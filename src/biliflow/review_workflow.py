@@ -328,18 +328,51 @@ def reconcile_persistent_overlay_items(
     while retaining both report references for audit.
     """
     removed: set[int] = set()
-    for visual in items:
+
+    def retain_support(owner: dict, support: dict) -> None:
+        """Keep compact, inspectable evidence for a card absorbed by a track."""
+        record = {
+            "id": support.get("id"),
+            "category": support.get("category"),
+            "candidate_type": support.get("candidate_type"),
+            "start_seconds": support.get("start_seconds"),
+            "end_seconds": support.get("end_seconds"),
+            "region_source_pixels": support.get("suggested_region_source_pixels"),
+            "region_classification": support.get("region_classification"),
+            "source_candidate_refs": list(support.get("source_candidate_refs") or []),
+        }
+        records = owner.setdefault("supporting_detections", [])
+        marker = (
+            record["id"], record["start_seconds"], record["end_seconds"],
+            tuple(record["source_candidate_refs"]),
+        )
+        if not any(
+            (
+                value.get("id"), value.get("start_seconds"), value.get("end_seconds"),
+                tuple(value.get("source_candidate_refs") or []),
+            ) == marker
+            for value in records
+        ):
+            records.append(record)
+        owner["supporting_candidate_count"] = len(records)
+    persistent_owners = sorted(
+        items,
+        key=lambda item: 0 if item.get("category") == "visual_logo" else 1,
+    )
+    for visual in persistent_owners:
         visual_region = visual.get("suggested_region_source_pixels")
         if (
-            visual.get("category") != "visual_logo"
+            id(visual) in removed
+            or visual.get("category") not in {"visual_logo", "text"}
             or visual.get("candidate_type") != "persistent_overlay"
             or not isinstance(visual_region, dict)
         ):
             continue
-        for text_item in items:
+        for text_item in items if visual.get("category") == "visual_logo" else []:
             text_region = text_item.get("suggested_region_source_pixels")
             if (
-                id(text_item) in removed
+                text_item is visual
+                or id(text_item) in removed
                 or text_item.get("category") != "text"
                 or text_item.get("candidate_type") != "persistent_overlay"
                 or not isinstance(text_region, dict)
@@ -380,6 +413,7 @@ def reconcile_persistent_overlay_items(
                 "visual_logo", visual["start_seconds"], visual["end_seconds"],
                 "|".join(visual["evidence"]),
             )
+            retain_support(visual, text_item)
             removed.add(id(text_item))
             break
         # Region-level confirmations and short OCR fragments fully contained
@@ -402,12 +436,19 @@ def reconcile_persistent_overlay_items(
                 support is visual
                 or id(support) in removed
                 or support.get("category") not in {"visual_logo", "text"}
-                or support.get("candidate_type") is not None
+                or support.get("candidate_type") in {
+                    "opening_promotion", "branded_end_card", "promotional_segment",
+                    "scene_text", "subtitle", "title_overlay",
+                }
                 or support.get("review_kind") == "title_overlay"
                 or not isinstance(support_region, dict)
                 or support_overlap < required_overlap
                 or float(support["start_seconds"]) < float(visual["start_seconds"])
                 or float(support["end_seconds"]) > float(visual["end_seconds"])
+                or (
+                    support.get("decision") is not None
+                    and support.get("decision") != visual.get("decision")
+                )
             ):
                 continue
             for key in (
@@ -417,8 +458,99 @@ def reconcile_persistent_overlay_items(
                 visual[key] = list(dict.fromkeys(
                     list(visual.get(key) or []) + list(support.get(key) or [])
                 ))
+            retain_support(visual, support)
             removed.add(id(support))
     return [item for item in items if id(item) not in removed]
+
+
+def group_safety_review_events(
+    items: list[dict], *, maximum_gap_seconds: float = 6.0,
+    maximum_span_seconds: float = 30.0,
+) -> list[dict]:
+    """Group nearby safety detections into one review decision.
+
+    The original intervals remain discrete.  ``build_edit_plan`` expands an
+    approved action back to those intervals, so a gap used only for review
+    context is never cut or blurred.
+    """
+    if maximum_gap_seconds < 0 or maximum_span_seconds <= 0:
+        raise ValueError("Invalid safety event grouping limits")
+    safety_categories = {"adult", "gore", "violence"}
+    ordered = sorted(items, key=lambda item: (item["category"], item["start_seconds"]))
+    grouped: list[dict] = []
+    for original in ordered:
+        item = dict(original)
+        previous = grouped[-1] if grouped else None
+        suggestions_compatible = (
+            previous is not None
+            and (
+                previous.get("suggested_decision") is None
+                or item.get("suggested_decision") is None
+                or previous.get("suggested_decision") == item.get("suggested_decision")
+            )
+        )
+        can_group = (
+            previous is not None
+            and previous.get("category") == item.get("category")
+            and item.get("category") in safety_categories
+            and previous.get("decision") is None
+            and item.get("decision") is None
+            and float(item["start_seconds"]) <= (
+                float(previous["end_seconds"]) + maximum_gap_seconds
+            )
+            and float(item["end_seconds"]) - float(previous["start_seconds"])
+            <= maximum_span_seconds
+            and suggestions_compatible
+        )
+        if not can_group:
+            grouped.append(item)
+            continue
+        previous["end_seconds"] = max(
+            float(previous["end_seconds"]), float(item["end_seconds"])
+        )
+        scores = [
+            value for value in (previous.get("max_score"), item.get("max_score"))
+            if value is not None
+        ]
+        previous["max_score"] = max(scores) if scores else None
+        previous["priority"] = min(
+            (previous["priority"], item["priority"]),
+            key=lambda value: _PRIORITY_RANK.get(value, 2),
+        )
+        for key in (
+            "labels", "reasons", "evidence", "preview_images",
+            "source_candidate_refs",
+        ):
+            previous[key] = list(dict.fromkeys(
+                list(previous.get(key) or []) + list(item.get(key) or [])
+            ))
+        intervals = list(previous.get("detected_intervals") or [])
+        for detected in item.get("detected_intervals") or [{
+            "start_seconds": item["start_seconds"],
+            "end_seconds": item["end_seconds"],
+        }]:
+            marker = (
+                float(detected["start_seconds"]), float(detected["end_seconds"]),
+            )
+            if not any(
+                (
+                    float(existing["start_seconds"]),
+                    float(existing["end_seconds"]),
+                ) == marker
+                for existing in intervals
+            ):
+                intervals.append(dict(detected))
+        previous["detected_intervals"] = sorted(
+            intervals, key=lambda value: value["start_seconds"]
+        )
+        previous["candidate_type"] = "review_event_group"
+        previous["temporal_policy"] = "discrete_detected_intervals"
+        previous["event_detection_count"] = len(previous["detected_intervals"])
+        previous["id"] = _item_id(
+            previous["category"], previous["start_seconds"],
+            previous["end_seconds"], "|".join(previous["evidence"]),
+        )
+    return grouped
 
 
 def revalidate_preserved_review_items(
@@ -1415,6 +1547,7 @@ def build_review_queue(
                 })
         item["detected_intervals"] = clamped_intervals
     items = _merge_items(items, merge_gap_seconds)
+    items = group_safety_review_events(items)
     items = _guard_title_overlays(items, title_references)
     items = _guard_in_film_text(items, in_film_text_references)
     items = refine_persistent_logo_regions(items)
@@ -1442,6 +1575,13 @@ def build_review_queue(
             # required through every later detector upgrade.
             items, stale_visual_items = revalidate_preserved_review_items(items)
             advisory_items.extend(stale_visual_items)
+            # Old unresolved cards are restored after the first reconciliation.
+            # Re-run both safe compaction passes so a detector upgrade cannot
+            # resurrect dozens of cards already represented by one track/event.
+            items = reconcile_persistent_overlay_items(
+                items, source_duration=source_duration,
+            )
+            items = group_safety_review_events(items)
     items = sorted(items, key=lambda item: (
         _PRIORITY_RANK.get(item["priority"], 2),
         item["start_seconds"], item["category"],
@@ -1939,11 +2079,13 @@ function initializeExportSettings(){{if(exportSettingsInitialized)return;const p
 function toggleCustomOutputSize(){{document.querySelector('#custom-size-wrap').hidden=document.querySelector('#output-size-mode').value!=='custom';}}
 function outputSizeSelection(){{const mode=document.querySelector('#output-size-mode').value;if(mode==='unlimited')return{{size_mode:'unlimited',description:'không giới hạn dung lượng'}};if(mode==='default')return{{size_mode:'default',description:'tối đa 3,5 GB'}};const maximum=Number(document.querySelector('#custom-output-gb').value);if(!Number.isFinite(maximum)||maximum<0.05||maximum>1000)throw new Error('Giới hạn tùy chỉnh phải từ 0,05 đến 1.000 GB.');return{{size_mode:'custom',max_output_gb:maximum,description:`tối đa ${{maximum.toLocaleString('vi-VN')}} GB`}};}}
 function pendingDescription(){{const pending=queue.items.filter(x=>!x.decision),names={{violence:'Bạo lực',gore:'Máu me',adult:'18+',visual_logo:'Logo / quảng cáo',text:'Chữ'}};if(!pending.length)return 'Đã duyệt đủ. Bạn có thể xuất video.';return `Còn ${{pending.length}} mục chưa duyệt: ${{pending.slice(0,3).map(x=>`${{names[x.category]||x.category}} ${{clock(x.start_seconds)}}–${{clock(x.end_seconds)}}`).join('; ')}}. Hãy chọn Giữ nguyên cảnh, Làm mờ toàn cảnh, Cắt cả cảnh hoặc Cần xem thêm.`;}}
-function render(){{const c=queue.counts,done=c.total-c.pending,scope=queue.detection_scope||{{}},scopeNames={{advertising:'Quảng cáo / logo',adult:'18+',gore:'Máu me',violence:'Bạo lực'}},selected=(scope.selected||[]).map(x=>scopeNames[x]||x),skipped=(scope.skipped||[]).map(x=>scopeNames[x]||x);const advisory=(queue.advisory_items||[]).length,visual=queue.visual_ai_audit?.assessment_count||0;document.querySelector('#summary').textContent=`${{done}}/${{c.total}} mục chính đã duyệt · ${{c.pending}} mục chính còn lại · ${{advisory}} ứng viên phụ · Đã quét: ${{selected.length?selected.join(', '):'phạm vi cũ'}} · Visual AI ${{visual}} mục · Trạng thái: ${{queue.status}}`;document.querySelector('#candidate-filter').textContent=`Ứng viên phụ (${{advisory}})`;document.querySelector('#progress').style.width=`${{c.total?done/c.total*100:100}}%`;if(resources){{const range=resources.estimated_preview_megabytes_range;document.querySelector('#resources').innerHTML=`<div class="resource">Video nguồn<strong>${{size(resources.source_bytes)}}</strong></div><div class="resource">Ảnh và report<strong>${{size(resources.report_bytes)}}</strong></div><div class="resource">Ổ E còn trống<strong>${{size(resources.disk_free_bytes)}}</strong></div><div class="resource">Preview dự kiến<strong>${{resources.estimated_preview_seconds}} giây · khoảng ${{range[0]}}–${{range[1]}} MB</strong></div><div class="resource-note">Review chỉ tải ảnh và không chạy model. ${{skipped.length?`Không quét trong lượt này: ${{skipped.join(', ')}}. Ít thẻ hơn không có nghĩa các nhóm này đã an toàn. `:''}}Có ${{c.total}} mục chính bắt buộc duyệt và ${{advisory}} ứng viên phụ không chặn xuất. Mỗi thẻ ghi rõ quyết định áp dụng cho toàn track, một cửa sổ đã gom hay chỉ đoạn hiện tại; không tự áp dụng cho mọi nội dung trông giống nhau trong phim.</div>`;}}const active=['QUEUED','RENDERING'].includes(exportJob.status);const ready=queue.status==='READY_FOR_EDIT_PLAN'&&!active;document.querySelector('#finalize').disabled=!ready;const exportText={{IDLE:pendingDescription(),WAITING_REVIEW:pendingDescription(),READY_TO_EXPORT:'Đã duyệt đủ. Bạn có thể xuất video.',QUEUED:'Đã xếp hàng xuất video.',RENDERING:'Đang render và kiểm tra video…',COMPLETED:`Hoàn tất: ${{exportJob.output||''}}`,FAILED:`Xuất thất bại: ${{exportJob.error||'không rõ lỗi'}}`}};document.querySelector('#export-status').textContent=exportText[exportJob.status]||pendingDescription();const source=filter==='candidates'?(queue.advisory_items||[]):queue.items;const data=filter==='candidates'?source:source.filter(visible);document.querySelector('#items').innerHTML=data.length?data.map(card).join(''):'<div class="empty">Không có mục nào trong bộ lọc này.</div>';drawRegionPreviews();}}
+function render(){{const c=queue.counts,done=c.total-c.pending,scope=queue.detection_scope||{{}},scopeNames={{advertising:'Quảng cáo / logo',adult:'18+',gore:'Máu me',violence:'Bạo lực'}},selected=(scope.selected||[]).map(x=>scopeNames[x]||x),skipped=(scope.skipped||[]).map(x=>scopeNames[x]||x);const fullTracks=queue.items.filter(x=>x.candidate_type==='persistent_overlay'&&trackCoversFullVideo(x)).length,rangeTracks=queue.items.filter(x=>x.candidate_type==='persistent_overlay'&&!trackCoversFullVideo(x)).length,advisory=(queue.advisory_items||[]).length,visual=queue.visual_ai_audit?.assessment_count||0;document.querySelector('#summary').textContent=`${{done}}/${{c.total}} mục chính đã duyệt · ${{c.pending}} mục chính còn lại · ${{fullTracks}} track toàn video · ${{rangeTracks}} track theo khoảng · ${{advisory}} ứng viên phụ · Đã quét: ${{selected.length?selected.join(', '):'phạm vi cũ'}} · Visual AI ${{visual}} mục · Trạng thái: ${{queue.status}}`;document.querySelector('#candidate-filter').textContent=`Ứng viên phụ (${{advisory}})`;document.querySelector('#progress').style.width=`${{c.total?done/c.total*100:100}}%`;if(resources){{const range=resources.estimated_preview_megabytes_range;document.querySelector('#resources').innerHTML=`<div class="resource">Video nguồn<strong>${{size(resources.source_bytes)}}</strong></div><div class="resource">Ảnh và report<strong>${{size(resources.report_bytes)}}</strong></div><div class="resource">Ổ E còn trống<strong>${{size(resources.disk_free_bytes)}}</strong></div><div class="resource">Preview dự kiến<strong>${{resources.estimated_preview_seconds}} giây · khoảng ${{range[0]}}–${{range[1]}} MB</strong></div><div class="resource-note">Review chỉ tải ảnh và không chạy model. ${{skipped.length?`Không quét trong lượt này: ${{skipped.join(', ')}}. Ít thẻ hơn không có nghĩa các nhóm này đã an toàn. `:''}}Có ${{c.total}} mục chính bắt buộc duyệt và ${{advisory}} ứng viên phụ không chặn xuất. Track toàn video, track theo khoảng và nhóm sự kiện được ghi riêng; nhóm sự kiện chỉ áp dụng các khoảng phát hiện gốc, không sửa khoảng trống.</div>`;}}const active=['QUEUED','RENDERING'].includes(exportJob.status);const ready=queue.status==='READY_FOR_EDIT_PLAN'&&!active;document.querySelector('#finalize').disabled=!ready;const exportText={{IDLE:pendingDescription(),WAITING_REVIEW:pendingDescription(),READY_TO_EXPORT:'Đã duyệt đủ. Bạn có thể xuất video.',QUEUED:'Đã xếp hàng xuất video.',RENDERING:'Đang render và kiểm tra video…',COMPLETED:`Hoàn tất: ${{exportJob.output||''}}`,FAILED:`Xuất thất bại: ${{exportJob.error||'không rõ lỗi'}}`}};document.querySelector('#export-status').textContent=exportText[exportJob.status]||pendingDescription();const source=filter==='candidates'?(queue.advisory_items||[]):queue.items;const data=filter==='candidates'?source:source.filter(visible);document.querySelector('#items').innerHTML=data.length?data.map(card).join(''):'<div class="empty">Không có mục nào trong bộ lọc này.</div>';drawRegionPreviews();}}
 function actionName(x,decision){{if(decision==='KEEP')return 'Giữ nguyên';if(decision==='CUT')return 'Cắt cả cảnh';if(decision==='BLUR')return x.suggested_region_source_pixels?(isLogoItem(x)?'Làm mờ logo':'Làm mờ vùng chữ/logo'):'Làm mờ toàn cảnh';return decision;}}
-function decisionScope(x){{const intervals=Array.isArray(x.detected_intervals)?x.detected_intervals:[],from=clock(x.start_seconds),to=clock(x.end_seconds);if(x.advisory)return{{kind:'advisory',title:'Ứng viên kiểm tra thêm — chưa thuộc quyết định chính',detail:`Bằng chứng chưa đủ để ghép mục này vào track chính. Thẻ chính khác không tự xử lý mục này. Nếu bạn chọn một hành động, mục sẽ được đưa vào kế hoạch và chỉ áp dụng ${{from}}–${{to}}.`}};if(x.candidate_type==='persistent_overlay'||x.temporal_policy==='continuous_persistent_overlay')return{{kind:'track',title:'Đại diện cho một track liên tục',detail:`Lựa chọn cho vùng khoanh đỏ áp dụng vùng đó trong toàn bộ ${{from}}–${{to}}. Lựa chọn cho toàn cảnh áp dụng toàn khung trong cùng khoảng. Không tự áp dụng cho logo ở vị trí hoặc track khác.`}};if(intervals.length>1)return{{kind:'grouped',title:`Đại diện cho ${{intervals.length}} lần phát hiện đã gom`,detail:`Các lần phát hiện gần nhau đã được gom thành cửa sổ ${{from}}–${{to}}; quyết định áp dụng toàn bộ cửa sổ này, kể cả khoảng ngắn giữa các lần phát hiện. Không tự lan sang cảnh khác.`}};return{{kind:'single',title:'Chỉ áp dụng cho đoạn hiện tại',detail:`Quyết định chỉ áp dụng ${{from}}–${{to}}. Đây không phải lựa chọn đại diện cho mọi quảng cáo hoặc logo cùng loại trong toàn phim.`}};}}
+function trackCoversFullVideo(x){{const duration=Number(queue.source?.duration_seconds||0),tolerance=Math.max(1.5,duration*.0005);return duration>0&&Number(x.start_seconds)<=tolerance&&Number(x.end_seconds)>=duration-tolerance;}}
+function decisionScope(x){{const intervals=Array.isArray(x.detected_intervals)?x.detected_intervals:[],from=clock(x.start_seconds),to=clock(x.end_seconds);if(x.advisory)return{{kind:'advisory',title:'Ứng viên kiểm tra thêm — chưa thuộc quyết định chính',detail:`Bằng chứng chưa đủ để ghép mục này vào track chính. Thẻ chính khác không tự xử lý mục này. Nếu bạn chọn một hành động, mục sẽ được đưa vào kế hoạch và chỉ áp dụng ${{from}}–${{to}}.`}};if(x.candidate_type==='persistent_overlay'||x.temporal_policy==='continuous_persistent_overlay'){{const full=trackCoversFullVideo(x),support=Number(x.supporting_candidate_count||0);return{{kind:'track',title:full?'QUYẾT ĐỊNH TOÀN VIDEO':'QUYẾT ĐỊNH TOÀN KHOẢNG XUẤT HIỆN',detail:`Một lựa chọn cho vùng khoanh đỏ áp dụng từ ${{from}} đến ${{to}}${{full?' — toàn bộ video':''}}. ${{support?`Track này đại diện thêm ${{support}} lần phát hiện cùng vùng đã lưu trong Audit. `:''}}Logo ở vị trí hoặc track khác vẫn cần quyết định riêng.`}};}}if(x.temporal_policy==='discrete_detected_intervals'&&intervals.length>1)return{{kind:'grouped',title:`NHÓM SỰ KIỆN — ${{intervals.length}} khoảng phát hiện`,detail:`Một lựa chọn được áp dụng riêng cho ${{intervals.length}} khoảng gốc trong ${{from}}–${{to}}; các khoảng trống giữa chúng không bị cắt hoặc làm mờ.`}};if(intervals.length>1)return{{kind:'grouped',title:`Đại diện cho ${{intervals.length}} lần phát hiện đã gom`,detail:`Các lần phát hiện gần nhau đã được gom thành cửa sổ ${{from}}–${{to}}; quyết định áp dụng toàn bộ cửa sổ này. Không tự lan sang cảnh khác.`}};return{{kind:'single',title:'CHỈ ĐOẠN HIỆN TẠI',detail:`Quyết định chỉ áp dụng ${{from}}–${{to}}. Đây không phải lựa chọn đại diện cho mọi quảng cáo hoặc logo cùng loại trong toàn phim.`}};}}
 function scopeBlock(x){{const scope=decisionScope(x);return `<div class="scope-detail ${{scope.kind}}"><strong>Phạm vi áp dụng: ${{esc(scope.title)}}</strong>${{esc(scope.detail)}}</div>`;}}
-function overlapCoverage(x){{const covered=queue.items.filter(other=>other.id!==x.id&&other.decision==='BLUR'&&other.start_seconds<x.end_seconds&&other.end_seconds>x.start_seconds);if(!covered.length)return '';const persistent=covered.filter(other=>other.candidate_type==='persistent_overlay'&&other.decision_region_source_pixels&&other.decision_region_source_pixels!=='FULL_FRAME');const full=covered.filter(other=>other.decision_region_source_pixels==='FULL_FRAME');const parts=[];if(persistent.length){{const owner=persistent[0],r=owner.decision_region_source_pixels;parts.push(`Logo/watermark cố định ở vùng khác của khung hình đã được duyệt làm mờ bởi mục riêng (x=${{r.x}}, y=${{r.y}}, rộng=${{r.width}}, cao=${{r.height}}). Vùng khoanh đỏ hiện tại là ứng viên riêng; chỉ phân loại nội dung nằm trong vùng đỏ.`);}}if(full.length)parts.push(`${{full.length}} đoạn trùng thời gian đã được duyệt làm mờ toàn cảnh.`);return parts.length?`<div class="coverage">${{parts.join(' ')}}</div>`:'';}}
+function regionOverlap(a,b){{if(!a||!b||a==='FULL_FRAME'||b==='FULL_FRAME')return 0;const left=Math.max(a.x,b.x),top=Math.max(a.y,b.y),right=Math.min(a.x+a.width,b.x+b.width),bottom=Math.min(a.y+a.height,b.y+b.height),intersection=Math.max(0,right-left)*Math.max(0,bottom-top),smaller=Math.min(a.width*a.height,b.width*b.height);return smaller?intersection/smaller:0;}}
+function overlapCoverage(x){{const covered=queue.items.filter(other=>other.id!==x.id&&other.decision==='BLUR'&&other.start_seconds<x.end_seconds&&other.end_seconds>x.start_seconds);if(!covered.length)return '';const persistent=covered.filter(other=>other.candidate_type==='persistent_overlay'&&other.decision_region_source_pixels&&other.decision_region_source_pixels!=='FULL_FRAME');const full=covered.filter(other=>other.decision_region_source_pixels==='FULL_FRAME');const parts=[];if(persistent.length){{const owner=persistent[0],r=owner.decision_region_source_pixels,current=x.suggested_region_source_pixels||x.decision_region_source_pixels,same=regionOverlap(r,current)>=.6,label=esc((owner.labels||[])[0]||'logo/watermark'),scope=trackCoversFullVideo(owner)?'toàn video':`${{clock(owner.start_seconds)}}–${{clock(owner.end_seconds)}}`;parts.push(same?`Track <strong>${{label}}</strong> cùng vùng này đã được duyệt làm mờ ${{scope}}; thẻ hiện tại chỉ là bằng chứng hỗ trợ.`:`Track <strong>${{label}}</strong> ở vùng khác đã được duyệt làm mờ ${{scope}} (x=${{r.x}}, y=${{r.y}}, rộng=${{r.width}}, cao=${{r.height}}). Vùng đỏ hiện tại vẫn là ứng viên riêng.`);}}if(full.length)parts.push(`${{full.length}} đoạn trùng thời gian đã được duyệt làm mờ toàn cảnh.`);return parts.length?`<div class="coverage">${{parts.join(' ')}}</div>`:'';}}
 function regionOwner(x){{if(x.suggested_region_source_pixels&&Array.isArray(x.source_frame_size))return x;if(x.advisory)return null;return queue.items.find(other=>other.id!==x.id&&isLogoItem(other)&&other.decision==='BLUR'&&(other.suggested_region_source_pixels||other.decision_region_source_pixels)&&Array.isArray(other.source_frame_size)&&other.start_seconds<x.end_seconds&&other.end_seconds>x.start_seconds)||null;}}
 function regionName(owner){{if(owner?.decision==='BLUR')return 'logo thương hiệu đã xác nhận';if(owner?.decision==='KEEP')return 'tiêu đề/nội dung phim đã xác nhận';const names={{movie_title:'tiêu đề phim',approved_non_brand:'nội dung phim đã xác nhận',external_brand:'logo thương hiệu',external_brand_candidate:'ứng viên logo thương hiệu',branded_end_card:'end-card thương hiệu',promotional_segment:'đoạn quảng bá',unknown:'chưa phân loại'}};return names[owner?.region_classification]||'vùng chưa phân loại';}}
 function regionImages(x,owner){{if(!owner)return x.preview_images.slice(0,3).map(p=>`<img src="/media/${{encodeURIComponent(p)}}" loading="lazy">`).join('');const r=owner.suggested_region_source_pixels||owner.decision_region_source_pixels;if(!r||r==='FULL_FRAME')return x.preview_images.slice(0,3).map(p=>`<img src="/media/${{encodeURIComponent(p)}}" loading="lazy">`).join('');return x.preview_images.slice(0,3).map((p,index)=>`<div class="region-pair"><canvas class="region-frame" data-src="/media/${{encodeURIComponent(p)}}" data-x="${{r.x}}" data-y="${{r.y}}" data-w="${{r.width}}" data-h="${{r.height}}" data-sw="${{owner.source_frame_size[0]}}" data-sh="${{owner.source_frame_size[1]}}"></canvas>${{index===0?`<canvas class="region-crop" data-src="/media/${{encodeURIComponent(p)}}" data-x="${{r.x}}" data-y="${{r.y}}" data-w="${{r.width}}" data-h="${{r.height}}" data-sw="${{owner.source_frame_size[0]}}" data-sh="${{owner.source_frame_size[1]}}"></canvas>`:''}}</div>`).join('');}}
@@ -2174,42 +2316,57 @@ def build_edit_plan(*, project_root: Path, queue_path: Path, plan_path: Path) ->
     for item in payload["items"]:
         if item["decision"] == "KEEP":
             continue
-        operation = {
-            "id": f'op-{item["id"].removeprefix("review-")}',
-            "type": item["decision"].lower(),
-            "category": item["category"],
-            "start_seconds": max(0.0, float(item["start_seconds"])),
-            "end_seconds": min(source_duration, float(item["end_seconds"])),
-            "reason": item.get("decision_note") or ", ".join(item["reasons"]),
-            "review_item_id": item["id"],
-            "review_item_ids": [item["id"]],
-            "detected_intervals": [{
-                "review_item_id": item["id"],
-                **(item.get("detected_interval") or {
-                    "start_seconds": item["start_seconds"],
-                    "end_seconds": item["end_seconds"],
-                }),
-            }],
-            "evidence": item["evidence"],
-        }
-        if operation["start_seconds"] >= operation["end_seconds"]:
-            raise ValueError(f"Reviewed operation is outside the source: {item['id']}")
-        if item["decision"] == "BLUR":
-            operation["region_source_pixels"] = item[
-                "decision_region_source_pixels"
-            ]
-            region = operation["region_source_pixels"]
-            adaptive_feather = (
-                min(4, max(2, int(region["height"]) // 24))
-                if isinstance(region, dict) else 0
+        discrete = item.get("temporal_policy") == "discrete_detected_intervals"
+        application_intervals = (
+            list(item.get("detected_intervals") or [])
+            if discrete else [{
+                "start_seconds": item["start_seconds"],
+                "end_seconds": item["end_seconds"],
+            }]
+        )
+        for interval_index, detected in enumerate(application_intervals):
+            provenance_interval = (
+                detected if discrete else item.get("detected_interval") or detected
             )
-            operation["blur"] = {
-                "sigma": 28,
-                "edge_feather_pixels": adaptive_feather,
-                "edge_feather_mode": item.get("decision_blur_edge_mode") or "all_edges",
-                "region_policy": "ocr_union_asymmetric_tight_v3",
+            operation_id = f'op-{item["id"].removeprefix("review-")}'
+            if len(application_intervals) > 1:
+                operation_id = f"{operation_id}-{interval_index + 1:02d}"
+            operation = {
+                "id": operation_id,
+                "type": item["decision"].lower(),
+                "category": item["category"],
+                "start_seconds": max(0.0, float(detected["start_seconds"])),
+                "end_seconds": min(source_duration, float(detected["end_seconds"])),
+                "reason": item.get("decision_note") or ", ".join(item["reasons"]),
+                "review_item_id": item["id"],
+                "review_item_ids": [item["id"]],
+                "detected_intervals": [{
+                    "review_item_id": item["id"],
+                    "start_seconds": provenance_interval["start_seconds"],
+                    "end_seconds": provenance_interval["end_seconds"],
+                }],
+                "evidence": item["evidence"],
             }
-        operations.append(operation)
+            if operation["start_seconds"] >= operation["end_seconds"]:
+                raise ValueError(
+                    f"Reviewed operation is outside the source: {item['id']}"
+                )
+            if item["decision"] == "BLUR":
+                operation["region_source_pixels"] = item[
+                    "decision_region_source_pixels"
+                ]
+                region = operation["region_source_pixels"]
+                adaptive_feather = (
+                    min(4, max(2, int(region["height"]) // 24))
+                    if isinstance(region, dict) else 0
+                )
+                operation["blur"] = {
+                    "sigma": 28,
+                    "edge_feather_pixels": adaptive_feather,
+                    "edge_feather_mode": item.get("decision_blur_edge_mode") or "all_edges",
+                    "region_policy": "ocr_union_asymmetric_tight_v3",
+                }
+            operations.append(operation)
     cuts = sorted(
         (operation for operation in operations if operation["type"] == "cut"),
         key=lambda operation: operation["start_seconds"],

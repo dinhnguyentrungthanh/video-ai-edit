@@ -423,7 +423,7 @@ class ReviewWorkflowTests(unittest.TestCase):
         self.assertIn("Đây là logo thương hiệu — làm mờ", page)
         self.assertIn("Đây là tiêu đề/nội dung phim — giữ lại", page)
         self.assertIn("Chỉ nội dung nằm trong khung đỏ này đang được phân loại", page)
-        self.assertIn("Logo/watermark cố định ở vùng khác của khung hình", page)
+        self.assertIn("Track <strong>${label}</strong> ở vùng khác", page)
         self.assertIn("confidence>=.9", page)
         self.assertIn("Quyết định cho toàn cảnh", page)
         self.assertIn("logo thương hiệu đã xác nhận", page)
@@ -433,10 +433,13 @@ class ReviewWorkflowTests(unittest.TestCase):
         self.assertIn("mục chính bắt buộc duyệt", page)
         self.assertIn("function decisionScope(x)", page)
         self.assertIn("Phạm vi áp dụng:", page)
-        self.assertIn("Đại diện cho một track liên tục", page)
-        self.assertIn("Chỉ áp dụng cho đoạn hiện tại", page)
+        self.assertIn("QUYẾT ĐỊNH TOÀN VIDEO", page)
+        self.assertIn("QUYẾT ĐỊNH TOÀN KHOẢNG XUẤT HIỆN", page)
+        self.assertIn("CHỈ ĐOẠN HIỆN TẠI", page)
+        self.assertIn("NHÓM SỰ KIỆN", page)
+        self.assertIn("các khoảng trống giữa chúng không bị cắt hoặc làm mờ", page)
         self.assertIn("Ứng viên kiểm tra thêm — chưa thuộc quyết định chính", page)
-        self.assertIn("không tự áp dụng cho mọi nội dung trông giống nhau", page)
+        self.assertIn("Logo ở vị trí hoặc track khác vẫn cần quyết định riêng", page)
         self.assertIn('id="output-size-mode"', page)
         self.assertIn("Tối đa 3,5 GB (mặc định)", page)
         self.assertIn("Giới hạn tùy chỉnh", page)
@@ -685,6 +688,46 @@ class ReviewWorkflowTests(unittest.TestCase):
             encoding="utf-8",
         )
         return path
+
+    def test_safety_event_group_expands_to_original_intervals_in_edit_plan(self):
+        report = self._report(
+            "violence-event-group", "violence", [
+                {"start_seconds": 10, "end_seconds": 12, "max_score": 0.8},
+                {"start_seconds": 16, "end_seconds": 18, "max_score": 0.9},
+                {"start_seconds": 60, "end_seconds": 62, "max_score": 0.7},
+            ],
+        )
+        queue_path = self.root / "reports" / "violence-event-review" / "queue.json"
+        queue = build_review_queue(
+            project_root=self.root, report_paths=[report], queue_path=queue_path,
+        )
+        self.assertEqual(len(queue["items"]), 2)
+        grouped = next(
+            item for item in queue["items"]
+            if item.get("candidate_type") == "review_event_group"
+        )
+        self.assertEqual(grouped["event_detection_count"], 2)
+        self.assertEqual(grouped["temporal_policy"], "discrete_detected_intervals")
+        record_review_decision(
+            project_root=self.root, queue_path=queue_path,
+            item_id=grouped["id"], decision="BLUR", full_frame=True,
+        )
+        other = next(item for item in queue["items"] if item["id"] != grouped["id"])
+        record_review_decision(
+            project_root=self.root, queue_path=queue_path,
+            item_id=other["id"], decision="KEEP",
+        )
+        plan = build_edit_plan(
+            project_root=self.root, queue_path=queue_path,
+            plan_path=self.root / "work" / "violence-event-plan.json",
+        )
+        self.assertEqual(
+            [
+                (operation["start_seconds"], operation["end_seconds"])
+                for operation in plan["approved_operations"]
+            ],
+            [(10.0, 12.0), (16.0, 18.0)],
+        )
 
     def test_visual_detector_omissions_make_queue_coverage_incomplete(self):
         report = self._report(
@@ -1311,6 +1354,50 @@ class ReviewWorkflowTests(unittest.TestCase):
         self.assertIn("NPt", persistent[0]["labels"])
         self.assertEqual(queue["candidate_coverage"]["source_candidate_count"], 4)
         self.assertEqual(queue["candidate_coverage"]["queue_item_count"], 1)
+        self.assertTrue(queue["candidate_coverage"]["complete"])
+
+    def test_ocr_only_persistent_track_absorbs_matching_visual_cards(self):
+        directory = self.root / "reports" / "ocr-only-persistent"
+        directory.mkdir()
+        text = directory / "text-scan.json"
+        text.write_text(json.dumps({
+            "status": "REVIEW_REQUIRED", "input": str(self.source),
+            "input_sha256": "abc", "duration_seconds": 100,
+            "source_size": [1920, 1080], "analysis_size": [960, 540],
+            "tracks": [{
+                "track_id": 1, "start_seconds": 0, "end_seconds": 100,
+                "review_candidate": True, "review_priority": "high",
+                "routing": "REVIEW_PERSISTENT_OVERLAY",
+                "candidate_type": "persistent_overlay",
+                "suggested_decision": "BLUR",
+                "union_box": [50, 25, 150, 50],
+                "sample_text": ["EXAMPLE.NET"],
+            }],
+        }), encoding="utf-8")
+        visual = self._report(
+            "matching-visual-cards", "visual_logo", [{
+                "start_seconds": 20, "end_seconds": 25, "max_score": 1.0,
+                "region_localization": {
+                    "frame_size": [1920, 1080],
+                    "proposals": [{
+                        "blur_region_px": [100, 50, 200, 50],
+                        "region_classification": "external_brand_candidate",
+                        "suggested_decision": "BLUR",
+                    }],
+                },
+            }],
+        )
+        queue = build_review_queue(
+            project_root=self.root, report_paths=[text, visual],
+            queue_path=self.root / "reports" / "ocr-only-review" / "queue.json",
+        )
+        self.assertEqual(len(queue["items"]), 1)
+        track = queue["items"][0]
+        self.assertEqual(track["candidate_type"], "persistent_overlay")
+        self.assertEqual(track["category"], "text")
+        self.assertEqual(track["supporting_candidate_count"], 1)
+        self.assertEqual(len(track["supporting_detections"]), 1)
+        self.assertEqual(queue["candidate_coverage"]["source_candidate_count"], 2)
         self.assertTrue(queue["candidate_coverage"]["complete"])
 
     def test_repeated_ocr_overlay_is_routed_to_logo_review(self):
