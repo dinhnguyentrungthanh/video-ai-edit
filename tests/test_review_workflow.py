@@ -446,6 +446,9 @@ class ReviewWorkflowTests(unittest.TestCase):
         self.assertIn("Không giới hạn dung lượng", page)
         self.assertIn("function outputSizeSelection()", page)
         self.assertIn("body:JSON.stringify(selection)", page)
+        self.assertIn("function queueIdentity(value)", page)
+        self.assertIn("async function refreshQueue()", page)
+        self.assertIn("setInterval(refreshQueue,3000)", page)
 
     def test_disjoint_adjacent_logo_regions_are_not_merged(self):
         report = self._report(

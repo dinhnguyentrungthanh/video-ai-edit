@@ -1,3 +1,9 @@
+# 0.7.22 - 2026-09-27
+
+- Refresh an already-open Review page when a rerun publishes a new queue revision, so newly detected adult, violence and advertising findings cannot remain hidden behind the previous in-memory queue.
+- Keep the active review filter while refreshing, reload resource/export state for the new revision, and continue storing every user decision immediately before any refresh can occur.
+- Confirm the completed Troy rerun contains the reported explicit scene as an `adult` review item covering `06:54.5–07:45.5` in both the detector report and the live dashboard queue.
+
 # 0.7.21 - 2026-09-27
 
 - Preserve the open or closed state of each video's `Chạy lại kiểm tra` panel across the Dashboard's three-second refresh cycle.
