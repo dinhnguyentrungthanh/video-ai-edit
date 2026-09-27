@@ -524,6 +524,79 @@ class VisualLogoScannerTests(unittest.TestCase):
         self.assertEqual(coverage["approved_brand_time_groups_missing"], 0)
         self.assertTrue(coverage["complete"])
 
+    def test_approved_memory_records_at_same_geometry_share_one_track_group(self):
+        windows = {}
+        for index, timestamp in enumerate((10.0, 60.0, 120.0, 180.0)):
+            windows[(timestamp, timestamp + 5.0)] = [{"features": {
+                "score": 0.9 + index * 0.01,
+                "brand_memory": {
+                    "memory_class": "brand", "similarity": 0.97,
+                    "memory_key": f"approved-example-{index}",
+                    "relative_box": [0.05 + index * 0.001, 0.14, 0.10, 0.06],
+                },
+            }}]
+        selected = select_candidate_windows(
+            windows, set(), 1,
+            scan_start=0.0, scan_end=300.0, coverage_bucket_seconds=300.0,
+        )
+        coverage = candidate_selection_coverage(
+            windows, selected, scan_start=0.0, coverage_bucket_seconds=300.0,
+        )
+        self.assertEqual(len(selected), 1)
+        self.assertEqual(coverage["approved_brand_time_groups"], 1)
+        self.assertEqual(coverage["approved_brand_time_groups_missing"], 0)
+        self.assertTrue(coverage["complete"])
+
+    def test_distinct_approved_memory_geometries_remain_separate_tracks(self):
+        def known(memory_key, relative_box):
+            return [{"features": {
+                "score": 1.0,
+                "brand_memory": {
+                    "memory_class": "brand", "similarity": 0.97,
+                    "memory_key": memory_key, "relative_box": relative_box,
+                },
+            }}]
+        windows = {
+            (10.0, 15.0): known("top-left", [0.05, 0.05, 0.10, 0.05]),
+            (20.0, 25.0): known("bottom-right", [0.80, 0.85, 0.15, 0.08]),
+        }
+        selected = select_candidate_windows(
+            windows, set(), 1,
+            scan_start=0.0, scan_end=300.0, coverage_bucket_seconds=300.0,
+        )
+        coverage = candidate_selection_coverage(
+            windows, selected, scan_start=0.0, coverage_bucket_seconds=300.0,
+        )
+        self.assertEqual(len(selected), 1)
+        self.assertEqual(coverage["approved_brand_time_groups"], 2)
+        self.assertEqual(coverage["approved_brand_time_groups_missing"], 1)
+        self.assertFalse(coverage["complete"])
+
+    def test_weak_brand_memory_match_stays_in_novel_regional_coverage(self):
+        key = (125.0, 130.0)
+        windows = {key: [{"features": {
+            "score": 0.8,
+            "focus_region": "top_right",
+            "full_frame_score": 0.5,
+            "regional_score": 0.8,
+            "brand_memory": {
+                "memory_class": "brand", "similarity": 0.90,
+                "memory_key": "weak-example",
+                "relative_box": [0.82, 0.04, 0.15, 0.06],
+            },
+        }}]}
+        selected = select_candidate_windows(
+            windows, set(), 1,
+            scan_start=0.0, scan_end=300.0, coverage_bucket_seconds=300.0,
+        )
+        coverage = candidate_selection_coverage(
+            windows, selected, scan_start=0.0, coverage_bucket_seconds=300.0,
+        )
+        self.assertEqual(selected, [key])
+        self.assertEqual(coverage["approved_brand_candidate_windows"], 0)
+        self.assertEqual(coverage["regional_candidate_windows"], 1)
+        self.assertTrue(coverage["complete"])
+
     def test_selection_coverage_exposes_unconfirmed_novel_windows(self):
         windows = {
             (0.0, 5.0): [{"features": {"score": 0.9}}],

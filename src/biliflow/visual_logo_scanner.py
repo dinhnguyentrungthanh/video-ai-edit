@@ -51,6 +51,7 @@ BOUNDARY_SCENE_PROMPT = (
 
 ROUTING_CACHE_SCHEMA_VERSION = 1
 ROUTING_ALGORITHM_VERSION = 2
+APPROVED_BRAND_MEMORY_SIMILARITY = 0.94
 
 
 def _inside(root: Path, path: Path, label: str) -> Path:
@@ -951,11 +952,90 @@ def _approved_brand_key(frames: list[dict]) -> str | None:
         return None
     if (
         match.get("memory_class") != "brand"
-        or float(match.get("similarity", 0.0)) < 0.84
+        or float(match.get("similarity", 0.0)) < APPROVED_BRAND_MEMORY_SIMILARITY
     ):
         return None
     value = str(match.get("memory_key") or "").strip()
     return value or None
+
+
+def _approved_brand_box(frames: list[dict]) -> tuple[float, float, float, float] | None:
+    """Return a normalized xyxy box for a strong approved-memory match."""
+    if _approved_brand_key(frames) is None:
+        return None
+    strongest = max(
+        frames, key=lambda item: float(item.get("features", {}).get("score", 0.0))
+    )
+    match = strongest.get("features", {}).get("brand_memory")
+    relative = match.get("relative_box") if isinstance(match, dict) else None
+    if not isinstance(relative, (list, tuple)) or len(relative) != 4:
+        return None
+    try:
+        left, top, width, height = (float(value) for value in relative)
+    except (TypeError, ValueError):
+        return None
+    if left < 0 or top < 0 or width <= 0 or height <= 0:
+        return None
+    if left + width > 1.01 or top + height > 1.01:
+        return None
+    return left, top, left + width, top + height
+
+
+def _approved_brand_time_groups(
+    keys: list[tuple[float, float]] | set[tuple[float, float]],
+    windows: dict[tuple[float, float], list[dict]],
+    *,
+    scan_start: float,
+    coverage_bucket_seconds: float,
+    minimum_iou: float = 0.30,
+) -> list[list[tuple[float, float]]]:
+    """Cluster approved brand matches by time bucket and learned geometry.
+
+    Brand memory stores one record per reviewed item, so using ``memory_key`` as
+    the track identity fragments one physical watermark into many fake tracks.
+    Geometry is the stable identity required here: a representative is retained
+    for every distinct approved region in every coverage bucket. Records without
+    a valid learned box conservatively fall back to their exact memory key.
+    """
+    if coverage_bucket_seconds <= 0:
+        raise ValueError("coverage_bucket_seconds must be positive")
+    buckets: dict[int, list[dict[str, object]]] = {}
+    for key in sorted(keys):
+        memory_key = _approved_brand_key(windows[key])
+        if memory_key is None:
+            continue
+        bucket = _coverage_bucket(
+            key, scan_start=scan_start,
+            coverage_bucket_seconds=coverage_bucket_seconds,
+        )
+        geometry = _approved_brand_box(windows[key])
+        groups = buckets.setdefault(bucket, [])
+        for group in groups:
+            reference = group["geometry"]
+            same_geometry = (
+                geometry is not None
+                and reference is not None
+                and box_iou(geometry, reference) >= minimum_iou
+            )
+            same_fallback = (
+                geometry is None
+                and reference is None
+                and group["memory_key"] == memory_key
+            )
+            if same_geometry or same_fallback:
+                group["keys"].append(key)
+                break
+        else:
+            groups.append({
+                "geometry": geometry,
+                "memory_key": memory_key,
+                "keys": [key],
+            })
+    return [
+        list(group["keys"])
+        for bucket in sorted(buckets)
+        for group in buckets[bucket]
+    ]
 
 
 def _candidate_focus_class(frames: list[dict]) -> str:
@@ -1076,23 +1156,22 @@ def candidate_selection_coverage(
         for bucket, required in full_frame_required.items()
     )
 
-    def group(key: tuple[float, float]) -> tuple[str, int]:
-        memory_key = _approved_brand_key(windows[key])
-        assert memory_key is not None
-        bucket = max(0, int((key[0] - scan_start) // coverage_bucket_seconds))
-        return memory_key, bucket
-
-    known_groups = {group(key) for key in known}
-    selected_known_groups = {group(key) for key in known & selected_set}
+    known_groups = _approved_brand_time_groups(
+        known, windows, scan_start=scan_start,
+        coverage_bucket_seconds=coverage_bucket_seconds,
+    )
+    selected_known_groups = sum(
+        bool(set(group) & selected_set) for group in known_groups
+    )
     regional_omitted = regional - selected_set
-    missing_known_groups = known_groups - selected_known_groups
+    missing_known_groups = len(known_groups) - selected_known_groups
     return {
         "complete": (
             not regional_omitted
             and missing_full_frame_representatives == 0
-            and not missing_known_groups
+            and missing_known_groups == 0
         ),
-        "strategy": "all_regional_plus_two_full_frame_representatives_per_time_bucket",
+        "strategy": "all_regional_plus_two_full_frame_and_each_approved_geometry_track_per_time_bucket",
         "novel_candidate_windows": len(novel),
         "novel_candidate_windows_selected": len(novel & selected_set),
         "novel_candidate_windows_omitted": (
@@ -1111,8 +1190,8 @@ def candidate_selection_coverage(
         "approved_brand_windows_selected": len(known & selected_set),
         "approved_brand_windows_collapsed": len(known - selected_set),
         "approved_brand_time_groups": len(known_groups),
-        "approved_brand_time_groups_selected": len(selected_known_groups),
-        "approved_brand_time_groups_missing": len(missing_known_groups),
+        "approved_brand_time_groups_selected": selected_known_groups,
+        "approved_brand_time_groups_missing": missing_known_groups,
     }
 
 
@@ -1185,13 +1264,15 @@ def select_candidate_windows(
                 if key not in selected_set:
                     selected.append(key)
                     selected_set.add(key)
+        if len(selected) >= max_candidate_windows:
+            return
         for key in sorted(candidates, key=lambda item: (-score(item), item[0])):
+            if len(selected) >= max_candidate_windows:
+                return
             if key in selected_set:
                 continue
             selected.append(key)
             selected_set.add(key)
-            if len(selected) >= max_candidate_windows:
-                return
 
     novel = [key for key in interior if _approved_brand_key(windows[key]) is None]
     known = [key for key in interior if _approved_brand_key(windows[key]) is not None]
@@ -1218,16 +1299,19 @@ def select_candidate_windows(
         ))
     add_distributed(representatives)
 
-    # One representative for each approved logo in every five-minute bucket
-    # preserves temporal coverage without letting the same watermark consume
-    # hundreds of semantic slots.
-    representatives: dict[tuple[str, int], tuple[float, float]] = {}
-    for key in known:
-        identity = (_approved_brand_key(windows[key]) or "", bucket_for(key))
-        current = representatives.get(identity)
-        if current is None or (score(key), -key[0]) > (score(current), -current[0]):
-            representatives[identity] = key
-    add_distributed(list(representatives.values()))
+    # One representative for each approved geometry track in every five-minute
+    # bucket preserves temporal coverage. A memory key identifies one reviewed
+    # example, not the physical logo track, so grouping by it fragments a single
+    # watermark and can starve later buckets of semantic slots.
+    approved_groups = _approved_brand_time_groups(
+        known, windows, scan_start=scan_start,
+        coverage_bucket_seconds=coverage_bucket_seconds,
+    )
+    representatives = [
+        max(group, key=lambda key: (score(key), -key[0]))
+        for group in approved_groups
+    ]
+    add_distributed(representatives)
     add_distributed(full_frame)
     add_distributed(known)
     return selected
@@ -1509,7 +1593,8 @@ def scan_visual_logos(
             initial_answer = None
             if (
                 isinstance(memory_match, dict)
-                and float(memory_match.get("similarity", 0.0)) >= 0.94
+                and float(memory_match.get("similarity", 0.0))
+                >= APPROVED_BRAND_MEMORY_SIMILARITY
                 and memory_match.get("memory_class") == "brand"
             ):
                 state = "CONFIRMED"

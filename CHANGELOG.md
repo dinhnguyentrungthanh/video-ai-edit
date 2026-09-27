@@ -1,3 +1,11 @@
+# 0.7.24 - 2026-09-27
+
+- Map approved brand-memory candidates by learned logo geometry and five-minute time bucket instead of treating every reviewed memory record as a separate physical track.
+- Require `0.94` similarity before a brand-memory match can bypass semantic confirmation; weaker matches return to regional/full-frame candidate routing.
+- Preserve every concrete regional lead, two complementary full-frame representatives per time bucket, and one representative for every approved geometry track per time bucket.
+- Fix distributed candidate selection so it cannot append past the configured semantic-model budget.
+- Validate the new routing against Troy's cached 2,330 windows: all 181 regional leads, all 80 required full-frame representatives, and all 39 approved geometry/time groups are covered within the existing 420-window budget.
+
 # 0.7.23 - 2026-09-27
 
 - Promote sustained adult findings labelled `porn` or `hentai` to high-priority review when confidence is at least `0.99` for four seconds or longer; this changes review ordering only and never creates or approves an edit.
