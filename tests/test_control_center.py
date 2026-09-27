@@ -17,12 +17,22 @@ from biliflow.final_renderer import render_progress_path
 class ControlCenterVisualAuditTests(unittest.TestCase):
     def test_dashboard_preserves_metadata_drafts_across_refreshes(self):
         page = _dashboard_html()
-        self.assertIn("const detectorDrafts={};const metadataDrafts={};", page)
+        self.assertIn(
+            "const detectorDrafts={};const metadataDrafts={};const rerunPanelDrafts={};",
+            page,
+        )
         self.assertIn("function metadataSelection(j)", page)
         self.assertIn("function captureMetadataDraft(id)", page)
         self.assertIn('onchange="captureMetadataDraft(${id})"', page)
         self.assertIn("content_style:metadata.content_style", page)
         self.assertIn("delete metadataDrafts[id]", page)
+
+    def test_dashboard_preserves_open_rerun_panel_across_refreshes(self):
+        page = _dashboard_html()
+        self.assertIn("function captureRerunPanelDrafts()", page)
+        self.assertIn("captureRerunPanelDrafts();const jobs=", page)
+        self.assertIn('data-job-id="${id}" ${rerunPanelDrafts[id]?\'open\':\'\'}', page)
+        self.assertIn("delete rerunPanelDrafts[id]", page)
 
     def test_dashboard_groups_jobs_and_shows_export_lifecycle(self):
         page = _dashboard_html()

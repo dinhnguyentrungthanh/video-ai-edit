@@ -1,3 +1,10 @@
+## Stable rerun controls V0.7.21 — 2026-09-27
+
+- Dashboard refreshes every three seconds but now captures the open/closed state of every `Chạy lại kiểm tra` panel before rebuilding video cards.
+- An open rerun panel is restored immediately after rendering, so detector choices no longer disappear while the user is selecting a scope.
+- The saved UI state is removed after the rerun request succeeds. This changes no scheduler, detector, report, review or renderer behavior.
+- Shared stages now sort sibling artifact roots by a stable path key. This removes a pre-existing nondeterministic cache miss for the paired gore/violence reports discovered by the full regression suite.
+
 ## Live-action adult sequence completion V0.7.20 — 2026-09-27
 
 - A frame-by-frame Troy audit confirmed a temporal coverage defect rather than a render defect. The source adult sequence begins around `06:56`, while the old `0.95` frame gate produced five separate intervals beginning only at `07:01.5` and left short unblurred cutaways.

@@ -1,3 +1,10 @@
+# 0.7.21 - 2026-09-27
+
+- Preserve the open or closed state of each video's `Chạy lại kiểm tra` panel across the Dashboard's three-second refresh cycle.
+- Keep detector checkbox drafts visible while the panel is open and clear the saved panel state only after a rerun is successfully queued.
+- Sort sibling stage-artifact roots deterministically so shared gore/violence cache snapshots cannot miss only because set iteration returned a different directory order.
+- Keep detector commands, review data and media processing unchanged; the cache fix only makes an existing exact-match restore deterministic.
+
 # 0.7.20 - 2026-09-27
 
 - Complete live-action adult scenes around high-confidence NSFW seeds instead of exposing only isolated frames above the global threshold.

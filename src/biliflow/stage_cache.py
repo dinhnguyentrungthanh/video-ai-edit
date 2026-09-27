@@ -85,7 +85,8 @@ def _tree_fingerprint(root: Path) -> str:
 
 def _artifact_roots(paths: Iterable[Path]) -> tuple[Path, ...]:
     parents = sorted(
-        {path.resolve().parent for path in paths}, key=lambda path: len(path.parts)
+        {path.resolve().parent for path in paths},
+        key=lambda path: (len(path.parts), path.as_posix().casefold()),
     )
     if not parents:
         raise ValueError("A cached stage must declare at least one artifact")
