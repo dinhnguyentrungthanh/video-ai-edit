@@ -65,6 +65,9 @@ def build_parser() -> argparse.ArgumentParser:
     )
     scan.add_argument("--temporal-window-frames", type=int, default=5)
     scan.add_argument("--temporal-minimum-hits", type=int, default=3)
+    scan.add_argument("--review-merge-gap-seconds", type=float, default=3.0)
+    scan.add_argument("--sequence-context-threshold", type=float, default=0.70)
+    scan.add_argument("--sequence-context-seconds", type=float, default=8.0)
 
     content_scan = sub.add_parser(
         "scan-content", help="Scan a video with the local gore or violence classifier"
@@ -421,6 +424,9 @@ def main() -> int:
             content_style=args.content_style,
             temporal_window_frames=args.temporal_window_frames,
             temporal_minimum_hits=args.temporal_minimum_hits,
+            review_merge_gap_seconds=args.review_merge_gap_seconds,
+            sequence_context_threshold=args.sequence_context_threshold,
+            sequence_context_seconds=args.sequence_context_seconds,
         )
         print(json.dumps(payload, indent=2, ensure_ascii=False))
         return 0

@@ -168,6 +168,12 @@ def pipeline_stages(
                     run_command(
                         root, "scan", "--input", source, "--report-dir", adult,
                         "--sample-fps", config["adult_sample_fps"],
+                        "--review-merge-gap-seconds",
+                        config["adult_review_merge_gap_seconds"],
+                        "--sequence-context-threshold",
+                        config["adult_sequence_context_threshold"],
+                        "--sequence-context-seconds",
+                        config["adult_sequence_context_seconds"],
                         "--content-style", "live_action", "--device", "cuda",
                     ),
                     (adult / "scan.json",),

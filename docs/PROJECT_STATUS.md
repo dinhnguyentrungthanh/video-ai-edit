@@ -1,3 +1,12 @@
+## Live-action adult sequence completion V0.7.20 — 2026-09-27
+
+- A frame-by-frame Troy audit confirmed a temporal coverage defect rather than a render defect. The source adult sequence begins around `06:56`, while the old `0.95` frame gate produced five separate intervals beginning only at `07:01.5` and left short unblurred cutaways.
+- The high-confidence `0.95` score remains the only signal allowed to create a required review item. Nearby `0.70+` scores may only extend that existing seed, bounded to eight seconds on either side.
+- Adult intervals separated by at most three seconds after padding are presented as one continuous review interval. This covers camera cutaways inside the same sequence without merging the unrelated candidate at `07:55–07:58`.
+- Applying the new policy to the measured Troy scores changes the fragmented `07:01.5–07:40.5` coverage into one `06:54.5–07:45.5` interval. An isolated moderate score still creates no item.
+- The policy values are explicit adult-stage arguments in both processing profiles, so the stage-cache command fingerprint changes and a requested rerun cannot restore the old adult artifact.
+- No advertising/logo, gore, violence, review-decision or renderer logic changed. Verification: 223/223 automated tests pass.
+
 ## Completed export history V0.7.19 — 2026-09-27
 
 - Completed cards retain a full 100% export bar instead of replacing progress with a generic completion label.

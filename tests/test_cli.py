@@ -24,6 +24,9 @@ class CliTests(unittest.TestCase):
                 self.assertEqual(main(), 0)
             arguments = scanner.call_args.kwargs
             self.assertEqual(arguments["threshold"], 0.95)
+            self.assertEqual(arguments["review_merge_gap_seconds"], 3.0)
+            self.assertEqual(arguments["sequence_context_threshold"], 0.70)
+            self.assertEqual(arguments["sequence_context_seconds"], 8.0)
             self.assertEqual(arguments["content_style"], "unknown")
             self.assertNotIn("adult_threshold", arguments)
             self.assertEqual(arguments["input_path"], Path("input.mp4"))

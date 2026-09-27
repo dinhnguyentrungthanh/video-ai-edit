@@ -6,6 +6,7 @@ import json
 import os
 import subprocess
 import time
+from bisect import bisect_left, bisect_right
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -14,7 +15,7 @@ import torch
 from PIL import Image
 from transformers import AutoImageProcessor, AutoModelForImageClassification
 
-from biliflow.intervals import compact_interval_thumbnails, group_hits
+from biliflow.intervals import compact_interval_thumbnails, group_hits, merge_intervals
 from biliflow.probe import duration_seconds, probe_video
 from biliflow.report import write_report
 from biliflow.storage import require_capacity
@@ -86,6 +87,79 @@ def temporal_confirm_hits(hits: list[dict], window_frames: int, minimum_hits: in
     return [hit for hit in hits if int(hit["frame_index"]) in confirmed]
 
 
+def complete_nsfw_sequence_context(
+    intervals: list[dict],
+    score_samples: list[dict],
+    *,
+    context_threshold: float,
+    context_seconds: float,
+    padding_seconds: float,
+    duration_seconds: float,
+) -> list[dict]:
+    """Extend strong NSFW seeds with nearby moderate evidence.
+
+    A high threshold remains responsible for creating every review interval.  A
+    lower score can only extend an existing seed by a bounded amount, so an
+    isolated moderate frame never creates a new 18+ finding on its own.  This
+    fills the lead-in, cutaway and tail frames of one continuous adult scene
+    without lowering the detector threshold across the whole video.
+    """
+    if not 0 <= context_threshold <= 1:
+        raise ValueError("context_threshold must be between zero and one")
+    if context_seconds < 0 or padding_seconds < 0:
+        raise ValueError("context_seconds and padding_seconds cannot be negative")
+    if not intervals or context_seconds == 0:
+        return [dict(interval) for interval in intervals]
+
+    samples = sorted(score_samples, key=lambda item: float(item["timestamp_seconds"]))
+    timestamps = [float(sample["timestamp_seconds"]) for sample in samples]
+    completed: list[dict] = []
+    for interval in intervals:
+        original_start = float(interval["start_seconds"])
+        original_end = float(interval["end_seconds"])
+        before = [
+            sample for sample in samples[
+                bisect_left(timestamps, original_start - context_seconds):
+                bisect_left(timestamps, original_start)
+            ]
+            if float(sample["timestamp_seconds"]) < original_start
+            and float(sample["score"]) >= context_threshold
+        ]
+        after = [
+            sample for sample in samples[
+                bisect_right(timestamps, original_end):
+                bisect_right(timestamps, original_end + context_seconds)
+            ]
+            if original_end < float(sample["timestamp_seconds"])
+            and float(sample["score"]) >= context_threshold
+        ]
+        start = original_start
+        end = original_end
+        if before:
+            start = max(
+                0.0,
+                min(float(sample["timestamp_seconds"]) for sample in before) - padding_seconds,
+            )
+        if after:
+            end = min(
+                duration_seconds,
+                max(float(sample["timestamp_seconds"]) for sample in after) + padding_seconds,
+            )
+        value = dict(interval)
+        value["start_seconds"] = round(start, 3)
+        value["end_seconds"] = round(end, 3)
+        value["sequence_context"] = {
+            "applied": start < original_start or end > original_end,
+            "detector_start_seconds": round(original_start, 3),
+            "detector_end_seconds": round(original_end, 3),
+            "supporting_sample_count": len(before) + len(after),
+            "context_threshold": context_threshold,
+            "maximum_extension_seconds": context_seconds,
+        }
+        completed.append(value)
+    return completed
+
+
 def scan_nsfw(
     *,
     project_root: Path,
@@ -104,6 +178,9 @@ def scan_nsfw(
     content_style: str = "unknown",
     temporal_window_frames: int = 5,
     temporal_minimum_hits: int = 3,
+    review_merge_gap_seconds: float = 3.0,
+    sequence_context_threshold: float = 0.70,
+    sequence_context_seconds: float = 8.0,
 ) -> dict:
     input_path = input_path.resolve(strict=True)
     project_root = project_root.resolve(strict=True)
@@ -118,6 +195,12 @@ def scan_nsfw(
 
     if sample_fps <= 0 or batch_size <= 0 or top_k_candidates <= 0:
         raise ValueError("sample_fps, batch_size and top_k_candidates must be positive")
+    if not 0 <= sequence_context_threshold <= threshold <= 1:
+        raise ValueError("NSFW thresholds must be ordered between zero and one")
+    if merge_gap_seconds < 0 or review_merge_gap_seconds < 0:
+        raise ValueError("NSFW merge gaps cannot be negative")
+    if padding_seconds < 0 or sequence_context_seconds < 0:
+        raise ValueError("NSFW padding and sequence context cannot be negative")
     input_stat = input_path.stat()
     require_capacity(project_root, estimated_job_gb=max(8.0, input_stat.st_size / 1024**3 * 5))
 
@@ -163,6 +246,7 @@ def scan_nsfw(
     frames_scanned = 0
     hits: list[dict] = []
     scores: list[float] = []
+    score_samples: list[dict] = []
     candidate_heap: list[tuple[float, int, Image.Image]] = []
     batch: list[Image.Image] = []
     batch_indices: list[int] = []
@@ -188,6 +272,13 @@ def scan_nsfw(
         ):
             score = float(score)
             scores.append(score)
+            score_samples.append(
+                {
+                    "frame_index": frame_index,
+                    "timestamp_seconds": round(frame_index / sample_fps, 3),
+                    "score": score,
+                }
+            )
             candidate = (score, frame_index, image.copy())
             if len(candidate_heap) < top_k_candidates:
                 heapq.heappush(candidate_heap, candidate)
@@ -260,6 +351,17 @@ def scan_nsfw(
                     thumbnail.unlink()
         hits = confirmed_hits
     intervals = group_hits(hits, merge_gap_seconds, padding_seconds, video_duration)
+    detector_interval_count = len(intervals)
+    if content_style == "live_action":
+        intervals = merge_intervals(intervals, review_merge_gap_seconds)
+        intervals = complete_nsfw_sequence_context(
+            intervals,
+            score_samples,
+            context_threshold=sequence_context_threshold,
+            context_seconds=sequence_context_seconds,
+            padding_seconds=padding_seconds,
+            duration_seconds=video_duration,
+        )
     retained_thumbnail_count = compact_interval_thumbnails(report_dir, hits, intervals)
     top_candidates = []
     for score, frame_index, image in sorted(candidate_heap, reverse=True):
@@ -296,6 +398,20 @@ def scan_nsfw(
             "minimum_positive_frames": temporal_minimum_hits,
             "raw_hit_count": raw_hit_count,
             "confirmed_hit_count": len(hits),
+        },
+        "sequence_completion": {
+            "enabled": content_style == "live_action",
+            "seed_threshold": threshold,
+            "context_threshold": sequence_context_threshold,
+            "maximum_context_seconds": sequence_context_seconds,
+            "review_merge_gap_seconds": review_merge_gap_seconds,
+            "detector_interval_count": detector_interval_count,
+            "completed_interval_count": len(intervals),
+            "extended_interval_count": sum(
+                bool(interval.get("sequence_context", {}).get("applied"))
+                for interval in intervals
+            ),
+            "moderate_evidence_creates_new_interval": False,
         },
         "score_summary": _score_summary(scores),
         "top_candidates": top_candidates,

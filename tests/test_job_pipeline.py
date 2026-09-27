@@ -46,6 +46,17 @@ class JobPipelineTests(unittest.TestCase):
         self.assertIn("confirm_violence", names)
         self.assertIn("localize_logo", names)
 
+    def test_live_adult_stage_pins_sequence_completion_policy(self):
+        source = next((ROOT / "input").glob("*.mp4"))
+        stages = pipeline_stages(
+            root=ROOT, job_key="test-live-adult-policy", source=source,
+            content_style="live_action", profile="careful", detector_groups=["adult"],
+        )
+        argv = next(stage for stage in stages if stage.name == "adult").commands[0].argv
+        self.assertEqual(argv[argv.index("--review-merge-gap-seconds") + 1], "3.0")
+        self.assertEqual(argv[argv.index("--sequence-context-threshold") + 1], "0.7")
+        self.assertEqual(argv[argv.index("--sequence-context-seconds") + 1], "8.0")
+
     def test_localize_stage_runs_florence_then_grounding_fallback(self):
         source = next((ROOT / "input").glob("*.mp4"))
         stages = pipeline_stages(

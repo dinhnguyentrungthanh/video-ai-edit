@@ -1,3 +1,12 @@
+# 0.7.20 - 2026-09-27
+
+- Complete live-action adult scenes around high-confidence NSFW seeds instead of exposing only isolated frames above the global threshold.
+- Keep `0.95` as the only threshold that can create a review item; use `0.70` evidence only to extend an existing item by at most eight seconds, so moderate standalone frames do not add false findings.
+- Merge review gaps up to three seconds inside one adult sequence while leaving longer gaps and unrelated candidates separate.
+- Pin the sequence policy in processing profiles and adult-stage commands, which prevents an older cached adult report from satisfying a rerun after this detector upgrade.
+- Recheck Troy source scores: the fragmented `07:01.5–07:40.5` detections now form one review interval covering `06:54.5–07:45.5`; the separate `07:55–07:58` candidate remains independent.
+- Keep advertising/logo, gore, violence, review decisions and rendering unchanged; pass 223/223 automated tests.
+
 # 0.7.19 - 2026-09-27
 
 - Keep the export progress bar visible at 100% on completed video cards.
