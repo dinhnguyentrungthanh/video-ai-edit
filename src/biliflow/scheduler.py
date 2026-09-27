@@ -30,6 +30,8 @@ from biliflow.final_renderer import (
 )
 from biliflow.probe import duration_seconds, probe_video
 from biliflow.license_policy import audit_project_models
+from biliflow.stage_cache import StageArtifactCache
+from biliflow.cleanup import prune_file_caches
 
 
 ACTIVE_STATES = {
@@ -56,6 +58,7 @@ class JobScheduler:
         self._process: subprocess.Popen | None = None
         self._active: tuple[int, str] | None = None
         self._log_handle = None
+        self._stage_cache = StageArtifactCache(self.root)
 
     @property
     def active(self) -> dict[str, Any] | None:
@@ -310,37 +313,78 @@ class JobScheduler:
         try:
             if name == "preflight":
                 self._run_preflight(job)
-            for command in definition.commands:
-                log_handle = log_path.open("ab")
-                kwargs: dict[str, Any] = {"cwd": self.root, "stdout": log_handle,
-                                          "stderr": subprocess.STDOUT}
-                if os.name == "nt":
-                    kwargs["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
-                process = subprocess.Popen(command.argv, **kwargs)
-                with self._lock:
-                    self._process = process
-                    self._active = (job_id, name)
-                    self._log_handle = log_handle
-                self.store.update_stage(job_id, name, pid=process.pid, heartbeat_at=now_iso())
-                while process.poll() is None:
-                    if self._stop.wait(1.0):
-                        break
-                    self.store.update_stage(job_id, name, heartbeat_at=now_iso())
-                if process.poll() is None:
-                    self._terminate_process(process)
-                code = process.wait()
-                log_handle.close()
-                with self._lock:
-                    self._process = None
-                    self._active = None
-                    self._log_handle = None
-                if code != 0:
-                    raise RuntimeError(f"Stage process exited with code {code}; see {log_path}")
-                for artifact in command.expected_artifacts:
-                    validate_json_artifact(artifact)
-                    relative = artifact.resolve().relative_to(self.root).as_posix()
-                    self.store.add_artifact(job_id, stage_name=name, kind=name,
-                                            path=relative, bytes_count=artifact.stat().st_size)
+            artifacts = tuple(
+                artifact
+                for command in definition.commands
+                for artifact in command.expected_artifacts
+            )
+            report_root = self.root / "reports" / "jobs" / self._pipeline_key(job)
+            cache_hit = self._stage_cache.restore(
+                stage_name=name,
+                source_sha256=str(job["source_sha256"]),
+                source_path=Path(job["source_path"]),
+                report_root=report_root,
+                commands=(command.argv for command in definition.commands),
+                artifact_paths=artifacts,
+            )
+            if cache_hit is not None:
+                self.store.add_event(
+                    job_id, "STAGE_CACHE_HIT",
+                    f"Stage {name} restored from an exact source/config cache",
+                    payload={"stage": name, "cache_key": cache_hit["key"]},
+                )
+                for artifact in artifacts:
+                    self._register_artifact(job_id, name, artifact)
+            else:
+                for command in definition.commands:
+                    log_handle = log_path.open("ab")
+                    kwargs: dict[str, Any] = {"cwd": self.root, "stdout": log_handle,
+                                              "stderr": subprocess.STDOUT}
+                    if os.name == "nt":
+                        kwargs["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
+                    process = subprocess.Popen(command.argv, **kwargs)
+                    with self._lock:
+                        self._process = process
+                        self._active = (job_id, name)
+                        self._log_handle = log_handle
+                    self.store.update_stage(job_id, name, pid=process.pid, heartbeat_at=now_iso())
+                    while process.poll() is None:
+                        if self._stop.wait(1.0):
+                            break
+                        self.store.update_stage(job_id, name, heartbeat_at=now_iso())
+                    if process.poll() is None:
+                        self._terminate_process(process)
+                    code = process.wait()
+                    log_handle.close()
+                    with self._lock:
+                        self._process = None
+                        self._active = None
+                        self._log_handle = None
+                    if code != 0:
+                        raise RuntimeError(f"Stage process exited with code {code}; see {log_path}")
+                    for artifact in command.expected_artifacts:
+                        self._register_artifact(job_id, name, artifact)
+                cached = self._stage_cache.store(
+                    stage_name=name,
+                    source_sha256=str(job["source_sha256"]),
+                    source_path=Path(job["source_path"]),
+                    report_root=report_root,
+                    commands=(command.argv for command in definition.commands),
+                    artifact_paths=artifacts,
+                )
+                if cached is not None:
+                    pruning = self._stage_cache.prune()
+                    file_pruning = prune_file_caches(self.root)
+                    self.store.add_event(
+                        job_id, "STAGE_CACHE_STORED",
+                        f"Stage {name} saved for exact reruns",
+                        payload={
+                            "stage": name,
+                            "cache_key": cached["key"],
+                            **pruning,
+                            "file_cache_pruning": file_pruning,
+                        },
+                    )
             self.store.update_stage(job_id, name, state="COMPLETED", progress=1.0,
                                     pid=None, heartbeat_at=now_iso(), completed_at=now_iso(),
                                     error=None)
@@ -364,6 +408,14 @@ class JobScheduler:
                 self.store.update_job(job_id, state="FAILED", error=str(error), current_stage=name)
                 self.store.add_event(job_id, "STAGE_FAILED", str(error), level="ERROR",
                                      payload={"stage": name})
+
+    def _register_artifact(self, job_id: int, stage_name: str, artifact: Path) -> None:
+        validate_json_artifact(artifact)
+        relative = artifact.resolve().relative_to(self.root).as_posix()
+        self.store.add_artifact(
+            job_id, stage_name=stage_name, kind=stage_name,
+            path=relative, bytes_count=artifact.stat().st_size,
+        )
 
     def _run_preflight(self, job: dict[str, Any]) -> None:
         source = Path(job["source_path"])

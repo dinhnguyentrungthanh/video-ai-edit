@@ -26,6 +26,7 @@ from biliflow.storage import storage_status
 from biliflow.textscan import scan_text
 from biliflow.text_semantics import classify_text_report
 from biliflow.violence_scanner import scan_violence
+from biliflow.live_safety_scanner import scan_live_safety
 from biliflow.video_benchmark import benchmark_videos
 from biliflow.vlm_confirmation import confirm_violence_report
 from biliflow.visual_logo_scanner import scan_visual_logos
@@ -90,6 +91,40 @@ def build_parser() -> argparse.ArgumentParser:
     content_scan.add_argument("--temporal-minimum-hits", type=int, default=3)
     content_scan.add_argument("--clip-frames", type=int, default=16)
     content_scan.add_argument("--stride-frames", type=int, default=8)
+
+    live_safety = sub.add_parser(
+        "scan-live-safety",
+        help="Scan live-action gore and violence from one exact shared decode",
+    )
+    live_safety.add_argument("--input", type=Path, required=True)
+    live_safety.add_argument("--report-dir", type=Path, required=True)
+    live_safety.add_argument(
+        "--gore-model", type=Path,
+        default=root / "models" / "image_safety_classifier_m",
+    )
+    live_safety.add_argument(
+        "--violence-model", type=Path,
+        default=root / "models" / "vit_base_violence_detection",
+    )
+    live_safety.add_argument(
+        "--ffmpeg", type=Path,
+        default=root / "tools" / "ffmpeg" / "bin" / "ffmpeg.exe",
+    )
+    live_safety.add_argument(
+        "--ffprobe", type=Path,
+        default=root / "tools" / "ffmpeg" / "bin" / "ffprobe.exe",
+    )
+    live_safety.add_argument("--gore-sample-fps", type=float, default=2.0)
+    live_safety.add_argument("--violence-sample-fps", type=float, default=8.0)
+    live_safety.add_argument("--gore-batch-size", type=int, default=16)
+    live_safety.add_argument("--clip-frames", type=int, default=16)
+    live_safety.add_argument("--stride-frames", type=int, default=8)
+    live_safety.add_argument("--top-k", type=int, default=20)
+    live_safety.add_argument("--gore-threshold", type=float, default=0.50)
+    live_safety.add_argument("--violence-threshold", type=float, default=0.28)
+    live_safety.add_argument("--merge-gap-seconds", type=float, default=2.0)
+    live_safety.add_argument("--padding-seconds", type=float, default=1.0)
+    live_safety.add_argument("--device", choices=["cuda", "cpu"], default="cuda")
 
     confirm_violence = sub.add_parser(
         "confirm-violence",
@@ -467,6 +502,39 @@ def main() -> int:
             device_name=args.device,
         )
         print(json.dumps(payload, indent=2, ensure_ascii=False))
+        return 0
+    if args.command == "scan-live-safety":
+        ensure_model_allowed(root, args.gore_model)
+        ensure_model_allowed(root, args.violence_model)
+        payload = scan_live_safety(
+            project_root=root,
+            input_path=args.input,
+            report_dir=args.report_dir,
+            gore_model_path=args.gore_model,
+            violence_model_path=args.violence_model,
+            ffmpeg_path=args.ffmpeg,
+            ffprobe_path=args.ffprobe,
+            gore_sample_fps=args.gore_sample_fps,
+            violence_sample_fps=args.violence_sample_fps,
+            gore_batch_size=args.gore_batch_size,
+            clip_frames=args.clip_frames,
+            stride_frames=args.stride_frames,
+            top_k_candidates=args.top_k,
+            gore_threshold=args.gore_threshold,
+            violence_threshold=args.violence_threshold,
+            gore_merge_gap_seconds=args.merge_gap_seconds,
+            violence_merge_gap_seconds=args.merge_gap_seconds,
+            padding_seconds=args.padding_seconds,
+            device_name=args.device,
+        )
+        print(json.dumps({
+            "gore_report": str((args.report_dir / "gore" / "scan.json").resolve()),
+            "violence_report": str((args.report_dir / "violence" / "scan.json").resolve()),
+            "frames_scanned": {
+                "gore": payload["gore"]["frames_scanned"],
+                "violence": payload["violence"]["frames_scanned"],
+            },
+        }, indent=2, ensure_ascii=False))
         return 0
     if args.command == "scan-content":
         if args.kind == "violence":

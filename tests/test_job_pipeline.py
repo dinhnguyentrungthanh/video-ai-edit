@@ -40,6 +40,9 @@ class JobPipelineTests(unittest.TestCase):
             root=ROOT, job_key="test-live", source=source,
             content_style="live_action", profile="careful")]
         self.assertIn("adult", names)
+        self.assertIn("live_safety", names)
+        self.assertNotIn("gore", names)
+        self.assertNotIn("violence", names)
         self.assertIn("confirm_violence", names)
         self.assertIn("localize_logo", names)
 
@@ -128,6 +131,21 @@ class JobPipelineTests(unittest.TestCase):
             detector_groups=["gore"],
         )]
         self.assertEqual(names, ["preflight", "gore", "build_review"])
+
+    def test_live_gore_and_violence_share_one_decode_stage(self):
+        source = next((ROOT / "input").glob("*.mp4"))
+        stages = pipeline_stages(
+            root=ROOT, job_key="test-live-shared", source=source,
+            content_style="live_action", profile="careful",
+            detector_groups=["gore", "violence"],
+        )
+        self.assertEqual(
+            [stage.name for stage in stages],
+            ["preflight", "live_safety", "confirm_violence", "build_review"],
+        )
+        shared = stages[1]
+        self.assertIn("scan-live-safety", shared.commands[0].argv)
+        self.assertEqual(len(shared.commands[0].expected_artifacts), 2)
 
     def test_detector_selection_rejects_empty_and_unknown_values(self):
         with self.assertRaises(ValueError):

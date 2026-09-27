@@ -173,7 +173,24 @@ def pipeline_stages(
                     (adult / "scan.json",),
                 ),), uses_gpu=True,
             ))
-        if "gore" in selected_detectors:
+        shared_live_safety = (
+            "gore" in selected_detectors and "violence" in selected_detectors
+        )
+        if shared_live_safety:
+            stages.append(PipelineStage(
+                "live_safety", "SCANNING_SAFETY",
+                (StageCommand(
+                    run_command(
+                        root, "scan-live-safety", "--input", source,
+                        "--report-dir", base,
+                        "--gore-sample-fps", config["gore_sample_fps"],
+                        "--violence-sample-fps", config["violence_sample_fps"],
+                        "--device", "cuda",
+                    ),
+                    (gore / "scan.json", violence / "scan.json"),
+                ),), uses_gpu=True,
+            ))
+        elif "gore" in selected_detectors:
             stages.append(
             PipelineStage(
                 "gore", "SCANNING_SAFETY",
@@ -187,8 +204,8 @@ def pipeline_stages(
                     (gore / "scan.json",),
                 ),), uses_gpu=True,
             ))
-        if "violence" in selected_detectors:
-            stages.extend([
+        if "violence" in selected_detectors and not shared_live_safety:
+            stages.append(
             PipelineStage(
                 "violence", "SCANNING_SAFETY",
                 (StageCommand(
@@ -200,7 +217,9 @@ def pipeline_stages(
                     ),
                     (violence / "scan.json",),
                 ),), uses_gpu=True,
-            ),
+            ))
+        if "violence" in selected_detectors:
+            stages.append(
             PipelineStage(
                 "confirm_violence", "SCANNING_SAFETY",
                 (StageCommand(
@@ -210,8 +229,7 @@ def pipeline_stages(
                     ),
                     (violence / "scan-confirmed.json",),
                 ),), uses_gpu=True,
-            ),
-            ])
+            ))
 
     if "advertising" in selected_detectors:
         text = base / "text"

@@ -15,7 +15,7 @@ $CommandName = if ($BiliflowArgs.Count -gt 0) { $BiliflowArgs[0] } else { '' }
 $UsesCuda = -not ($BiliflowArgs -contains '--device' -and $BiliflowArgs[([Array]::IndexOf($BiliflowArgs, '--device') + 1)] -eq 'cpu')
 $GpuCommands = @(
     'scan', 'scan-text', 'classify-text', 'scan-content',
-    'scan-animation-safety', 'scan-visual-logo',
+    'scan-animation-safety', 'scan-live-safety', 'scan-visual-logo',
     'confirm-violence', 'benchmark-images', 'benchmark-videos', 'benchmark-ad-pipeline',
     'localize-visual-logo', 'augment-grounding-regions'
 )

@@ -13,6 +13,72 @@ from biliflow.final_renderer import render_progress_path
 
 
 class SchedulerTests(unittest.TestCase):
+    def test_exact_stage_cache_skips_subprocess_and_restores_new_revision(self):
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            for name in (
+                "input", "reports/jobs", "logs", "config", "scripts",
+                "src/biliflow",
+            ):
+                (root / name).mkdir(parents=True, exist_ok=True)
+            (root / "src" / "biliflow" / "worker.py").write_text(
+                "VERSION = 1\n", encoding="utf-8"
+            )
+            (root / "config" / "processing_profiles.json").write_text(
+                "{}", encoding="utf-8"
+            )
+            (root / "scripts" / "run.ps1").write_text("run", encoding="utf-8")
+            source = root / "input" / "video.mp4"
+            source.write_bytes(b"video")
+            source_sha = "a" * 64
+            store = JobStore(root / "jobs.sqlite3")
+            job = store.upsert_job(
+                job_key="run-2", source_path=source,
+                source_sha256=source_sha, source_size_bytes=5,
+                source_mtime_ns=source.stat().st_mtime_ns,
+                content_style="live_action", state="QUEUED",
+            )
+            store.replace_stages(job["id"], ["adult"])
+            scheduler = JobScheduler(root, store)
+            old_root = root / "reports" / "jobs" / "run-1"
+            old_artifact = old_root / "adult" / "scan.json"
+            (old_artifact.parent / "thumbnails").mkdir(parents=True)
+            (old_artifact.parent / "thumbnails" / "frame.jpg").write_bytes(b"jpg")
+            old_artifact.write_text(
+                json.dumps({"status": "COMPLETED", "input_sha256": source_sha}),
+                encoding="utf-8",
+            )
+            old_command = (
+                "missing-scanner", "--input", str(source),
+                "--report-dir", str(old_artifact.parent),
+            )
+            scheduler._stage_cache.store(
+                stage_name="adult", source_sha256=source_sha,
+                source_path=source, report_root=old_root,
+                commands=(old_command,), artifact_paths=(old_artifact,),
+            )
+            new_root = root / "reports" / "jobs" / "run-2"
+            new_artifact = new_root / "adult" / "scan.json"
+            new_command = (
+                "missing-scanner", "--input", str(source),
+                "--report-dir", str(new_artifact.parent),
+            )
+            definition = PipelineStage(
+                "adult", "SCANNING_SAFETY",
+                (StageCommand(new_command, (new_artifact,)),), uses_gpu=True,
+            )
+            try:
+                scheduler._execute(
+                    store.get_job(job["id"]), store.stage(job["id"], "adult"), definition
+                )
+                self.assertEqual(store.stage(job["id"], "adult")["state"], "COMPLETED")
+                self.assertTrue(new_artifact.is_file())
+                self.assertTrue((new_artifact.parent / "thumbnails" / "frame.jpg").is_file())
+                events = store.events(job["id"])
+                self.assertTrue(any(item["event_type"] == "STAGE_CACHE_HIT" for item in events))
+            finally:
+                store.close()
+
     def test_interrupted_render_removes_only_its_partial_output(self):
         with TemporaryDirectory() as directory:
             root = Path(directory)
