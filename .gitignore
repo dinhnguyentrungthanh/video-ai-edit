@@ -50,3 +50,7 @@ backup_billi/
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
+
+# Bootstrap clone retained temporarily
+video-ai-edit/
+state/
