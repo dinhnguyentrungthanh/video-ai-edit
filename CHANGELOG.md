@@ -1,3 +1,9 @@
+# 0.7.23 - 2026-09-27
+
+- Promote sustained adult findings labelled `porn` or `hentai` to high-priority review when confidence is at least `0.99` for four seconds or longer; this changes review ordering only and never creates or approves an edit.
+- Add a safe priority refresh for an existing queue so detector output and saved review decisions remain untouched after the ranking upgrade.
+- Verify the reported Troy sequence: explicit content is detected at `15:28.5–15:50.5` and `16:23–17:07`; the gap is a legitimate banquet cutaway rather than a missed continuation.
+
 # 0.7.22 - 2026-09-27
 
 - Refresh an already-open Review page when a rerun publishes a new queue revision, so newly detected adult, violence and advertising findings cannot remain hidden behind the previous in-memory queue.

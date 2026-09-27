@@ -22,6 +22,7 @@ from biliflow.review_workflow import (
     review_export_paths,
     review_resource_status,
     pixel_region_iou,
+    promote_strong_adult_priorities,
     refine_persistent_logo_regions,
     tighten_text_region,
     union_pixel_regions,
@@ -29,6 +30,28 @@ from biliflow.review_workflow import (
 
 
 class VisualAuditQueueTests(unittest.TestCase):
+    def test_sustained_high_confidence_adult_scene_is_prioritized(self):
+        items = promote_strong_adult_priorities([
+            {
+                "id": "adult-strong", "category": "adult", "priority": "context",
+                "start_seconds": 928.5, "end_seconds": 950.5,
+                "max_score": 0.999486, "labels": ["porn"], "decision": None,
+            },
+            {
+                "id": "adult-short", "category": "adult", "priority": "context",
+                "start_seconds": 475.0, "end_seconds": 478.0,
+                "max_score": 0.9999, "labels": ["porn"], "decision": None,
+            },
+            {
+                "id": "violence", "category": "violence", "priority": "context",
+                "start_seconds": 928.5, "end_seconds": 950.5,
+                "max_score": 1.0, "labels": ["Violent"], "decision": None,
+            },
+        ])
+        self.assertEqual(items[0]["priority"], "high")
+        self.assertEqual(items[1]["priority"], "context")
+        self.assertEqual(items[2]["priority"], "context")
+
     def test_high_confidence_visual_conflict_requires_human_choice(self):
         with TemporaryDirectory() as directory:
             root = Path(directory)

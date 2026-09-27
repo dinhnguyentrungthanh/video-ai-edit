@@ -122,6 +122,34 @@ def _priority(interval: dict) -> str:
     return "context"
 
 
+def promote_strong_adult_priorities(items: list[dict]) -> list[dict]:
+    """Put sustained, high-confidence explicit scenes at the front of review.
+
+    This only changes review ordering. It never creates a finding or assigns
+    an edit decision, and therefore cannot turn weak evidence into an edit.
+    """
+    promoted = []
+    for original in items:
+        item = dict(original)
+        labels = {str(value).strip().casefold() for value in item.get("labels") or []}
+        try:
+            score = float(item.get("max_score") or 0.0)
+            duration = float(item.get("end_seconds") or 0.0) - float(
+                item.get("start_seconds") or 0.0
+            )
+        except (TypeError, ValueError):
+            score, duration = 0.0, 0.0
+        if (
+            item.get("category") == "adult"
+            and labels.intersection({"porn", "hentai"})
+            and score >= 0.99
+            and duration >= 4.0
+        ):
+            item["priority"] = "high"
+        promoted.append(item)
+    return promoted
+
+
 def _review_label(category: str, value: object) -> str | None:
     if value is None:
         return None
@@ -1582,6 +1610,7 @@ def build_review_queue(
                 items, source_duration=source_duration,
             )
             items = group_safety_review_events(items)
+    items = promote_strong_adult_priorities(items)
     items = sorted(items, key=lambda item: (
         _PRIORITY_RANK.get(item["priority"], 2),
         item["start_seconds"], item["category"],
@@ -1668,6 +1697,28 @@ def build_review_queue(
             "edit_plan_requires_all_items_resolved": True,
         },
     }
+    _write_json(queue_path, payload)
+    _render_queue_html(root, queue_path, payload)
+    return payload
+
+
+def refresh_review_priorities(*, project_root: Path, queue_path: Path) -> dict:
+    """Re-rank an existing queue without rescanning or changing decisions."""
+    root = project_root.resolve(strict=True)
+    reports_root = (root / "reports").resolve(strict=True)
+    queue_path = _inside(reports_root, queue_path, "Queue path").resolve(strict=True)
+    payload = _read_json(queue_path)
+    payload["items"] = sorted(
+        promote_strong_adult_priorities(list(payload.get("items") or [])),
+        key=lambda item: (
+            _PRIORITY_RANK.get(item.get("priority", "normal"), 2),
+            float(item.get("start_seconds") or 0.0),
+            str(item.get("category") or ""),
+        ),
+    )
+    payload["counts"] = _counts(payload["items"])
+    payload["status"] = _queue_status(payload["items"])
+    payload["updated_at"] = _now()
     _write_json(queue_path, payload)
     _render_queue_html(root, queue_path, payload)
     return payload
