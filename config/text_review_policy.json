@@ -1,0 +1,7 @@
+{
+  "version": 1,
+  "description": "User-defined review overrides. These terms force review but never trigger an automatic edit.",
+  "always_review_terms": [
+    "Netflix"
+  ]
+}

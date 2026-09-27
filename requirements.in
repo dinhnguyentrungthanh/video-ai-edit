@@ -1,0 +1,4 @@
+# PyTorch and torchvision are installed from the official CUDA wheel index.
+# The remaining dependencies are declared in pyproject.toml.
+-e .
+

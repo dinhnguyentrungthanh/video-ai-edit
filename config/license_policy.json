@@ -1,0 +1,161 @@
+{
+  "version": 1,
+  "profile": "free-commercial-safe-local",
+  "requirements": {
+    "usage_cost": "free",
+    "local_inference_only": true,
+    "external_media_upload_allowed": false,
+    "commercial_use_allowed": true,
+    "require_pinned_revision": true,
+    "require_source_url": true,
+    "allowed_model_licenses": [
+      "Apache-2.0",
+      "MIT",
+      "BSD-2-Clause",
+      "BSD-3-Clause"
+    ]
+  },
+  "publishing": {
+    "requires_user_source_rights_confirmation": true,
+    "confirmation_text": "Tôi xác nhận mình sở hữu hoặc có giấy phép/quyền cho phép chỉnh sửa và đăng video, âm thanh, phụ đề, logo và hình ảnh nguồn."
+  },
+  "models": {
+    "easyocr": {
+      "approval_status": "APPROVED",
+      "license_spdx": "Apache-2.0",
+      "commercial_use_allowed": true,
+      "usage_cost": "free",
+      "local_inference_only": true,
+      "external_media_upload": false,
+      "source_url": "https://github.com/JaidedAI/EasyOCR",
+      "training_data_review_status": "DOCUMENTED_BY_UPSTREAM"
+    },
+    "nsfw_detection_2_nano": {
+      "approval_status": "APPROVED",
+      "license_spdx": "Apache-2.0",
+      "commercial_use_allowed": true,
+      "usage_cost": "free",
+      "local_inference_only": true,
+      "external_media_upload": false,
+      "source_url": "https://huggingface.co/viddexa/nsfw-detection-2-nano",
+      "training_data_review_status": "UPSTREAM_DETAILS_LIMITED"
+    },
+    "image_safety_classifier_m": {
+      "approval_status": "APPROVED",
+      "license_spdx": "MIT",
+      "commercial_use_allowed": true,
+      "usage_cost": "free",
+      "local_inference_only": true,
+      "external_media_upload": false,
+      "source_url": "https://huggingface.co/OwenElliott/image-safety-classifier-m",
+      "training_data_review_status": "UPSTREAM_REPORTS_PROPRIETARY_WEB_DATA"
+    },
+    "wd_vit_tagger_v3": {
+      "approval_status": "APPROVED",
+      "license_spdx": "Apache-2.0",
+      "commercial_use_allowed": true,
+      "usage_cost": "free",
+      "local_inference_only": true,
+      "external_media_upload": false,
+      "source_url": "https://huggingface.co/SmilingWolf/wd-vit-tagger-v3",
+      "training_data_review_status": "UPSTREAM_REPORTS_DANBOORU"
+    },
+    "multilingual_minilm_text_semantics": {
+      "approval_status": "APPROVED",
+      "license_spdx": "MIT",
+      "commercial_use_allowed": true,
+      "usage_cost": "free",
+      "local_inference_only": true,
+      "external_media_upload": false,
+      "source_url": "https://huggingface.co/MoritzLaurer/multilingual-MiniLMv2-L6-mnli-xnli",
+      "training_data_review_status": "DOCUMENTED_MIXED_UPSTREAM_DATASETS"
+    },
+    "videomae_xd_violence_small": {
+      "approval_status": "BLOCKED",
+      "license_spdx": "CC-BY-NC-4.0",
+      "commercial_use_allowed": false,
+      "usage_cost": "free",
+      "local_inference_only": true,
+      "external_media_upload": false,
+      "source_url": "https://huggingface.co/KingTechnician/videomae-small-finetuned-kinetics-xd-violence-binary",
+      "training_data_review_status": "UPSTREAM_DETAILS_LIMITED",
+      "blocked_reason": "Giấy phép chỉ cho mục đích phi thương mại; không đạt profile commercial-safe."
+    },
+    "vit_base_violence_detection": {
+      "approval_status": "APPROVED",
+      "license_spdx": "Apache-2.0",
+      "commercial_use_allowed": true,
+      "usage_cost": "free",
+      "local_inference_only": true,
+      "external_media_upload": false,
+      "source_url": "https://huggingface.co/jaranohaal/vit-base-violence-detection",
+      "training_data_review_status": "UPSTREAM_REPORTS_REAL_LIFE_VIOLENCE_SITUATIONS"
+    },
+    "qwen2_vl_2b_instruct": {
+      "approval_status": "APPROVED",
+      "license_spdx": "Apache-2.0",
+      "commercial_use_allowed": true,
+      "usage_cost": "free",
+      "local_inference_only": true,
+      "external_media_upload": false,
+      "source_url": "https://huggingface.co/Qwen/Qwen2-VL-2B-Instruct",
+      "training_data_review_status": "DOCUMENTED_BY_UPSTREAM_MODEL_CARD"
+    },
+    "florence_2_base": {
+      "approval_status": "APPROVED",
+      "license_spdx": "MIT",
+      "commercial_use_allowed": true,
+      "usage_cost": "free",
+      "local_inference_only": true,
+      "external_media_upload": false,
+      "source_url": "https://huggingface.co/microsoft/Florence-2-base",
+      "training_data_review_status": "DOCUMENTED_BY_UPSTREAM_MODEL_CARD"
+    },
+    "phi_3_5_vision_int4": {
+      "approval_status": "BLOCKED",
+      "license_spdx": "MIT",
+      "commercial_use_allowed": true,
+      "usage_cost": "free",
+      "local_inference_only": true,
+      "external_media_upload": false,
+      "source_url": "https://huggingface.co/microsoft/Phi-3.5-vision-instruct-onnx",
+      "training_data_review_status": "DOCUMENTED_BY_UPSTREAM_MODEL_CARD",
+      "blocked_reason": "Benchmark logo semantics đạt specificity 0%; model không được dùng trong lượt production."
+    },
+    "grounding_dino_tiny": {
+      "approval_status": "APPROVED",
+      "license_spdx": "Apache-2.0",
+      "commercial_use_allowed": true,
+      "usage_cost": "free",
+      "local_inference_only": true,
+      "external_media_upload": false,
+      "source_url": "https://huggingface.co/IDEA-Research/grounding-dino-tiny",
+      "training_data_review_status": "DOCUMENTED_BY_UPSTREAM_MODEL_CARD"
+    },
+    "siglip_base_patch16_224": {
+      "approval_status": "APPROVED",
+      "license_spdx": "Apache-2.0",
+      "commercial_use_allowed": true,
+      "usage_cost": "free",
+      "local_inference_only": true,
+      "external_media_upload": false,
+      "source_url": "https://huggingface.co/google/siglip-base-patch16-224",
+      "training_data_review_status": "DOCUMENTED_BY_UPSTREAM_MODEL_CARD"
+    }
+  },
+  "hosted_services": {
+    "codex_visual_audit": {
+      "approval_status": "USER_OPT_IN_PER_JOB",
+      "authentication": "chatgpt_required",
+      "api_key_allowed": false,
+      "billing_mode": "chatgpt_included_allowance_only",
+      "automatic_credit_purchase": false,
+      "external_media_upload": "bounded_review_thumbnails_only",
+      "source_video_upload": false,
+      "audio_upload": false,
+      "maximum_images_per_job": 36,
+      "human_edit_approval_required": true,
+      "maximum_images_per_batch": 12
+    }
+  }
+}

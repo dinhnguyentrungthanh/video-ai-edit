@@ -1,0 +1,33 @@
+{
+  "schema_version": 1,
+  "careful": {
+    "description": "Quét tỉ mỉ mặc định cho nguồn mới",
+    "animation_sample_fps": 2.0,
+    "adult_sample_fps": 2.0,
+    "gore_sample_fps": 2.0,
+    "violence_sample_fps": 8.0,
+    "text_sample_every": 3.0,
+    "logo_sample_every": 2.0,
+    "logo_boundary_sample_every": 0.25,
+    "logo_boundary_seconds": 30.0,
+    "logo_max_candidate_windows": 420,
+    "logo_scene_change_threshold": 0.22,
+    "logo_coverage_bucket_seconds": 300.0,
+    "logo_coverage_fallbacks_per_bucket": 2
+  },
+  "fast": {
+    "description": "Quét nhanh cho nguồn đã có regression ổn định",
+    "animation_sample_fps": 1.0,
+    "adult_sample_fps": 1.0,
+    "gore_sample_fps": 1.0,
+    "violence_sample_fps": 4.0,
+    "text_sample_every": 5.0,
+    "logo_sample_every": 4.0,
+    "logo_boundary_sample_every": 0.5,
+    "logo_boundary_seconds": 20.0,
+    "logo_max_candidate_windows": 120,
+    "logo_scene_change_threshold": 0.25,
+    "logo_coverage_bucket_seconds": 300.0,
+    "logo_coverage_fallbacks_per_bucket": 1
+  }
+}

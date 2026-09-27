@@ -1,0 +1,18 @@
+$BiliflowRoot = Split-Path -Parent $PSScriptRoot
+
+$env:UV_CACHE_DIR = Join-Path $BiliflowRoot 'cache\uv'
+$env:UV_PYTHON_INSTALL_DIR = Join-Path $BiliflowRoot 'runtime\python'
+$env:UV_PYTHON_BIN_DIR = Join-Path $BiliflowRoot 'runtime\bin'
+$env:UV_TOOL_DIR = Join-Path $BiliflowRoot 'runtime\uv-tools'
+$env:UV_TOOL_BIN_DIR = Join-Path $BiliflowRoot 'runtime\bin'
+$env:UV_PYTHON_PREFERENCE = 'only-managed'
+$env:PIP_CACHE_DIR = Join-Path $BiliflowRoot 'cache\pip'
+$env:HF_HOME = Join-Path $BiliflowRoot 'cache\huggingface'
+$env:HF_HUB_CACHE = Join-Path $BiliflowRoot 'cache\huggingface\hub'
+$env:TORCH_HOME = Join-Path $BiliflowRoot 'cache\torch'
+$env:PLAYWRIGHT_BROWSERS_PATH = Join-Path $BiliflowRoot 'cache\playwright'
+$env:TEMP = Join-Path $BiliflowRoot 'temp'
+$env:TMP = Join-Path $BiliflowRoot 'temp'
+$env:PYTHONPATH = Join-Path $BiliflowRoot 'src'
+$env:HF_HUB_DISABLE_TELEMETRY = '1'
+$env:DO_NOT_TRACK = '1'

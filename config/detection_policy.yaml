@@ -1,0 +1,144 @@
+schema_version: 1
+
+confirmation:
+  required_before_edit: true
+  allowed_decisions:
+    - KEEP
+    - BLUR
+    - CUT
+    - NEEDS_MORE_CONTEXT
+  generate_preview_clip_by_default: false
+  allow_automatic_edit: false
+  allow_full_export_during_benchmark: false
+
+routing:
+  allowed_content_styles:
+    - live_action
+    - animation
+    - mixed
+    - unknown
+  ask_when_style_unknown: true
+  run_both_for_mixed: true
+
+branches:
+  - id: adult_live_action
+    category: adult
+    content_style: live_action
+    status: EXPERIMENTAL
+    model: viddexa/nsfw-detection-2-nano
+    candidate_threshold: 0.95
+    poc_status: PROVISIONAL_NEEDS_MORE_NEGATIVES
+  - id: adult_animation
+    category: adult
+    content_style: animation
+    status: EXPERIMENTAL
+    model: SmilingWolf/wd-vit-tagger-v3
+    candidate_threshold: 0.15
+    cooccurrence_threshold: 0.05
+    minimum_cooccurring_labels: 3
+    score_aggregation: probabilistic_union
+    shared_inference_with:
+      - blood_gore_animation
+    temporal_confirmation:
+      sample_fps: 2
+      minimum_positive_frames: 3
+      window_frames: 5
+    poc_status: BASELINE_READY
+  - id: blood_gore_live_action
+    category: blood_gore
+    content_style: live_action
+    status: EXPERIMENTAL
+    model: OwenElliott/image-safety-classifier-m
+    candidate_threshold: 0.50
+    poc_status: BASELINE_READY
+  - id: blood_gore_animation
+    category: blood_gore
+    content_style: animation
+    status: EXPERIMENTAL
+    model: SmilingWolf/wd-vit-tagger-v3
+    candidate_threshold: 0.20
+    low_candidate_threshold: 0.05
+    context_threshold: 0.02
+    cooccurrence_threshold: 0.03
+    score_aggregation: probabilistic_union
+    review_merge_gap_seconds: 6
+    shared_inference_with: adult_animation
+    temporal_confirmation:
+      sample_fps: 2
+      minimum_positive_frames: 3
+      window_frames: 5
+      context_minimum_positive_frames: 4
+    poc_status: BASELINE_READY
+  - id: violence_live_action
+    category: violence
+    content_style: live_action
+    status: EXPERIMENTAL
+    model: KingTechnician/videomae-small-finetuned-kinetics-xd-violence-binary
+    candidate_threshold: 0.50
+    temporal_clip:
+      sample_fps: 8
+      frames: 16
+      stride_frames: 8
+    poc_status: BASELINE_READY
+  - id: violence_animation
+    category: violence
+    content_style: animation
+    status: EXPERIMENTAL
+    model: ensemble
+    video_model: KingTechnician/videomae-small-finetuned-kinetics-xd-violence-binary
+    video_candidate_threshold: 0.61
+    video_high_priority_threshold: 0.90
+    wd_model: SmilingWolf/wd-vit-tagger-v3
+    wd_high_priority_threshold: 0.20
+    decision: video_score_gte_0_61_or_wd_direct_score_gte_0_20
+    review_merge_gap_seconds: 8
+    excluded_trigger_labels:
+      - fire
+      - explosion
+    danger_labels:
+      - fire
+      - explosion
+    temporal_clip:
+      sample_fps: 8
+      frames: 16
+      stride_frames: 8
+    wd_shared_inference_with:
+      - adult_animation
+      - blood_gore_animation
+    benchmark:
+      distinct_videos: 2
+      positive_samples: 59
+      negative_samples: 67
+      recall: 0.864407
+      precision: 0.809524
+      balanced_accuracy: 0.842651
+      conan_labels_provisional: true
+    poc_status: FIELD_BASELINE_READY
+
+poc_acceptance:
+  minimum_positive_samples: 10
+  minimum_hard_negative_samples: 20
+  minimum_recall: 0.80
+  target_recall: 0.85
+  minimum_balanced_accuracy: 0.80
+  target_balanced_accuracy: 0.85
+  target_precision: 0.70
+  missed_high_severity_allowed: 1
+
+field_validation:
+  minimum_positive_samples: 30
+  minimum_hard_negative_samples: 60
+  minimum_distinct_videos: 2
+  minimum_recall: 0.80
+  target_recall: 0.85
+  minimum_balanced_accuracy: 0.80
+  target_balanced_accuracy: 0.85
+  target_precision: 0.70
+  maximum_candidates_per_video_hour: 20
+  require_manual_confirmation: true
+
+report_retention:
+  strongest_thumbnail_per_interval: 1
+  top_k_candidates: 20
+  compress_after_successful_upload: true
+  delete_only_after_retention_and_archive_verification: true

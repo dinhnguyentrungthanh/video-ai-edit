@@ -1,0 +1,21 @@
+project_root: "E:/DungChung/BiliFlow"
+ffmpeg_path: "E:/DungChung/BiliFlow/tools/ffmpeg/bin/ffmpeg.exe"
+ffprobe_path: "E:/DungChung/BiliFlow/tools/ffmpeg/bin/ffprobe.exe"
+models:
+  nsfw: "E:/DungChung/BiliFlow/models/nsfw_image_detection"
+scan:
+  sample_fps: 1.0
+  batch_size: 8
+  top_k_candidates: 20
+  threshold: 0.70
+  merge_gap_seconds: 2.0
+  padding_seconds: 1.0
+storage:
+  warning_free_gb: 200
+  pause_free_gb: 150
+  hard_stop_free_gb: 100
+  minimum_free_percent: 20
+  temp_retention_hours: 24
+  failed_work_retention_days: 7
+  preview_retention_days: 30
+  cleanup_mode: dry_run
