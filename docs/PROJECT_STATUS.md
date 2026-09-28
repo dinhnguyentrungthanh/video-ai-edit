@@ -1,3 +1,13 @@
+## Scan performance phase 3: moving text, effective thresholds and GPU stop — 2026-09-28
+
+- Added a standalone synthetic OCR stress benchmark and a dedicated PowerShell runner using the existing GPU mutex. Production `run.ps1` is unchanged, so adding this benchmark does not invalidate production stage-cache fingerprints.
+- 48 generated/labeled 960x540 frames cover moving/clipped/disappearing banners, unrelated text, small/blurred/noisy text and low-confidence top banners. All fixture RGB pixels survive FFV1 decode exactly. All 183 raw OCR regions preserve recognized text and acceptance between serial and batch 8; max confidence delta 0.000005918.
+- Effective threshold checks use the actual scanner acceptance function and geometry: two eligible cases within 0.05 of 0.35, three within 0.03 of 0.10. Closest margins 0.006515 and 0.008519 respectively. These are not numerical knife-edge cases or proof of unseen-film recall.
+- Three isolated complete OCR/review comparisons retain all report fields except confidence/runtime, JPEG hashes, candidate mappings and queue projections, with 9/12/4 tracks. All supplied OCR candidates remain represented. Nothing is auto-approved/exported.
+- Three fresh workers signal after actual CUDA recognition, then stop through the scheduler's existing process-tree terminator. Worker/FFmpeg children exit in 0.154–0.164s; no completed partial report survives. Subsequent GPU inference succeeds. This checks the backend termination method, not Dashboard button/UI state or resource exhaustion.
+- Evidence: `reports/benchmarks/ocr-stress-20260928-175841/`, about 12 MB before logs; prior 32-frame pilot retained at `ocr-stress-20260928-175620/`. Full suite 268/268 passes. No source videos, production code, queues, decisions or model settings changed.
+- Default remains batch 1. Next: bounded original-source batching pilot with source-resolution geometry/timing, then duplicate work/shared decode investigation. No full-film rerun, merge or push.
+
 ## Scan performance phase 3: contiguous OCR validation — 2026-09-28
 
 - Added `benchmark-ocr-contiguous` under the existing GPU mutex. Plans allow at most six excerpts of at most 120 seconds each, restricted to input sources and the existing 3-second sampling grid. Original files and production reports/decisions are untouched.

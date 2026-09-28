@@ -1,3 +1,10 @@
+# Unreleased — OCR boundary and cancellation validation — 2026-09-28
+
+- Add standalone synthetic OCR stress benchmark with lossless fixture hashes, actual effective-threshold diagnostics and isolated report/review comparisons. Keep the production launcher unchanged to avoid unrelated cache invalidation.
+- Validate 48 generated frames / 183 OCR regions: unchanged text, accepted regions, preview hashes and review mappings; max confidence difference 0.000005918. Moving text, degraded text and low-threshold top banners are covered in this synthetic corpus.
+- Exercise actual CUDA workers and FFmpeg children with the production process-tree stop method: three clean stops in 0.154–0.164s, followed by successful GPU inference. This does not certify the Dashboard UI or OOM recovery.
+- Pass 268/268 tests. Serial default remains unchanged; no production source, saved decision, threshold or export changes.
+
 # Unreleased — contiguous OCR equivalence benchmark — 2026-09-28
 
 - Add bounded `benchmark-ocr-contiguous` with GPU locking, lossless sampled-frame verification, report/preview/review comparisons and a failing exit status if equivalence or supplied-candidate coverage fails.

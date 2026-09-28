@@ -298,9 +298,45 @@ batch interruption propagates without returning partial predictions; existing
 raw-reader tests cover blocked-pipe cleanup. Real GPU stop-button/cancellation
 latency is not measured here. Full suite: **265/265**, `unittest.log` in the root.
 
-**Next gate:** labeled small/low-contrast text near acceptance thresholds,
-moving banners, and real GPU cancellation/resource stress. Retain serial default
-until those checks justify activation. No production job, audit or export ran.
+### Synthetic moving text, threshold and cancellation follow-up
+
+Run independently with `.\scripts\benchmark-ocr-stress.ps1`. This runner takes
+the existing GPU mutex without editing `scripts/run.ps1`, whose content is part
+of production stage-cache identity. No downloads or external API calls occur.
+
+Evidence: `reports/benchmarks/ocr-stress-20260928-175841/`. The 48 generated,
+labeled frames contain moving/clipped/disappearing banners, independent static
+text, blur/noise/low contrast and long top-banner text. Source/decode RGB hashes
+match for all 48 frames. Synthetic clips and PNGs remain as reproducible test
+evidence (about 12 MB), not production media. The earlier 32-frame pilot remains
+at `ocr-stress-20260928-175620/`; do not silently delete either evidence root.
+
+- All **183 raw regions** retain text and accepted-box/text pairs; maximum
+  confidence change is **0.000005918**.
+- Acceptance diagnostics use the scanner's actual text/geometry rules, not just
+  proximity to a numeric threshold that may not apply. There are 2 eligible
+  examples within 0.05 of 0.35 and 3 within 0.03 of the 0.10 banner threshold.
+  Closest margins are 0.006515 and 0.008519. Arbitrarily close boundary cases are
+  not proven safe; finite equivalence tests cannot guarantee all unseen inputs.
+- Three separate OCR-to-review pipelines retain report content except score/
+  runtime noise, JPEG hashes, regions/actions and reference mappings. Track
+  counts: **9, 12, 4**. All supplied OCR candidates are represented. Labels record
+  rendered text, including clipped/degraded examples; this is not a claim that
+  every label is readable or correctly recognized by the baseline detector.
+- Three workers reached a real CUDA recognition checkpoint, then the production
+  scheduler's process-tree stop method terminated them and their FFmpeg children
+  in **0.154–0.164s**. No final partial scan report appeared. Subsequent GPU
+  inference completed successfully. Only benchmark-created processes were stopped;
+  no live scheduler/store was instantiated or modified. This is not an end-to-end
+  Dashboard pause/UI test and does not simulate OOM or driver failure.
+- **268/268 unittest passes**, including effective-threshold diagnostic checks;
+  `unittest.log` is retained in the evidence directory.
+
+These follow-ups complete the bounded synthetic moving-text/threshold and normal
+GPU cancellation checks. They do not establish full-film recall or speed. Default
+remains serial; the next batching step is a bounded original-source pilot for
+source-resolution geometry and elapsed timing, rather than more synthetic loops.
+Resource exhaustion is still unvalidated. No production job, audit or export ran.
 
 ## Remaining implementation sequence
 

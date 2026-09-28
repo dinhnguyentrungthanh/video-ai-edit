@@ -9,7 +9,7 @@ This is the short, authoritative starting point for a new Codex account or chat.
 - Project root: `E:\DungChung\BiliFlow`
 - Active branch: `improve/scan-performance-metrics` (new user request; remain here).
 - Base local `main`: `7f5a9fb`; ten commits ahead of `origin/main` when this branch was created. Previous detector improvements are already on local `main`.
-- Latest verified milestone: contiguous OCR A/B, 265/265 tests. Six 90-second source windows (180 sampled frames) preserve all report/preview/review projections across 24 measured runs. Summed median OCR-to-report time on sampled fixtures improves 15.56%; confidence differs by up to 0.000006. This excludes full-source decode/hash and other detectors. Dashboard/CLI default remains batch 1; prefetch stays OFF. See `docs/SCAN_PERFORMANCE.md`.
+- Latest verified milestone: synthetic moving-text/threshold OCR and GPU-stop checks, 268/268 tests. All 183 OCR regions across 48 generated frames preserve text and acceptance; three isolated pipeline comparisons preserve reports/previews/queues. Three actual GPU worker process trees stop in 0.154–0.164s and subsequent GPU inference succeeds. Earlier contiguous fixtures show 15.56% OCR-to-report improvement, not full-film speedup. Dashboard/CLI default remains batch 1; prefetch stays OFF. See `docs/SCAN_PERFORMANCE.md`.
 - Runtime source version: `src/biliflow/__init__.py` reports `0.7.24`
 - Packaging metadata in `pyproject.toml` still reports `0.7.19`; use the runtime source version for dashboard diagnosis and align the package metadata during a later release housekeeping change.
 - Confirm working-tree state with Git; performance work is isolated from `main`.
@@ -27,7 +27,22 @@ Always confirm this section with `git status` and `git log` because it becomes s
 
 ## Last verified production-style run
 
-Latest contiguous OCR evidence (not a production run):
+Latest synthetic stress evidence (not a production run):
+`reports/benchmarks/ocr-stress-20260928-175841/`. Includes generated text labels,
+48 source/decode RGB hashes, raw serial/batched predictions, isolated queues,
+three real GPU cancellation results and `unittest.log` (268/268). Both effective
+acceptance thresholds have nearby examples; nearest margins are 0.006515 at
+0.35 and 0.008519 at 0.10, not arbitrarily close to numerical boundaries.
+No text/acceptance differences; max confidence delta 0.000005918. Dedicated
+`scripts/benchmark-ocr-stress.ps1` preserves the production launcher's fingerprint
+and uses its GPU mutex. Three full reports/queues match except documented score
+noise, with 9/12/4 tracks. Earlier 32-frame pilot is at `ocr-stress-20260928-175620`.
+Do not claim unseen-film recall, all-detector coverage, OOM safety, Dashboard
+button behavior or full end-to-end speed from these synthetic checks. Next use
+a bounded original-source pilot for timing/geometry, then focus on duplicate
+work/shared decoding; avoid endlessly expanding synthetic OCR tests.
+
+Earlier contiguous OCR evidence (not a production run):
 `reports/benchmarks/ocr-contiguous-20260928-172310/` contains `comparison.json`,
 `analysis.json`, per-frame source/fixture hashes, isolated reports/queues/previews
 and the 265/265 `unittest.log`. Six 90-second windows from Troy and Conan 20/21
@@ -37,8 +52,9 @@ remain represented. The sum of per-window median wall times is 49.047 -> 41.415s
 (15.56% less), on warm lossless sampled fixtures. This is not full-source scan
 time, complete advertising coverage, or a benchmark of adult/gore/violence.
 Measured PyTorch peak allocation is equal at 664.82 MiB for both paths; this is
-not total GPU VRAM. Batch 8 remains opt-in. Next gates: moving banners,
-near-threshold labeled text and real GPU cancellation/resource stress.
+not total GPU VRAM. Batch 8 remains opt-in. Synthetic moving banners,
+near-threshold text and process-tree cancellation are now checked above;
+resource exhaustion and a production-style batching pilot remain unvalidated.
 
 Earlier OCR batching evidence (not a production run):
 `reports/benchmarks/ocr-batch-20260928-165521/` and
@@ -130,7 +146,7 @@ This run skipped `adult`, `gore`, and `violence`. It validates advertisement/log
 2. **Run one fresh all-detector Troy regression when requested.** Confirm the V0.7.20 adult interval and V0.7.23 high-priority intervals appear in the current Review UI. The latest verified V0.7.24 run was advertising-only.
 3. **Benchmark across Troy, Conan, and Shin.** Record recall-oriented logo coverage, false review groups, stage durations, and output correctness. Do not claim general logo accuracy from Troy alone.
 4. **Reduce scan time without lowering coverage.** Phase timing instrumentation is complete on the improvement branch. Collect these timings on the next authorized run; older reports cannot supply them. The last advertising-only Troy rerun took roughly 27 minutes: OCR about 13 minutes and visual-logo routing/localization about 14 minutes. The requested 5-10 minute full-video target is not yet achieved.
-5. **Performance work after measurement.** Dependency-scoped exact stage cache is implemented. OCR prefetch remains off because its benefit was negligible. Same-width OCR recognition batching passes the six-window contiguous-sampling/review comparison but remains opt-in pending moving-banner, near-threshold and real GPU cancellation/stress checks. Inspect repeated source hashing next without weakening content identity. Keep source SHA/config/model revisions and existing bounded cleanup policy. Do not reduce sampling density or model thresholds without an A/B regression.
+5. **Performance work after measurement.** Dependency-scoped exact stage cache is implemented. OCR prefetch remains off because its benefit was negligible. Opt-in same-width OCR passes contiguous-sampling and synthetic moving-banner/threshold comparisons plus actual GPU worker cancellation. Keep serial default pending a bounded original-source pilot; there is no OOM/exhaustion guarantee. Inspect repeated source hashing/shared decoding next without weakening content identity. Keep source SHA/config/model revisions and existing bounded cleanup policy. Do not reduce sampling density or model thresholds without an A/B regression.
 6. **Optional export acceleration comes later.** NVENC is currently blocked by the installed driver/FFmpeg API mismatch. Smart Render is unsafe for timelines with persistent blur unless continuity and full output validation are proven. CPU libx264 remains the production path.
 7. **Merge/push only after user authorization.** The previous improvement branch was merged into local `main`; the new `improve/scan-performance-metrics` branch is separate and unmerged. Local commits are not yet on the remote.
 
