@@ -338,6 +338,38 @@ remains serial; the next batching step is a bounded original-source pilot for
 source-resolution geometry and elapsed timing, rather than more synthetic loops.
 Resource exhaustion is still unvalidated. No production job, audit or export ran.
 
+### Original-source Troy pilot
+
+User-authorized evidence at `reports/benchmarks/ocr-native-20260928-181450/`;
+harness at `reports/benchmarks/ocr-native-pilot.py`. This uses the original
+7,609,490,930-byte Troy file directly, source **00:48–02:18**, rather than a
+sampled proxy. Four warm runs use serial/8/8/serial ordering with unchanged
+3-second sampling. Models are loaded once (8.701s); a 3-second native warmup
+is excluded from the measured runs. All runs hash the entire original file.
+
+| Median phase | Serial | Batch 8 | Reduction |
+| --- | ---: | ---: | ---: |
+| Total OCR scan, including original decode/hash | 33.257s | 30.760s | 7.51% |
+| OCR model calls | 11.089s | 8.700s | 21.55% |
+| Source SHA256 | 20.674s | 20.546s | Not an optimization |
+| Scan excluding source hash | 12.583s | 10.214s | 18.83% |
+| Isolated queue creation | 0.026s | 0.023s | Too small to interpret |
+
+All four runs retain 30 sampled frames, 42 tracks, classification/regions/times,
+4 primary and 10 advisory review items, source-candidate mapping and identical
+JPEG hashes. Review dimensions are original **1920x1080**; this also checks a
+nonzero source timestamp. Maximum confidence difference is 0.000001. Source
+SHA256 matches every time, and size/mtime remain unchanged. No decisions are
+auto-approved. Full suite still passes **268/268** (`unittest.log`).
+
+This is baseline equivalence, not an accuracy label for every candidate. Scope
+is OCR/text semantics only: visual-logo routing/localization, Structure/Visual
+Audit, adult/gore/violence and export were not rerun. Full-film timing cannot be
+inferred by multiplying a 90-second excerpt's cost, particularly because every
+excerpt hashes the full source. The production Troy job and saved decisions stay
+untouched; Dashboard remains on batch 1. A complete advertising opt-in comparison
+can follow when requested. The original-source geometry/timing pilot is complete.
+
 ## Remaining implementation sequence
 
 1. **Remove additional demonstrated duplicate work.** Dependency-scoped stage
@@ -345,8 +377,9 @@ Resource exhaustion is still unvalidated. No production job, audit or export ran
    replacing source-content verification with filename/mtime guesses. Cache reuse must require
    the same source SHA, model/revision, preprocessing, scope and configuration.
    Never reuse results between different source videos by filename or appearance.
-2. **Validate opt-in OCR recognition batching.** Same-width batches show modest
-   gains on fixture pipelines but need the gate above before default activation.
+2. **Validate opt-in OCR recognition batching in the complete pipeline.** The
+   bounded native-source gate above passes. Measure a controlled full advertising
+   job when requested before considering default activation; Dashboard stays serial.
    Prefetch remains off. Preserve exact timestamps,
    dimensions, frame order and end-of-stream handling. Cap RAM/VRAM, support
    cancellation and keep a serial fallback. Batching changes numerical execution;

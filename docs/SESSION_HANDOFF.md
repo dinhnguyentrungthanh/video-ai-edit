@@ -9,7 +9,7 @@ This is the short, authoritative starting point for a new Codex account or chat.
 - Project root: `E:\DungChung\BiliFlow`
 - Active branch: `improve/scan-performance-metrics` (new user request; remain here).
 - Base local `main`: `7f5a9fb`; ten commits ahead of `origin/main` when this branch was created. Previous detector improvements are already on local `main`.
-- Latest verified milestone: synthetic moving-text/threshold OCR and GPU-stop checks, 268/268 tests. All 183 OCR regions across 48 generated frames preserve text and acceptance; three isolated pipeline comparisons preserve reports/previews/queues. Three actual GPU worker process trees stop in 0.154–0.164s and subsequent GPU inference succeeds. Earlier contiguous fixtures show 15.56% OCR-to-report improvement, not full-film speedup. Dashboard/CLI default remains batch 1; prefetch stays OFF. See `docs/SCAN_PERFORMANCE.md`.
+- Latest verified milestone: native Troy OCR pilot at source 48–138s, 268/268 tests. Four serial/8/8/serial runs retain 42 tracks, all preview hashes and native-resolution review mappings. Median OCR time falls 21.55%; total OCR scan including original decode/hash falls 7.51% (33.257 -> 30.760s). This is not complete advertising/all-detector throughput. Dashboard/CLI default remains batch 1; prefetch stays OFF. See `docs/SCAN_PERFORMANCE.md`.
 - Runtime source version: `src/biliflow/__init__.py` reports `0.7.24`
 - Packaging metadata in `pyproject.toml` still reports `0.7.19`; use the runtime source version for dashboard diagnosis and align the package metadata during a later release housekeeping change.
 - Confirm working-tree state with Git; performance work is isolated from `main`.
@@ -27,7 +27,23 @@ Always confirm this section with `git status` and `git log` because it becomes s
 
 ## Last verified production-style run
 
-Latest synthetic stress evidence (not a production run):
+Latest original-source OCR pilot (not a production job):
+`reports/benchmarks/ocr-native-20260928-181450/` contains the comparison,
+analysis, Vietnamese `SUMMARY.md`, isolated queues/previews and 268/268 test log.
+Harness: `reports/benchmarks/ocr-native-pilot.py`. Source is the original Troy
+file, SHA256 `f43cf94aadffb8c127c18fb23a51c58de2bdafcb2f05b1e91bd84be726fb19e9`.
+At source 48–138s, 30 frames per run, native 1920x1080 geometry: all four runs
+retain 42 tracks, 4 primary / 10 advisory review items and identical JPEGs.
+Maximum confidence delta is 0.000001; source hashes and size/mtime agree.
+Warm medians: OCR 11.089 -> 8.700s; total scan 33.257 -> 30.760s, of which
+source hashing costs about 20.6s per run. Model loading (8.701s) and the 3-second
+warmup are excluded from those medians. Complete visual-logo/AI audit, safety
+detectors and export were not run; production Troy decisions are untouched.
+The bounded native-source gate passes. Next target is a controlled opt-in
+full advertising pipeline comparison when requested, or removing demonstrated
+duplicate work/shared decode. Do not claim the Dashboard already uses batch 8.
+
+Earlier synthetic stress evidence (not a production run):
 `reports/benchmarks/ocr-stress-20260928-175841/`. Includes generated text labels,
 48 source/decode RGB hashes, raw serial/batched predictions, isolated queues,
 three real GPU cancellation results and `unittest.log` (268/268). Both effective
@@ -38,9 +54,9 @@ No text/acceptance differences; max confidence delta 0.000005918. Dedicated
 and uses its GPU mutex. Three full reports/queues match except documented score
 noise, with 9/12/4 tracks. Earlier 32-frame pilot is at `ocr-stress-20260928-175620`.
 Do not claim unseen-film recall, all-detector coverage, OOM safety, Dashboard
-button behavior or full end-to-end speed from these synthetic checks. Next use
-a bounded original-source pilot for timing/geometry, then focus on duplicate
-work/shared decoding; avoid endlessly expanding synthetic OCR tests.
+button behavior or full end-to-end speed from these synthetic checks. The bounded
+original-source pilot is now complete above; focus next on duplicate work/shared
+decoding rather than endlessly expanding synthetic OCR tests.
 
 Earlier contiguous OCR evidence (not a production run):
 `reports/benchmarks/ocr-contiguous-20260928-172310/` contains `comparison.json`,
@@ -146,7 +162,7 @@ This run skipped `adult`, `gore`, and `violence`. It validates advertisement/log
 2. **Run one fresh all-detector Troy regression when requested.** Confirm the V0.7.20 adult interval and V0.7.23 high-priority intervals appear in the current Review UI. The latest verified V0.7.24 run was advertising-only.
 3. **Benchmark across Troy, Conan, and Shin.** Record recall-oriented logo coverage, false review groups, stage durations, and output correctness. Do not claim general logo accuracy from Troy alone.
 4. **Reduce scan time without lowering coverage.** Phase timing instrumentation is complete on the improvement branch. Collect these timings on the next authorized run; older reports cannot supply them. The last advertising-only Troy rerun took roughly 27 minutes: OCR about 13 minutes and visual-logo routing/localization about 14 minutes. The requested 5-10 minute full-video target is not yet achieved.
-5. **Performance work after measurement.** Dependency-scoped exact stage cache is implemented. OCR prefetch remains off because its benefit was negligible. Opt-in same-width OCR passes contiguous-sampling and synthetic moving-banner/threshold comparisons plus actual GPU worker cancellation. Keep serial default pending a bounded original-source pilot; there is no OOM/exhaustion guarantee. Inspect repeated source hashing/shared decoding next without weakening content identity. Keep source SHA/config/model revisions and existing bounded cleanup policy. Do not reduce sampling density or model thresholds without an A/B regression.
+5. **Performance work after measurement.** Dependency-scoped exact stage cache is implemented. OCR prefetch remains off because its benefit was negligible. Opt-in same-width OCR passes sampled/synthetic/native-source comparisons plus actual GPU worker cancellation. The native Troy pilot improves total OCR scan time 7.51%, not full pipeline time. Keep serial default; a controlled full advertising opt-in comparison remains to be requested/integrated. There is no OOM/exhaustion guarantee. Inspect repeated source hashing/shared decoding next without weakening content identity. Keep source SHA/config/model revisions and existing bounded cleanup policy. Do not reduce sampling density or model thresholds without an A/B regression.
 6. **Optional export acceleration comes later.** NVENC is currently blocked by the installed driver/FFmpeg API mismatch. Smart Render is unsafe for timelines with persistent blur unless continuity and full output validation are proven. CPU libx264 remains the production path.
 7. **Merge/push only after user authorization.** The previous improvement branch was merged into local `main`; the new `improve/scan-performance-metrics` branch is separate and unmerged. Local commits are not yet on the remote.
 

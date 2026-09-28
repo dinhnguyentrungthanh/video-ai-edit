@@ -1,3 +1,9 @@
+# Unreleased — original-source Troy OCR pilot — 2026-09-28
+
+- Validate opt-in batch 8 directly on Troy source 48–138s, with four warm serial/8/8/serial runs. Retain 42 tracks, native-resolution regions, primary/advisory review mappings and identical preview hashes; maximum confidence delta 0.000001.
+- Median total OCR scan including full-source hashing/decode improves 7.51% (33.257 -> 30.760s); OCR model work improves 21.55%. This does not measure complete advertising or all-detector throughput.
+- Retain isolated benchmark evidence and pass 268/268 tests. No runtime source, Dashboard default, source media, existing review decision or export behavior changes.
+
 # Unreleased — OCR boundary and cancellation validation — 2026-09-28
 
 - Add standalone synthetic OCR stress benchmark with lossless fixture hashes, actual effective-threshold diagnostics and isolated report/review comparisons. Keep the production launcher unchanged to avoid unrelated cache invalidation.

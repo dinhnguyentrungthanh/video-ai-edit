@@ -1,3 +1,12 @@
+## Scan performance phase 3: native Troy OCR pilot — 2026-09-28
+
+- User authorized a short original-source comparison. Scanned Troy source 48–138s directly, no proxy/transcode, with unchanged 3-second sampling and thresholds. Scope: OCR/text semantics only, not complete advertising or safety detectors.
+- Four warm runs in serial/8/8/serial order preserve 30 frames, 42 tracks, classifications, original 1920x1080 review geometry, 4 primary and 10 advisory items, candidate mapping and all JPEG hashes. Max confidence difference 0.000001. All source hashes agree; source size/mtime remain unchanged.
+- Median total OCR scan: 33.257 -> 30.760s (7.51% reduction). OCR model work: 11.089 -> 8.700s (21.55%). Whole-source hashing costs 20.674/20.546s respectively. Excluding hash, scan time improves 18.83%. Do not extend these ratios to full-film elapsed time.
+- Models load once in 8.701s; an untimed 3-second native warmup precedes measurements. Isolated queue creation costs about 0.024s. No production job/decision/default changed; no Visual AI Audit or export ran.
+- Evidence: `reports/benchmarks/ocr-native-20260928-181450/` (`comparison.json`, `analysis.json`, `SUMMARY.md`, per-run reports and 268/268 unittest log). Harness retained at `reports/benchmarks/ocr-native-pilot.py`. No runtime source change.
+- Bounded native-source gate passes. Default remains serial; next work is controlled full-advertising opt-in validation when requested, or duplicate-work/shared-decode optimization. No merge/push.
+
 ## Scan performance phase 3: moving text, effective thresholds and GPU stop — 2026-09-28
 
 - Added a standalone synthetic OCR stress benchmark and a dedicated PowerShell runner using the existing GPU mutex. Production `run.ps1` is unchanged, so adding this benchmark does not invalidate production stage-cache fingerprints.
