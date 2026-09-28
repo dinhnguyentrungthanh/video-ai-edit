@@ -28,6 +28,8 @@ class SchedulerTests(unittest.TestCase):
                 "{}", encoding="utf-8"
             )
             (root / "scripts" / "run.ps1").write_text("run", encoding="utf-8")
+            for name in ("scanner", "license_policy", "control_center"):
+                (root / "src/biliflow" / (name + ".py")).write_text("# original", encoding="utf-8")
             source = root / "input" / "video.mp4"
             source.write_bytes(b"video")
             source_sha = "a" * 64
@@ -57,6 +59,7 @@ class SchedulerTests(unittest.TestCase):
                 source_path=source, report_root=old_root,
                 commands=(old_command,), artifact_paths=(old_artifact,),
             )
+            (root / "src/biliflow/control_center.py").write_text("# UI update", encoding="utf-8")
             new_root = root / "reports" / "jobs" / "run-2"
             new_artifact = new_root / "adult" / "scan.json"
             new_command = (

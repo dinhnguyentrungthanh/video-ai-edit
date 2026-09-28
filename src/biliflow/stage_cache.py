@@ -8,8 +8,10 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Iterable
 
+from biliflow.cache_dependencies import stage_source_paths
 
-CACHE_SCHEMA_VERSION = 1
+
+CACHE_SCHEMA_VERSION = 2
 DEFAULT_MAX_CACHE_BYTES = 10 * 1024**3
 DEFAULT_MAX_CACHE_AGE = timedelta(days=14)
 CACHEABLE_STAGES = frozenset({
@@ -36,16 +38,20 @@ def _json_digest(value: Any) -> str:
     return hashlib.sha256(encoded).hexdigest()
 
 
-def _tree_fingerprint(root: Path) -> str:
+def _tree_fingerprint(root: Path, stage_name: str = "") -> str:
     """Fingerprint code/config and model identities without hashing large weights."""
     records: list[dict[str, Any]] = []
     for relative in (
-        "src/biliflow",
+        *(path.relative_to(root).as_posix() for path in stage_source_paths(root, stage_name)),
         "config/processing_profiles.json",
         "config/detection_policy.yaml",
         "config/text_review_policy.json",
         "config/license_policy.json",
         "scripts/run.ps1",
+        "scripts/env.ps1",
+        "annotations/text_semantics_seed_v1.json",
+        "pyproject.toml",
+        "uv.lock",
     ):
         candidate = root / relative
         paths = [candidate] if candidate.is_file() else (
@@ -67,6 +73,15 @@ def _tree_fingerprint(root: Path) -> str:
             else:
                 item["mtime_ns"] = stat.st_mtime_ns
             records.append(item)
+    if stage_name in {"visual_logo", "localize_logo"}:
+        memory = root / "state" / "brand-memory.json"
+        records.append({"brand_memory": hashlib.sha256(memory.read_bytes()).hexdigest()
+                        if memory.is_file() else None})
+    for name in ("ffmpeg", "ffprobe"):
+        executable = root / "tools" / "ffmpeg" / "bin" / (name + ".exe")
+        if executable.is_file():
+            stat = executable.stat()
+            records.append({"tool": name, "size": stat.st_size, "mtime_ns": stat.st_mtime_ns})
     models = root / "models"
     if models.exists():
         for path in sorted(item for item in models.rglob("*") if item.is_file()):
@@ -107,15 +122,14 @@ class StageArtifactCache:
     def __init__(self, root: Path):
         self.root = root.resolve(strict=True)
         self.cache_root = self.root / "cache" / "stage-results"
-        self._runtime_fingerprint: str | None = None
 
     def cacheable(self, stage_name: str, artifact_paths: Iterable[Path]) -> bool:
         return stage_name in CACHEABLE_STAGES and bool(tuple(artifact_paths))
 
-    def _fingerprint(self) -> str:
-        if self._runtime_fingerprint is None:
-            self._runtime_fingerprint = _tree_fingerprint(self.root)
-        return self._runtime_fingerprint
+    def _fingerprint(self, stage_name: str) -> str:
+        # A dashboard can stay open across code/model/config changes. Never pin
+        # its first fingerprint for the lifetime of that process.
+        return _tree_fingerprint(self.root, stage_name)
 
     def _normalized_arguments(
         self, arguments: Iterable[str], *, source_path: Path, report_root: Path
@@ -146,12 +160,32 @@ class StageArtifactCache:
         artifact_paths: Iterable[Path],
     ) -> str:
         artifacts = tuple(Path(path).resolve() for path in artifact_paths)
+        commands = tuple(tuple(str(value) for value in command) for command in commands)
         resolved_report_root = report_root.resolve()
+        # Reports produced inside a multi-command stage are outputs, not external
+        # dependencies. External upstream reports must match by content, not name.
+        produced = set()
+        upstream = []
+        for command in commands:
+            for index, argument in enumerate(command[:-1]):
+                if argument in {"--report", "--policy", "--semantic-seed"}:
+                    path = Path(command[index + 1]).resolve()
+                    if path not in produced:
+                        upstream.append({
+                            "path": self._normalized_arguments(
+                                [str(path)], source_path=source_path, report_root=report_root,
+                            )[0],
+                            "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+                        })
+            for index, argument in enumerate(command[:-1]):
+                if argument == "--output":
+                    produced.add(Path(command[index + 1]).resolve())
         payload = {
             "schema": CACHE_SCHEMA_VERSION,
             "stage": stage_name,
             "source_sha256": source_sha256,
-            "runtime": self._fingerprint(),
+            "runtime": self._fingerprint(stage_name),
+            "upstream": upstream,
             "commands": [
                 self._normalized_arguments(
                     command, source_path=source_path, report_root=report_root
@@ -263,6 +297,7 @@ class StageArtifactCache:
         report_root: Path,
         commands: Iterable[Iterable[str]],
         artifact_paths: Iterable[Path],
+        expected_key: str | None = None,
     ) -> dict[str, Any] | None:
         artifacts = tuple(Path(path).resolve() for path in artifact_paths)
         if not self.cacheable(stage_name, artifacts):
@@ -284,6 +319,10 @@ class StageArtifactCache:
             commands=commands,
             artifact_paths=artifacts,
         )
+        if expected_key is not None and key != expected_key:
+            # Dependencies changed while the subprocess was running. The result
+            # may still be reviewed, but must not be cached under a new identity.
+            return None
         entry = self.entry(source_sha256, stage_name, key)
         snapshot = entry / "snapshot"
         temporary = entry.with_name(entry.name + ".tmp")

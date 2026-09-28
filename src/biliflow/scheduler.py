@@ -319,6 +319,12 @@ class JobScheduler:
                 for artifact in command.expected_artifacts
             )
             report_root = self.root / "reports" / "jobs" / self._pipeline_key(job)
+            cache_key = self._stage_cache.key(
+                stage_name=name, source_sha256=str(job["source_sha256"]),
+                source_path=Path(job["source_path"]), report_root=report_root,
+                commands=(command.argv for command in definition.commands),
+                artifact_paths=artifacts,
+            ) if self._stage_cache.cacheable(name, artifacts) else None
             cache_hit = self._stage_cache.restore(
                 stage_name=name,
                 source_sha256=str(job["source_sha256"]),
@@ -371,6 +377,7 @@ class JobScheduler:
                     report_root=report_root,
                     commands=(command.argv for command in definition.commands),
                     artifact_paths=artifacts,
+                    expected_key=cache_key,
                 )
                 if cached is not None:
                     pruning = self._stage_cache.prune()

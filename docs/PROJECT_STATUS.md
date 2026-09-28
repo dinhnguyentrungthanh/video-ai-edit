@@ -1,3 +1,13 @@
+## Scan performance phase 2: exact stage reuse — 2026-09-28
+
+- Remain on `improve/scan-performance-metrics`; no merge/push or production rerun.
+- Stage cache now follows each scanner's transitive Python imports rather than invalidating every scan when the Dashboard or review UI changes. Uncertain dependencies fall back to full-source fingerprinting. Model/config scopes remain conservative.
+- Added missing identity inputs: upstream report bytes, semantic training seed, localizer script and logo brand memory. Fingerprints refresh for each lookup, and store checks the identity captured before execution.
+- Cache schema v2 deliberately misses v1 entries once; no old report, queue, brand memory or decision is deleted. Future exact reruns can reuse v2 snapshots.
+- Real artifact test: copied the existing Troy job #39 OCR report into an isolated temporary project, changed only its UI file, then compared old/new cache implementations. Old cache misses; new cache restores all 252 files byte-for-byte in 1.826 seconds. No detector or video ran.
+- Evidence: `reports/benchmarks/stage-cache-20260928-160614/comparison.json`; full suite 247/247 passes, log beside that file.
+- Benefit applies to exact reruns after unrelated code edits. New-video throughput has not improved in this phase. Next is bounded prefetch, then benchmark-gated batching/shared decode.
+
 ## Scan performance phase 1 — 2026-09-28
 
 - User requested a separate improvement branch: `improve/scan-performance-metrics`, created from `main` at `7f5a9fb`.

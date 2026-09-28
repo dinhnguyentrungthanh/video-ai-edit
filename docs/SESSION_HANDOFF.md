@@ -9,7 +9,7 @@ This is the short, authoritative starting point for a new Codex account or chat.
 - Project root: `E:\DungChung\BiliFlow`
 - Active branch: `improve/scan-performance-metrics` (new user request; remain here).
 - Base local `main`: `7f5a9fb`; ten commits ahead of `origin/main` when this branch was created. Previous detector improvements are already on local `main`.
-- Latest verified milestone: performance instrumentation, 236/236 tests, short real CUDA equivalence smoke. See `docs/SCAN_PERFORMANCE.md`.
+- Latest verified milestone: dependency-scoped stage cache, 247/247 tests; real Troy OCR artifact reuse restores 252 byte-identical files after an isolated UI edit. See `docs/SCAN_PERFORMANCE.md`.
 - Runtime source version: `src/biliflow/__init__.py` reports `0.7.24`
 - Packaging metadata in `pyproject.toml` still reports `0.7.19`; use the runtime source version for dashboard diagnosis and align the package metadata during a later release housekeeping change.
 - Confirm working-tree state with Git; performance work is isolated from `main`.
@@ -26,6 +26,13 @@ The improvement sequence now present on local `main` is:
 Always confirm this section with `git status` and `git log` because it becomes stale after new work.
 
 ## Last verified production-style run
+
+Phase 2 cache-only evidence is at
+`reports/benchmarks/stage-cache-20260928-160614/`. A temporary project used copies
+of the real Troy OCR artifacts: baseline cache missed after a UI edit; new cache
+restored 252 identical files in 1.826s. This does not measure new-video inference.
+Cache schema v2 rejects old v1 entries once; reports and decisions remain intact.
+Restart the Dashboard when idle to load the updated scheduler/cache implementation.
 
 Performance work did not rerun or replace the production job below. The new
 isolated 12-second benchmark is under
@@ -93,7 +100,7 @@ This run skipped `adult`, `gore`, and `violence`. It validates advertisement/log
 2. **Run one fresh all-detector Troy regression when requested.** Confirm the V0.7.20 adult interval and V0.7.23 high-priority intervals appear in the current Review UI. The latest verified V0.7.24 run was advertising-only.
 3. **Benchmark across Troy, Conan, and Shin.** Record recall-oriented logo coverage, false review groups, stage durations, and output correctness. Do not claim general logo accuracy from Troy alone.
 4. **Reduce scan time without lowering coverage.** Phase timing instrumentation is complete on the improvement branch. Collect these timings on the next authorized run; older reports cannot supply them. The last advertising-only Troy rerun took roughly 27 minutes: OCR about 13 minutes and visual-logo routing/localization about 14 minutes. The requested 5-10 minute full-video target is not yet achieved.
-5. **Performance work after measurement.** Reuse a bounded shared decode/frame broker across compatible OCR and visual stages, retain cache keys based on source SHA/config/model revision, and auto-clean old cache through the existing storage policy. Do not reduce sampling density or model thresholds without an A/B regression.
+5. **Performance work after measurement.** Dependency-scoped exact stage cache is implemented; current evidence verifies artifact reuse, not fresh scan speed. Next test bounded prefetch/OCR batching before extending compatible shared decode. Keep source SHA/config/model revisions and existing bounded cleanup policy. Do not reduce sampling density or model thresholds without an A/B regression.
 6. **Optional export acceleration comes later.** NVENC is currently blocked by the installed driver/FFmpeg API mismatch. Smart Render is unsafe for timelines with persistent blur unless continuity and full output validation are proven. CPU libx264 remains the production path.
 7. **Merge/push only after user authorization.** The previous improvement branch was merged into local `main`; the new `improve/scan-performance-metrics` branch is separate and unmerged. Local commits are not yet on the remote.
 

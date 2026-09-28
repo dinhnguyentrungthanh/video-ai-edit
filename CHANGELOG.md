@@ -1,3 +1,11 @@
+# Unreleased — dependency-scoped stage cache — 2026-09-28
+
+- Reuse scan artifacts after unrelated dashboard/review changes by tracking the selected scanner's transitive local imports, including lazy imports. Keep CLI/launchers, shared policy/config and model identities conservative; unresolved/dynamic imports fall back to the full source tree.
+- Include upstream report contents, OCR semantic seeds and logo brand memory in cache identity. Recompute fingerprints while the dashboard remains open instead of retaining its first fingerprint indefinitely.
+- Refuse to cache a completed stage under a different dependency identity if code/config/input reports changed while it ran.
+- Advance cache schema to v2; v1 entries are not trusted or migrated. Existing reports, review decisions and outputs are retained, and cache cleanup limits stay unchanged.
+- Verify real Troy OCR artifacts in an isolated project: after a UI-only edit, baseline misses while the scoped cache restores 252 byte-identical files in 1.826s. This measures cache reuse, not new-video inference or an end-to-end rerun. Pass 247/247 tests.
+
 # Unreleased — scan timing instrumentation — 2026-09-28
 
 - Add bounded exclusive host-wall timings across text, visual-logo, adult and safety scanners plus localization/confirmation; preserve model inputs, thresholds and export behavior.
