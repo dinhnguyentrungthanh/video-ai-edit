@@ -1,10 +1,17 @@
+# Unreleased — lossless visual-logo routing cache — 2026-09-28
+
+- Fix a pre-existing cold/warm mismatch found in the full Troy advertising trial: keep every routing frame's features and JPEG bytes, rather than reducing to two before regional candidate selection. The existing two-image VLM evidence selection still happens after routing.
+- Version routing-cache identity/serialization as v2 and reject legacy lossy caches without deleting reports or decisions. Preserve model inputs, thresholds, sampling and existing cache cleanup limits.
+- Reproduce the middle-frame loss in a regression test, then pass all 276 tests. Corrected full Troy advertising results retain 199/199 regional leads, 116 logo intervals, identical review proposals and all baseline preview hashes. Structure Audit passes; original review/source/brand memory are preserved.
+- Verify a real warm v2 run matches the cold report and 496 scanner JPEGs. Same-video logo stage: 812.780s cold / 181.821s warm. Full-film OCR batch 8 (765.102s) offers no material demonstrated gain against historical serial (770.734s); keep batching optional and serial as default. No safety scan, export, merge or push.
+
 # Unreleased — per-job experimental OCR mode — 2026-09-28
 
 - Add an OCR selector to Dashboard start/rerun controls: standard (default batch 1) or experimental faster recognition (batch 8). Preserve drafts across refreshes; persist the selected value through rerun, resume and restart, and display the current mode on the job card.
 - Exclude `reports/benchmarks` and report directories marked `.biliflow-benchmark` from automatic Dashboard import, so isolated trials cannot replace active review revisions. Existing production reports/decisions are retained.
 - Validate exact integer modes before state changes. Only the advertising text stage receives the opt-in CLI flag; other detector commands, sampling, thresholds and export remain unchanged. Stage-cache command identity separates the two OCR modes.
 - Pass 274/274 tests, including executed Dashboard JavaScript, invalid-value rejection, persistence, scope and cache separation.
-- Start a user-authorized full advertising trial for Troy under `reports/jobs/troy-ocr8-full-20260928-182704`, with separate state/logs under the matching `reports/benchmarks` directory. No production review decisions, Visual AI or export are changed/run; results pending completion.
+- Complete the user-authorized full advertising trial for Troy under `reports/jobs/troy-ocr8-full-20260928-182704`, with separate state/logs under the matching `reports/benchmarks` directory. OCR equivalence passes; its pre-existing logo-cache mismatch is fixed and verified in the follow-up documented above. No production review decisions, Visual AI or export are changed/run.
 
 # Unreleased — original-source Troy OCR pilot — 2026-09-28
 

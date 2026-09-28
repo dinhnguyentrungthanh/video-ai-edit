@@ -9,7 +9,7 @@ This is the short, authoritative starting point for a new Codex account or chat.
 - Project root: `E:\DungChung\BiliFlow`
 - Active branch: `improve/scan-performance-metrics` (new user request; remain here).
 - Base local `main`: `7f5a9fb`; ten commits ahead of `origin/main` when this branch was created. Previous detector improvements are already on local `main`.
-- Latest code milestone: `bf5bc35` adds per-job standard/experimental OCR controls with preserved serial default; 274/274 tests. Full advertising Troy trial is in progress (details below). Earlier native-source OCR pilot improves total OCR scan 7.51%, not complete advertising throughput. Prefetch stays OFF. See `docs/SCAN_PERFORMANCE.md`.
+- Latest code milestone: `6231f58` fixes lossy visual-logo routing cache serialization; 276/276 tests. `bf5bc35` adds per-job standard/experimental OCR controls with preserved serial default. Full Troy advertising equivalence and corrected cold/warm logo verification now pass. No material full-film OCR acceleration was demonstrated. Prefetch stays OFF. See `docs/SCAN_PERFORMANCE.md`.
 - Runtime source version: `src/biliflow/__init__.py` reports `0.7.24`
 - Packaging metadata in `pyproject.toml` still reports `0.7.19`; use the runtime source version for dashboard diagnosis and align the package metadata during a later release housekeeping change.
 - Confirm working-tree state with Git; performance work is isolated from `main`.
@@ -27,17 +27,38 @@ Always confirm this section with `git status` and `git log` because it becomes s
 
 ## Last verified production-style run
 
-Active authorized full advertising trial: `troy-ocr8-full-20260928-182704`.
+Completed corrective advertising trial: `troy-ocr8-full-cache2-20260928-184844`.
 Reports live under `reports/jobs/` with that key; separate SQLite state/logs and
 `trial.json` live under the matching `reports/benchmarks/` directory. Do not
-launch a duplicate run. The worker uses real pipeline commands with OCR batch 8,
-careful/live_action/advertising, bypassing stage-result reuse; internal logo
-routing cache remains enabled. Original Dashboard job #39 is unchanged.
+launch a duplicate run. The first full trial `troy-ocr8-full-20260928-182704`
+finished: OCR preserved all 3,921 sampled frames, retained tracks and preview
+hashes, but logo cache v1 lost middle-frame regional evidence. Its faster total
+time is NOT an accepted performance result. The corrective run reuses that
+verified OCR, rehashes the source and reruns logo/localization/review with v2.
+Original Dashboard job #39 is unchanged.
 Harness `reports/benchmarks/run_troy_ocr8_full.py`; read-only comparator
-`reports/benchmarks/compare_troy_ocr8_full.py`. Completion and full comparison
-are pending; inspect `trial.json`/logs before making claims. No Visual AI,
+`reports/benchmarks/compare_troy_ocr8_full.py`. Corrected raw logo results match
+the production cold baseline: 199/199 regional leads, 116 intervals, all 608
+pipeline JPEGs. Localized differences are only six documented telemetry fields.
+Review proposals match (6 primary / 294 advisory); all 123 source candidates are
+represented and Structure Audit passes. Original job #39/revision 3 and source,
+review and brand-memory checks remain unchanged (`integrity-check.json`).
+`verify_troy_logo_cache2.py` confirms the real warm v2 run matches the corrected
+cold report and all 496 scanner JPEGs, including scores. See `warm-cache-check.json`;
+the initial all-directory comparison is retained: it counted 112 downstream
+GroundingDINO extraction images that the scanner-only warm run does not produce.
+Warm logo stage is 181.821s versus cold 812.780s; this only measures same-video
+routing-cache reuse, not new-video or whole-pipeline acceleration. The corrective
+run reuses OCR, so its total is not a fresh end-to-end scan measurement.
+No trial is still running. No Visual AI,
 safety scan or export. The main Dashboard was not running at launch; next normal
 start will load the new OCR selector. No merge/push authorized.
+
+Next: profile CPU logo feature extraction versus brand-memory matching and OCR
+detection versus recognition on bounded excerpts. The cold logo stage spends
+612.124s in CPU routing, while full OCR batch 8 takes 765.102s against historical
+serial 770.734s. Do not enable batching by default or promise a 5–10 minute scan.
+Keep sampling/models/thresholds fixed; benchmark any optimization before adoption.
 
 Latest original-source OCR pilot (not a production job):
 `reports/benchmarks/ocr-native-20260928-181450/` contains the comparison,

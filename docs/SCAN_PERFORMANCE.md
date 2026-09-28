@@ -370,6 +370,63 @@ excerpt hashes the full source. The production Troy job and saved decisions stay
 untouched; Dashboard remains on batch 1. A complete advertising opt-in comparison
 can follow when requested. The original-source geometry/timing pilot is complete.
 
+## Full advertising Troy validation and routing-cache correction
+
+The authorized full trial `troy-ocr8-full-20260928-182704` used the original
+196-minute Troy source, careful/live_action/advertising only, with batch 8.
+Its OCR preserves 3,921 sampled frames, 250 retained tracks, all classifications,
+regions/times and 250 preview hashes against the production baseline. Confidence
+and runtime metadata are excluded from that comparison. OCR wall time is
+765.102s versus historical serial 770.734s: this is not a material demonstrated
+full-film speedup. The earlier short-excerpt gains do not generalize to this film.
+
+That full trial exposed a pre-existing visual-logo routing cache v1 defect:
+the writer retained only strongest/latest images before candidate selection,
+although regional routing examines evidence from every frame. Sixteen regional
+leads disappeared from warm-cache routing (199 -> 183), changing VLM selection
+and review proposals. Its 19m33s total is not an accepted performance result.
+Structure Audit passed because supplied report candidates were mapped; it does
+not compare detection against a previous run or establish ground-truth recall.
+
+Commit `6231f58` preserves all original routing frames/features/JPEGs in cache v2
+and includes the schema in the cache key. Legacy caches are rejected, not deleted.
+Model sampling, thresholds and post-selection VLM evidence remain unchanged.
+The middle-frame regression fails before the fix and passes afterward; all
+276 tests pass. Cache remains gzip-compressed under the existing 4 GiB / 30-day
+cleanup policy. This film's entry grows from 45,391,760 to 56,496,657 bytes.
+
+Corrected trial `troy-ocr8-full-cache2-20260928-184844` rehashes the source and
+reuses verified OCR, then reruns logo/localization/review. It restores 199/199
+regional leads, all 80 required full-frame representatives, and 39/39 approved
+geometry/time groups. The raw logo report matches the original cold baseline;
+localized output differs only in six documented timing/cache-use fields.
+All 608 logo JPEG hashes match. Review proposals match: 6 primary and 294
+advisory items; all 123 source candidates are represented; Structure Audit PASS.
+Original job #39/revision 3, review SHA, source stat and brand memory are unchanged.
+
+Corrective stage times: preflight 20.347s, OCR copy 0.245s (not inference),
+visual-logo 812.780s, localization 202.259s, review 8.278s. Do not report their
+sum as a fresh complete OCR-to-review scan. Logo routing CPU work consumes
+612.124s, local VLM 131.286s and frame-pipe waits 2.282s. OCR model work in the
+first trial consumes 676.415s versus only 14.333s pipe wait. These host-wall
+measurements suggest profiling CPU routing and OCR detection/recognition
+separately before extending shared decode; they do not identify a safe change
+to make without further evidence. Historical and current runs are not a
+controlled contemporaneous speed comparison.
+
+Warm v2 equivalence passes in `warm-cache-check.json`: 181.821s, an identical
+raw report including scores, and all 496 scanner JPEG hashes equal to cold.
+The initial comparison counted all directories and flagged 112 downstream
+GroundingDINO extraction images produced only by the completed cold pipeline.
+That evidence is retained; the corrected scanner-only comparison restricts itself
+to `thumbnails` and `audit-thumbnails`, without rerunning inference or ignoring
+any mismatch in shared images. This speed benefit applies to same-video cache
+reuse, not first scans of different videos. No trial remains active.
+The standalone harnesses and comparisons are in `reports/benchmarks/`.
+All trials are isolated from automatic production review import. No Visual AI,
+adult/gore/violence scan, source edit or export was performed. Serial OCR remains
+the default; per-job batch 8 stays experimental.
+
 ## Remaining implementation sequence
 
 1. **Remove additional demonstrated duplicate work.** Dependency-scoped stage
@@ -377,9 +434,11 @@ can follow when requested. The original-source geometry/timing pilot is complete
    replacing source-content verification with filename/mtime guesses. Cache reuse must require
    the same source SHA, model/revision, preprocessing, scope and configuration.
    Never reuse results between different source videos by filename or appearance.
-2. **Validate opt-in OCR recognition batching in the complete pipeline.** The
-   bounded native-source gate above passes. Measure a controlled full advertising
-   job when requested before considering default activation; Dashboard stays serial.
+2. **Profile the measured CPU-routing and OCR model bottlenecks.** Full Troy
+   advertising equivalence is checked above, but batch 8 does not demonstrate a
+   material full-film OCR gain. Keep Dashboard serial by default. Separate CPU
+   feature extraction from brand-memory matching and OCR detection from recognition
+   in a bounded benchmark before choosing another implementation change.
    Prefetch remains off. Preserve exact timestamps,
    dimensions, frame order and end-of-stream handling. Cap RAM/VRAM, support
    cancellation and keep a serial fallback. Batching changes numerical execution;
