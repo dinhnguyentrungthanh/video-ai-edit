@@ -105,7 +105,7 @@ This run skipped `adult`, `gore`, and `violence`. It validates advertisement/log
 Set-Location E:\DungChung\BiliFlow
 git status --short --branch
 git log -8 --oneline --decorate
-.\.venv\Scripts\python.exe -m pytest -q
+.\.venv\Scripts\python.exe -m unittest discover -s tests -p "test_*.py" -v
 ```
 
 Start or stop the dashboard with `Start-BiliFlow.cmd` and `Stop-BiliFlow.cmd`. Do not assume that closing the browser tab stops the backend.

@@ -24,7 +24,7 @@ The handoff file records the active branch, the last verified real-video run, an
 ## Verification
 
 - Run the focused tests for the files changed, then the full suite for detector, scheduler, review, or renderer changes.
-- The standard full test command is `.\.venv\Scripts\python.exe -m pytest -q`.
+- The standard full test command is `.\.venv\Scripts\python.exe -m unittest discover -s tests -p "test_*.py" -v`. The project test files use `unittest`; do not assume `pytest` is installed.
 - Run `.\scripts\run.ps1 license-audit` when model manifests, dependencies, or license policy change.
 - Real-video validation must report the exact job/revision and detector scope. A single-purpose scan never certifies skipped detector groups.
 - Update `CHANGELOG.md`, `docs/PROJECT_STATUS.md`, and `docs/SESSION_HANDOFF.md` after a verified milestone.
