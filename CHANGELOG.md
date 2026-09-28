@@ -1,3 +1,11 @@
+# Unreleased — opt-in same-width OCR recognition batches — 2026-09-28
+
+- Add experimental `scan-text --recognition-batch-size 2|4|8` for CUDA vi/en. Default remains 1 in CLI, Python and Dashboard; sampling, detection, thresholds, model and export behavior are unchanged.
+- Group only crops with the exact padded width used by serial EasyOCR, restore original order, preserve contrast retries and bound batch count/input area. Ordinary EasyOCR batching changes padding and was rejected after observed text changes.
+- Across 39 original-source frames from Troy and Conan 20/21 (109 text boxes), same-width batches retain text and accepted regions; score differences reach 0.000001101. Recognition-only time falls 19.0% across the measured fixtures.
+- Reversed-order OCR/tracking/semantic/report benchmarks on lossless fixture sequences are 3.7–6.3% faster, with the same tracks, geometry, classification and preview hashes. Reports differ slightly in confidence values, so exact numerical equivalence is not claimed.
+- Pass 260/260 tests. This remains opt-in pending longer contiguous-video review/coverage validation; no production rerun, default activation, merge or push.
+
 # Unreleased — bounded OCR prefetch experiment — 2026-09-28
 
 - Add an opt-in raw-frame queue (depth 0..4, 32 MiB raw-buffer budget with serial fallback), preserving bytes, sampling, frame order, OCR parameters and review behavior. Default remains serial (`prefetch_frames=0`).

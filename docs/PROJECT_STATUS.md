@@ -1,3 +1,13 @@
+## Scan performance phase 3: opt-in OCR crop batching — 2026-09-28
+
+- Added `scan-text --recognition-batch-size 2|4|8`, restricted to CUDA vi/en. Default 1 preserves current Dashboard behavior. Raw frame prefetch remains off.
+- Unlike ordinary EasyOCR batching, the experimental implementation preserves each crop's serial padded width, only combines matching widths, retains order and bounds batches by count and input area. Very wide crops stay serial. The input-area cap is not a total VRAM cap.
+- Benchmarked 39 source frames / 109 boxes across Troy and Conan 20/21. Same-width batching preserves all recognized text and accepted boxes in this corpus; maximum confidence change is about 1.101e-6. Ordinary batch=8 changed text and is rejected.
+- Summed frame-median recognition time improves 19.0%; reversed-order OCR-to-report wall time on two short lossless fixture sequences improves 6.33% and 3.70%. These numbers are NOT full-video pipeline speedups.
+- All report fields except confidence/runtime metadata and all preview JPEG hashes agree. The sequences produce respectively 14 and 5 tracks with unchanged classifications/regions/times. This is baseline equivalence evidence, not a ground-truth accuracy/recall benchmark.
+- Evidence: `reports/benchmarks/ocr-batch-20260928-165521/`, `review-170011/` beneath it, and `reports/benchmarks/ocr-batch-20260928-170046/`, `review-170317/` beneath it. Final full test log in the second root: 260/260 pass.
+- Next: validate the opt-in path on longer contiguous excerpts with near-threshold/low-contrast small text, resource/cancellation checks and complete review coverage before proposing any default activation. No full source job rerun or saved decision was changed.
+
 ## Scan performance phase 3 experiment: OCR prefetch — 2026-09-28
 
 - Added bounded CPU raw-frame prefetch for OCR as an opt-in Python parameter. Default is zero; production profiles and CLI scan defaults remain serial. No detector thresholds, sampling, models or export logic changed.

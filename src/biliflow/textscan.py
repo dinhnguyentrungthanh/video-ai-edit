@@ -499,10 +499,15 @@ def scan_text(
     semantic_classifier=None,
     reader=None,
     prefetch_frames: int = 0,
+    recognition_batch_size: int = 1,
 ) -> dict:
     performance = ScanPerformance()
     if not isinstance(prefetch_frames, int) or not 0 <= prefetch_frames <= 4:
         raise ValueError("prefetch_frames must be an integer from 0 to 4")
+    if recognition_batch_size not in (1, 2, 4, 8):
+        raise ValueError("recognition_batch_size must be 1, 2, 4 or 8")
+    if recognition_batch_size > 1 and (device_name != "cuda" or languages != ("vi", "en")):
+        raise ValueError("Experimental recognition batching requires CUDA and vi/en")
     input_path = input_path.resolve(strict=True)
     project_root = project_root.resolve(strict=True)
     report_dir = report_dir.resolve()
@@ -551,6 +556,12 @@ def scan_text(
                 user_network_directory=str(model_dir),
                 download_enabled=False,
             )
+
+    if recognition_batch_size > 1:
+        from biliflow.ocr_batch_experiment import SameWidthReader
+        if not str(getattr(reader, "device", "")).startswith("cuda"):
+            raise ValueError("Experimental recognition batching requires a CUDA OCR reader")
+        reader = SameWidthReader(reader, batch_size=recognition_batch_size)
 
     fps = 1.0 / sample_every
     frame_bytes = analysis_width * analysis_height * 3
@@ -795,6 +806,7 @@ def scan_text(
         "routing_counts": full_routing_counts,
         "tracks": summaries,
         "metrics": {
+            "recognition_batch_size": recognition_batch_size,
             "frame_prefetch": {"requested_depth": prefetch_frames, "effective_depth": frame_reader.depth,
                                "buffer_budget_bytes": 32 * 1024**2},
             "performance": performance.snapshot(),

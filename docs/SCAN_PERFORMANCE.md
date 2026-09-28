@@ -183,6 +183,76 @@ and `analysis.json`. Full unittest: **252/252**; log at
 EOF, producer exceptions, bounded backpressure, memory fallback and cancellation
 of a real child process blocked on a pipe.
 
+## Phase 3 experiment — recognition batches with unchanged crop padding
+
+Inspection of the installed EasyOCR implementation found that ordinary
+`readtext(batch_size=8)` changes the padding width: it uses a common frame-wide
+maximum instead of each crop's serial width. A/B confirmed changed text, so this
+path is rejected even though the sampled changes were below acceptance thresholds.
+
+The alternative in `ocr_batch_experiment.py` uses EasyOCR's unchanged crop
+extraction and recognition functions, groups only identical serial padded widths,
+and restores original output order. It retains character filtering, greedy
+decoding, contrast retry and all existing thresholds. Batch count is at most 8;
+input area is limited to `8 * 64 * 512` pixels per batch, with oversized crops
+running alone. This bounds batching growth, not total VRAM/activation memory.
+
+It is explicitly opt-in through Python `recognition_batch_size` and CLI
+`--recognition-batch-size`; choices are 1, 2, 4, 8. **Default remains 1**. The
+experimental path requires CUDA and the current vi/en Latin model. No Dashboard
+profile enables it. Errors propagate normally; there is no skipped-frame or
+silent drop fallback.
+
+### Measured results
+
+- Original source frames: Troy and Conan 20/21, two disjoint timestamp sets,
+  **39 frames / 109 text boxes**. Extraction is single-frame 960px bilinear;
+  lossless PNG fixtures are retained. These are fixed-frame equivalence tests,
+  not annotated ground truth and not contiguous full-video sampling.
+- Baseline/same-width recognition time, sum of per-frame medians: first corpus
+  1.2213/0.9324s, second 0.8345/0.7321s; combined reduction **19.03%**.
+- Same-width batches preserve all text and accepted box/text pairs in the corpus.
+  Maximum confidence difference **1.100739e-6**. Serial repeat runs are exact;
+  batched floating-point results are not numerically identical.
+- Ordinary batch=8 changes text in four repeated runs of each corpus (eight
+  changed runs, not necessarily eight distinct frames) and shifts confidence by
+  up to 0.0633. It is not integrated.
+- Warm reversed-order whole OCR calls on lossless fixture sequences include
+  detection, recognition, tracking, semantics, source hashing and report writes:
+  15-frame sequence **3.294 → 3.085s (6.33%)**; 24-frame sequence
+  **3.813 → 3.672s (3.70%)**. These small test clips use one fixture per second;
+  production sampling defaults are unchanged. No original source was transcoded.
+- Both sequences retain track count (14 and 5), regions, times, classifications
+  and identical JPEG hashes. Exact report comparison fails only on small OCR
+  confidence changes after runtime metadata is excluded.
+- This does not validate a production queue, Structure/Visual Audit, render,
+  near-threshold cases in unseen movies, or safety detectors. Do not extrapolate
+  these percentages to the complete 27-minute advertising pipeline.
+
+Evidence roots:
+
+- `reports/benchmarks/ocr-batch-20260928-165521/comparison.json`
+- `reports/benchmarks/ocr-batch-20260928-165521/review-170011/comparison.json`
+- `reports/benchmarks/ocr-batch-20260928-170046/comparison.json`
+- `reports/benchmarks/ocr-batch-20260928-170046/review-170317/comparison.json`
+- Final tests: **260/260**, second root's `unittest.log`.
+
+Reproduce bounded tests, with the usual GPU mutex:
+
+```powershell
+.\scripts\run.ps1 benchmark-ocr-batch --input "E:\DungChung\BiliFlow\input\VIDEO.mp4"
+.\scripts\run.ps1 benchmark-ocr-batch --review-fixtures "reports/benchmarks/ocr-batch-RUN"
+```
+
+A separate short opt-in scan can use `scan-text --recognition-batch-size 8` with
+`--start-seconds`, `--duration-seconds` and a new report directory. Preserve the
+default batch=1 baseline for comparison; do not replace a live job's reports.
+
+**Next gate:** longer contiguous excerpts, including low-contrast logos, small
+text near acceptance thresholds, moving banners, credits and empty frames;
+compare every sample, accepted finding, track and review mapping, plus VRAM and
+abort behavior. Retain serial default until those checks justify activation.
+
 ## Remaining implementation sequence
 
 1. **Remove additional demonstrated duplicate work.** Dependency-scoped stage
@@ -190,8 +260,9 @@ of a real child process blocked on a pipe.
    replacing source-content verification with filename/mtime guesses. Cache reuse must require
    the same source SHA, model/revision, preprocessing, scope and configuration.
    Never reuse results between different source videos by filename or appearance.
-2. **OCR inference batching experiments.** Prefetch was tested without a useful
-   measured benefit and remains off. Preserve exact timestamps,
+2. **Validate opt-in OCR recognition batching.** Same-width batches show modest
+   gains on fixture pipelines but need the gate above before default activation.
+   Prefetch remains off. Preserve exact timestamps,
    dimensions, frame order and end-of-stream handling. Cap RAM/VRAM, support
    cancellation and keep a serial fallback. Batching changes numerical execution;
    enable it only after model-output and coverage comparisons pass.

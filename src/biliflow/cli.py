@@ -224,6 +224,10 @@ def build_parser() -> argparse.ArgumentParser:
     text_scan.add_argument("--languages", nargs="+", default=["vi", "en"])
     text_scan.add_argument("--device", choices=["cuda", "cpu"], default="cuda")
     text_scan.add_argument(
+        "--recognition-batch-size", type=int, choices=[1, 2, 4, 8], default=1,
+        help="Experimental CUDA vi/en recognition batching by identical crop width; default serial",
+    )
+    text_scan.add_argument(
         "--semantic-model", type=Path,
         default=root / "models" / "multilingual_minilm_text_semantics",
     )
@@ -452,6 +456,7 @@ def main() -> int:
             semantic_model_dir=None if args.skip_semantic_routing else args.semantic_model,
             policy_path=None if args.skip_semantic_routing else args.policy,
             semantic_seed_path=None if args.skip_semantic_routing else args.semantic_seed,
+            recognition_batch_size=args.recognition_batch_size,
         )
         print(json.dumps({
             "report": str((args.report_dir / "text-scan.json").resolve()),

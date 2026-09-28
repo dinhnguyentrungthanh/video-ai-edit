@@ -17,7 +17,7 @@ $GpuCommands = @(
     'scan', 'scan-text', 'classify-text', 'scan-content',
     'scan-animation-safety', 'scan-live-safety', 'scan-visual-logo',
     'confirm-violence', 'benchmark-images', 'benchmark-videos', 'benchmark-ad-pipeline',
-    'localize-visual-logo', 'augment-grounding-regions', 'benchmark-scan-timing', 'benchmark-frame-prefetch'
+    'localize-visual-logo', 'augment-grounding-regions', 'benchmark-scan-timing', 'benchmark-frame-prefetch', 'benchmark-ocr-batch'
 )
 $MutexName = $null
 if ($UsesCuda -and $GpuCommands -contains $CommandName) {
@@ -51,6 +51,9 @@ try {
     } elseif ($CommandName -eq 'benchmark-frame-prefetch') {
         $PrefetchArgs = if ($BiliflowArgs.Count -gt 1) { $BiliflowArgs[1..($BiliflowArgs.Count - 1)] } else { @() }
         & $PythonExe (Join-Path $PSScriptRoot 'benchmark_frame_prefetch.py') @PrefetchArgs
+    } elseif ($CommandName -eq 'benchmark-ocr-batch') {
+        $BatchArgs = if ($BiliflowArgs.Count -gt 1) { $BiliflowArgs[1..($BiliflowArgs.Count - 1)] } else { @() }
+        & $PythonExe (Join-Path $PSScriptRoot 'benchmark_ocr_batch.py') @BatchArgs
     } else {
         & $PythonExe -m biliflow @BiliflowArgs
     }
