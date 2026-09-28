@@ -1,3 +1,12 @@
+## Scan performance phase 3 experiment: OCR prefetch — 2026-09-28
+
+- Added bounded CPU raw-frame prefetch for OCR as an opt-in Python parameter. Default is zero; production profiles and CLI scan defaults remain serial. No detector thresholds, sampling, models or export logic changed.
+- Queue caps depth at four with a 32 MiB raw-buffer budget, retains exact bytes/order, applies backpressure instead of dropping frames, forwards read errors and stops the reader on early exit. This is not a cap on total process/model RAM.
+- Real CUDA OCR A/B: Troy source seconds 0–30 and 418–448, five measured runs per excerpt with a warm shared OCR/semantic model and reversed baseline/prefetch order. Every detection payload and JPEG hash agrees; ten frames per run, 13 preview images in the opening excerpt and one in the later excerpt.
+- Median wall time excluding full-source hashing: baseline/prefetch 2.886/2.892s at start 0; 2.333/2.325s at start 418. Benefit is below 1% and inconsistent, so prefetch is NOT enabled by default.
+- Evidence: `reports/benchmarks/frame-prefetch-20260928-161812/comparison.json` and `analysis.json`. Full suite passes 252/252; log `reports/benchmarks/prefetch-unittest.log`.
+- No production rerun, queue change, merge or push. Next: benchmark OCR inference batching/preprocessing, with exact input coverage and output comparisons; do not assume read-ahead will accelerate an entire film.
+
 ## Scan performance phase 2: exact stage reuse — 2026-09-28
 
 - Remain on `improve/scan-performance-metrics`; no merge/push or production rerun.

@@ -9,7 +9,7 @@ This is the short, authoritative starting point for a new Codex account or chat.
 - Project root: `E:\DungChung\BiliFlow`
 - Active branch: `improve/scan-performance-metrics` (new user request; remain here).
 - Base local `main`: `7f5a9fb`; ten commits ahead of `origin/main` when this branch was created. Previous detector improvements are already on local `main`.
-- Latest verified milestone: dependency-scoped stage cache, 247/247 tests; real Troy OCR artifact reuse restores 252 byte-identical files after an isolated UI edit. See `docs/SCAN_PERFORMANCE.md`.
+- Latest verified milestone: bounded OCR prefetch experiment, 252/252 tests; real A/B keeps all detections/previews equal but gives no consistent speed gain. Prefetch remains OFF by default. Earlier dependency-scoped cache improvement remains active. See `docs/SCAN_PERFORMANCE.md`.
 - Runtime source version: `src/biliflow/__init__.py` reports `0.7.24`
 - Packaging metadata in `pyproject.toml` still reports `0.7.19`; use the runtime source version for dashboard diagnosis and align the package metadata during a later release housekeeping change.
 - Confirm working-tree state with Git; performance work is isolated from `main`.
@@ -26,6 +26,13 @@ The improvement sequence now present on local `main` is:
 Always confirm this section with `git status` and `git log` because it becomes stale after new work.
 
 ## Last verified production-style run
+
+Latest experiment (not a production run):
+`reports/benchmarks/frame-prefetch-20260928-161812/`. OCR samples at source
+0–30s and 418–448s matched all detections/preview hashes across ten runs, but
+wall time excluding source SHA changed by less than 1%, inconsistently. Keep
+`prefetch_frames=0` in production. Next investigate OCR inference batching with
+coverage/equivalence tests; do not broaden prefetch based on this result.
 
 Phase 2 cache-only evidence is at
 `reports/benchmarks/stage-cache-20260928-160614/`. A temporary project used copies
@@ -100,7 +107,7 @@ This run skipped `adult`, `gore`, and `violence`. It validates advertisement/log
 2. **Run one fresh all-detector Troy regression when requested.** Confirm the V0.7.20 adult interval and V0.7.23 high-priority intervals appear in the current Review UI. The latest verified V0.7.24 run was advertising-only.
 3. **Benchmark across Troy, Conan, and Shin.** Record recall-oriented logo coverage, false review groups, stage durations, and output correctness. Do not claim general logo accuracy from Troy alone.
 4. **Reduce scan time without lowering coverage.** Phase timing instrumentation is complete on the improvement branch. Collect these timings on the next authorized run; older reports cannot supply them. The last advertising-only Troy rerun took roughly 27 minutes: OCR about 13 minutes and visual-logo routing/localization about 14 minutes. The requested 5-10 minute full-video target is not yet achieved.
-5. **Performance work after measurement.** Dependency-scoped exact stage cache is implemented; current evidence verifies artifact reuse, not fresh scan speed. Next test bounded prefetch/OCR batching before extending compatible shared decode. Keep source SHA/config/model revisions and existing bounded cleanup policy. Do not reduce sampling density or model thresholds without an A/B regression.
+5. **Performance work after measurement.** Dependency-scoped exact stage cache is implemented. OCR prefetch was benchmarked and remains off because its benefit was negligible; it does not establish a fresh-scan speedup. Next investigate OCR inference batching before extending compatible shared decode. Keep source SHA/config/model revisions and existing bounded cleanup policy. Do not reduce sampling density or model thresholds without an A/B regression.
 6. **Optional export acceleration comes later.** NVENC is currently blocked by the installed driver/FFmpeg API mismatch. Smart Render is unsafe for timelines with persistent blur unless continuity and full output validation are proven. CPU libx264 remains the production path.
 7. **Merge/push only after user authorization.** The previous improvement branch was merged into local `main`; the new `improve/scan-performance-metrics` branch is separate and unmerged. Local commits are not yet on the remote.
 

@@ -1,3 +1,11 @@
+# Unreleased — bounded OCR prefetch experiment — 2026-09-28
+
+- Add an opt-in raw-frame queue (depth 0..4, 32 MiB raw-buffer budget with serial fallback), preserving bytes, sampling, frame order, OCR parameters and review behavior. Default remains serial (`prefetch_frames=0`).
+- Ensure queue backpressure, propagation of reader failures and early-exit cleanup of the FFmpeg reader; normal OCR also closes its pipes.
+- Add a mutex-protected short OCR A/B benchmark with warm models and reversed run order. Troy 00:00–00:30 and 06:58–07:28 match every detection payload and preview hash across ten runs.
+- Measured OCR wall time excluding source hashing changes by less than 1%, inconsistently. Do not enable prefetch in Dashboard/production profiles or claim new-video acceleration from this result.
+- Pass 252/252 tests. Evidence: `reports/benchmarks/frame-prefetch-20260928-161812/`.
+
 # Unreleased — dependency-scoped stage cache — 2026-09-28
 
 - Reuse scan artifacts after unrelated dashboard/review changes by tracking the selected scanner's transitive local imports, including lazy imports. Keep CLI/launchers, shared policy/config and model identities conservative; unresolved/dynamic imports fall back to the full source tree.

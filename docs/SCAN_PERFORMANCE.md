@@ -131,6 +131,58 @@ The Dashboard must restart when idle to load scheduler changes. No automatic
 restart was performed. This phase improves reuse on exact reruns after unrelated
 code edits; it does not accelerate the first scan of a new video.
 
+## Phase 3 experiment — bounded OCR prefetch
+
+`FramePrefetch` can read original FFmpeg raw bytes ahead on one CPU thread.
+Depth is limited to 0..4; the 32 MiB raw-buffer budget reserves queue frames plus
+three transient/consumer buffers, falling back to serial for oversized frames.
+This budget excludes FFmpeg/model/image-processing RAM. A full queue blocks the
+producer; it never replaces or drops frames. EOF/partial-frame bytes and reader
+errors reach the original scanner checks. Early exit terminates the owned FFmpeg
+process before joining the thread, avoiding a blocked pipe-reader lock.
+
+The Python OCR function accepts `prefetch_frames`, default **0**. No production
+profile/CLI scan default enables it. Only the benchmark opts into depth 2.
+`metrics.frame_prefetch` records requested/effective depth and budget. Pipe-wait
+timing in prefetch mode measures consumer queue wait, not the producer's CPU work.
+
+Run the bounded benchmark with the normal GPU mutex:
+
+```powershell
+.\scripts\run.ps1 benchmark-frame-prefetch --input "E:\DungChung\BiliFlow\input\VIDEO.mp4"
+```
+
+The script permits at most three excerpts of 30 seconds each and writes separate
+evidence under reports. The default samples are 0–30s and 418–448s. It loads local
+OCR/semantic models once, warms up, then runs baseline / prefetch / prefetch /
+current-serial / baseline. It compares detection payloads (excluding runtime
+metadata) and all JPEG hashes, without transcode or changes to the source/queue.
+
+Troy experiment against baseline `8a2caf3`:
+
+| Excerpt start | Baseline median excluding SHA | Prefetch median excluding SHA | Exact payload/JPEG matches |
+| --- | ---: | ---: | --- |
+| 0s | 2.886s | 2.892s | All five runs |
+| 418s | 2.333s | 2.325s | All five runs |
+
+Each run processes ten original samples at the unchanged three-second OCR
+interval. The opening excerpt has 13 preview JPEGs; the later excerpt has one.
+Hashing the entire 7.609 GB source takes about 20–22 seconds per short invocation,
+so whole-call medians are 23.256/24.026s and 22.731/22.728s respectively. This cost
+must not be mistaken for OCR inference time or extrapolated per 30-second window
+in a full-film scan: the production scanner hashes once per invocation.
+
+**Decision: keep prefetch disabled by default.** The sub-1% changes after excluding
+SHA are inconsistent and do not demonstrate a useful gain. These samples prove
+OCR equivalence only, not general detector accuracy, safety-group coverage or
+full-film throughput. Broader prefetch activation is not justified.
+
+Evidence: `reports/benchmarks/frame-prefetch-20260928-161812/comparison.json`
+and `analysis.json`. Full unittest: **252/252**; log at
+`reports/benchmarks/prefetch-unittest.log`. Tests cover ordering, partial frames,
+EOF, producer exceptions, bounded backpressure, memory fallback and cancellation
+of a real child process blocked on a pipe.
+
 ## Remaining implementation sequence
 
 1. **Remove additional demonstrated duplicate work.** Dependency-scoped stage
@@ -138,7 +190,8 @@ code edits; it does not accelerate the first scan of a new video.
    replacing source-content verification with filename/mtime guesses. Cache reuse must require
    the same source SHA, model/revision, preprocessing, scope and configuration.
    Never reuse results between different source videos by filename or appearance.
-2. **Bounded prefetch, then OCR batching experiments.** Preserve exact timestamps,
+2. **OCR inference batching experiments.** Prefetch was tested without a useful
+   measured benefit and remains off. Preserve exact timestamps,
    dimensions, frame order and end-of-stream handling. Cap RAM/VRAM, support
    cancellation and keep a serial fallback. Batching changes numerical execution;
    enable it only after model-output and coverage comparisons pass.

@@ -17,7 +17,7 @@ $GpuCommands = @(
     'scan', 'scan-text', 'classify-text', 'scan-content',
     'scan-animation-safety', 'scan-live-safety', 'scan-visual-logo',
     'confirm-violence', 'benchmark-images', 'benchmark-videos', 'benchmark-ad-pipeline',
-    'localize-visual-logo', 'augment-grounding-regions', 'benchmark-scan-timing'
+    'localize-visual-logo', 'augment-grounding-regions', 'benchmark-scan-timing', 'benchmark-frame-prefetch'
 )
 $MutexName = $null
 if ($UsesCuda -and $GpuCommands -contains $CommandName) {
@@ -48,6 +48,9 @@ try {
     } elseif ($CommandName -eq 'benchmark-scan-timing') {
         $TimingArgs = if ($BiliflowArgs.Count -gt 1) { $BiliflowArgs[1..($BiliflowArgs.Count - 1)] } else { @() }
         & $PythonExe (Join-Path $PSScriptRoot 'benchmark_scan_timing.py') @TimingArgs
+    } elseif ($CommandName -eq 'benchmark-frame-prefetch') {
+        $PrefetchArgs = if ($BiliflowArgs.Count -gt 1) { $BiliflowArgs[1..($BiliflowArgs.Count - 1)] } else { @() }
+        & $PythonExe (Join-Path $PSScriptRoot 'benchmark_frame_prefetch.py') @PrefetchArgs
     } else {
         & $PythonExe -m biliflow @BiliflowArgs
     }

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from biliflow.performance import ScanPerformance
+from biliflow.frame_prefetch import FramePrefetch
 
 import html
 import hashlib
@@ -497,8 +498,11 @@ def scan_text(
     semantic_seed_path: Path | None = None,
     semantic_classifier=None,
     reader=None,
+    prefetch_frames: int = 0,
 ) -> dict:
     performance = ScanPerformance()
+    if not isinstance(prefetch_frames, int) or not 0 <= prefetch_frames <= 4:
+        raise ValueError("prefetch_frames must be an integer from 0 to 4")
     input_path = input_path.resolve(strict=True)
     project_root = project_root.resolve(strict=True)
     report_dir = report_dir.resolve()
@@ -568,10 +572,12 @@ def scan_text(
     active_tracks: list[Track] = []
     all_tracks: list[Track] = []
     ffmpeg = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    frame_reader = FramePrefetch(ffmpeg, frame_bytes, _read_exact, depth=prefetch_frames)
     try:
         assert ffmpeg.stdout is not None
+        frame_reader.__enter__()
         while True:
-            data = performance.call('frame_pipe_wait', _read_exact, ffmpeg.stdout, frame_bytes)
+            data = performance.call('frame_pipe_wait', frame_reader.read)
             if not data:
                 break
             if len(data) != frame_bytes:
@@ -670,6 +676,8 @@ def scan_text(
             ffmpeg.terminate()
             ffmpeg.wait(timeout=10)
         raise
+    finally:
+        frame_reader.__exit__(None, None, None)
 
     summaries = []
     tracks_by_id = {}
@@ -787,6 +795,8 @@ def scan_text(
         "routing_counts": full_routing_counts,
         "tracks": summaries,
         "metrics": {
+            "frame_prefetch": {"requested_depth": prefetch_frames, "effective_depth": frame_reader.depth,
+                               "buffer_budget_bytes": 32 * 1024**2},
             "performance": performance.snapshot(),
             "elapsed_seconds": round(elapsed, 3),
             "video_seconds_per_processing_second": round(scan_duration / elapsed, 3) if elapsed else None,
