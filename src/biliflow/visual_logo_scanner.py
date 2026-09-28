@@ -51,7 +51,7 @@ BOUNDARY_SCENE_PROMPT = (
     "the actual story or the title card of the current episode; otherwise UNCERTAIN."
 )
 
-ROUTING_CACHE_SCHEMA_VERSION = 1
+ROUTING_CACHE_SCHEMA_VERSION = 2
 ROUTING_ALGORITHM_VERSION = 2
 APPROVED_BRAND_MEMORY_SIMILARITY = 0.94
 
@@ -745,6 +745,7 @@ def _routing_cache_key(source_sha256: str, settings: dict) -> str:
         {
             "source_sha256": source_sha256,
             "algorithm_version": ROUTING_ALGORITHM_VERSION,
+            "cache_schema_version": ROUTING_CACHE_SCHEMA_VERSION,
             "settings": settings,
         },
         ensure_ascii=True,
@@ -769,7 +770,11 @@ def _write_routing_cache(
 ) -> None:
     serialized_windows = []
     for key in sorted(windows):
-        evidence = select_window_evidence(windows[key], maximum=2)
+        # Routing examines every frame's regional evidence. Keeping only the
+        # strongest/latest VLM images changes which windows get selected on a
+        # cache hit. Preserve original order, features and bytes; reduce to two
+        # frames only after candidate selection, exactly as in a cold scan.
+        evidence = windows[key]
         serialized_windows.append({
             "key": list(key),
             "sample_count": int(window_sample_counts.get(key, len(windows[key]))),

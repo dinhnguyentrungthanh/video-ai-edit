@@ -1,4 +1,6 @@
 import unittest
+import gzip
+import json
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
@@ -30,6 +32,39 @@ from biliflow.visual_logo_scanner import (
 
 
 class VisualLogoScannerTests(unittest.TestCase):
+    def test_legacy_lossy_routing_cache_is_rejected(self):
+        with TemporaryDirectory() as directory:
+            path = Path(directory) / "routing.json.gz"
+            with gzip.open(path, "wt", encoding="utf-8") as handle:
+                json.dump({"schema_version": 1, "source_sha256": "a" * 64,
+                    "cache_key": "test", "windows": []}, handle)
+            self.assertIsNone(_read_routing_cache(path, source_sha256="a" * 64, cache_key="test"))
+
+    def test_cache_keeps_middle_regional_evidence_used_by_window_routing(self):
+        key = (10.0, 15.0)
+        frames = [
+            {"timestamp_seconds": 10.0, "jpeg": b"strong", "focus_jpeg": None,
+             "features": {"score": .99, "focus_region": "full", "full_frame_score": .99, "regional_score": .99}},
+            {"timestamp_seconds": 12.0, "jpeg": b"middle", "focus_jpeg": b"logo",
+             "features": {"score": .8, "focus_region": "top_right", "full_frame_score": .2, "regional_score": .8}},
+            {"timestamp_seconds": 14.0, "jpeg": b"latest", "focus_jpeg": None,
+             "features": {"score": .5, "focus_region": "full", "full_frame_score": .5, "regional_score": .5}},
+        ]
+        windows = {key: frames}
+        before = candidate_selection_coverage(windows, [key], scan_start=0, coverage_bucket_seconds=300)
+        self.assertEqual(before["regional_candidate_windows"], 1)
+        with TemporaryDirectory() as directory:
+            path = Path(directory) / "routing.json.gz"
+            _write_routing_cache(path, source_sha256="a" * 64, cache_key="test",
+                windows=windows, window_sample_counts={key: 3}, boundary_keys=set(),
+                boundary_transitions=[], frames_scanned=3, heuristic_hits=3,
+                coverage_fallback_count=0, scene_routed_count=0)
+            restored = _read_routing_cache(path, source_sha256="a" * 64, cache_key="test")
+        self.assertEqual(restored["decoded_windows"], windows)
+        self.assertEqual(candidate_selection_coverage(restored["decoded_windows"], [key],
+            scan_start=0, coverage_bucket_seconds=300), before)
+        self.assertEqual(select_window_evidence(restored["decoded_windows"][key]), select_window_evidence(frames))
+
     def test_brand_memory_replaces_unrelated_focus_with_learned_region(self):
         frame = np.full((180, 320, 3), 20, dtype=np.uint8)
         frame[9:45, 256:307] = 230
