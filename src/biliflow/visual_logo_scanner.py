@@ -108,6 +108,21 @@ def _correlation(first: np.ndarray, second: np.ndarray) -> float:
     return value if np.isfinite(value) else 0.0
 
 
+def _rgb_background_distance(frame: np.ndarray, background: np.ndarray) -> np.ndarray:
+    """The same Euclidean distance, without a generic last-axis reduction.
+
+    RGB pixels and the channel medians are integers or half integers here, so
+    all three squared terms and their sum are exactly representable in float64.
+    Keep the original subtraction dtype, square root and normalization.
+    """
+    delta = frame.astype(np.float32) - background
+    squared = delta[:, :, 0] * delta[:, :, 0]
+    squared += delta[:, :, 1] * delta[:, :, 1]
+    squared += delta[:, :, 2] * delta[:, :, 2]
+    np.sqrt(squared, out=squared)
+    return squared / 441.673
+
+
 def logo_candidate_features(
     frame_rgb: np.ndarray, previous_rgb: np.ndarray | None = None
 ) -> dict[str, float]:
@@ -126,7 +141,7 @@ def logo_candidate_features(
         )
     )
     background = np.median(border, axis=0)
-    colour_distance = np.linalg.norm(frame.astype(np.float32) - background, axis=2) / 441.673
+    colour_distance = _rgb_background_distance(frame, background)
     active = colour_distance >= 0.12
     active_ratio = float(active.mean())
     center = active[round(height * 0.18):round(height * 0.82), round(width * 0.18):round(width * 0.82)]
@@ -1435,8 +1450,8 @@ def scan_visual_logos(
                 duration=right - left, sample_every=boundary_sample_every,
                 width=analysis_width, height=analysis_height,
             )):
-                features = performance.call('logo_cpu_routing', regional_logo_candidate_features, frame, boundary_previous)
-                features = performance.call('logo_cpu_routing', _route_with_brand_memory, frame, features, memory_records)
+                features = performance.call('logo_feature_extraction', regional_logo_candidate_features, frame, boundary_previous)
+                features = performance.call('logo_brand_memory', _route_with_brand_memory, frame, features, memory_records)
                 if boundary_previous is not None:
                     boundary_transitions.append(
                         (timestamp, _frame_change_score(boundary_previous, frame))
@@ -1456,8 +1471,8 @@ def scan_visual_logos(
             duration=scan_duration, sample_every=effective_sample_interval,
             width=analysis_width, height=analysis_height,
         )):
-            features = performance.call('logo_cpu_routing', regional_logo_candidate_features, frame, previous)
-            features = performance.call('logo_cpu_routing', _route_with_brand_memory, frame, features, memory_records)
+            features = performance.call('logo_feature_extraction', regional_logo_candidate_features, frame, previous)
+            features = performance.call('logo_brand_memory', _route_with_brand_memory, frame, features, memory_records)
             in_dense_boundary = any(left <= timestamp < right for left, right in boundary_ranges)
             change_score = _frame_change_score(previous, frame) if previous is not None else 0.0
             scene_route = (
