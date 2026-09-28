@@ -7,15 +7,15 @@ This is the short, authoritative starting point for a new Codex account or chat.
 ## Repository state
 
 - Project root: `E:\DungChung\BiliFlow`
-- Active branch: `improve/review-performance`
-- Remote relation before committing this handoff: five feature commits ahead of `origin/improve/review-performance`; the documentation commit containing this file adds one more local commit.
-- Latest feature commit: `0b4ff3c Map logo candidates by geometry track`
+- Active branch: `main`
+- Local `main` was fast-forwarded through `ef45b32` after 228/228 tests passed. Before this status refresh it was eight commits ahead of `origin/main`.
+- Latest verified feature commit: `0b4ff3c Map logo candidates by geometry track`
 - Runtime source version: `src/biliflow/__init__.py` reports `0.7.24`
 - Packaging metadata in `pyproject.toml` still reports `0.7.19`; use the runtime source version for dashboard diagnosis and align the package metadata during a later release housekeeping change.
 - Working tree was clean when this handoff was written.
-- The user asked to test this branch before merging. Do not merge to `main` or push unless the user asks.
+- The user approved the merge after testing. Continue new work directly on `main`; do not push unless the user asks.
 
-The five local feature commits not yet on the remote are:
+The improvement sequence now present on local `main` is:
 
 1. `b0088f8 Complete live-action adult scene coverage`
 2. `ff5c7d4 Keep rerun controls open during refresh`
@@ -88,7 +88,7 @@ This run skipped `adult`, `gore`, and `violence`. It validates advertisement/log
 4. **Reduce scan time without lowering coverage.** Instrument per-stage wall time first. The last advertising-only Troy rerun took roughly 27 minutes: OCR about 13 minutes and visual-logo routing/localization about 14 minutes. The requested 5-10 minute full-video target is not yet achieved.
 5. **Performance work after measurement.** Reuse a bounded shared decode/frame broker across compatible OCR and visual stages, retain cache keys based on source SHA/config/model revision, and auto-clean old cache through the existing storage policy. Do not reduce sampling density or model thresholds without an A/B regression.
 6. **Optional export acceleration comes later.** NVENC is currently blocked by the installed driver/FFmpeg API mismatch. Smart Render is unsafe for timelines with persistent blur unless continuity and full output validation are proven. CPU libx264 remains the production path.
-7. **Merge and push only after user acceptance.** The user explicitly chose to test the improvement branch before merging to `main`.
+7. **Push only after user authorization.** The improvement branch has already been fast-forwarded into local `main`; the local commits are not yet on the remote.
 
 ## Safety and product constraints
 
@@ -113,5 +113,5 @@ Start or stop the dashboard with `Start-BiliFlow.cmd` and `Stop-BiliFlow.cmd`. D
 ## Prompt to paste into a new chat
 
 ```text
-Làm việc trong E:\DungChung\BiliFlow. Trước khi sửa, hãy đọc AGENTS.md và docs/SESSION_HANDOFF.md, sau đó kiểm tra git status và 8 commit gần nhất. Tiếp tục trên nhánh hiện tại; chưa merge main và chưa push nếu tôi chưa yêu cầu. Hãy đối chiếu mọi kết luận với report/job thực tế, giữ nguyên nguyên tắc video nguồn bất biến, model local miễn phí/commercial-safe và mọi edit phải qua người duyệt. Sau khi nắm trạng thái, tóm tắt ngắn: việc đã hoàn tất, bằng chứng kiểm chứng mới nhất, việc còn lại theo ưu tiên và bước tiếp theo bạn sẽ làm.
+Làm việc trong E:\DungChung\BiliFlow. Trước khi sửa, hãy đọc AGENTS.md và docs/SESSION_HANDOFF.md, sau đó kiểm tra git status và 8 commit gần nhất. Tiếp tục trực tiếp trên nhánh main hiện tại và chưa push nếu tôi chưa yêu cầu. Hãy đối chiếu mọi kết luận với report/job thực tế, giữ nguyên nguyên tắc video nguồn bất biến, model local miễn phí/commercial-safe và mọi edit phải qua người duyệt. Sau khi nắm trạng thái, tóm tắt ngắn: việc đã hoàn tất, bằng chứng kiểm chứng mới nhất, việc còn lại theo ưu tiên và bước tiếp theo bạn sẽ làm.
 ```
