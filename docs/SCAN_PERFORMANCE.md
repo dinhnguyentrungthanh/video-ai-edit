@@ -1,6 +1,53 @@
 # Scan performance work — 2026-09-28
 
-## Current milestone
+## Latest CPU-routing milestone
+
+Commit `2c72280` removes generic last-axis norm reduction from RGB background
+distance calculation, using the same three squared terms, sqrt and normalization.
+Pixel values and channel medians are integral or half-integral, so the squared
+terms and sum are exactly representable. Tests compare actual distances/masks
+bit-for-bit, including noncontiguous crops and unchanged input arrays.
+
+Evidence `reports/benchmarks/logo-rgb-distance-20260928-193550/` compares immutable
+`35fa7de` with the optimized path in baseline/optimized/optimized/baseline order.
+Six excerpts from Troy and Conan 20/21 contain 270 frames, including dense
+opening samples. Every feature, score, geometry and brand match is identical.
+Median CPU feature extraction plus brand matching is **13.482 -> 10.718s**,
+**20.50% less**; per-excerpt reductions are 15.28–22.29%. Decode, source hashing,
+model inference, localization and review are excluded. Do not multiply this
+percentage into a claim about entire films or all-detector runs.
+
+`logo-routing-equivalence-20260928-193742/` exercises the actual cold scanner
+before VLM load: Troy 0–30s (135 dense + ordinary samples) and Conan 21
+4200–4260s (30 ordinary samples). Original/new counts, 18 candidate windows,
+selection, feature metadata and VLM full/crop JPEG hashes match exactly.
+Source SHA verification remains active. Benchmark-only cache IO interception
+forces cold work without deleting or overwriting existing routing caches.
+Production queue and brand-memory hashes remain unchanged. No review job is
+created and no VLM/localization/safety/export is run in this integration check.
+
+Full tests: **278/278**. Future cold scan telemetry separates
+`logo_feature_extraction` from `logo_brand_memory`; old `logo_cpu_routing` remains
+only in historical reports. Cache schemas/models/sampling/thresholds stay fixed.
+
+Other experiments deliberately not enabled:
+
+- `routing-cpu-20260928-192616/`: 60 frames, thread counts 12/1/2/2/1/12.
+  Single-thread CPU work improves about 9% in that sample, but changes global
+  OpenCV execution settings; defaults remain untouched.
+- `logo-edge-reuse-20260928-193159/`: storing previous edge maps preserves all
+  270 frame features but only improves this CPU sample 1.88%; source/tests are
+  archived with the evidence, not enabled in production.
+- `ocr-phases-20260928-192818/`: four 30-second serial OCR excerpts, 40 frames.
+  Detection takes 4.577s, recognition 5.726s, readtext total 10.472s. Method
+  timing wrappers retain all uninstrumented predictions; model loading/decoding
+  is excluded. Do not extrapolate these phase shares to full Troy. OCR remains
+  unchanged, batch 1 default, prefetch off.
+
+Next benchmark is complete cold advertising timing when a long run is authorized
+or on the user's next new video; actual whole-video minute savings are unknown.
+
+## Original measurement milestone
 
 Phase 1 (measurement and equivalence checks) is implemented on
 `improve/scan-performance-metrics`, based on local `main` at `7f5a9fb`.
@@ -434,11 +481,12 @@ the default; per-job batch 8 stays experimental.
    replacing source-content verification with filename/mtime guesses. Cache reuse must require
    the same source SHA, model/revision, preprocessing, scope and configuration.
    Never reuse results between different source videos by filename or appearance.
-2. **Profile the measured CPU-routing and OCR model bottlenecks.** Full Troy
-   advertising equivalence is checked above, but batch 8 does not demonstrate a
-   material full-film OCR gain. Keep Dashboard serial by default. Separate CPU
-   feature extraction from brand-memory matching and OCR detection from recognition
-   in a bounded benchmark before choosing another implementation change.
+2. **Continue only from measured CPU/OCR bottlenecks.** The bounded phase split
+   and RGB CPU optimization at the top of this document are complete. Measure
+   full cold advertising impact when authorized before quoting minutes saved.
+   Batch 8 still shows no material full-film OCR gain; keep Dashboard serial.
+   More OCR changes require separate detection/recognition benchmarks and exact
+   acceptance/coverage comparisons, not simply increasing batch size.
    Prefetch remains off. Preserve exact timestamps,
    dimensions, frame order and end-of-stream handling. Cap RAM/VRAM, support
    cancellation and keep a serial fallback. Batching changes numerical execution;

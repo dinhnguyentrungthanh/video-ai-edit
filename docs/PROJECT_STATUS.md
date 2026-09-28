@@ -1,3 +1,12 @@
+## CPU logo routing: exact RGB-distance optimization — 2026-09-28
+
+- Commit `2c72280` replaces generic RGB-axis norm reduction with the same three squared channel terms, square root and normalization. uint8 pixels and half-integer channel medians make the intermediate squared sum exactly representable; array tests verify bit-exact distances and the unchanged 0.12 mask. No threshold, region, model, OpenCV thread count, sampling or export changes.
+- Six original-source excerpts / 270 frames from Troy and Conan 20/21, with reversed baseline/optimized order, preserve every feature/score/geometry and brand match against immutable `35fa7de`. Median CPU routing 13.482 -> 10.718s (-20.50%); individual excerpt reductions 15.28–22.29%. This excludes source decode/hash, VLM/localization and review, so it is not a full-film acceleration percentage.
+- Actual cold scanner routing checks on Troy 0–30s and Conan 21 4200–4260s retain all 165 samples, 18 windows, selected candidates and full/crop JPEG hashes supplied to VLM. The harness stops before model load and intercepts cache IO without deleting/overwriting production caches. Original Troy queue and brand-memory hashes remain unchanged. No all-detector scan, audit, export, merge or push.
+- Split future logo telemetry into `logo_feature_extraction` and `logo_brand_memory`. Bounded serial OCR instrumentation (40 frames) measured detection 4.577s and recognition 5.726s in 10.472s readtext time; predictions match the uninstrumented calls. OCR code and batch-1 default are unchanged.
+- Rejected previous-edge reuse (1.88% CPU gain) and left OpenCV threading unchanged. Experiment source/evidence retained under `reports/benchmarks`; only the measured RGB optimization is in production code. Full suite 278/278 passes.
+- Evidence: `reports/benchmarks/logo-rgb-distance-20260928-193550/`, `logo-routing-equivalence-20260928-193742/`, `ocr-phases-20260928-192818/`. Next: authorized full cold advertising timing or the next new-video run, before quoting actual minutes saved. No long rerun started.
+
 ## Routing-cache regression found by full advertising comparison — 2026-09-28
 
 - First full trial `troy-ocr8-full-20260928-182704` preserves OCR tracks, sample coverage and all 250 preview hashes. OCR takes 765.102s versus historical serial 770.734s; no material full-film OCR speedup is demonstrated.

@@ -9,7 +9,7 @@ This is the short, authoritative starting point for a new Codex account or chat.
 - Project root: `E:\DungChung\BiliFlow`
 - Active branch: `improve/scan-performance-metrics` (new user request; remain here).
 - Base local `main`: `7f5a9fb`; ten commits ahead of `origin/main` when this branch was created. Previous detector improvements are already on local `main`.
-- Latest code milestone: `6231f58` fixes lossy visual-logo routing cache serialization; 276/276 tests. `bf5bc35` adds per-job standard/experimental OCR controls with preserved serial default. Full Troy advertising equivalence and corrected cold/warm logo verification now pass. No material full-film OCR acceleration was demonstrated. Prefetch stays OFF. See `docs/SCAN_PERFORMANCE.md`.
+- Latest code milestone: `2c72280` reduces CPU RGB-distance overhead with bit-exact output; 278/278 tests. Six source excerpts show 20.50% lower CPU routing time, not whole-video scan time. Actual cold-routing/VLM-input checks also pass. Prior `6231f58` fixes lossy visual-logo cache; `bf5bc35` adds opt-in OCR controls with serial default. Prefetch stays OFF. See `docs/SCAN_PERFORMANCE.md`.
 - Runtime source version: `src/biliflow/__init__.py` reports `0.7.24`
 - Packaging metadata in `pyproject.toml` still reports `0.7.19`; use the runtime source version for dashboard diagnosis and align the package metadata during a later release housekeeping change.
 - Confirm working-tree state with Git; performance work is isolated from `main`.
@@ -26,6 +26,28 @@ The improvement sequence now present on local `main` is:
 Always confirm this section with `git status` and `git log` because it becomes stale after new work.
 
 ## Last verified production-style run
+
+Latest bounded performance verification (not a production rerun):
+
+- `reports/benchmarks/logo-rgb-distance-20260928-193550/`: six source excerpts,
+  270 frames from Troy and Conan 20/21, baseline/optimized/optimized/baseline.
+  CPU features plus brand matching median 13.482 -> 10.718s (-20.50%); every
+  feature/score/focus geometry equals immutable baseline `35fa7de` exactly.
+- `reports/benchmarks/logo-routing-equivalence-20260928-193742/`: actual scanner
+  control flow on Troy 0-30s (dense boundaries) and Conan 21 4200-4260s (ordinary
+  sampling). All 165 samples, 18 windows, counts, selection and full/crop JPEG
+  hashes for VLM evidence match. Source hash verification runs normally; cache
+  reads/writes are intercepted only by the harness to force cold routing without
+  overwriting existing caches. Stop before VLM load; no review/export is created.
+- `reports/benchmarks/ocr-phases-20260928-192818/`: unchanged serial OCR over 40
+  frames, four 30-second excerpts. Detection 4.577s / recognition 5.726s, total
+  readtext 10.472s. Instrumented/uninstrumented predictions match. These are
+  excerpt measurements, not full-film phase shares; OCR code/defaults unchanged.
+- OpenCV thread-count changes were not adopted. Previous-edge reuse was also
+  rejected after only 1.88% CPU benefit; its code/evidence is retained at
+  `reports/benchmarks/logo-edge-reuse-20260928-193159/`, not in production.
+- All 278 tests pass (`logo-rgb-distance-20260928-193550/unittest.log`). Production
+  Troy queue and brand-memory hashes remain unchanged. No benchmark is running.
 
 Completed corrective advertising trial: `troy-ocr8-full-cache2-20260928-184844`.
 Reports live under `reports/jobs/` with that key; separate SQLite state/logs and
@@ -54,11 +76,12 @@ No trial is still running. No Visual AI,
 safety scan or export. The main Dashboard was not running at launch; next normal
 start will load the new OCR selector. No merge/push authorized.
 
-Next: profile CPU logo feature extraction versus brand-memory matching and OCR
-detection versus recognition on bounded excerpts. The cold logo stage spends
-612.124s in CPU routing, while full OCR batch 8 takes 765.102s against historical
-serial 770.734s. Do not enable batching by default or promise a 5–10 minute scan.
-Keep sampling/models/thresholds fixed; benchmark any optimization before adoption.
+Next: measure end-to-end impact on an authorized full cold advertising run, or
+the user's next new video. Do not automatically rerun long jobs or replace review
+decisions. CPU RGB optimization is active but no full-film minute saving is yet
+measured. Continue leaving OCR batching experimental: the full batch-8 Troy run
+took 765.102s against historical serial 770.734s. Keep sampling/models/thresholds
+fixed; do not promise a 5–10 minute scan. No merge/push is authorized.
 
 Latest original-source OCR pilot (not a production job):
 `reports/benchmarks/ocr-native-20260928-181450/` contains the comparison,

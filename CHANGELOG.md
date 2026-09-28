@@ -1,3 +1,10 @@
+# Unreleased — exact CPU logo-distance calculation — 2026-09-28
+
+- Reduce RGB background-distance computation overhead while preserving pixel distances and every threshold comparison exactly. Split logo CPU timing into feature extraction and brand-memory matching. No model, sampling, thread-count, review or export behavior changes.
+- Verify 270 original-source frames across six Troy/Conan excerpts against immutable baseline code: identical features/geometry, median CPU routing 13.482 -> 10.718s (-20.50%). This is a CPU-stage measurement, not end-to-end video speed.
+- Verify actual cold routing on 165 additional samples from dense opening/ordinary middle sections: same 18 windows, selected candidates and VLM JPEG inputs. Preserve source/review/brand memory. Pass 278/278 tests.
+- Profile serial OCR detection/recognition without changing it. Leave batch 8 optional. Retain rejected previous-edge-cache experiment only as evidence; no full-video rerun, merge or push.
+
 # Unreleased — lossless visual-logo routing cache — 2026-09-28
 
 - Fix a pre-existing cold/warm mismatch found in the full Troy advertising trial: keep every routing frame's features and JPEG bytes, rather than reducing to two before regional candidate selection. The existing two-image VLM evidence selection still happens after routing.
