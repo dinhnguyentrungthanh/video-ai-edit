@@ -1,3 +1,12 @@
+## Full advertising measurement after RGB optimization — 2026-09-28
+
+- User-authorized Troy trial `troy-rgb-cold-full-20260928-194937` completed with serial OCR and fresh isolated routing/GroundingDINO caches. Actual pipeline stages use separate SQLite/review and benchmark import protection; production source/cache/job/review/brand memory are preserved.
+- Full advertising elapsed time **1786.436s (29m46s)**: preflight 20.709s, OCR 821.828s, visual-logo 686.890s, localization 248.265s, review/local audit 8.710s. No Visual AI, adult/gore/violence or export.
+- CPU logo routing is 517.638s (features 493.007 + brand matching 24.631), versus 612.124s in the recent pre-optimization cold run: 15.44% observed reduction. Logo stage falls from that run's 812.780 to 686.890s. These are separate, non-interleaved runs; bounded reversed-order evidence remains the more controlled attribution test.
+- End-to-end speedup is NOT demonstrated against the older 27m29s complete production run. That run computed 25 DINO inputs and reused 87; this run computes 112 with zero hits. OCR also takes longer. Do not use a synthetic sum of stages from different runs to claim a measured full-pipeline gain.
+- Baseline equivalence passes: 3,921 OCR frames, 6,121 logo frames, 199/199 regional leads, 116 logo intervals, 858 identical JPEGs. Localized output differs only in five runtime/cache telemetry fields. Review proposals remain 6 primary / 294 advisory, all 123 source candidates represented, Structure Audit PASS. Original job #39/revision and hashes remain unchanged.
+- Evidence in `reports/benchmarks/troy-rgb-cold-full-20260928-194937/`: `trial.json`, `analysis.json`, `comparison.json`, `SUMMARY.md`. No benchmark remains active. Runtime source unchanged in this measurement; latest full suite remains 278/278. Next bounded target: OCR inference and remaining feature extraction, with controlled cache conditions for any future end-to-end A/B. No merge/push.
+
 ## CPU logo routing: exact RGB-distance optimization — 2026-09-28
 
 - Commit `2c72280` replaces generic RGB-axis norm reduction with the same three squared channel terms, square root and normalization. uint8 pixels and half-integer channel medians make the intermediate squared sum exactly representable; array tests verify bit-exact distances and the unchanged 0.12 mask. No threshold, region, model, OpenCV thread count, sampling or export changes.

@@ -1,3 +1,9 @@
+# Unreleased — complete cold advertising measurement — 2026-09-28
+
+- Complete the user-authorized original Troy advertising run with serial OCR and fresh isolated routing/GroundingDINO caches: total 29m46s. Preserve production data and decisions; no safety detectors, Visual AI or export.
+- Verify unchanged OCR/logo detections, localized geometry, review proposals and all 858 JPEGs; 6 primary / 294 advisory items, full supplied-candidate coverage, Structure Audit PASS.
+- Observe CPU routing 612.124 -> 517.638s against the recent pre-optimization cold run. Do not claim an end-to-end speedup: the older complete 27m29s run used different DINO cache conditions, and this run's OCR is slower. No production code/default change in this measurement.
+
 # Unreleased — exact CPU logo-distance calculation — 2026-09-28
 
 - Reduce RGB background-distance computation overhead while preserving pixel distances and every threshold comparison exactly. Split logo CPU timing into feature extraction and brand-memory matching. No model, sampling, thread-count, review or export behavior changes.

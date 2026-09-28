@@ -27,6 +27,29 @@ Always confirm this section with `git status` and `git log` because it becomes s
 
 ## Last verified production-style run
 
+COMPLETED user-authorized full measurement: `troy-rgb-cold-full-20260928-194937`.
+No benchmark is running. Harness `reports/benchmarks/run_troy_rgb_full.py` uses
+serial OCR and actual pipeline stages with isolated SQLite/review, and redirects
+routing/GroundingDINO result caches into a fresh benchmark namespace. No production
+cache is deleted. Source: original Troy, careful/live_action/advertising only.
+
+- Total **1786.436s (29m46s)**: preflight 20.709, OCR 821.828, visual-logo 686.890,
+  localization 248.265, build-review/local structural audit 8.710 seconds.
+- CPU logo routing 517.638s vs recent pre-optimization cold 612.124s (-15.44%
+  observed); total logo stage 686.890 vs 812.780s. These runs were not interleaved.
+- The older complete production scan was about 27m29s, so this trial DOES NOT
+  demonstrate a lower end-to-end time. Older DINO had 87 cache hits / 25 computed;
+  this run has 0 hits / 112 computed. OCR also took longer. OS/model-file caching
+  is uncontrolled. Do not conflate the CPU improvement with full-pipeline speed.
+- OCR/raw logo results match baseline; localized differences are five documented
+  telemetry fields. All 858 JPEG hashes match; review proposals remain 6 primary
+  and 294 advisory, all 123 source candidates represented, Structure Audit PASS.
+- Original job #39 (full row/revision), queue hash, source stat and brand-memory
+  hash remain unchanged. No Visual AI, safety scan, export, merge or push.
+- Read `analysis.json`, `comparison.json`, `trial.json`, and Vietnamese `SUMMARY.md`
+  under `reports/benchmarks/troy-rgb-cold-full-20260928-194937/`. The corresponding
+  `reports/jobs` tree is benchmark-marked and not auto-imported by the Dashboard.
+
 Latest bounded performance verification (not a production rerun):
 
 - `reports/benchmarks/logo-rgb-distance-20260928-193550/`: six source excerpts,
@@ -76,12 +99,13 @@ No trial is still running. No Visual AI,
 safety scan or export. The main Dashboard was not running at launch; next normal
 start will load the new OCR selector. No merge/push authorized.
 
-Next: measure end-to-end impact on an authorized full cold advertising run, or
-the user's next new video. Do not automatically rerun long jobs or replace review
-decisions. CPU RGB optimization is active but no full-film minute saving is yet
-measured. Continue leaving OCR batching experimental: the full batch-8 Troy run
-took 765.102s against historical serial 770.734s. Keep sampling/models/thresholds
-fixed; do not promise a 5–10 minute scan. No merge/push is authorized.
+Next: focus bounded experiments on OCR/model computation (732.225s in this run)
+and remaining logo feature work (493.007s), rather than frame read-ahead (OCR
+14.609s / logo 2.246s pipe wait). A fair total speed claim needs matching cache
+conditions and a controlled baseline/optimized run, not another unrelated historic
+comparison. Do not launch additional long runs automatically. Keep OCR batch 1,
+sampling/models/thresholds fixed and user decisions intact. No 5–10 minute scan
+promise, merge or push is authorized.
 
 Latest original-source OCR pilot (not a production job):
 `reports/benchmarks/ocr-native-20260928-181450/` contains the comparison,

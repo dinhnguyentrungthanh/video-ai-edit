@@ -1,5 +1,54 @@
 # Scan performance work — 2026-09-28
 
+## Full advertising measurement after RGB optimization
+
+Authorized run `troy-rgb-cold-full-20260928-194937`, code HEAD `41c1443`, original
+196m02.72s Troy source, careful/live_action/advertising only. Serial OCR is used.
+Stage-result reuse is bypassed; benchmark-only launchers redirect routing and
+GroundingDINO result caches to a new empty namespace without deleting production
+caches. OS/model-file caching is not controlled. No existing queue is replaced.
+
+| Measured stage | Seconds |
+| --- | ---: |
+| Source preflight | 20.709 |
+| OCR/text semantics | 821.828 |
+| Visual logo routing + confirmation | 686.890 |
+| Florence + GroundingDINO localization | 248.265 |
+| Build review + local structural audit | 8.710 |
+| Total controller wall time | **1786.436 (29m46s)** |
+
+CPU routing = 493.007s feature extraction + 24.631s brand matching = 517.638s.
+The recent pre-optimization cold run recorded 612.124s, an observed 15.44%
+reduction; complete logo stage is 686.890 vs 812.780s. They are separate runs,
+not a controlled interleaved A/B, so not every timing difference can be attributed
+to the RGB change. The bounded reversed-order measurements below isolate it better.
+
+This run is **not faster end-to-end** than the historical production total of
+about 1648.627s (27m29s). That baseline reused 87 GroundingDINO results and computed
+25; this run computes all 112 (43.672s inference/cache work vs historical 11.054s).
+OCR also takes longer (821.828 vs 770.734s). Do not invent a measured baseline by
+summing stages from different trials. A total causal speed claim needs matching
+cache conditions, machine load and a contemporaneous baseline/optimized experiment.
+
+Quality comparison against the production baseline passes: all retained OCR data,
+raw logo data and localized geometry agree, except runtime/confidence metadata;
+the localized report has five specifically documented telemetry differences.
+All 858 JPEG hashes match. Review proposals remain 6 primary / 294 advisory;
+all 123 supplied source candidates are represented, Structure Audit PASS.
+199/199 regional leads, 80/80 required full-frame representatives, and 39/39
+approved geometry/time groups remain represented. This is baseline equivalence,
+not ground-truth accuracy or a test of adult/gore/violence.
+
+Original job #39 (full row/revision), source stat, review hash and brand-memory
+hash remain unchanged. No Visual AI, export, merge or push. No benchmark is active.
+Evidence: `reports/benchmarks/troy-rgb-cold-full-20260928-194937/` (`analysis.json`,
+`comparison.json`, `trial.json`, `SUMMARY.md`); job reports are benchmark-marked.
+No runtime source changes during this measurement; latest tests remain 278/278.
+
+The measured next bottlenecks are OCR model work (732.225s) and logo features
+(493.007s), not pipe waits (14.609s / 2.246s). Keep serial default and use bounded
+experiments before another long authorized A/B. No 5–10 minute guarantee.
+
 ## Latest CPU-routing milestone
 
 Commit `2c72280` removes generic last-axis norm reduction from RGB background
