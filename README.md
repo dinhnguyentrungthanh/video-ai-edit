@@ -17,6 +17,8 @@ BiliFlow là hệ thống local-first hỗ trợ quét, review, xử lý và sau
 
 ### Control Center theo phiên
 
+Ở phần bắt đầu/chạy lại từng video, mục **OCR** cho chọn **Chuẩn** (mặc định) hoặc **Tăng tốc (thử nghiệm)**. Tùy chọn chỉ áp dụng nhận chữ trong nhóm Quảng cáo/logo, không đổi mật độ quét hay ngưỡng phát hiện. Lựa chọn được lưu riêng theo video; bạn có thể chọn lại Chuẩn cho lượt sau. Mức tăng tốc toàn bộ luồng còn phụ thuộc video và các bước khác.
+
 Double-click [`Start-BiliFlow.cmd`](Start-BiliFlow.cmd) để mở dashboard tập trung tại `127.0.0.1:8765`. Dashboard tự nhập sáu nguồn và lịch sử review hiện có, theo dõi video mới sau khi file ổn định 60 giây, cho xếp nhiều video, chọn profile `careful`/`fast`, dừng sau stage, dừng ngay, retry, review và chọn riêng cho từng video: giới hạn mặc định 3,5 GB, giới hạn tùy chỉnh hoặc không giới hạn dung lượng.
 
 Đóng tab trình duyệt không dừng backend. Dùng nút **Tắt** trên dashboard hoặc [`Stop-BiliFlow.cmd`](Stop-BiliFlow.cmd) để tắt watcher, scheduler, worker và cổng web. BiliFlow không cài service và không tự chạy cùng Windows.

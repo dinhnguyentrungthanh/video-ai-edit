@@ -1,3 +1,11 @@
+# Unreleased — per-job experimental OCR mode — 2026-09-28
+
+- Add an OCR selector to Dashboard start/rerun controls: standard (default batch 1) or experimental faster recognition (batch 8). Preserve drafts across refreshes; persist the selected value through rerun, resume and restart, and display the current mode on the job card.
+- Exclude `reports/benchmarks` and report directories marked `.biliflow-benchmark` from automatic Dashboard import, so isolated trials cannot replace active review revisions. Existing production reports/decisions are retained.
+- Validate exact integer modes before state changes. Only the advertising text stage receives the opt-in CLI flag; other detector commands, sampling, thresholds and export remain unchanged. Stage-cache command identity separates the two OCR modes.
+- Pass 274/274 tests, including executed Dashboard JavaScript, invalid-value rejection, persistence, scope and cache separation.
+- Start a user-authorized full advertising trial for Troy under `reports/jobs/troy-ocr8-full-20260928-182704`, with separate state/logs under the matching `reports/benchmarks` directory. No production review decisions, Visual AI or export are changed/run; results pending completion.
+
 # Unreleased — original-source Troy OCR pilot — 2026-09-28
 
 - Validate opt-in batch 8 directly on Troy source 48–138s, with four warm serial/8/8/serial runs. Retain 42 tracks, native-resolution regions, primary/advisory review mappings and identical preview hashes; maximum confidence delta 0.000001.

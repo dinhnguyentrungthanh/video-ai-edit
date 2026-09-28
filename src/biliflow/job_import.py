@@ -39,6 +39,17 @@ def _infer_style(root: Path, queues: list[dict[str, Any]]) -> str:
     return "unknown"
 
 
+def _is_benchmark_queue(path: Path, reports_root: Path) -> bool:
+    if path.is_relative_to(reports_root / "benchmarks"):
+        return True
+    for directory in path.parents:
+        if not directory.is_relative_to(reports_root):
+            break
+        if (directory / ".biliflow-benchmark").is_file():
+            return True
+    return False
+
+
 def import_existing_project(root: Path, store: JobStore) -> dict[str, int]:
     """Import source files and historical review queues without modifying them."""
     root = root.resolve(strict=True)
@@ -46,6 +57,8 @@ def import_existing_project(root: Path, store: JobStore) -> dict[str, int]:
     ffprobe = root / "tools" / "ffmpeg" / "bin" / "ffprobe.exe"
     queue_rows: list[tuple[Path, dict[str, Any]]] = []
     for path in (root / "reports").rglob("review-queue.json"):
+        if _is_benchmark_queue(path, root / "reports"):
+            continue
         payload = _read_json(path)
         if payload and payload.get("source", {}).get("sha256"):
             queue_rows.append((path, payload))

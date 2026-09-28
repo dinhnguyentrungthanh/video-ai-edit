@@ -9,6 +9,32 @@ from biliflow.job_store import JobStore
 
 
 class JobImportTests(unittest.TestCase):
+    def test_benchmark_queues_cannot_replace_production_revision(self):
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            for name in ("input", "reports/production", "reports/benchmarks/native/run",
+                         "reports/jobs/isolated/nested", "output", "state"):
+                (root / name).mkdir(parents=True, exist_ok=True)
+            source = root / "input/movie.mp4"
+            source.write_bytes(b"source")
+            queue = {"status": "REVIEW_REQUIRED", "updated_at": "2026-01-01",
+                "source": {"path": str(source), "sha256": hashlib.sha256(b"source").hexdigest(),
+                           "duration_seconds": 12}, "reports": [], "items": [{"decision": "BLUR"}]}
+            production = root / "reports/production/review-queue.json"
+            production.write_text(json.dumps(queue), encoding="utf-8")
+            original = production.read_bytes()
+            queue.update(updated_at="2026-12-01", items=[])
+            for name in ("reports/benchmarks/native/run", "reports/jobs/isolated/nested"):
+                (root / name / "review-queue.json").write_text(json.dumps(queue), encoding="utf-8")
+            (root / "reports/jobs/isolated/.biliflow-benchmark").write_text("Isolated trial", encoding="utf-8")
+            store = JobStore(root / "state/jobs.sqlite3")
+            try:
+                self.assertEqual(import_existing_project(root, store)["revisions"], 1)
+                self.assertEqual(store.list_jobs()[0]["active_queue_path"], "reports/production/review-queue.json")
+                self.assertEqual(production.read_bytes(), original)
+            finally:
+                store.close()
+
     def test_import_preserves_queue_and_activates_latest(self):
         with TemporaryDirectory() as directory:
             root = Path(directory)

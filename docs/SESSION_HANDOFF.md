@@ -9,7 +9,7 @@ This is the short, authoritative starting point for a new Codex account or chat.
 - Project root: `E:\DungChung\BiliFlow`
 - Active branch: `improve/scan-performance-metrics` (new user request; remain here).
 - Base local `main`: `7f5a9fb`; ten commits ahead of `origin/main` when this branch was created. Previous detector improvements are already on local `main`.
-- Latest verified milestone: native Troy OCR pilot at source 48–138s, 268/268 tests. Four serial/8/8/serial runs retain 42 tracks, all preview hashes and native-resolution review mappings. Median OCR time falls 21.55%; total OCR scan including original decode/hash falls 7.51% (33.257 -> 30.760s). This is not complete advertising/all-detector throughput. Dashboard/CLI default remains batch 1; prefetch stays OFF. See `docs/SCAN_PERFORMANCE.md`.
+- Latest code milestone: `bf5bc35` adds per-job standard/experimental OCR controls with preserved serial default; 274/274 tests. Full advertising Troy trial is in progress (details below). Earlier native-source OCR pilot improves total OCR scan 7.51%, not complete advertising throughput. Prefetch stays OFF. See `docs/SCAN_PERFORMANCE.md`.
 - Runtime source version: `src/biliflow/__init__.py` reports `0.7.24`
 - Packaging metadata in `pyproject.toml` still reports `0.7.19`; use the runtime source version for dashboard diagnosis and align the package metadata during a later release housekeeping change.
 - Confirm working-tree state with Git; performance work is isolated from `main`.
@@ -26,6 +26,18 @@ The improvement sequence now present on local `main` is:
 Always confirm this section with `git status` and `git log` because it becomes stale after new work.
 
 ## Last verified production-style run
+
+Active authorized full advertising trial: `troy-ocr8-full-20260928-182704`.
+Reports live under `reports/jobs/` with that key; separate SQLite state/logs and
+`trial.json` live under the matching `reports/benchmarks/` directory. Do not
+launch a duplicate run. The worker uses real pipeline commands with OCR batch 8,
+careful/live_action/advertising, bypassing stage-result reuse; internal logo
+routing cache remains enabled. Original Dashboard job #39 is unchanged.
+Harness `reports/benchmarks/run_troy_ocr8_full.py`; read-only comparator
+`reports/benchmarks/compare_troy_ocr8_full.py`. Completion and full comparison
+are pending; inspect `trial.json`/logs before making claims. No Visual AI,
+safety scan or export. The main Dashboard was not running at launch; next normal
+start will load the new OCR selector. No merge/push authorized.
 
 Latest original-source OCR pilot (not a production job):
 `reports/benchmarks/ocr-native-20260928-181450/` contains the comparison,

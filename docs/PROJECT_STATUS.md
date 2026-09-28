@@ -1,3 +1,12 @@
+## Per-job OCR mode and full advertising trial — 2026-09-28
+
+- Commit `bf5bc35` exposes standard/experimental OCR on Dashboard start and rerun. Selection persists per job and across page refresh/resume/restart; unsupported values are rejected before settings/job changes. Serial mode retains its exact previous command line.
+- Batch 8 changes only the advertising text command. Safety, visual-logo, localization and export commands remain unchanged. Cache keys distinguish serial/batched OCR. All 274 tests pass, including Node-executed UI behavior and scheduler persistence.
+- Automatic report import now skips `reports/benchmarks` and `.biliflow-benchmark` marked report trees; the new Troy trial is marked. This also protects native-source pilot queues from becoming the active production revision on Dashboard restart.
+- Full advertising Troy trial is running at `reports/jobs/troy-ocr8-full-20260928-182704`. State and logs are isolated at `reports/benchmarks/troy-ocr8-full-20260928-182704/`; harness `reports/benchmarks/run_troy_ocr8_full.py` uses the production pipeline definitions and local structure audit. Original live job #39/queue is retained.
+- Stage-report caching is bypassed for this trial; scanner-internal routing cache follows its existing policy, so any cache contribution must be reported separately. No cloud/Visual AI, safety detectors or export are authorized by this advertising-only run.
+- Comparison helper: `reports/benchmarks/compare_troy_ocr8_full.py`; compare against #39 run `20260927-234709`. Full-video equivalence and total elapsed time remain pending. Keep serial default, remain on the improvement branch, no merge/push.
+
 ## Scan performance phase 3: native Troy OCR pilot — 2026-09-28
 
 - User authorized a short original-source comparison. Scanned Troy source 48–138s directly, no proxy/transcode, with unchanged 3-second sampling and thresholds. Scope: OCR/text semantics only, not complete advertising or safety detectors.
