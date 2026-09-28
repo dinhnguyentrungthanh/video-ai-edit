@@ -116,11 +116,19 @@ def _report_paths(
     return reports
 
 
+def normalize_ocr_batch_size(value: object) -> int:
+    if type(value) is not int or value not in (1, 8):
+        raise ValueError("OCR phải là chế độ chuẩn (1) hoặc tăng tốc thử nghiệm (8)")
+    return value
+
+
 def pipeline_stages(
     *, root: Path, job_key: str, source: Path, content_style: str, profile: str,
     source_sha256: str | None = None,
     detector_groups: list[str] | tuple[str, ...] | None = None,
+    ocr_recognition_batch_size: int = 1,
 ) -> list[PipelineStage]:
+    ocr_recognition_batch_size = normalize_ocr_batch_size(ocr_recognition_batch_size)
     root = root.resolve(strict=True)
     source = source.resolve(strict=True)
     if content_style not in {"animation", "live_action", "mixed"}:
@@ -245,6 +253,8 @@ def pipeline_stages(
             run_command(
                 root, "scan-text", "--input", source, "--report-dir", text,
                 "--sample-every", config["text_sample_every"], "--device", "cuda",
+                *(("--recognition-batch-size", ocr_recognition_batch_size)
+                  if ocr_recognition_batch_size != 1 else ()),
             ),
             (text / "text-scan.json",),
         ),), uses_gpu=True,
