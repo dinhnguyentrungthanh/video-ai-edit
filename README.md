@@ -1,6 +1,6 @@
 # BiliFlow
 
-Trạng thái dự án hiện tại được cập nhật tại [`docs/PROJECT_STATUS.md`](docs/PROJECT_STATUS.md).
+Phiên Codex mới nên bắt đầu từ [`AGENTS.md`](AGENTS.md) và [`docs/SESSION_HANDOFF.md`](docs/SESSION_HANDOFF.md). Lịch sử kỹ thuật đầy đủ nằm tại [`docs/PROJECT_STATUS.md`](docs/PROJECT_STATUS.md).
 
 BiliFlow là hệ thống local-first hỗ trợ quét, review, xử lý và sau này upload video lên BiliBili TV. Hệ thống hiện có scanner NSFW, OCR tiếng Việt, benchmark classifier nội dung và edit plan có bước review trước khi export.
 

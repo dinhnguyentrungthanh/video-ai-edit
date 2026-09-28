@@ -1,3 +1,28 @@
+## Logo geometry-track coverage V0.7.24 — 2026-09-28
+
+- Approved brand-memory matches now require similarity `>=0.94` before bypassing semantic confirmation; weaker matches return to ordinary candidate routing.
+- Candidate coverage groups strong matches by learned logo geometry and five-minute timeline bucket instead of treating every memory record as a separate physical logo.
+- Selection retains every concrete regional lead, two complementary full-frame representatives per bucket, and one representative for every approved geometry track per bucket without exceeding its configured budget.
+- The real Troy advertising-only rerun retained 199/199 regional leads and 39/39 approved geometry/time groups, with zero missing required full-frame representatives.
+- The resulting queue covers all 123 source candidates, collapses 117 repeated findings into six review groups, has no missing references, and passes deterministic Structure Audit.
+- The base OCR, Florence, GroundingDINO, Qwen, adult, gore, violence and render models were not changed.
+- Verification: 228/228 automated tests pass. Real-run evidence is recorded in `docs/SESSION_HANDOFF.md`.
+
+## Sustained explicit-scene priority V0.7.23 — 2026-09-27
+
+- Sustained adult findings labelled `porn` or `hentai` with score `>=0.99` for at least four seconds are promoted to high review priority.
+- The change only affects review ordering; it does not create a candidate, choose an edit, or modify a saved decision.
+- Troy evidence at `15:28.5-15:50.5` and `16:23-17:07` is present in the detector output. The gap is a banquet cutaway.
+- Existing queues can refresh priority safely while preserving all detector data and user decisions.
+- Verification: 225/225 automated tests pass.
+
+## Live review queue revision refresh V0.7.22 — 2026-09-27
+
+- Review pages poll the active queue revision every three seconds and reload when a rerun publishes a newer revision.
+- The current filter is preserved and resource/export state is reloaded; user decisions continue to be persisted before refresh.
+- This prevents newly detected adult, violence, or advertising items from remaining hidden behind an older in-memory queue.
+- Verification: 224/224 automated tests pass.
+
 ## Stable rerun controls V0.7.21 — 2026-09-27
 
 - Dashboard refreshes every three seconds but now captures the open/closed state of every `Chạy lại kiểm tra` panel before rebuilding video cards.
