@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from biliflow.performance import ScanPerformance
+
 import heapq
 import csv
 import json
@@ -141,6 +143,7 @@ def scan_content(
     temporal_minimum_hits: int = 3,
     target_labels: tuple[str, ...] | None = None,
 ) -> dict:
+    performance = ScanPerformance()
     input_path = input_path.resolve(strict=True)
     project_root = project_root.resolve(strict=True)
     report_dir = report_dir.resolve()
@@ -161,9 +164,10 @@ def scan_content(
     device = torch.device(device_name)
     if device.type == "cuda" and not torch.cuda.is_available():
         raise RuntimeError("CUDA was requested but PyTorch cannot access the GPU")
-    scorer, labels, target_indices = _load_classifier(
-        kind, model_path, device, target_labels=target_labels
-    )
+    with performance.measure('model_load'):
+        scorer, labels, target_indices = _load_classifier(
+            kind, model_path, device, target_labels=target_labels
+        )
 
     width = height = 256
     frame_bytes = width * height * 3
@@ -199,7 +203,7 @@ def scan_content(
         nonlocal peak_rss
         if not batch:
             return
-        probabilities, predicted_labels = scorer(batch)
+        probabilities, predicted_labels = performance.call('model_step', scorer, batch)
         for image, frame_index, score, predicted_label in zip(
             batch, batch_indices, probabilities, predicted_labels
         ):
@@ -216,7 +220,7 @@ def scan_content(
             if score >= threshold:
                 timestamp = frame_index / sample_fps
                 name = f"frame-{frame_index:08d}-{timestamp:.3f}s.jpg"
-                image.save(thumbs / name, format="JPEG", quality=82, optimize=True)
+                performance.call('preview_write', image.save, thumbs / name, format="JPEG", quality=82, optimize=True)
                 hits.append(
                     {
                         "frame_index": frame_index,
@@ -235,7 +239,7 @@ def scan_content(
     try:
         assert ffmpeg.stdout is not None
         while True:
-            data = _read_exact(ffmpeg.stdout, frame_bytes)
+            data = performance.call('frame_pipe_wait', _read_exact, ffmpeg.stdout, frame_bytes)
             if not data:
                 break
             if len(data) != frame_bytes:
@@ -282,7 +286,7 @@ def scan_content(
     for score, frame_index, image, predicted_label in sorted(candidate_heap, reverse=True):
         timestamp = frame_index / sample_fps
         name = f"candidate-{frame_index:08d}-{timestamp:.3f}s.jpg"
-        image.save(candidates_dir / name, format="JPEG", quality=82, optimize=True)
+        performance.call('preview_write', image.save, candidates_dir / name, format="JPEG", quality=82, optimize=True)
         image.close()
         top_candidates.append(
             {
@@ -304,7 +308,7 @@ def scan_content(
         "created_at": datetime.now(timezone.utc).isoformat(),
         "input": str(input_path),
         "input_size_bytes": input_stat.st_size,
-        "input_sha256": sha256_file(input_path),
+        "input_sha256": performance.call('source_hash', sha256_file, input_path),
         "duration_seconds": video_duration,
         "sample_fps": sample_fps,
         "frames_scanned": frames_scanned,
@@ -331,6 +335,7 @@ def scan_content(
         "intervals": intervals,
         "retained_interval_thumbnail_count": retained_thumbnail_count,
         "metrics": {
+            "performance": performance.snapshot(),
             "elapsed_seconds": round(elapsed, 3),
             "video_seconds_per_processing_second": round(video_duration / elapsed, 3) if elapsed else None,
             "peak_process_ram_bytes": peak_rss,

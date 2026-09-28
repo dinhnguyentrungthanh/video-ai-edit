@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from biliflow.performance import ScanPerformance
+
 import copy
 import json
 import re
@@ -108,6 +110,7 @@ def confirm_violence_report(
         else {"model": model_path.name}
     )
 
+    performance = ScanPerformance()
     started = time.perf_counter()
     retained = []
     rejected = []
@@ -121,16 +124,18 @@ def confirm_violence_report(
         if device_name == "cuda" and not torch.cuda.is_available():
             raise RuntimeError("CUDA was requested but is not available")
         dtype = torch.float16 if device_name == "cuda" else torch.float32
-        processor = AutoProcessor.from_pretrained(
-            model_path,
-            local_files_only=True,
-            min_pixels=224 * 224,
-            max_pixels=384 * 384,
-        )
-        model = AutoModelForImageTextToText.from_pretrained(
-            model_path, local_files_only=True, dtype=dtype
-        ).to(device_name)
-        model.eval()
+        with performance.measure('model_load'):
+            processor = AutoProcessor.from_pretrained(
+                model_path,
+                local_files_only=True,
+                min_pixels=224 * 224,
+                max_pixels=384 * 384,
+            )
+            model = AutoModelForImageTextToText.from_pretrained(
+                model_path, local_files_only=True, dtype=dtype
+            ).to(device_name)
+            model.eval()
+
         if device_name == "cuda":
             torch.cuda.reset_peak_memory_stats()
 
@@ -146,7 +151,7 @@ def confirm_violence_report(
                     frame_dir = temporary_root / f"interval-{index:05d}"
                     frame_dir.mkdir()
                     center = _timestamp(interval)
-                    frames = _sample_context_frames(
+                    frames = performance.call("frame_extract", _sample_context_frames,
                         capture,
                         center_seconds=center,
                         duration_seconds=duration,
@@ -165,21 +170,23 @@ def confirm_violence_report(
                                 + [{"type": "text", "text": VIOLENCE_CONFIRMATION_PROMPT}]
                             ),
                         }]
-                        inputs = processor.apply_chat_template(
-                            messages,
-                            add_generation_prompt=True,
-                            tokenize=True,
-                            return_dict=True,
-                            return_tensors="pt",
-                        ).to(model.device)
-                        with torch.inference_mode():
-                            generated = model.generate(
-                                **inputs, do_sample=False, max_new_tokens=8
-                            )
-                        answer = processor.decode(
-                            generated[0][inputs["input_ids"].shape[-1]:],
-                            skip_special_tokens=True,
-                        ).strip()
+                        with performance.measure('model_step'):
+                            inputs = processor.apply_chat_template(
+                                messages,
+                                add_generation_prompt=True,
+                                tokenize=True,
+                                return_dict=True,
+                                return_tensors="pt",
+                            ).to(model.device)
+                            with torch.inference_mode():
+                                generated = model.generate(
+                                    **inputs, do_sample=False, max_new_tokens=8
+                                )
+                            answer = processor.decode(
+                                generated[0][inputs["input_ids"].shape[-1]:],
+                                skip_special_tokens=True,
+                            ).strip()
+
                         state = _answer_state(answer)
                     answers[state] += 1
                     interval["vlm_confirmation"] = {
@@ -237,6 +244,7 @@ def confirm_violence_report(
         time.perf_counter() - started, 3
     )
     payload["metrics"]["confirmation_peak_cuda_memory_bytes"] = peak_cuda_memory
+    payload["metrics"]["confirmation_performance"] = performance.snapshot()
     payload["safety"] = {
         "automatic_edit": False,
         "note": "VLM confirmation only filters review candidates; every retained interval still requires human review.",

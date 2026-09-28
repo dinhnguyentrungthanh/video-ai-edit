@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from biliflow.performance import ScanPerformance
+
 import html
 import hashlib
 import io
@@ -496,6 +498,7 @@ def scan_text(
     semantic_classifier=None,
     reader=None,
 ) -> dict:
+    performance = ScanPerformance()
     input_path = input_path.resolve(strict=True)
     project_root = project_root.resolve(strict=True)
     report_dir = report_dir.resolve()
@@ -526,23 +529,24 @@ def scan_text(
     source_width, source_height = _video_size(probe)
     analysis_height = max(2, round(source_height * analysis_width / source_width / 2) * 2)
 
-    if reader is None:
-        try:
-            import easyocr
-        except ImportError as exc:
-            raise RuntimeError("EasyOCR is not installed in the project environment") from exc
-        model_dir.mkdir(parents=True, exist_ok=True)
-        if not any(model_dir.glob("*.pth")):
-            raise RuntimeError(
-                f"OCR model is missing in {model_dir}. Model download must be approved before scanning."
+    with performance.measure('model_load'):
+        if reader is None:
+            try:
+                import easyocr
+            except ImportError as exc:
+                raise RuntimeError("EasyOCR is not installed in the project environment") from exc
+            model_dir.mkdir(parents=True, exist_ok=True)
+            if not any(model_dir.glob("*.pth")):
+                raise RuntimeError(
+                    f"OCR model is missing in {model_dir}. Model download must be approved before scanning."
+                )
+            reader = easyocr.Reader(
+                list(languages),
+                gpu=device_name == "cuda",
+                model_storage_directory=str(model_dir),
+                user_network_directory=str(model_dir),
+                download_enabled=False,
             )
-        reader = easyocr.Reader(
-            list(languages),
-            gpu=device_name == "cuda",
-            model_storage_directory=str(model_dir),
-            user_network_directory=str(model_dir),
-            download_enabled=False,
-        )
 
     fps = 1.0 / sample_every
     frame_bytes = analysis_width * analysis_height * 3
@@ -567,7 +571,7 @@ def scan_text(
     try:
         assert ffmpeg.stdout is not None
         while True:
-            data = _read_exact(ffmpeg.stdout, frame_bytes)
+            data = performance.call('frame_pipe_wait', _read_exact, ffmpeg.stdout, frame_bytes)
             if not data:
                 break
             if len(data) != frame_bytes:
@@ -577,7 +581,7 @@ def scan_text(
                 (analysis_height, analysis_width, 3)
             )
             frame_image = Image.fromarray(frame_array)
-            raw_detections = reader.readtext(
+            raw_detections = performance.call('model_step', reader.readtext,
                 frame_array,
                 detail=1,
                 paragraph=False,
@@ -585,64 +589,66 @@ def scan_text(
                 workers=0,
                 decoder="greedy",
             )
-            detections = []
-            for points, text, confidence in raw_detections:
-                confidence = float(confidence)
-                box = _box_from_points(points)
-                if box[2] - box[0] < 8 or box[3] - box[1] < 6:
-                    continue
-                cleaned_text = _clean_text(str(text))
-                if not _accept_detection(
-                    confidence=confidence,
-                    text=cleaned_text,
-                    box=box,
-                    width=analysis_width,
-                    height=analysis_height,
-                    minimum_confidence=minimum_confidence,
-                ):
-                    continue
-                detections.append(
-                    {
-                        "timestamp_seconds": round(timestamp, 3),
-                        "box": list(box),
-                        "text": cleaned_text,
-                        "confidence": confidence,
-                        "zone": _zone(box, analysis_width, analysis_height),
-                    }
-                )
+            with performance.measure('tracking'):
+                detections = []
+                for points, text, confidence in raw_detections:
+                    confidence = float(confidence)
+                    box = _box_from_points(points)
+                    if box[2] - box[0] < 8 or box[3] - box[1] < 6:
+                        continue
+                    cleaned_text = _clean_text(str(text))
+                    if not _accept_detection(
+                        confidence=confidence,
+                        text=cleaned_text,
+                        box=box,
+                        width=analysis_width,
+                        height=analysis_height,
+                        minimum_confidence=minimum_confidence,
+                    ):
+                        continue
+                    detections.append(
+                        {
+                            "timestamp_seconds": round(timestamp, 3),
+                            "box": list(box),
+                            "text": cleaned_text,
+                            "confidence": confidence,
+                            "zone": _zone(box, analysis_width, analysis_height),
+                        }
+                    )
 
-            still_active = []
-            for track in active_tracks:
-                if timestamp - track.last_seen <= sample_every * 2.5:
-                    still_active.append(track)
-            active_tracks = still_active
-            used_tracks: set[int] = set()
-            for detection in sorted(detections, key=lambda item: item["confidence"], reverse=True):
-                candidates = [
-                    track
-                    for track in active_tracks
-                    if track.track_id not in used_tracks
-                    and track.zone == detection["zone"]
-                    and _same_region(track.last_box, tuple(detection["box"]))
-                    and _text_continuity(
-                        str(track.observations[-1]["text"]), str(detection["text"])
-                    )
-                ]
-                if candidates:
-                    track = max(candidates, key=lambda item: _iou(item.last_box, tuple(detection["box"])))
-                else:
-                    track = Track(
-                        track_id=next_track_id,
-                        first_seen=timestamp,
-                        last_seen=timestamp,
-                        last_box=tuple(detection["box"]),
-                        zone=detection["zone"],
-                    )
-                    next_track_id += 1
-                    active_tracks.append(track)
-                    all_tracks.append(track)
-                track.add(detection, frame_image)
-                used_tracks.add(track.track_id)
+                still_active = []
+                for track in active_tracks:
+                    if timestamp - track.last_seen <= sample_every * 2.5:
+                        still_active.append(track)
+                active_tracks = still_active
+                used_tracks: set[int] = set()
+                for detection in sorted(detections, key=lambda item: item["confidence"], reverse=True):
+                    candidates = [
+                        track
+                        for track in active_tracks
+                        if track.track_id not in used_tracks
+                        and track.zone == detection["zone"]
+                        and _same_region(track.last_box, tuple(detection["box"]))
+                        and _text_continuity(
+                            str(track.observations[-1]["text"]), str(detection["text"])
+                        )
+                    ]
+                    if candidates:
+                        track = max(candidates, key=lambda item: _iou(item.last_box, tuple(detection["box"])))
+                    else:
+                        track = Track(
+                            track_id=next_track_id,
+                            first_seen=timestamp,
+                            last_seen=timestamp,
+                            last_box=tuple(detection["box"]),
+                            zone=detection["zone"],
+                        )
+                        next_track_id += 1
+                        active_tracks.append(track)
+                        all_tracks.append(track)
+                    track.add(detection, frame_image)
+                    used_tracks.add(track.track_id)
+
             frame_image.close()
             frames_scanned += 1
             if frames_scanned % 100 == 0:
@@ -674,43 +680,44 @@ def scan_text(
 
     semantic_routing = False
     semantic_device = None
-    if semantic_classifier is not None or semantic_model_dir is not None:
-        from biliflow.text_semantics import (
-            LocalEmbeddingTextClassifier,
-            _representative_text,
-            classify_text_track,
-            load_text_policy,
-        )
+    with performance.measure('text_semantics'):
+        if semantic_classifier is not None or semantic_model_dir is not None:
+            from biliflow.text_semantics import (
+                LocalEmbeddingTextClassifier,
+                _representative_text,
+                classify_text_track,
+                load_text_policy,
+            )
 
-        if policy_path is None:
-            raise ValueError("policy_path is required when semantic routing is enabled")
-        policy = load_text_policy(policy_path)
-        if semantic_classifier is None:
-            if semantic_seed_path is None:
-                raise ValueError("semantic_seed_path is required for semantic routing")
-            classifier = LocalEmbeddingTextClassifier(
-                semantic_model_dir, semantic_seed_path, device_name
+            if policy_path is None:
+                raise ValueError("policy_path is required when semantic routing is enabled")
+            policy = load_text_policy(policy_path)
+            if semantic_classifier is None:
+                if semantic_seed_path is None:
+                    raise ValueError("semantic_seed_path is required for semantic routing")
+                classifier = LocalEmbeddingTextClassifier(
+                    semantic_model_dir, semantic_seed_path, device_name
+                )
+            else:
+                classifier = semantic_classifier
+            texts = [_representative_text(summary) for summary in summaries]
+            score_rows = (
+                classifier.classify_many(texts)
+                if hasattr(classifier, "classify_many")
+                else [classifier(text) for text in texts]
             )
-        else:
-            classifier = semantic_classifier
-        texts = [_representative_text(summary) for summary in summaries]
-        score_rows = (
-            classifier.classify_many(texts)
-            if hasattr(classifier, "classify_many")
-            else [classifier(text) for text in texts]
-        )
-        summaries = [
-            classify_text_track(
-                summary,
-                semantic_scores=scores,
-                analysis_size=[analysis_width, analysis_height],
-                video_duration=video_duration,
-                policy=policy,
-            )
-            for summary, scores in zip(summaries, score_rows, strict=True)
-        ]
-        semantic_routing = True
-        semantic_device = getattr(classifier, "device", device_name)
+            summaries = [
+                classify_text_track(
+                    summary,
+                    semantic_scores=scores,
+                    analysis_size=[analysis_width, analysis_height],
+                    video_duration=video_duration,
+                    policy=policy,
+                )
+                for summary, scores in zip(summaries, score_rows, strict=True)
+            ]
+            semantic_routing = True
+            semantic_device = getattr(classifier, "device", device_name)
 
     summaries = _promote_repeated_corner_overlays(summaries, video_duration)
 
@@ -742,22 +749,24 @@ def scan_text(
     summaries = review_candidates + reference_tracks[
         :max(0, max_report_tracks - len(review_candidates))
     ]
-    for summary in summaries:
-        track = tracks_by_id[summary["track_id"]]
-        if track.best_frame_jpeg is not None:
-            name = f"track-{track.track_id:05d}.jpg"
-            with Image.open(io.BytesIO(track.best_frame_jpeg)) as stored_preview:
-                annotated = _annotate(stored_preview.convert("RGB"), summary)
-            annotated.save(previews_dir / name, format="JPEG", quality=86, optimize=True)
-            annotated.close()
-            summary["preview"] = f"text-previews/{name}"
+    with performance.measure('preview_output'):
+        for summary in summaries:
+            track = tracks_by_id[summary["track_id"]]
+            if track.best_frame_jpeg is not None:
+                name = f"track-{track.track_id:05d}.jpg"
+                with Image.open(io.BytesIO(track.best_frame_jpeg)) as stored_preview:
+                    annotated = _annotate(stored_preview.convert("RGB"), summary)
+                performance.call('preview_write', annotated.save, previews_dir / name, format="JPEG", quality=86, optimize=True)
+                annotated.close()
+                summary["preview"] = f"text-previews/{name}"
+
     elapsed = time.perf_counter() - started
     payload = {
         "schema_version": 2 if semantic_routing else 1,
         "status": "REVIEW_REQUIRED",
         "created_at": datetime.now(timezone.utc).isoformat(),
         "input": str(input_path),
-        "input_sha256": _sha256_file(input_path),
+        "input_sha256": performance.call('source_hash', _sha256_file, input_path),
         "duration_seconds": video_duration,
         "scan_start_seconds": start_seconds,
         "scan_duration_seconds": scan_duration,
@@ -778,6 +787,7 @@ def scan_text(
         "routing_counts": full_routing_counts,
         "tracks": summaries,
         "metrics": {
+            "performance": performance.snapshot(),
             "elapsed_seconds": round(elapsed, 3),
             "video_seconds_per_processing_second": round(scan_duration / elapsed, 3) if elapsed else None,
             "peak_process_ram_bytes": peak_rss,

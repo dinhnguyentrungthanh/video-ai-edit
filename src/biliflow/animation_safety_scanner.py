@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from biliflow.performance import ScanPerformance
+
 import csv
 import heapq
 import json
@@ -115,6 +117,7 @@ def scan_animation_safety(
     gore_context_temporal_minimum_hits: int = 4,
     device_name: str = "cuda",
 ) -> dict:
+    performance = ScanPerformance()
     project_root = project_root.resolve(strict=True)
     input_path = input_path.resolve(strict=True)
     report_dir = report_dir.resolve()
@@ -166,22 +169,23 @@ def scan_animation_safety(
     danger_indices = _label_indices(labels, DANGER_LABELS)
     adult_indices = _label_indices(labels, ADULT_EXPLICIT_LABELS)
 
-    model = timm.create_model(
-        config["architecture"],
-        pretrained=False,
-        num_classes=config["num_classes"],
-        **config.get("model_args", {}),
-    )
-    model.load_state_dict(load_file(model_path / "model.safetensors"))
-    model = model.to(device).eval()
-    transform = timm.data.create_transform(
-        input_size=tuple(config["pretrained_cfg"]["input_size"]),
-        interpolation=config["pretrained_cfg"]["interpolation"],
-        crop_pct=float(config["pretrained_cfg"]["crop_pct"]),
-        mean=tuple(config["pretrained_cfg"]["mean"]),
-        std=tuple(config["pretrained_cfg"]["std"]),
-        is_training=False,
-    )
+    with performance.measure('model_load'):
+        model = timm.create_model(
+            config["architecture"],
+            pretrained=False,
+            num_classes=config["num_classes"],
+            **config.get("model_args", {}),
+        )
+        model.load_state_dict(load_file(model_path / "model.safetensors"))
+        model = model.to(device).eval()
+        transform = timm.data.create_transform(
+            input_size=tuple(config["pretrained_cfg"]["input_size"]),
+            interpolation=config["pretrained_cfg"]["interpolation"],
+            crop_pct=float(config["pretrained_cfg"]["crop_pct"]),
+            mean=tuple(config["pretrained_cfg"]["mean"]),
+            std=tuple(config["pretrained_cfg"]["std"]),
+            is_training=False,
+        )
 
     adult_dir = report_dir / "adult"
     gore_dir = report_dir / "gore"
@@ -225,9 +229,11 @@ def scan_animation_safety(
         nonlocal peak_rss
         if not batch:
             return
-        pixels = torch.stack([transform(image) for image in batch]).to(device)
-        with torch.inference_mode():
-            probabilities = torch.sigmoid(model(pixels)).cpu()
+        with performance.measure('model_step'):
+            pixels = torch.stack([transform(image) for image in batch]).to(device)
+            with torch.inference_mode():
+                probabilities = torch.sigmoid(model(pixels)).cpu()
+
         adult_batch = _union(probabilities, adult_indices)
         gore_batch = _union(probabilities, gore_indices)
         context_batch = _union(probabilities, context_indices)
@@ -275,7 +281,7 @@ def scan_animation_safety(
                 and adult_cooccurrence[position] >= adult_minimum_cooccurring_labels
             ):
                 name = f"frame-{frame_index:08d}-{timestamp:.3f}s.jpg"
-                image.save(
+                performance.call('preview_write', image.save,
                     adult_dir / "thumbnails" / name,
                     format="JPEG", quality=82, optimize=True,
                 )
@@ -301,7 +307,7 @@ def scan_animation_safety(
             )
             if high_score or context_confirmed:
                 name = f"frame-{frame_index:08d}-{timestamp:.3f}s.jpg"
-                image.save(gore_dir / "thumbnails" / name, format="JPEG", quality=82, optimize=True)
+                performance.call('preview_write', image.save, gore_dir / "thumbnails" / name, format="JPEG", quality=82, optimize=True)
                 gore_hits.append(
                     {
                         "frame_index": frame_index,
@@ -316,7 +322,7 @@ def scan_animation_safety(
                 )
             if violence_score >= violence_threshold:
                 name = f"frame-{frame_index:08d}-{timestamp:.3f}s.jpg"
-                image.save(
+                performance.call('preview_write', image.save,
                     violence_dir / "thumbnails" / name,
                     format="JPEG", quality=82, optimize=True,
                 )
@@ -344,7 +350,7 @@ def scan_animation_safety(
     try:
         assert ffmpeg.stdout is not None
         while True:
-            data = _read_exact(ffmpeg.stdout, frame_bytes)
+            data = performance.call('frame_pipe_wait', _read_exact, ffmpeg.stdout, frame_bytes)
             if not data:
                 break
             if len(data) != frame_bytes:
@@ -421,6 +427,7 @@ def scan_animation_safety(
                 thumbnail.unlink(missing_ok=True)
 
     shared_metrics = {
+        "performance": performance.snapshot(),
         "elapsed_seconds": round(elapsed, 3),
         "video_seconds_per_processing_second": (
             round(video_duration / elapsed, 3) if elapsed else None
@@ -431,7 +438,7 @@ def scan_animation_safety(
         ),
         "shared_inference": True,
     }
-    input_hash = sha256_file(input_path)
+    input_hash = performance.call('source_hash', sha256_file, input_path)
     common = {
         "schema_version": 2,
         "status": status,

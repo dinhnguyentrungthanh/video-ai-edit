@@ -17,7 +17,7 @@ $GpuCommands = @(
     'scan', 'scan-text', 'classify-text', 'scan-content',
     'scan-animation-safety', 'scan-live-safety', 'scan-visual-logo',
     'confirm-violence', 'benchmark-images', 'benchmark-videos', 'benchmark-ad-pipeline',
-    'localize-visual-logo', 'augment-grounding-regions'
+    'localize-visual-logo', 'augment-grounding-regions', 'benchmark-scan-timing'
 )
 $MutexName = $null
 if ($UsesCuda -and $GpuCommands -contains $CommandName) {
@@ -32,8 +32,11 @@ try {
     if ($MutexName) {
         $ResourceMutex = [Threading.Mutex]::new($false, $MutexName)
         Write-Host "BiliFlow: waiting for resource slot $MutexName"
+        $SlotWait = [Diagnostics.Stopwatch]::StartNew()
         $HasMutex = $ResourceMutex.WaitOne()
+        $SlotWait.Stop()
         Write-Host "BiliFlow: resource slot acquired"
+        Write-Host ("BiliFlow performance: resource_wait_seconds={0:F3}" -f $SlotWait.Elapsed.TotalSeconds)
     }
     if ($CommandName -eq 'localize-visual-logo') {
         $LocalizerArgs = if ($BiliflowArgs.Count -gt 1) {
@@ -42,6 +45,9 @@ try {
             @()
         }
         & $PythonExe (Join-Path $PSScriptRoot 'localize_visual_logo_report.py') @LocalizerArgs
+    } elseif ($CommandName -eq 'benchmark-scan-timing') {
+        $TimingArgs = if ($BiliflowArgs.Count -gt 1) { $BiliflowArgs[1..($BiliflowArgs.Count - 1)] } else { @() }
+        & $PythonExe (Join-Path $PSScriptRoot 'benchmark_scan_timing.py') @TimingArgs
     } else {
         & $PythonExe -m biliflow @BiliflowArgs
     }

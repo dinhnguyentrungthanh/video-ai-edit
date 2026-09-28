@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from biliflow.performance import ScanPerformance
+
 import heapq
 import json
 import os
@@ -50,6 +52,7 @@ def scan_violence(
     device_name: str = "cuda",
     content_style: str = "live_action",
 ) -> dict:
+    performance = ScanPerformance()
     input_path = input_path.resolve(strict=True)
     project_root = project_root.resolve(strict=True)
     report_dir = report_dir.resolve()
@@ -75,60 +78,61 @@ def scan_violence(
     if device.type == "cuda" and not torch.cuda.is_available():
         raise RuntimeError("CUDA was requested but PyTorch cannot access the GPU")
 
-    manifest = json.loads((model_path / "manifest.json").read_text(encoding="utf-8"))
-    backend = manifest.get("backend")
-    frame_window_backend = backend == "timm_frame_video"
-    if frame_window_backend:
-        import timm
-        from torchvision.transforms import Compose, Normalize, Resize, ToTensor
+    with performance.measure('model_load'):
+        manifest = json.loads((model_path / "manifest.json").read_text(encoding="utf-8"))
+        backend = manifest.get("backend")
+        frame_window_backend = backend == "timm_frame_video"
+        if frame_window_backend:
+            import timm
+            from torchvision.transforms import Compose, Normalize, Resize, ToTensor
 
-        model = timm.create_model(
-            manifest["architecture"], pretrained=False,
-            num_classes=len(manifest["label_names"]),
-        )
-        incompatible = model.load_state_dict(
-            load_file(model_path / "model.safetensors"), strict=False
-        )
-        if incompatible.missing_keys or incompatible.unexpected_keys:
-            raise RuntimeError(f"Checkpoint mismatch: {incompatible}")
-        frame_transform = Compose([
-            Resize((224, 224)), ToTensor(),
-            Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5)),
-        ])
-        positive_indices = [int(manifest.get("positive_index", 1))]
-        aggregation_top_k = int(manifest.get("aggregation_top_k", 5))
-        processor = None
-    else:
-        processor = (
-            AutoImageProcessor.from_pretrained(model_path, local_files_only=True)
-            if (model_path / "preprocessor_config.json").exists()
-            else VideoMAEImageProcessor(size={"shortest_edge": 224}, crop_size={"height": 224, "width": 224})
-        )
-    if backend == "transformers_video_multiclass":
-        config = AutoConfig.from_pretrained(model_path, local_files_only=True)
-        model = AutoModelForVideoClassification.from_config(config)
-        state = load_file(model_path / "model.safetensors")
-        for layer in range(config.num_hidden_layers):
-            base = f"videomae.encoder.layer.{layer}.attention.attention."
-            query_bias = state.pop(base + "q_bias")
-            value_bias = state.pop(base + "v_bias")
-            state[base + "query.bias"] = query_bias
-            state[base + "key.bias"] = torch.zeros_like(query_bias)
-            state[base + "value.bias"] = value_bias
-        incompatible = model.load_state_dict(state, strict=False)
-        if incompatible.missing_keys or incompatible.unexpected_keys:
-            raise RuntimeError(f"Checkpoint mismatch: {incompatible}")
-    elif not frame_window_backend:
-        model = AutoModelForVideoClassification.from_pretrained(
-            model_path, local_files_only=True, use_safetensors=True
-        )
-    model = model.to(device).eval()
-    if not frame_window_backend:
-        wanted = {label.casefold() for label in manifest.get("target_labels", [])}
-        positive_indices = [
-            int(index) for index, label in model.config.id2label.items()
-            if str(label).casefold() in wanted
-        ] or [1]
+            model = timm.create_model(
+                manifest["architecture"], pretrained=False,
+                num_classes=len(manifest["label_names"]),
+            )
+            incompatible = model.load_state_dict(
+                load_file(model_path / "model.safetensors"), strict=False
+            )
+            if incompatible.missing_keys or incompatible.unexpected_keys:
+                raise RuntimeError(f"Checkpoint mismatch: {incompatible}")
+            frame_transform = Compose([
+                Resize((224, 224)), ToTensor(),
+                Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5)),
+            ])
+            positive_indices = [int(manifest.get("positive_index", 1))]
+            aggregation_top_k = int(manifest.get("aggregation_top_k", 5))
+            processor = None
+        else:
+            processor = (
+                AutoImageProcessor.from_pretrained(model_path, local_files_only=True)
+                if (model_path / "preprocessor_config.json").exists()
+                else VideoMAEImageProcessor(size={"shortest_edge": 224}, crop_size={"height": 224, "width": 224})
+            )
+        if backend == "transformers_video_multiclass":
+            config = AutoConfig.from_pretrained(model_path, local_files_only=True)
+            model = AutoModelForVideoClassification.from_config(config)
+            state = load_file(model_path / "model.safetensors")
+            for layer in range(config.num_hidden_layers):
+                base = f"videomae.encoder.layer.{layer}.attention.attention."
+                query_bias = state.pop(base + "q_bias")
+                value_bias = state.pop(base + "v_bias")
+                state[base + "query.bias"] = query_bias
+                state[base + "key.bias"] = torch.zeros_like(query_bias)
+                state[base + "value.bias"] = value_bias
+            incompatible = model.load_state_dict(state, strict=False)
+            if incompatible.missing_keys or incompatible.unexpected_keys:
+                raise RuntimeError(f"Checkpoint mismatch: {incompatible}")
+        elif not frame_window_backend:
+            model = AutoModelForVideoClassification.from_pretrained(
+                model_path, local_files_only=True, use_safetensors=True
+            )
+        model = model.to(device).eval()
+        if not frame_window_backend:
+            wanted = {label.casefold() for label in manifest.get("target_labels", [])}
+            positive_indices = [
+                int(index) for index, label in model.config.id2label.items()
+                if str(label).casefold() in wanted
+            ] or [1]
 
     width = height = 256
     frame_bytes = width * height * 3
@@ -166,7 +170,7 @@ def scan_violence(
     try:
         assert ffmpeg.stdout is not None
         while True:
-            data = _read_exact(ffmpeg.stdout, frame_bytes)
+            data = performance.call('frame_pipe_wait', _read_exact, ffmpeg.stdout, frame_bytes)
             if not data:
                 break
             if len(data) != frame_bytes:
@@ -180,25 +184,29 @@ def scan_violence(
                     clip_frames if windows_scored == 0 else min(stride_frames, clip_frames)
                 )
                 new_frames = list(window)[-new_frame_count:]
-                pixels = torch.stack([frame_transform(frame) for frame in new_frames]).to(device)
-                with torch.inference_mode():
-                    frame_probabilities = torch.softmax(model(pixels), dim=-1)[:, positive_indices[0]]
-                frame_score_window.extend(frame_probabilities.cpu().tolist())
+                with performance.measure('model_step'):
+                    pixels = torch.stack([frame_transform(frame) for frame in new_frames]).to(device)
+                    with torch.inference_mode():
+                        frame_probabilities = torch.softmax(model(pixels), dim=-1)[:, positive_indices[0]]
+                    frame_score_window.extend(frame_probabilities.cpu().tolist())
+
                 if len(frame_score_window) != clip_frames:
                     raise RuntimeError("Frame score cache is not aligned with the video window")
                 score = aggregate_top_k_mean(
                     list(frame_score_window), aggregation_top_k
                 )
             else:
-                frames = [np.asarray(frame).copy() for frame in window]
-                assert processor is not None
-                inputs = {
-                    key: value.to(device)
-                    for key, value in processor(frames, return_tensors="pt").items()
-                }
-                with torch.inference_mode():
-                    probabilities = torch.softmax(model(**inputs).logits, dim=-1)[0].cpu()
-                score = float(probabilities[positive_indices].sum())
+                with performance.measure('model_step'):
+                    frames = [np.asarray(frame).copy() for frame in window]
+                    assert processor is not None
+                    inputs = {
+                        key: value.to(device)
+                        for key, value in processor(frames, return_tensors="pt").items()
+                    }
+                    with torch.inference_mode():
+                        probabilities = torch.softmax(model(**inputs).logits, dim=-1)[0].cpu()
+                    score = float(probabilities[positive_indices].sum())
+
             scores.append(score)
             windows_scored += 1
             center_frame_index = frames_scanned - 1 - clip_frames // 2
@@ -214,7 +222,7 @@ def scan_violence(
                 preview.close()
             if score >= threshold:
                 name = f"clip-{windows_scored:06d}-{timestamp:.3f}s.jpg"
-                window[clip_frames // 2].save(thumbs / name, "JPEG", quality=82, optimize=True)
+                performance.call('preview_write', window[clip_frames // 2].save, thumbs / name, "JPEG", quality=82, optimize=True)
                 hits.append({
                     "frame_index": windows_scored,
                     "timestamp_seconds": round(timestamp, 3),
@@ -254,7 +262,7 @@ def scan_violence(
         )
         timestamp = center_frame_index / sample_fps
         name = f"candidate-{window_index:06d}-{timestamp:.3f}s.jpg"
-        image.save(candidates_dir / name, "JPEG", quality=82, optimize=True)
+        performance.call('preview_write', image.save, candidates_dir / name, "JPEG", quality=82, optimize=True)
         image.close()
         top_candidates.append({
             "rank": len(top_candidates) + 1,
@@ -273,7 +281,7 @@ def scan_violence(
         "created_at": datetime.now(timezone.utc).isoformat(),
         "input": str(input_path),
         "input_size_bytes": input_stat.st_size,
-        "input_sha256": sha256_file(input_path),
+        "input_sha256": performance.call('source_hash', sha256_file, input_path),
         "duration_seconds": video_duration,
         "content_style": content_style,
         "sample_fps": sample_fps,
@@ -301,6 +309,7 @@ def scan_violence(
         },
         "retained_interval_thumbnail_count": retained_thumbnail_count,
         "metrics": {
+            "performance": performance.snapshot(),
             "elapsed_seconds": round(elapsed, 3),
             "video_seconds_per_processing_second": round(video_duration / elapsed, 3) if elapsed else None,
             "peak_process_ram_bytes": peak_rss,

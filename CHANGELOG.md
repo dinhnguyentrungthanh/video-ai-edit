@@ -1,3 +1,11 @@
+# Unreleased — scan timing instrumentation — 2026-09-28
+
+- Add bounded exclusive host-wall timings across text, visual-logo, adult and safety scanners plus localization/confirmation; preserve model inputs, thresholds and export behavior.
+- Add a read-only per-job timing report that distinguishes absent telemetry, historical cache profiles and shared scan timings.
+- Add a GPU-slot-aware short equivalence benchmark; no production job or review queue is created.
+- Pass 236/236 tests and a real 12-second Troy CUDA equivalence smoke: text, adult and shared live-action safety detection payloads match the baseline, with 54 identical preview hashes. Full-film speed improvement is not yet measured.
+- Continue on `improve/scan-performance-metrics`; implementation sequence and evidence are in `docs/SCAN_PERFORMANCE.md`.
+
 # 0.7.24 - 2026-09-27
 
 - Map approved brand-memory candidates by learned logo geometry and five-minute time bucket instead of treating every reviewed memory record as a separate physical track.

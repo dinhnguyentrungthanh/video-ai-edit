@@ -16,6 +16,7 @@ import torch
 import numpy as np
 from PIL import Image
 
+from biliflow.performance import ScanPerformance
 from biliflow.brand_memory import (
     approved_brand_memory_region,
     load_brand_memory,
@@ -136,6 +137,7 @@ def _blur_region(box: tuple[float, float, float, float], size: tuple[int, int]) 
 
 
 def main() -> int:
+    performance = ScanPerformance()
     parser = argparse.ArgumentParser(
         description="Add Florence region proposals after Qwen logo confirmation"
     )
@@ -180,19 +182,20 @@ def main() -> int:
         raise RuntimeError(f"Florence runtime mismatch: {transformers.__version__}")
     if args.device == "cuda" and not torch.cuda.is_available():
         raise RuntimeError("CUDA was requested but is unavailable")
-    processor = AutoProcessor.from_pretrained(
-        model_path, local_files_only=True, trust_remote_code=True
-    )
-    dtype = torch.float16 if args.device == "cuda" else torch.float32
-    model = AutoModelForCausalLM.from_pretrained(
-        model_path, torch_dtype=dtype, local_files_only=True, trust_remote_code=True
-    ).to(args.device).eval()
+    with performance.measure('model_load'):
+        processor = AutoProcessor.from_pretrained(
+            model_path, local_files_only=True, trust_remote_code=True
+        )
+        dtype = torch.float16 if args.device == "cuda" else torch.float32
+        model = AutoModelForCausalLM.from_pretrained(
+            model_path, torch_dtype=dtype, local_files_only=True, trust_remote_code=True
+        ).to(args.device).eval()
 
     started = time.perf_counter()
     localized = 0
     for index, interval in enumerate(intervals, start=1):
         timestamp = _timestamp(interval)
-        image = _extract_frame(ffmpeg, video, timestamp)
+        image = performance.call('frame_extract', _extract_frame, ffmpeg, video, timestamp)
         confirmation = interval.get("visual_logo_confirmation", {})
         memory_match = confirmation.get("features", {}).get("brand_memory")
         learned_region = approved_brand_memory_region(
@@ -241,10 +244,10 @@ def main() -> int:
             )
             continue
         grounding = _task_value(
-            _run_task(model, processor, image, GROUNDING_TASK, GROUNDING_TEXT),
+            performance.call('model_step', _run_task, model, processor, image, GROUNDING_TASK, GROUNDING_TEXT),
             GROUNDING_TASK,
         )
-        ocr = _task_value(_run_task(model, processor, image, OCR_TASK, None), OCR_TASK)
+        ocr = _task_value(performance.call('model_step', _run_task, model, processor, image, OCR_TASK, None), OCR_TASK)
         proposals = consolidate_region_proposals(
             grounding_boxes=grounding.get("bboxes", []),
             grounding_labels=grounding.get("labels", []),
@@ -380,6 +383,7 @@ def main() -> int:
         "automatic_edit": False,
         "requires_human_review": True,
     }
+    report.setdefault("metrics", {})["localization_performance"] = performance.snapshot()
     output_path.parent.mkdir(parents=True, exist_ok=True)
     temporary = output_path.with_suffix(output_path.suffix + ".tmp")
     temporary.write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from biliflow.performance import ScanPerformance
+
 import hashlib
 import heapq
 import json
@@ -182,6 +184,7 @@ def scan_nsfw(
     sequence_context_threshold: float = 0.70,
     sequence_context_seconds: float = 8.0,
 ) -> dict:
+    performance = ScanPerformance()
     input_path = input_path.resolve(strict=True)
     project_root = project_root.resolve(strict=True)
     report_dir = report_dir.resolve()
@@ -210,11 +213,13 @@ def scan_nsfw(
     if device.type == "cuda" and not torch.cuda.is_available():
         raise RuntimeError("CUDA was requested but PyTorch cannot access the GPU")
 
-    processor = AutoImageProcessor.from_pretrained(model_path, local_files_only=True)
-    model = AutoModelForImageClassification.from_pretrained(
-        model_path, local_files_only=True, use_safetensors=True
-    ).to(device)
-    model.eval()
+    with performance.measure('model_load'):
+        processor = AutoImageProcessor.from_pretrained(model_path, local_files_only=True)
+        model = AutoModelForImageClassification.from_pretrained(
+            model_path, local_files_only=True, use_safetensors=True
+        ).to(device)
+        model.eval()
+
     manifest_path = model_path / "manifest.json"
     model_manifest = json.loads(manifest_path.read_text(encoding="utf-8")) if manifest_path.exists() else {}
     nsfw_indices = _nsfw_indices(model, model_manifest.get("target_labels"))
@@ -256,10 +261,12 @@ def scan_nsfw(
         nonlocal peak_rss
         if not batch:
             return
-        inputs = processor(images=batch, return_tensors="pt")
-        inputs = {key: value.to(device) for key, value in inputs.items()}
-        with torch.inference_mode():
-            all_probabilities = torch.softmax(model(**inputs).logits, dim=-1).cpu()
+        with performance.measure('model_step'):
+            inputs = processor(images=batch, return_tensors="pt")
+            inputs = {key: value.to(device) for key, value in inputs.items()}
+            with torch.inference_mode():
+                all_probabilities = torch.softmax(model(**inputs).logits, dim=-1).cpu()
+
         target_probabilities = all_probabilities[:, nsfw_indices]
         probabilities = target_probabilities.sum(dim=-1).tolist()
         best_targets = target_probabilities.argmax(dim=-1).tolist()
@@ -290,7 +297,7 @@ def scan_nsfw(
             if score >= threshold:
                 timestamp = frame_index / sample_fps
                 name = f"frame-{frame_index:08d}-{timestamp:.3f}s.jpg"
-                image.save(thumbs / name, format="JPEG", quality=82, optimize=True)
+                performance.call('preview_write', image.save, thumbs / name, format="JPEG", quality=82, optimize=True)
                 hits.append(
                     {
                         "frame_index": frame_index,
@@ -309,7 +316,7 @@ def scan_nsfw(
     try:
         assert ffmpeg.stdout is not None
         while True:
-            data = _read_exact(ffmpeg.stdout, frame_bytes)
+            data = performance.call('frame_pipe_wait', _read_exact, ffmpeg.stdout, frame_bytes)
             if not data:
                 break
             if len(data) != frame_bytes:
@@ -367,7 +374,7 @@ def scan_nsfw(
     for score, frame_index, image in sorted(candidate_heap, reverse=True):
         timestamp = frame_index / sample_fps
         name = f"candidate-{frame_index:08d}-{timestamp:.3f}s.jpg"
-        image.save(candidates_dir / name, format="JPEG", quality=82, optimize=True)
+        performance.call('preview_write', image.save, candidates_dir / name, format="JPEG", quality=82, optimize=True)
         image.close()
         top_candidates.append(
             {
@@ -386,7 +393,7 @@ def scan_nsfw(
         "created_at": datetime.now(timezone.utc).isoformat(),
         "input": str(input_path),
         "input_size_bytes": input_stat.st_size,
-        "input_sha256": sha256_file(input_path),
+        "input_sha256": performance.call('source_hash', sha256_file, input_path),
         "duration_seconds": video_duration,
         "sample_fps": sample_fps,
         "frames_scanned": frames_scanned,
@@ -425,6 +432,7 @@ def scan_nsfw(
         "intervals": intervals,
         "retained_interval_thumbnail_count": retained_thumbnail_count,
         "metrics": {
+            "performance": performance.snapshot(),
             "elapsed_seconds": round(elapsed, 3),
             "video_seconds_per_processing_second": round(video_duration / elapsed, 3) if elapsed else None,
             "peak_process_ram_bytes": peak_rss,

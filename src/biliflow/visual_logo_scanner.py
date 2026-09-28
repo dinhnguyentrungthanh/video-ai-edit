@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from biliflow.performance import ScanPerformance
+
 import base64
 import gzip
 import hashlib
@@ -1329,6 +1331,7 @@ def scan_visual_logos(
     coverage_bucket_seconds: float = 300.0,
     coverage_fallbacks_per_bucket: int = 2,
 ) -> dict:
+    performance = ScanPerformance()
     root = project_root.resolve(strict=True)
     input_path = input_path.resolve(strict=True)
     report_dir = _inside((root / "reports").resolve(strict=True), report_dir, "Report directory")
@@ -1359,7 +1362,7 @@ def scan_visual_logos(
     analysis_height = max(2, round(source_height * analysis_width / source_width / 2) * 2)
     scan_end = start_seconds + scan_duration
     effective_sample_interval = effective_sample_every(sample_every, exhaustive)
-    input_sha256 = validated_source_sha256(input_path, source_sha256)
+    input_sha256 = performance.call('source_hash', validated_source_sha256, input_path, source_sha256)
     brand_memory = load_brand_memory(root)
     memory_records = [
         item for item in brand_memory.get("records", []) if isinstance(item, dict)
@@ -1422,13 +1425,13 @@ def scan_visual_logos(
     else:
         for left, right in boundary_ranges:
             boundary_previous = None
-            for timestamp, frame in _iter_frames(
+            for timestamp, frame in performance.iterate("frame_pipe_wait", _iter_frames(
                 ffmpeg_path=ffmpeg_path, input_path=input_path, start=left,
                 duration=right - left, sample_every=boundary_sample_every,
                 width=analysis_width, height=analysis_height,
-            ):
-                features = regional_logo_candidate_features(frame, boundary_previous)
-                features = _route_with_brand_memory(frame, features, memory_records)
+            )):
+                features = performance.call('logo_cpu_routing', regional_logo_candidate_features, frame, boundary_previous)
+                features = performance.call('logo_cpu_routing', _route_with_brand_memory, frame, features, memory_records)
                 if boundary_previous is not None:
                     boundary_transitions.append(
                         (timestamp, _frame_change_score(boundary_previous, frame))
@@ -1443,13 +1446,13 @@ def scan_visual_logos(
 
         previous = None
         coverage_candidates: dict[int, list[dict]] = {}
-        for timestamp, frame in _iter_frames(
+        for timestamp, frame in performance.iterate("frame_pipe_wait", _iter_frames(
             ffmpeg_path=ffmpeg_path, input_path=input_path, start=start_seconds,
             duration=scan_duration, sample_every=effective_sample_interval,
             width=analysis_width, height=analysis_height,
-        ):
-            features = regional_logo_candidate_features(frame, previous)
-            features = _route_with_brand_memory(frame, features, memory_records)
+        )):
+            features = performance.call('logo_cpu_routing', regional_logo_candidate_features, frame, previous)
+            features = performance.call('logo_cpu_routing', _route_with_brand_memory, frame, features, memory_records)
             in_dense_boundary = any(left <= timestamp < right for left, right in boundary_ranges)
             change_score = _frame_change_score(previous, frame) if previous is not None else 0.0
             scene_route = (
@@ -1529,21 +1532,22 @@ def scan_visual_logos(
         coverage_bucket_seconds=coverage_bucket_seconds,
     )
 
-    import torch
-    from transformers import AutoModelForImageTextToText, AutoProcessor
+    with performance.measure('model_load'):
+        import torch
+        from transformers import AutoModelForImageTextToText, AutoProcessor
 
-    if device_name == "cuda" and not torch.cuda.is_available():
-        raise RuntimeError("CUDA was requested but is not available")
-    processor = AutoProcessor.from_pretrained(
-        model_path, local_files_only=True, min_pixels=168 * 168, max_pixels=320 * 320
-    )
-    dtype = torch.float16 if device_name == "cuda" else torch.float32
-    model = AutoModelForImageTextToText.from_pretrained(
-        model_path, local_files_only=True, dtype=dtype
-    ).to(device_name)
-    model.eval()
-    if device_name == "cuda":
-        torch.cuda.reset_peak_memory_stats()
+        if device_name == "cuda" and not torch.cuda.is_available():
+            raise RuntimeError("CUDA was requested but is not available")
+        processor = AutoProcessor.from_pretrained(
+            model_path, local_files_only=True, min_pixels=168 * 168, max_pixels=320 * 320
+        )
+        dtype = torch.float16 if device_name == "cuda" else torch.float32
+        model = AutoModelForImageTextToText.from_pretrained(
+            model_path, local_files_only=True, dtype=dtype
+        ).to(device_name)
+        model.eval()
+        if device_name == "cuda":
+            torch.cuda.reset_peak_memory_stats()
 
     report_dir.mkdir(parents=True, exist_ok=True)
     thumbnails_dir = report_dir / "thumbnails"
@@ -1578,15 +1582,16 @@ def scan_visual_logos(
                         + [{"type": "text", "text": prompt}]
                     ),
                 }]
-                inputs = processor.apply_chat_template(
-                    messages, add_generation_prompt=True, tokenize=True,
-                    return_dict=True, return_tensors="pt",
-                ).to(model.device)
-                with torch.inference_mode():
-                    generated = model.generate(**inputs, do_sample=False, max_new_tokens=20)
-                return processor.decode(
-                    generated[0][inputs["input_ids"].shape[-1]:], skip_special_tokens=True
-                ).strip()
+                with performance.measure('model_step'):
+                    inputs = processor.apply_chat_template(
+                        messages, add_generation_prompt=True, tokenize=True,
+                        return_dict=True, return_tensors="pt",
+                    ).to(model.device)
+                    with torch.inference_mode():
+                        generated = model.generate(**inputs, do_sample=False, max_new_tokens=20)
+                    return processor.decode(
+                        generated[0][inputs["input_ids"].shape[-1]:], skip_special_tokens=True
+                    ).strip()
 
             memory_match = strongest["features"].get("brand_memory")
             confirmation_source = "qwen_local"
@@ -1773,6 +1778,7 @@ def scan_visual_logos(
         "rejected_windows": rejected,
         "model": json.loads((model_path / "manifest.json").read_text(encoding="utf-8")),
         "metrics": {
+            "performance": performance.snapshot(),
             "elapsed_seconds": round(elapsed, 3),
             "video_seconds_per_processing_second": round(scan_duration / elapsed, 3) if elapsed else None,
             "peak_process_ram_bytes": peak_rss,

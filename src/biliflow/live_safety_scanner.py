@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from biliflow.performance import ScanPerformance
+
 import heapq
 import json
 import os
@@ -53,6 +55,7 @@ def scan_live_safety(
     transport; every Nth left frame is byte-identical to the old 2 fps stream.
     The violence branch remains byte-identical to the old 8 fps stream.
     """
+    performance = ScanPerformance()
     project_root = project_root.resolve(strict=True)
     input_path = input_path.resolve(strict=True)
     report_dir = report_dir.resolve()
@@ -84,37 +87,38 @@ def scan_live_safety(
     if device.type == "cuda" and not torch.cuda.is_available():
         raise RuntimeError("CUDA was requested but PyTorch cannot access the GPU")
 
-    gore_scorer, gore_labels, gore_target_indices = _load_classifier(
-        "gore", gore_model_path, device
-    )
-    gore_manifest = json.loads(
-        (gore_model_path / "manifest.json").read_text(encoding="utf-8")
-    )
-    violence_manifest = json.loads(
-        (violence_model_path / "manifest.json").read_text(encoding="utf-8")
-    )
-    if violence_manifest.get("backend") != "timm_frame_video":
-        raise ValueError("Shared live safety currently requires timm_frame_video violence")
+    with performance.measure('model_load'):
+        gore_scorer, gore_labels, gore_target_indices = _load_classifier(
+            "gore", gore_model_path, device
+        )
+        gore_manifest = json.loads(
+            (gore_model_path / "manifest.json").read_text(encoding="utf-8")
+        )
+        violence_manifest = json.loads(
+            (violence_model_path / "manifest.json").read_text(encoding="utf-8")
+        )
+        if violence_manifest.get("backend") != "timm_frame_video":
+            raise ValueError("Shared live safety currently requires timm_frame_video violence")
 
-    import timm
-    from torchvision.transforms import Compose, Normalize, Resize, ToTensor
+        import timm
+        from torchvision.transforms import Compose, Normalize, Resize, ToTensor
 
-    violence_model = timm.create_model(
-        violence_manifest["architecture"], pretrained=False,
-        num_classes=len(violence_manifest["label_names"]),
-    )
-    incompatible = violence_model.load_state_dict(
-        load_file(violence_model_path / "model.safetensors"), strict=False
-    )
-    if incompatible.missing_keys or incompatible.unexpected_keys:
-        raise RuntimeError(f"Checkpoint mismatch: {incompatible}")
-    violence_model = violence_model.to(device).eval()
-    violence_transform = Compose([
-        Resize((224, 224)), ToTensor(),
-        Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5)),
-    ])
-    violence_positive_index = int(violence_manifest.get("positive_index", 1))
-    aggregation_top_k = int(violence_manifest.get("aggregation_top_k", 5))
+        violence_model = timm.create_model(
+            violence_manifest["architecture"], pretrained=False,
+            num_classes=len(violence_manifest["label_names"]),
+        )
+        incompatible = violence_model.load_state_dict(
+            load_file(violence_model_path / "model.safetensors"), strict=False
+        )
+        if incompatible.missing_keys or incompatible.unexpected_keys:
+            raise RuntimeError(f"Checkpoint mismatch: {incompatible}")
+        violence_model = violence_model.to(device).eval()
+        violence_transform = Compose([
+            Resize((224, 224)), ToTensor(),
+            Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5)),
+        ])
+        violence_positive_index = int(violence_manifest.get("positive_index", 1))
+        aggregation_top_k = int(violence_manifest.get("aggregation_top_k", 5))
 
     gore_dir = report_dir / "gore"
     violence_dir = report_dir / "violence"
@@ -168,7 +172,7 @@ def scan_live_safety(
         nonlocal peak_rss
         if not gore_batch:
             return
-        probabilities, predicted_labels = gore_scorer(gore_batch)
+        probabilities, predicted_labels = performance.call('model_step', gore_scorer, gore_batch)
         for image, frame_index, raw_score, predicted_label in zip(
             gore_batch, gore_batch_indices, probabilities, predicted_labels
         ):
@@ -185,7 +189,7 @@ def scan_live_safety(
             if score >= gore_threshold:
                 timestamp = frame_index / gore_sample_fps
                 name = f"frame-{frame_index:08d}-{timestamp:.3f}s.jpg"
-                image.save(
+                performance.call('preview_write', image.save,
                     gore_dir / "thumbnails" / name,
                     format="JPEG", quality=82, optimize=True,
                 )
@@ -208,14 +212,16 @@ def scan_live_safety(
             else min(stride_frames, clip_frames)
         )
         new_frames = list(violence_window)[-new_frame_count:]
-        pixels = torch.stack([
-            violence_transform(frame) for frame in new_frames
-        ]).to(device)
-        with torch.inference_mode():
-            probabilities = torch.softmax(
-                violence_model(pixels), dim=-1
-            )[:, violence_positive_index]
-        violence_frame_scores.extend(probabilities.cpu().tolist())
+        with performance.measure('violence_model_step'):
+            pixels = torch.stack([
+                violence_transform(frame) for frame in new_frames
+            ]).to(device)
+            with torch.inference_mode():
+                probabilities = torch.softmax(
+                    violence_model(pixels), dim=-1
+                )[:, violence_positive_index]
+            violence_frame_scores.extend(probabilities.cpu().tolist())
+
         if len(violence_frame_scores) != clip_frames:
             raise RuntimeError("Frame score cache is not aligned with the video window")
         score = aggregate_top_k_mean(
@@ -240,7 +246,7 @@ def scan_live_safety(
             name = (
                 f"clip-{violence_windows_scored:06d}-{timestamp:.3f}s.jpg"
             )
-            violence_window[clip_frames // 2].save(
+            performance.call('preview_write', violence_window[clip_frames // 2].save,
                 violence_dir / "thumbnails" / name,
                 "JPEG", quality=82, optimize=True,
             )
@@ -260,7 +266,7 @@ def scan_live_safety(
     try:
         assert ffmpeg.stdout is not None
         while True:
-            data = _read_exact(ffmpeg.stdout, packed_frame_bytes)
+            data = performance.call('frame_pipe_wait', _read_exact, ffmpeg.stdout, packed_frame_bytes)
             if not data:
                 break
             if len(data) != packed_frame_bytes:
@@ -320,7 +326,7 @@ def scan_live_safety(
             ffmpeg.wait(timeout=10)
 
     elapsed = time.perf_counter() - started
-    input_hash = sha256_file(input_path)
+    input_hash = performance.call('source_hash', sha256_file, input_path)
     peak_cuda = (
         torch.cuda.max_memory_allocated(device) if device.type == "cuda" else 0
     )
@@ -330,6 +336,7 @@ def scan_live_safety(
         "gpu": torch.cuda.get_device_name(device) if device.type == "cuda" else None,
     }
     shared_metrics = {
+        "performance": performance.snapshot(),
         "elapsed_seconds": round(elapsed, 3),
         "video_seconds_per_processing_second": (
             round(video_duration / elapsed, 3) if elapsed else None
@@ -369,7 +376,7 @@ def scan_live_safety(
     ):
         timestamp = frame_index / gore_sample_fps
         name = f"candidate-{frame_index:08d}-{timestamp:.3f}s.jpg"
-        image.save(
+        performance.call('preview_write', image.save,
             gore_dir / "candidates" / name,
             format="JPEG", quality=82, optimize=True,
         )
@@ -423,7 +430,7 @@ def scan_live_safety(
         )
         timestamp = center_frame_index / violence_sample_fps
         name = f"candidate-{window_index:06d}-{timestamp:.3f}s.jpg"
-        image.save(
+        performance.call('preview_write', image.save,
             violence_dir / "candidates" / name,
             "JPEG", quality=82, optimize=True,
         )

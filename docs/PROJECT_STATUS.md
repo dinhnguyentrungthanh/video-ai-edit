@@ -1,3 +1,13 @@
+## Scan performance phase 1 — 2026-09-28
+
+- User requested a separate improvement branch: `improve/scan-performance-metrics`, created from `main` at `7f5a9fb`.
+- Added per-phase host-wall telemetry and a read-only job timing command. No sampling, threshold, model, review or export behavior changes.
+- Existing Troy advertising-only job #39 totals 1648.627 seconds across completed stages: text 770.734s, visual-logo 642.611s, localization 207.277s. Older reports have no internal phase timings.
+- Short CUDA equivalence smoke compared source seconds 418–430 against baseline scanner modules: text, adult and shared gore/violence payloads match; all 54 preview hashes match.
+- Full suite passes 236/236. Evidence: `reports/benchmarks/scan-timing-20260928-154948/`.
+- This completes measurement scaffolding, not a measured speedup. Full visual-logo/animation A/B and full-film performance benchmarks remain. No production rerun, merge or push was performed.
+- Next: eliminate measured duplicate work/cache invalidation, then bounded prefetch/OCR batch experiments and compatible shared decode. See `docs/SCAN_PERFORMANCE.md`.
+
 ## Logo geometry-track coverage V0.7.24 — 2026-09-28
 
 - Approved brand-memory matches now require similarity `>=0.94` before bypassing semantic confirmation; weaker matches return to ordinary candidate routing.

@@ -7,13 +7,13 @@ This is the short, authoritative starting point for a new Codex account or chat.
 ## Repository state
 
 - Project root: `E:\DungChung\BiliFlow`
-- Active branch: `main`
-- Local `main` was fast-forwarded through `ef45b32` after 228/228 tests passed. Before this status refresh it was eight commits ahead of `origin/main`.
-- Latest verified feature commit: `0b4ff3c Map logo candidates by geometry track`
+- Active branch: `improve/scan-performance-metrics` (new user request; remain here).
+- Base local `main`: `7f5a9fb`; ten commits ahead of `origin/main` when this branch was created. Previous detector improvements are already on local `main`.
+- Latest verified milestone: performance instrumentation, 236/236 tests, short real CUDA equivalence smoke. See `docs/SCAN_PERFORMANCE.md`.
 - Runtime source version: `src/biliflow/__init__.py` reports `0.7.24`
 - Packaging metadata in `pyproject.toml` still reports `0.7.19`; use the runtime source version for dashboard diagnosis and align the package metadata during a later release housekeeping change.
-- Working tree was clean when this handoff was written.
-- The user approved the merge after testing. Continue new work directly on `main`; do not push unless the user asks.
+- Confirm working-tree state with Git; performance work is isolated from `main`.
+- The earlier merge was approved, but this new improvement branch is not approved for merge/push. Do not merge or push unless the user asks.
 
 The improvement sequence now present on local `main` is:
 
@@ -26,6 +26,13 @@ The improvement sequence now present on local `main` is:
 Always confirm this section with `git status` and `git log` because it becomes stale after new work.
 
 ## Last verified production-style run
+
+Performance work did not rerun or replace the production job below. The new
+isolated 12-second benchmark is under
+`reports/benchmarks/scan-timing-20260928-154948/`: text, adult and shared live-action
+gore/violence payloads match baseline `7f5a9fb`, with 54 identical JPEG hashes.
+It does not validate full-film accuracy, animation, full visual-logo inference,
+or a scan speedup. See `docs/SCAN_PERFORMANCE.md` for limitations and next steps.
 
 Troy job #39 was rerun with detector scope `advertising` only after the V0.7.24 mapping fix.
 
@@ -85,10 +92,10 @@ This run skipped `adult`, `gore`, and `violence`. It validates advertisement/log
 1. **Human-check the new Troy advertising queue.** Confirm the full-timeline XEMBZ.NET region is tight and that the two opening CUT proposals are correct. This is a review task, not another detector change.
 2. **Run one fresh all-detector Troy regression when requested.** Confirm the V0.7.20 adult interval and V0.7.23 high-priority intervals appear in the current Review UI. The latest verified V0.7.24 run was advertising-only.
 3. **Benchmark across Troy, Conan, and Shin.** Record recall-oriented logo coverage, false review groups, stage durations, and output correctness. Do not claim general logo accuracy from Troy alone.
-4. **Reduce scan time without lowering coverage.** Instrument per-stage wall time first. The last advertising-only Troy rerun took roughly 27 minutes: OCR about 13 minutes and visual-logo routing/localization about 14 minutes. The requested 5-10 minute full-video target is not yet achieved.
+4. **Reduce scan time without lowering coverage.** Phase timing instrumentation is complete on the improvement branch. Collect these timings on the next authorized run; older reports cannot supply them. The last advertising-only Troy rerun took roughly 27 minutes: OCR about 13 minutes and visual-logo routing/localization about 14 minutes. The requested 5-10 minute full-video target is not yet achieved.
 5. **Performance work after measurement.** Reuse a bounded shared decode/frame broker across compatible OCR and visual stages, retain cache keys based on source SHA/config/model revision, and auto-clean old cache through the existing storage policy. Do not reduce sampling density or model thresholds without an A/B regression.
 6. **Optional export acceleration comes later.** NVENC is currently blocked by the installed driver/FFmpeg API mismatch. Smart Render is unsafe for timelines with persistent blur unless continuity and full output validation are proven. CPU libx264 remains the production path.
-7. **Push only after user authorization.** The improvement branch has already been fast-forwarded into local `main`; the local commits are not yet on the remote.
+7. **Merge/push only after user authorization.** The previous improvement branch was merged into local `main`; the new `improve/scan-performance-metrics` branch is separate and unmerged. Local commits are not yet on the remote.
 
 ## Safety and product constraints
 
@@ -105,6 +112,7 @@ This run skipped `adult`, `gore`, and `violence`. It validates advertisement/log
 Set-Location E:\DungChung\BiliFlow
 git status --short --branch
 git log -8 --oneline --decorate
+. .\scripts\env.ps1
 .\.venv\Scripts\python.exe -m unittest discover -s tests -p "test_*.py" -v
 ```
 
@@ -113,5 +121,5 @@ Start or stop the dashboard with `Start-BiliFlow.cmd` and `Stop-BiliFlow.cmd`. D
 ## Prompt to paste into a new chat
 
 ```text
-Làm việc trong E:\DungChung\BiliFlow. Trước khi sửa, hãy đọc AGENTS.md và docs/SESSION_HANDOFF.md, sau đó kiểm tra git status và 8 commit gần nhất. Tiếp tục trực tiếp trên nhánh main hiện tại và chưa push nếu tôi chưa yêu cầu. Hãy đối chiếu mọi kết luận với report/job thực tế, giữ nguyên nguyên tắc video nguồn bất biến, model local miễn phí/commercial-safe và mọi edit phải qua người duyệt. Sau khi nắm trạng thái, tóm tắt ngắn: việc đã hoàn tất, bằng chứng kiểm chứng mới nhất, việc còn lại theo ưu tiên và bước tiếp theo bạn sẽ làm.
+Làm việc trong E:\DungChung\BiliFlow. Trước khi sửa, hãy đọc AGENTS.md, docs/SESSION_HANDOFF.md và docs/SCAN_PERFORMANCE.md, sau đó kiểm tra git status và 8 commit gần nhất. Tiếp tục trên nhánh improve/scan-performance-metrics; chưa merge/push nếu tôi chưa yêu cầu. Hãy đối chiếu mọi kết luận với report/job thực tế, giữ nguyên nguyên tắc video nguồn bất biến, model local miễn phí/commercial-safe và mọi edit phải qua người duyệt. Sau khi nắm trạng thái, tóm tắt ngắn: việc đã hoàn tất, bằng chứng kiểm chứng mới nhất, việc còn lại theo ưu tiên và bước tiếp theo bạn sẽ làm.
 ```

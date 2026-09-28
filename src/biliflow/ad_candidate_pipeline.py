@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from biliflow.performance import ScanPerformance
+
 import gc
 import hashlib
 import json
@@ -745,6 +747,7 @@ def augment_grounding_regions(
 ) -> dict[str, Any]:
     """Add at most one DINO fallback box to already confirmed visual intervals."""
 
+    performance = ScanPerformance()
     report = _read_json(report_path)
     if report.get("scan_type") != "visual_logo":
         raise ValueError("Input must be a visual-logo scan report")
@@ -785,7 +788,7 @@ def augment_grounding_regions(
             video_path = Path(str(report.get("input", "")))
             if not video_path.is_file():
                 raise FileNotFoundError(f"Input video is missing: {video_path}")
-            subprocess.run([
+            performance.call("frame_extract", subprocess.run, [
                 str(ffmpeg_path), "-hide_banner", "-loglevel", "error", "-y",
                 "-ss", f"{float(timestamp):.3f}", "-i", str(video_path),
                 "-frames:v", "1", "-q:v", "2", str(frame_path),
@@ -803,7 +806,7 @@ def augment_grounding_regions(
         interval_by_id[identifier] = interval
 
     started = time.perf_counter()
-    detections, inference_metrics = detect_grounding_dino(
+    detections, inference_metrics = performance.call("model_and_cache", detect_grounding_dino,
         project_root,
         examples,
         model_path,
@@ -898,6 +901,7 @@ def augment_grounding_regions(
         "automatic_edit": False,
         "requires_human_review": True,
     }
+    report.setdefault("metrics", {})["grounding_performance"] = performance.snapshot()
     report["grounding_region_summary"] = summary
     output_path.parent.mkdir(parents=True, exist_ok=True)
     temporary = output_path.with_suffix(output_path.suffix + ".tmp")
