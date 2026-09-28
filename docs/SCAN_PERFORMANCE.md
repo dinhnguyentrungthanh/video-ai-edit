@@ -248,10 +248,59 @@ A separate short opt-in scan can use `scan-text --recognition-batch-size 8` with
 `--start-seconds`, `--duration-seconds` and a new report directory. Preserve the
 default batch=1 baseline for comparison; do not replace a live job's reports.
 
-**Next gate:** longer contiguous excerpts, including low-contrast logos, small
-text near acceptance thresholds, moving banners, credits and empty frames;
-compare every sample, accepted finding, track and review mapping, plus VRAM and
-abort behavior. Retain serial default until those checks justify activation.
+### Contiguous sampling and isolated review validation
+
+`benchmark-ocr-contiguous` accepts a JSON plan containing `segments`, each with
+`source` (absolute input path), `start` and `seconds`. Starts and lengths must be
+multiples of 3 seconds, at most six excerpts, each at most 120 seconds. It uses
+the same GPU mutex as production inference:
+
+```powershell
+.\scripts\run.ps1 benchmark-ocr-contiguous --plan reports/benchmarks/ocr-contiguous-plan-20260928.json
+```
+
+Evidence: `reports/benchmarks/ocr-contiguous-20260928-172310/`. Six 90-second
+windows cover Conan 20 at 240/600s, Conan 21 at 4140/6630s and Troy at 0/11640s.
+There are 180 unique sampled frames, representing 9 minutes of source timeline;
+this is not a scan of every video frame. RGB frame hashes verify lossless
+sampling fixtures against the original decode/scale output before inference.
+The fixtures are 960px FFV1 clips already sampled at 1/3 fps. They are removed
+after comparison; reports, previews and hashes remain. Isolated queues refer to
+those temporary sources and are evidence only, not production export inputs.
+
+Each excerpt has an untimed warmup and serial/8/8/serial runs. All 24 measured
+runs preserve accepted report fields except confidence/runtime, all JPEG hashes,
+and review projections including geometry, dimensions, blur edge mode, actions,
+intervals, labels, reasons and source-candidate references. All supplied OCR
+candidates remain represented; 273 reference tracks across the six excerpts.
+Maximum confidence difference: **0.000006**. This comparison preserves existing
+false positives too; it does not measure ground-truth recognition accuracy.
+
+| Excerpt | Serial median | Batch 8 median | Reduction |
+| --- | ---: | ---: | ---: |
+| Conan 20, 240–330s | 4.645s | 4.640s | 0.12% |
+| Conan 20, 600–690s | 5.735s | 5.358s | 6.57% |
+| Conan 21, 4140–4230s | 6.337s | 5.397s | 14.84% |
+| Conan 21, 6630–6720s | 5.158s | 4.867s | 5.65% |
+| Troy, 0–90s | 11.630s | 9.101s | 21.74% |
+| Troy, 11640–11730s | 15.542s | 12.053s | 22.45% |
+
+Summed medians: **49.047 -> 41.415s (15.56% reduction)**. This measures warm
+OCR-to-report calls on sampled fixtures; it excludes original-source decoding
+and hashing, cold loading, review construction, other detectors, audit and export.
+Do not extrapolate it to a complete film's elapsed time.
+
+RTX 2060 PyTorch peak allocated memory is 697,112,064 bytes (664.82 MiB) in both
+modes; peak reserved is 828,375,040 bytes (790 MiB). Sampled process RAM peaks at
+2,065,948,672 bytes (about 1.924 GiB). Allocator counters exclude other GPU
+allocations and RAM is sampled; none is a hard resource cap. Tests confirm a
+batch interruption propagates without returning partial predictions; existing
+raw-reader tests cover blocked-pipe cleanup. Real GPU stop-button/cancellation
+latency is not measured here. Full suite: **265/265**, `unittest.log` in the root.
+
+**Next gate:** labeled small/low-contrast text near acceptance thresholds,
+moving banners, and real GPU cancellation/resource stress. Retain serial default
+until those checks justify activation. No production job, audit or export ran.
 
 ## Remaining implementation sequence
 

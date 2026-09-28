@@ -1,3 +1,13 @@
+## Scan performance phase 3: contiguous OCR validation — 2026-09-28
+
+- Added `benchmark-ocr-contiguous` under the existing GPU mutex. Plans allow at most six excerpts of at most 120 seconds each, restricted to input sources and the existing 3-second sampling grid. Original files and production reports/decisions are untouched.
+- Tested six 90-second windows: Conan 20 at 240/600s, Conan 21 at 4140/6630s, Troy at 0/11640s. FFmpeg RGB frame hashes verify all 180 sampled frames survive the temporary FFV1 fixture exactly. Fixtures are already 960px sampled video; queue geometry is checked in that coordinate space, not original-resolution rendering.
+- Warm reversed-order serial/8/8/serial runs all match baseline report content except confidence/runtime fields, JPEG hashes, queue regions/actions/intervals and source-candidate mapping. 273 reference tracks across six windows; all supplied OCR candidates represented. Tiny score differences reach 0.000006. Equivalence does not establish ground-truth recall or correctness of existing candidates.
+- Sum of per-excerpt median OCR-to-report wall times: 49.047 -> 41.415s, 15.56% reduction. Individual reductions range 0.12–22.45%. This excludes original-source hashing/decode, cold model loading, other detectors and audit; no full-film acceleration claim.
+- RTX 2060: measured PyTorch peak allocated memory 664.82 MiB for both paths; peak reserved 790 MiB. Sampled process RAM peak about 1.924 GiB. These are measurements, not total VRAM or hard resource bounds.
+- Evidence: `reports/benchmarks/ocr-contiguous-20260928-172310/`. `analysis.json` rechecks all 24 runs using the extended queue comparator. Full suite 265/265 passes; added comparison-regression and batch-interrupt propagation tests.
+- Default stays batch 1, prefetch off. Remaining activation gates: moving banners, labeled near-threshold text and real GPU cancellation/resource stress. No live job rerun, model/threshold/export change, merge or push.
+
 ## Scan performance phase 3: opt-in OCR crop batching — 2026-09-28
 
 - Added `scan-text --recognition-batch-size 2|4|8`, restricted to CUDA vi/en. Default 1 preserves current Dashboard behavior. Raw frame prefetch remains off.

@@ -1,3 +1,10 @@
+# Unreleased — contiguous OCR equivalence benchmark — 2026-09-28
+
+- Add bounded `benchmark-ocr-contiguous` with GPU locking, lossless sampled-frame verification, report/preview/review comparisons and a failing exit status if equivalence or supplied-candidate coverage fails.
+- Validate six 90-second Troy/Conan windows, 180 unique frames and 24 measured runs. All accepted report content, preview hashes and review projections agree; maximum confidence delta 0.000006.
+- Measured summed median OCR-to-report time on warm sampled fixtures improves 15.56%, excluding original-source hashing/decode and other stages. PyTorch peak allocated memory is equal on this corpus. Default batching remains 1 pending further validation.
+- Add comparator regressions and interruption propagation coverage; 265/265 tests pass. No production queue, saved decision, detector threshold, export behavior or source video changed.
+
 # Unreleased — opt-in same-width OCR recognition batches — 2026-09-28
 
 - Add experimental `scan-text --recognition-batch-size 2|4|8` for CUDA vi/en. Default remains 1 in CLI, Python and Dashboard; sampling, detection, thresholds, model and export behavior are unchanged.

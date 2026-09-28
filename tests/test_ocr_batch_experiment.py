@@ -36,6 +36,18 @@ class OcrBatchExperimentTests(unittest.TestCase):
         self.assertEqual(recognize_same_width(self.reader, None, [], [],
             image_list_fn=self.crops, text_fn=unexpected, image_height=64), [])
 
+    def test_interrupt_propagates_without_returning_partial_predictions(self):
+        calls = []
+        def infer(*args):
+            calls.append(args[2])
+            if len(calls) == 2:
+                raise KeyboardInterrupt("cancelled")
+            return [(name, pixels, .8) for name, pixels in args[5]]
+        with self.assertRaises(KeyboardInterrupt):
+            recognize_same_width(self.reader, None, [("first", 64), ("second", 128)], [],
+                image_list_fn=self.crops, text_fn=infer, image_height=64)
+        self.assertEqual(calls, [64, 128])
+
     def test_unsupported_language_and_batch_are_explicit(self):
         with self.assertRaises(ValueError):
             recognize_same_width(self.reader, None, [], [], batch_size=128)
