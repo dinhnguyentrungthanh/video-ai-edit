@@ -125,6 +125,10 @@ DEFAULT_FAST_SCAN = True
 FAST_SCAN_OCR_BATCH_SIZE = 8
 FAST_SCAN_OCR_FRAME_WINDOW = 4
 FAST_SCAN_LOGO_ROUTING_WORKERS = 3
+# CRAFT detection under float16 autocast is not bit-identical; review items were
+# identical on Troy and Conan Movie 20 (all detector groups) before adoption
+# (docs/CLAUDE_SCAN_OPTIMIZATION_HANDOFF.md §16).
+FAST_SCAN_DETECT_PRECISION = "fp16"
 
 
 def normalize_fast_scan(value: object) -> bool:
@@ -173,6 +177,7 @@ def pipeline_stages(
             "--logo-routing-workers", FAST_SCAN_LOGO_ROUTING_WORKERS,
             "--logo-decode", "nvdec",
             *(("--logo-source-sha256", source_sha256) if source_sha256 else ()),
+            "--detect-precision", FAST_SCAN_DETECT_PRECISION,
         )
         logo_speed_arguments: tuple[object, ...] = (
             "--routing-workers", FAST_SCAN_LOGO_ROUTING_WORKERS,

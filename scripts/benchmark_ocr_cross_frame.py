@@ -216,6 +216,26 @@ def compare(reference, candidate, sizes):
             "equivalent": mismatched_frames == 0}
 
 
+class AutocastDetector:
+    """G0 probe only: run the CRAFT forward in float16 autocast, return float32.
+
+    EasyOCR's post-processing (OpenCV thresholds) needs float32 maps, so the
+    outputs are cast back; recognition is untouched.
+    """
+
+    def __init__(self, net):
+        self.net = net
+
+    def __call__(self, x):
+        import torch
+        with torch.autocast(device_type="cuda", dtype=torch.float16):
+            y, feature = self.net(x)
+        return y.float(), feature.float()
+
+    def __getattr__(self, name):
+        return getattr(self.net, name)
+
+
 def abba(args):
     import psutil
     import torch
@@ -250,12 +270,14 @@ def abba(args):
             finally:
                 timing[name] += perf_counter() - started
         return wrapped
+    original_detector = reader.detector
     reader.detect = timed("detect", original_detect)
     reader.recognize = timed("recognize", original_recognize)
     process = psutil.Process()
 
     def run_pass(label, config):
         config = dict(config or {})
+        reader.detector = AutocastDetector(original_detector) if config.pop("fp16_detect", False) else original_detector
         # cuDNN autotuning keeps fp32, shapes and all preprocessing; only the
         # convolution kernel choice changes, so outputs are still compared.
         torch.backends.cudnn.benchmark = bool(config.pop("cudnn_benchmark", False))
@@ -304,19 +326,22 @@ def abba(args):
     # its code lives in reports/benchmarks/ocr-cross-frame-abba-20260929-000902/.
     modes = {"A": None, "B": dict(batch_size=8, frame_window=args.window),
              "C": dict(cudnn_benchmark=True),
+             "H": dict(fp16_detect=True),
              "G": dict(batch_size=8, frame_window=args.window, cudnn_benchmark=True)}
     order = list(args.order) * args.rounds
     if order[0] != "A" or set(order) - set(modes):
         raise ValueError("--order must start with A and use only " + ", ".join(modes))
     for label in dict.fromkeys(order):
         config = dict(modes[label] or {})
+        fp16 = config.pop("fp16_detect", False)
+        reader.detector = AutocastDetector(original_detector) if fp16 else original_detector
         autotune = config.pop("cudnn_benchmark", False)
         torch.backends.cudnn.benchmark = autotune
         # Autotuning runs once per new tensor shape; warm every shape it will see.
         frames = [f for s in segments for f in s["frames"]] if autotune else warm
         if config:
             list(CrossFrameReader(reader, **config).iter_readtext(frames, **VALIDATED_READTEXT_OPTIONS))
-        elif autotune:
+        elif autotune or fp16:
             for f in frames:
                 reader.readtext(f, **VALIDATED_READTEXT_OPTIONS)
     torch.backends.cudnn.benchmark = False
@@ -334,6 +359,7 @@ def abba(args):
         result["comparison_to_first_A"] = compare(outputs["A"], preds, sizes)
         extra.append(result)
     reader.detect, reader.recognize = original_detect, original_recognize
+    reader.detector = original_detector
     torch.backends.cudnn.benchmark = False
 
     def summary(label):

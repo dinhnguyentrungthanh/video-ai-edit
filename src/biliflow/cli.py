@@ -247,6 +247,11 @@ def build_parser() -> argparse.ArgumentParser:
              "consecutive frames; requires --recognition-batch-size > 1; default 1",
     )
     text_scan.add_argument(
+        "--detect-precision", choices=["fp32", "fp16"], default="fp32",
+        help="Experimental: run the CRAFT detector forward in float16 autocast (not bit-identical); "
+             "default fp32",
+    )
+    text_scan.add_argument(
         "--prewarm-logo-routing", action="store_true",
         help="Run scan-visual-logo --routing-only as a child process during OCR so the logo "
              "stage reads a warm routing cache; the --logo-* values must equal the logo stage's",
@@ -507,6 +512,7 @@ def main() -> int:
                 recognition_batch_size=args.recognition_batch_size,
                 recognition_frame_window=args.recognition_frame_window,
                 decode_backend=args.decode,
+                detect_precision=args.detect_precision,
             )
         except BaseException:
             if prewarm is not None:

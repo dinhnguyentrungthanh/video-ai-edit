@@ -610,3 +610,87 @@ Track chất lượng (đề xuất riêng, cần người dùng tham gia gán n
 | F3 trích frame song song | Florence chờ frame 27,2 → 0,4 s; DINO 19,0 → 7,2 s; localization 220,1 → 185,0 s; đầu ra và 112 frame giống hệt | Giữ |
 
 Cấu hình cuối (F2 + F3), `troy-full-fast-20260929-164440`: **16m35s** so với 17m45s (−69,9 s ≥ cổng 60 s); report giống hệt, 858/858 JPEG, review 6/294, Structure Audit PASS; production và cache production không đổi. 326/326 test.
+
+## 15. Phép thử G0 — detect CRAFT ở FP16 (kế hoạch 29/09/2026, ghi trước khi đo)
+
+Mốc: `6a50df8` (16m35s). Detect CRAFT là phần lớn nhất còn lại (~430 s, GPU-bound). Phép thử chỉ đo, không sửa code production:
+
+- Cùng 150 frame (7 đoạn Troy/Conan) của harness `abba`. A = EasyOCR nguyên trạng (FP32). H = cùng reader, chỉ forward của CRAFT chạy trong `torch.autocast(float16)`, đầu ra ép về FP32 trước hậu xử lý; recognition giữ FP32. Thứ tự A/H/H/A, warmup riêng.
+- Đo: thời gian detect, toàn bộ dự đoán thô (box, text, confidence), nhận/loại và thứ tự sau lọc.
+- Quyết định:
+  - Giống hệt trên cả 150 frame và detect nhanh hơn ≥ 20% → mở rộng thành phép thử cả phim như giai đoạn A; chỉ tích hợp nếu cả phim cũng giống hệt.
+  - Có khác biệt → ghi số lượng/loại khác biệt; **không tích hợp** cho tới khi có bộ nhãn chuẩn để chứng minh chất lượng không giảm (track chất lượng).
+  - Không nhanh hơn ≥ 20% → loại.
+
+### 15.1. Kết quả G0 (29/09/2026)
+
+`reports/benchmarks/ocr-cross-frame-abba-20260929-173102/`: detect CRAFT FP32 14,891/15,057 s, FP16 autocast 9,177/9,125 s → **−39%**; CUDA allocated 458 → 372 MiB. Recognition không đổi.
+
+Đầu ra: 147/150 frame giống hệt; 3 frame khác, lặp lại y hệt giữa hai lượt:
+
+- Troy 24 s: box chữ "A" đơn lẻ lệch cạnh 2 px (vốn bị loại vì < 2 ký tự).
+- Troy 75 s: FP32 có box rác "PaiT1a" (confidence 0,02, vốn bị loại); FP16 không có.
+- Troy 117 s: watermark "XEMBZ NET" lệch 2 px, confidence 0,887 → 0,652; vẫn được nhận ở cả hai.
+
+Theo quy tắc ghi trước khi đo: có khác biệt → **không tích hợp** khi chưa có cách chứng minh chất lượng không giảm. Ước tính nếu áp dụng: detect cả phim ~430 → ~260 s, tổng pipeline ~16m35s → ~13m50s (chưa đo). Cần người dùng chọn tiêu chí: bộ nhãn chuẩn (chặt) hoặc so sánh ở mức kết quả review trên cả phim có người duyệt khác biệt (thực dụng).
+
+## 16. G1 — FP16 detect CRAFT, xác nhận ở mức review (kế hoạch 29/09/2026, người dùng chọn "Cách 1")
+
+1. **Tùy chọn opt-in** `scan-text --detect-precision fp32|fp16` (mặc định `fp32`): FP16 chỉ bọc forward của CRAFT trong `torch.autocast(float16)` và trả bản đồ điểm về float32 trước hậu xử lý; recognition, ngưỡng, sampling, độ phân giải giữ nguyên. Chưa đưa vào pipeline/Dashboard.
+2. **A/B cả pipeline cùng phiên**: lượt mốc = chế độ Tăng tốc xử lý hiện tại (`6a50df8`, FP32); lượt thử = như trên + `--detect-precision fp16` chỉ cho stage OCR (harness thêm cờ, không sửa pipeline).
+3. **So sánh**:
+   - Report logo, localized và mọi JPEG của nhánh logo phải giống hệt (OCR không ảnh hưởng nhánh này).
+   - OCR/review: ghép mục review giữa hai lượt theo loại và thời gian; liệt kê mục mất/thêm, đổi khoảng thời gian, đổi đề xuất, vùng lệch bao nhiêu pixel; tạo trang HTML tiếng Việt kèm ảnh preview hai bên để người dùng duyệt.
+4. **Cổng**: không mục review chính nào bị mất hoặc đổi đề xuất KEEP/BLUR/CUT; mọi khác biệt còn lại được liệt kê đầy đủ. **Chỉ tích hợp vào "Tăng tốc xử lý" khi người dùng duyệt danh sách khác biệt.** Tổng thời gian phải nhanh hơn ≥ 60 s.
+5. Sau đó (nếu được duyệt): tích hợp, test, cập nhật tài liệu, hỏi commit. Bộ nhãn chuẩn (Cách 2) làm tiếp theo làm nền đo lâu dài.
+
+### 16.1. Kết quả G1 (29/09/2026) — chờ người dùng duyệt
+
+Lượt FP16 `troy-full-fp16-20260929-173943` so với FP32 `troy-full-fast-20260929-164440` (cùng code `6a50df8` + tùy chọn opt-in, cùng ngày):
+
+| Stage | FP32 (s) | FP16 detect (s) |
+| --- | ---: | ---: |
+| Preflight | 18,5 | 18,1 |
+| OCR (+ routing làm nóng) | 668,2 | 540,0 |
+| Logo | 116,0 | 117,1 |
+| Localization | 185,0 | 183,9 |
+| Review + audit | 7,2 | 7,3 |
+| **Tổng** | **994,9 (16m35s)** | **866,6 (14m27s), −128,3 s (−12,9%)** |
+
+- Nhánh logo (scan, localized, mọi JPEG logo) giống hệt; 6/6 mục chính và 294/294 advisory giống hệt về loại, thời gian, vùng, đề xuất, nhãn (`review-diff.json`/`review-diff.html`).
+- Khác biệt duy nhất trong hàng đợi: một tham chiếu nguồn `track:2211` → `track:2212` (đánh số lại vì có thêm track credits).
+- Report OCR (45 đường dẫn JSON): mục watermark chỉ khác số thứ tự track/tên ảnh preview; hai track credits ở 11178 s đổi thứ tự; một track credits ở 11256 s lệch 2 px; thêm 2 track credits ngoài giới hạn report. Không track nào là ứng viên review.
+- Cổng kỹ thuật đạt (không mục chính nào mất/đổi đề xuất; nhanh hơn ≥ 60 s). Chờ người dùng duyệt trước khi đưa vào "Tăng tốc xử lý".
+
+### 16.2. G1b — xác minh thêm trên hoạt hình trước khi áp dụng (kế hoạch, ghi trước khi đo)
+
+Người dùng yêu cầu thêm một lượt xác minh đầy đủ. Nguồn: Conan Movie 20 (job production #38, hoạt hình, 6.690 s, H.264), chỉ đọc.
+
+- Harness nhận `--job-id`; hai lượt cùng phiên, state/cache riêng: FP32 (Tăng tốc xử lý hiện tại) rồi FP16 detect.
+- Cổng: nhánh logo giống hệt; không mục review chính nào mất hoặc đổi đề xuất KEEP/BLUR/CUT; mọi khác biệt còn lại được liệt kê; ca hồi quy Conan 20 phải giữ nguyên: watermark phimmoi vẫn BLUR tại vùng ~`1565,52 282x46` (brand memory) và không có vùng blur trên đầu nhân vật (~`1203,193 261x239`, 510–515 s) ở cả hai lượt.
+- Đạt cả Troy và Conan 20 → đề xuất người dùng duyệt để đưa FP16 vào "Tăng tốc xử lý". Không đạt → giữ FP32, ghi bằng chứng.
+
+### 16.3. Kết quả G1b trên Conan Movie 20 (29/09/2026) — đạt, chờ người dùng duyệt
+
+- **Lỗi có sẵn được phát hiện và sửa:** lượt FP32 đầu tiên dừng ở `augment-grounding-regions` vì `transformers` 5.17 `batch_decode([])` trả về `['']`, nên frame không có detection nào có 1 nhãn nhưng 0 box (`zip(strict=True)` lỗi). Không liên quan FP16/F3; job production nào gặp frame như vậy cũng sẽ dừng ở localization. Sửa: `_grounding_boxes` trả `[]` khi không có box, mọi lệch khác vẫn lỗi; có test hồi quy. Lượt lỗi `conan20-full-fast-20260929-181745` được giữ làm bằng chứng.
+- Chạy lại cùng phiên: FP32 `conan20-full-fast-20260929-183147` 658,0 s; FP16 `conan20-full-fp16-20260929-184246` 632,4 s. OCR 380,3 → 321,5 s (−58,8 s). Logo (+11,7 s) và localization (+19,5 s) chậm hơn ở lượt FP16 dù logic và đầu ra giống hệt — chỉ phần suy luận GPU chậm (VLM 115,4 → 123,2 s, Florence 75,8 → 90,4 s), tức trôi hiệu năng máy ở lượt chạy sau, làm lượt FP16 bị thiệt.
+- Đầu ra: nhánh logo giống hệt (scan, localized, JPEG); 2/2 mục chính, 393/393 advisory giống hệt; ứng viên review 2 = 2; track: LIKELY_CREDITS 177 → 175, LIKELY_SCENE_TEXT 277 → 276, các nhóm REVIEW_* và LOW_AD_UNCERTAIN không đổi.
+- Ca hồi quy Conan 20 giữ nguyên ở cả hai lượt: watermark phimmoi BLUR tại `1565,52 282x46`; không có vùng trên đầu nhân vật quanh 510–515 s.
+- Kết luận G1/G1b: cổng đạt trên Troy (live action) và Conan 20 (hoạt hình). Đề xuất đưa `--detect-precision fp16` vào "Tăng tốc xử lý" sau khi người dùng duyệt.
+
+### 16.4. G1c — kiểm tra các nhóm an toàn (kế hoạch, ghi trước khi đo)
+
+Người dùng yêu cầu xác nhận FP16 không ảnh hưởng model khác. Về cấu trúc: FP16 chỉ bọc forward CRAFT trong process `scan-text`; các model an toàn chạy ở stage/process riêng và (với live action) chạy **trước** stage OCR. Để đo trực tiếp: Conan Movie 20 (#38) với đủ nhóm quảng cáo + 18+ + máu me + bạo lực (stage `animation_safety`), FP32 rồi FP16 cùng phiên. Cổng: mọi report/ảnh an toàn giống hệt, nhánh logo giống hệt, mọi mục review (kể cả mục an toàn) giống hệt về loại/thời gian/vùng/đề xuất. Live action an toàn (Troy, 4–5 stage, rất dài) không chạy lần này; dựa vào lập luận thứ tự stage và có thể chạy sau nếu người dùng muốn.
+
+### 16.5. Kết quả G1c — đủ nhóm trên Conan Movie 20 (29/09/2026): đạt
+
+`conan20-allgroups-full-fast-20260929-190913` (FP32, 1.669,6 s) và `conan20-allgroups-full-fp16-20260929-193703` (FP16, 1.641,7 s):
+
+- Report an toàn `animation-safety/{adult,gore,violence}/scan.json`, report tổng và mọi ảnh an toàn: **giống hệt**. Nhánh logo (scan, localized, JPEG): giống hệt.
+- Review: 69/69 mục chính (55 gore, 9 violence, 3 adult, 2 visual_logo) và 393/393 advisory giống hệt về loại, thời gian, vùng, đề xuất.
+- Thời gian: stage an toàn 911,9 / 915,3 s (không dùng FP16); OCR 438,0 → 353,0 s (−85 s). Localization 147,0 → 204,9 s dù code và đầu ra giống hệt: +22 s trong các pha đo được (suy luận chậm hơn) và +36 s ngoài các pha (khởi động process/nạp) — nhiễu môi trường ở lượt chạy sau, không có cơ chế liên quan FP16 (stage chạy ở process riêng sau khi OCR đã thoát). Tổng chỉ −27,9 s trong cặp này vì nhiễu đó.
+- Kết luận: FP16 detect không ảnh hưởng model an toàn, logo, VLM, Florence hay GroundingDINO; chỉ đổi vài track credits/chữ trong cảnh ngoài ứng viên review. Lợi ích OCR ổn định: −128 s (Troy), −59 s và −85 s (Conan 20).
+
+### 16.6. Áp dụng (29/09/2026)
+
+Người dùng duyệt. `FAST_SCAN_DETECT_PRECISION = "fp16"`: "Tăng tốc xử lý" thêm `--detect-precision fp16` vào stage OCR; lệnh sinh ra trùng khớp từng tham số với lệnh đã benchmark (`troy-full-fp16-20260929-173943`). Chế độ thường và chế độ OCR batch 8 cũ vẫn FP32. 335/335 test.

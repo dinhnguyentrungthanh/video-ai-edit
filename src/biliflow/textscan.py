@@ -502,11 +502,16 @@ def scan_text(
     recognition_batch_size: int = 1,
     recognition_frame_window: int = 1,
     decode_backend: str = "cpu",
+    detect_precision: str = "fp32",
 ) -> dict:
     from biliflow import nvdec
+    from biliflow.ocr_precision import validate_detect_precision, with_detect_precision
 
     performance = ScanPerformance()
     nvdec.validate_backend(decode_backend)
+    validate_detect_precision(detect_precision)
+    if detect_precision != "fp32" and device_name != "cuda":
+        raise ValueError("fp16 text detection requires CUDA")
     if not isinstance(prefetch_frames, int) or not 0 <= prefetch_frames <= 4:
         raise ValueError("prefetch_frames must be an integer from 0 to 4")
     if recognition_batch_size not in (1, 2, 4, 8):
@@ -575,6 +580,7 @@ def scan_text(
                 download_enabled=False,
             )
 
+    reader = with_detect_precision(reader, detect_precision)
     cross_frame_reader = None
     if recognition_batch_size > 1:
         from biliflow.ocr_batch_experiment import CrossFrameReader, SameWidthReader
@@ -843,6 +849,7 @@ def scan_text(
         "metrics": {
             "recognition_batch_size": recognition_batch_size,
             "recognition_frame_window": recognition_frame_window,
+            "detect_precision": detect_precision,
             "decode": {"requested": decode_backend, "effective": effective_decode,
                        "fallback_reason": decode_fallback},
             "cross_frame_recognition": (

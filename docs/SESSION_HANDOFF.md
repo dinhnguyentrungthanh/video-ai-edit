@@ -54,7 +54,11 @@ docs/CLAUDE_SCAN_OPTIMIZATION_HANDOFF.md. Benchmark OCR-stage wrapper
 `scripts/benchmark-text-stage.ps1` keeps the warm-up in the benchmark cache.
 Phase E committed as `12a59a3`. Phase F (uncommitted until the user asks): background
 source hashing + parallel localization frame extraction; full pipeline 17m45s -> 16m35s,
-identical outputs (`troy-full-fast-20260929-164440`). Low-priority warm-up was rejected. 301/301 tests. RoutingPool entry points must be
+identical outputs (`troy-full-fast-20260929-164440`). Low-priority warm-up was rejected.
+Phase F committed as `6a50df8`. Then (user-approved): fast_scan uses FP16 CRAFT detection
+(review items identical on Troy and Conan 20 incl. all detector groups; Troy 14m27s) and
+the GroundingDINO empty-frame crash is fixed. Harness supports `--job-id 38|39` and
+`--detectors`; `review-diff` writes a Vietnamese HTML of review-level differences. 301/301 tests. RoutingPool entry points must be
 `python -m biliflow` or `__main__`-guarded scripts (spawned workers).
 
 ## Last verified production-style run

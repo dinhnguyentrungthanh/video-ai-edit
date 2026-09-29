@@ -1,3 +1,9 @@
+## FP16 text detection in "Tăng tốc xử lý" and GroundingDINO fix — 2026-09-29
+
+- fast_scan (default on) now also runs CRAFT detection under float16 autocast (`--detect-precision fp16`). Not bit-identical: validated at review level on Troy (6/294 items identical), Conan Movie 20 advertising (2/393) and Conan Movie 20 with all detector groups (69/393; adult/gore/violence and logo reports byte-identical). OCR stage −59…−128 s; Troy pipeline 16m35s → 14m27s. Plan/results: §15–16 of `docs/CLAUDE_SCAN_OPTIMIZATION_HANDOFF.md`.
+- Fixed a latent crash: GroundingDINO frames without detections produced one empty label (transformers 5.17 `batch_decode([])`), stopping `augment-grounding-regions`.
+- Since the start of the optimization work, Troy advertising: 25m32s → ~14m27s (−43%).
+
 ## Phase F: hidden hashing and parallel localization frames — 2026-09-29
 
 - F2 background source hashing (OCR; logo with verified recorded checksum) and F3 parallel localization frame extraction kept; F1 (low-priority warm-up) measured and rejected. Plan and results: §14 of `docs/CLAUDE_SCAN_OPTIMIZATION_HANDOFF.md`.

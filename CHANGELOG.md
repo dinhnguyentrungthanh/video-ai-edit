@@ -1,3 +1,9 @@
+# Unreleased — GroundingDINO empty-frame fix and FP16 text detection in fast scan — 2026-09-29
+
+- Fix a crash in `augment-grounding-regions`: with transformers 5.17, a frame without any GroundingDINO detection above threshold yields one empty label and zero boxes, which failed `zip(strict=True)` and stopped the localization stage (found by a Conan Movie 20 benchmark; not caused by the speed work). Such frames now contribute no regions; other mismatches still fail. Regression tests added.
+- Add opt-in `scan-text --detect-precision fp16` (default fp32): only the CRAFT detector forward runs under float16 autocast; score maps return to float32 before the unchanged post-processing; recognition stays fp32. Not bit-identical; after the validation below and user approval it is part of "Tăng tốc xử lý" (fast_scan). Standard mode stays fp32.
+- Review-level validation (user-authorized full pipelines, isolated caches): Troy 16m35s -> 14m27s (OCR 668 -> 540 s) and Conan Movie 20 OCR 380 -> 322 s; logo branches identical; all primary and advisory review items identical (6/294 and 2/393); differences limited to a few credits/scene-text tracks outside the review candidates and one renumbered track reference. The Conan 20 watermark-vs-head regression case is unchanged. With all detector groups on Conan 20, adult/gore/violence reports and images, the logo branch and all 69 primary / 393 advisory items are identical. 335/335 tests pass.
+
 # Unreleased — background source hashing and parallel localization frames — 2026-09-29
 
 - Hash the source on a background thread (`BackgroundSha256`) in the OCR stage and, when the job's checksum is supplied, in the visual-logo stage. The logo stage keys its cache with the recorded checksum and must verify the file before writing the routing cache or `scan.json`; a mismatch still fails without artifacts.

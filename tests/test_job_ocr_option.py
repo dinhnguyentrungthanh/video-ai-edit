@@ -157,6 +157,13 @@ class JobFastScanTests(unittest.TestCase):
     def test_standard_mode_never_prewarms(self):
         stages = {s.name: s for s in pipeline_stages(**self.options())}
         self.assertNotIn("--prewarm-logo-routing", stages["text"].commands[0].argv)
+        self.assertNotIn("--detect-precision", stages["text"].commands[0].argv)
+
+    def test_fast_scan_detects_text_in_fp16(self):
+        text = {s.name: s for s in pipeline_stages(**self.options(fast_scan=True))}["text"].commands[0].argv
+        self.assertEqual(text[text.index("--detect-precision") + 1], "fp16")
+        legacy = {s.name: s for s in pipeline_stages(**self.options(ocr_recognition_batch_size=8))}
+        self.assertNotIn("--detect-precision", legacy["text"].commands[0].argv)
 
     def test_fast_scan_overrides_legacy_ocr_batch_without_changing_its_meaning(self):
         legacy = {s.name: s for s in pipeline_stages(**self.options(ocr_recognition_batch_size=8))}

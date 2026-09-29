@@ -1,5 +1,19 @@
 # Scan performance work — 2026-09-28
 
+## FP16 CRAFT text detection in "Tăng tốc xử lý" — 2026-09-29
+
+| Trial pair (same code, same day) | OCR fp32 → fp16 | Review items |
+| --- | ---: | --- |
+| Troy advertising (`troy-full-fast-20260929-164440` / `troy-full-fp16-20260929-173943`) | 668.2 → 540.0 s; total 16m35s → 14m27s | 6/6 + 294/294 identical |
+| Conan 20 advertising (`conan20-full-fast-20260929-183147` / `conan20-full-fp16-20260929-184246`) | 380.3 → 321.5 s | 2/2 + 393/393 identical |
+| Conan 20 all groups (`conan20-allgroups-full-fast-20260929-190913` / `…-fp16-20260929-193703`) | 438.0 → 353.0 s | 69/69 + 393/393 identical; safety reports/images byte-identical |
+
+Only the CRAFT forward runs under float16 autocast; score maps return to float32
+for the unchanged post-processing. Differences are confined to a few credits /
+scene-text tracks outside the review candidates (plus renumbered track ids).
+Stages that do not use FP16 showed up to +58 s run-order noise in the second run
+of a pair while their outputs stayed byte-identical.
+
 ## Background hashing and parallel localization frames (phase F) — 2026-09-29
 
 | Stage | Before (`troy-full-fast-20260929-150440`) | After (`troy-full-fast-20260929-164440`) |
