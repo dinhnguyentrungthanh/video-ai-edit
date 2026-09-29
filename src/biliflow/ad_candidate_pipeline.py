@@ -414,23 +414,7 @@ def detect_grounding_dino(
                 text_threshold=text_threshold,
                 target_sizes=[(image.height, image.width)],
             )[0]
-            raw_labels = processed.get("text_labels", processed.get("labels", []))
-            boxes: list[dict[str, Any]] = []
-            for box, score, label in zip(
-                processed["boxes"].cpu().tolist(),
-                processed["scores"].float().cpu().tolist(),
-                raw_labels,
-                strict=True,
-            ):
-                x1, y1, x2, y2 = box
-                boxes.append({
-                    "x": int(round(x1)),
-                    "y": int(round(y1)),
-                    "width": max(1, int(round(x2 - x1))),
-                    "height": max(1, int(round(y2 - y1))),
-                    "score": round(float(score), 6),
-                    "label": str(label),
-                })
+            boxes = _grounding_boxes(processed)
             max_iou = None
             if example.expected_region:
                 max_iou = max(
@@ -732,6 +716,37 @@ def select_grounding_fallback(
         ):
             return None
     return selected
+
+
+def _grounding_boxes(processed: dict[str, Any]) -> list[dict[str, Any]]:
+    """Convert one post-processed GroundingDINO result into region dicts.
+
+    transformers 5.x decodes the labels with ``batch_decode``, which returns
+    ``['']`` for an empty list; a frame without any detection above threshold
+    therefore reports one label and zero boxes. Such a frame has no regions.
+    Any other length mismatch still fails loudly.
+    """
+    box_values = processed["boxes"].cpu().tolist()
+    labels = processed.get("text_labels", processed.get("labels", []))
+    if not box_values:
+        return []
+    boxes: list[dict[str, Any]] = []
+    for box, score, label in zip(
+        box_values,
+        processed["scores"].float().cpu().tolist(),
+        labels,
+        strict=True,
+    ):
+        x1, y1, x2, y2 = box
+        boxes.append({
+            "x": int(round(x1)),
+            "y": int(round(y1)),
+            "width": max(1, int(round(x2 - x1))),
+            "height": max(1, int(round(y2 - y1))),
+            "score": round(float(score), 6),
+            "label": str(label),
+        })
+    return boxes
 
 
 def _run_extractions(commands: list[list[str]], workers: int = 4, runner=subprocess.run) -> None:

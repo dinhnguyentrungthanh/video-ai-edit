@@ -70,3 +70,27 @@ class DinoExtractionTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class GroundingBoxesTests(unittest.TestCase):
+    """transformers 5.x: batch_decode([]) == [''] for a frame with no detection."""
+
+    def processed(self, boxes, scores, labels):
+        import torch
+        return {"boxes": torch.tensor(boxes, dtype=torch.float32).reshape(-1, 4),
+                "scores": torch.tensor(scores, dtype=torch.float16), "text_labels": labels}
+
+    def test_frame_without_detections_has_no_regions(self):
+        from biliflow.ad_candidate_pipeline import _grounding_boxes
+        self.assertEqual(_grounding_boxes(self.processed([], [], [""])), [])
+        self.assertEqual(_grounding_boxes(self.processed([], [], [])), [])
+
+    def test_detections_are_converted_unchanged(self):
+        from biliflow.ad_candidate_pipeline import _grounding_boxes
+        boxes = _grounding_boxes(self.processed([[10.4, 20.6, 110.2, 60.5]], [0.5], ["logo"]))
+        self.assertEqual(boxes, [{"x": 10, "y": 21, "width": 100, "height": 40, "score": 0.5, "label": "logo"}])
+
+    def test_other_length_mismatches_still_fail(self):
+        from biliflow.ad_candidate_pipeline import _grounding_boxes
+        with self.assertRaises(ValueError):
+            _grounding_boxes(self.processed([[0, 0, 5, 5]], [0.4], ["a", "b"]))
