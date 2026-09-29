@@ -89,6 +89,8 @@ class ScanTextCrossFrameTests(unittest.TestCase):
     def test_cross_frame_windows_match_serial_tracks_and_preview_frames(self):
         serial, serial_previews, _ = self.scan("serial")
         self.assertEqual(serial["frames_scanned"], 11)
+        from biliflow.textscan import _sha256_file
+        self.assertEqual(serial["input_sha256"], _sha256_file(self.video))
         self.assertTrue(serial["tracks"])
         self.assertTrue(serial_previews)
         self.assertIsNone(serial["metrics"]["cross_frame_recognition"])

@@ -1,3 +1,10 @@
+# Unreleased — background source hashing and parallel localization frames — 2026-09-29
+
+- Hash the source on a background thread (`BackgroundSha256`) in the OCR stage and, when the job's checksum is supplied, in the visual-logo stage. The logo stage keys its cache with the recorded checksum and must verify the file before writing the routing cache or `scan.json`; a mismatch still fails without artifacts.
+- Extract localization frames with the same FFmpeg commands in parallel: Florence prefetches up to 4 frames while the GPU works; GroundingDINO runs up to 4 extractions at once. Stage rerun on the same `scan.json`: identical `scan-florence.json`/`scan-localized.json` (timing fields only) and 112/112 identical frames; 220.1 -> 189.1 s.
+- Tried and removed: running the routing warm-up at BELOW_NORMAL priority did not speed up OCR (contention is GPU/memory) and cut routing's slack before OCR ends from ~186 to ~77 s.
+- Full Troy advertising pipeline (fast scan, isolated caches): 17m45s -> 16m35s (-69.9 s); OCR 685.2 -> 668.2 s, logo 133.5 -> 116.0 s, localization 220.1 -> 185.0 s. Outputs identical (reports, 858 JPEGs, review 6/294, Structure Audit PASS); production data and caches untouched. 326/326 tests pass.
+
 # Unreleased — warm logo routing during OCR ("Tăng tốc xử lý") — 2026-09-29
 
 - "Tăng tốc xử lý" now also warms the visual-logo routing cache while the OCR stage runs: `scan-text --prewarm-logo-routing` starts `scan-visual-logo --routing-only` (same routing code and cache key, no VLM, no report files) as a child process with the logo stage's own routing settings, NVDEC decoding and 3 workers. A failed warm-up only makes the logo stage compute routing itself; OCR failure or interruption kills the child's whole process tree. Standard mode is unchanged.

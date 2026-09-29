@@ -573,3 +573,40 @@ Report OCR/logo: 0 khác biệt; localized: 3 trường thời gian; 858/858 JPE
 ### 13.13. Kết quả E4/E6 — ĐẠT (29/09/2026)
 
 Tích hợp theo 13.12; 319/319 test. A/B cả pipeline bằng code tích hợp (`troy-full-fast-20260929-150440`) so với lượt hiện tại cùng ngày (`troy-full-fast-20260929-141826`): **22m33s → 17m45s (−288 s, −21,3%)**; OCR 596,1 → 685,2 s, logo 511,7 → 133,5 s (cache hit), localization 219,6 → 220,1 s. Report OCR/logo giống hệt, localized chỉ khác 3 trường thời gian, 858/858 JPEG, review 6/294 trùng, Structure Audit PASS; job/queue/nguồn/brand-memory production bảo toàn; không file nào trong `cache/` production thay đổi (harness chuyển process làm nóng sang namespace benchmark qua `scripts/benchmark-text-stage.ps1`).
+
+## 14. Giai đoạn F — cắt thời gian chờ còn lại, đầu ra giống hệt (kế hoạch 29/09/2026)
+
+Mốc: `12a59a3`, pipeline quảng cáo Troy 17m45s (`troy-full-fast-20260929-150440`). Phân bổ đo được:
+
+| Stage (s) | Thành phần |
+| --- | --- |
+| OCR 685,2 | GPU-bound; chậm hơn 89 s vì routing làm nóng chạy cùng (routing xong ở ~480 s, còn ~200 s dư) |
+| Logo 133,5 | hash nguồn 19,5; nạp VLM 8,7; VLM 94,6 (390 lượt) |
+| Localization 220,1 | Florence: trích frame 27,2 (116 lần FFmpeg tuần tự, PNG) + suy luận 116,0 + nạp 2,6; DINO: trích lại frame 19,0 (112 lần, JPEG) + nạp/suy luận 39,4; ~12 s khởi động process |
+
+Chỉ làm các thay đổi **không đổi đầu vào của model** (giống hệt theo cấu trúc) và vẫn đo xác nhận:
+
+- **F1 — Routing làm nóng chạy ưu tiên thấp (BELOW_NORMAL, process con kế thừa).** Routing có ~200 s dư nên nhường CPU cho OCR. Kỳ vọng OCR 685 → 620–650 s. Rủi ro: routing xong muộn hơn OCR → stage OCR chờ; stage logo vẫn gặp cache.
+- **F2 — Băm nguồn chạy nền, xác minh trước khi ghi.** OCR: băm song song trong lúc quét, chờ kết quả trước khi tạo report. Logo (khi có `--source-sha256` kỳ vọng): dùng hash kỳ vọng để tra cache ngay, băm nền; bắt buộc xác minh khớp **trước khi ghi routing cache và trước khi ghi `scan.json`**, sai → lỗi, không có artifact. Kỳ vọng −35…−40 s. Không đổi preflight (nơi tạo danh tính job).
+- **F3 — Trích frame song song cho localization**, cùng đúng lệnh FFmpeg: Florence prefetch tối đa 4 frame trước (chạy trong lúc GPU suy luận); DINO chạy các lệnh trích frame với tối đa 4 FFmpeg cùng lúc. Kỳ vọng −35…−40 s.
+- Không làm trong F: batch Florence/VLM (beam search nhạy số học, cần phép thử riêng), gộp process Florence+DINO (~12 s), đổi JPEG/PNG của đầu vào model.
+
+Kiểm chứng:
+
+1. Unit test cho từng thay đổi (thứ tự frame, lỗi/hủy, hash sai → không artifact, priority).
+2. F3 đo riêng: chạy lại stage localization (cả hai lệnh) trên `scan.json` của `troy-full-fast-20260929-150440`, so file `scan-localized.json` và toàn bộ frame/JPEG với bản gốc — phải giống hệt trừ telemetry thời gian.
+3. A/B cả pipeline F so với `12a59a3` cùng phiên: đầu ra giống hệt như các lượt trước; báo thời gian từng stage để quy công cho F1/F2/F3.
+
+Cổng: đầu ra giống hệt; tổng nhanh hơn ≥ 60 s. Mục nào tự nó làm chậm stage của mình → bỏ mục đó.
+
+Track chất lượng (đề xuất riêng, cần người dùng tham gia gán nhãn): bộ nhãn chuẩn để đo recall/precision; ca Conan Movie 20 nhận nhầm watermark với đầu nhân vật.
+
+### 14.1. Kết quả giai đoạn F — ĐẠT (29/09/2026)
+
+| Mục | Kết quả đo | Quyết định |
+| --- | --- | --- |
+| F1 routing ưu tiên thấp | OCR `model_step` 613 → 618 s (không nhanh hơn); routing 499 → 596 s, khoảng dư trước khi OCR xong 186 → 77 s | **Loại** (tranh chấp là GPU/băng thông, không phải CPU) |
+| F2 băm nền | OCR: hash 18,8 → 0 s chờ; logo 133,5 → 116,0 s | Giữ |
+| F3 trích frame song song | Florence chờ frame 27,2 → 0,4 s; DINO 19,0 → 7,2 s; localization 220,1 → 185,0 s; đầu ra và 112 frame giống hệt | Giữ |
+
+Cấu hình cuối (F2 + F3), `troy-full-fast-20260929-164440`: **16m35s** so với 17m45s (−69,9 s ≥ cổng 60 s); report giống hệt, 858/858 JPEG, review 6/294, Structure Audit PASS; production và cache production không đổi. 326/326 test.

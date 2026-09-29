@@ -734,6 +734,21 @@ def select_grounding_fallback(
     return selected
 
 
+def _run_extractions(commands: list[list[str]], workers: int = 4, runner=subprocess.run) -> None:
+    if not commands:
+        return
+    from concurrent.futures import ThreadPoolExecutor
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        futures = [pool.submit(runner, command, check=True, capture_output=True) for command in commands]
+        try:
+            for future in futures:
+                future.result()
+        except BaseException:
+            for future in futures:
+                future.cancel()
+            raise
+
+
 def augment_grounding_regions(
     project_root: Path,
     report_path: Path,
@@ -754,6 +769,7 @@ def augment_grounding_regions(
     intervals = report.get("intervals", [])
     examples: list[BenchmarkExample] = []
     interval_by_id: dict[str, dict[str, Any]] = {}
+    extractions: list[list[str]] = []
     for index, interval in enumerate(intervals):
         confirmation = interval.get("visual_logo_confirmation", {})
         if confirmation.get("state") not in {"CONFIRMED", "UNCERTAIN"}:
@@ -788,11 +804,11 @@ def augment_grounding_regions(
             video_path = Path(str(report.get("input", "")))
             if not video_path.is_file():
                 raise FileNotFoundError(f"Input video is missing: {video_path}")
-            performance.call("frame_extract", subprocess.run, [
+            extractions.append([
                 str(ffmpeg_path), "-hide_banner", "-loglevel", "error", "-y",
                 "-ss", f"{float(timestamp):.3f}", "-i", str(video_path),
                 "-frames:v", "1", "-q:v", "2", str(frame_path),
-            ], check=True, capture_output=True)
+            ])
         examples.append(BenchmarkExample(
             id=identifier,
             image=str(frame_path.resolve()),
@@ -804,6 +820,9 @@ def augment_grounding_regions(
             labels=tuple(),
         ))
         interval_by_id[identifier] = interval
+    # Same commands as before, at most four FFmpeg processes at a time; each
+    # writes its own file, so the frames given to DINO are unchanged.
+    performance.call("frame_extract", _run_extractions, extractions)
 
     started = time.perf_counter()
     detections, inference_metrics = performance.call("model_and_cache", detect_grounding_dino,

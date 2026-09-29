@@ -537,6 +537,10 @@ def scan_text(
         raise ValueError("start_seconds must be non-negative and duration_seconds must be positive")
 
     require_capacity(project_root, estimated_job_gb=2.0)
+    from biliflow.source_hash import BackgroundSha256
+
+    # Overlap the source hash with the scan; the report waits for it below.
+    source_hash = BackgroundSha256(input_path)
     probe = probe_video(ffprobe_path, input_path)
     video_duration = duration_seconds(probe)
     if start_seconds >= video_duration:
@@ -816,7 +820,7 @@ def scan_text(
         "status": "REVIEW_REQUIRED",
         "created_at": datetime.now(timezone.utc).isoformat(),
         "input": str(input_path),
-        "input_sha256": performance.call('source_hash', _sha256_file, input_path),
+        "input_sha256": performance.call('source_hash', source_hash.result),
         "duration_seconds": video_duration,
         "scan_start_seconds": start_seconds,
         "scan_duration_seconds": scan_duration,

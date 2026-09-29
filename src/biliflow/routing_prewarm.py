@@ -49,6 +49,9 @@ class RoutingPrewarm:
         log_path.parent.mkdir(parents=True, exist_ok=True)
         self._log = log_path.open("w", encoding="utf-8")
         try:
+            # Normal priority on purpose: BELOW_NORMAL did not speed up OCR
+            # (contention is GPU/memory, not CPU scheduling) and cut routing's
+            # slack before OCR ends from ~186 s to ~77 s (phase F1).
             self._process = popen(argv, cwd=str(cwd), stdout=self._log, stderr=subprocess.STDOUT)
         except BaseException:
             self._log.close()

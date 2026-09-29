@@ -1,3 +1,9 @@
+## Phase F: hidden hashing and parallel localization frames — 2026-09-29
+
+- F2 background source hashing (OCR; logo with verified recorded checksum) and F3 parallel localization frame extraction kept; F1 (low-priority warm-up) measured and rejected. Plan and results: §14 of `docs/CLAUDE_SCAN_OPTIMIZATION_HANDOFF.md`.
+- Full pipeline 17m45s -> **16m35s** with identical outputs (`reports/benchmarks/troy-full-fast-20260929-164440/comparison.json` vs `troy-full-fast-20260929-150440`). Since the start of this optimization work: 25m32s standard -> 16m35s (-35%).
+- Existing precision-style regression set: `annotations/review-regression-v1.json` (206 human decisions, 6 sources). Recall of missed content is still unmeasured; a labelled segment set is the proposed quality track. The Conan Movie 20 watermark-vs-head case was already fixed on 2026-09-26 (keep it as a regression check).
+
 ## Phase E: routing warm-up during OCR — 2026-09-29
 
 - Plan-first phase (docs/CLAUDE_SCAN_OPTIMIZATION_HANDOFF.md §13): E1 NVDEC pixel identity PASS (11,322 frames); E2 NVDEC-for-OCR rejected (+4.6%); E3 overlap gate "OCR ≤ 10% slower" failed (OCR +15–19%) → user accepted the trade-off with a pre-registered total-pipeline gate (≥ 3 min faster, identical outputs); E3b prototype PASS (22m33s → 17m40s).

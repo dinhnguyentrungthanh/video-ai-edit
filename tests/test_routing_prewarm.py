@@ -42,8 +42,11 @@ class RoutingPrewarmTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             log = Path(directory) / "prewarm.log"
             process = FakeProcess(code=3)
-            prewarm = RoutingPrewarm(["x"], cwd=Path(directory), log_path=log, popen=lambda *a, **k: process)
+            options = {}
+            prewarm = RoutingPrewarm(["x"], cwd=Path(directory), log_path=log,
+                                     popen=lambda *a, **k: options.update(k) or process)
             self.assertEqual(prewarm.finish(), 3)
+            self.assertNotIn("creationflags", options)  # normal priority (phase F1 rejected)
             running = FakeProcess(running=True)
             killed = []
             prewarm = RoutingPrewarm(["x"], cwd=Path(directory), log_path=log, popen=lambda *a, **k: running)
@@ -122,6 +125,29 @@ class RoutingOnlyScanTests(unittest.TestCase):
             self.assertFalse(report_dir.exists())
             with self.assertRaisesRegex(ValueError, "routing_only"):
                 scan_visual_logos(**common, exhaustive=True)
+
+    def test_background_source_check_blocks_cache_on_mismatch(self):
+        import hashlib
+        from biliflow.visual_logo_scanner import scan_visual_logos
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "reports").mkdir()
+            (root / "models/vlm").mkdir(parents=True)
+            video = root / "clip.mkv"
+            subprocess.run([str(FFMPEG), "-hide_banner", "-loglevel", "error", "-f", "lavfi", "-i",
+                            "testsrc=size=320x180:rate=5:duration=8", "-c:v", "ffv1", str(video)], check=True)
+            common = dict(project_root=root, input_path=video, report_dir=root / "reports/job/visual-logo",
+                          model_path=root / "models/vlm", ffmpeg_path=FFMPEG, ffprobe_path=FFPROBE,
+                          boundary_seconds=2.0, routing_only=True)
+            with self.assertRaisesRegex(ValueError, "Source checksum changed"):
+                scan_visual_logos(**common, source_sha256="0" * 64)
+            self.assertFalse(list((root / "cache").rglob("routing-*")) if (root / "cache").exists() else [])
+            actual = hashlib.sha256(video.read_bytes()).hexdigest()
+            result = scan_visual_logos(**common, source_sha256=actual.upper())
+            self.assertFalse(result["routing_cache"]["hit"])
+            self.assertIn(actual, result["routing_cache"]["path"])
+            with self.assertRaisesRegex(ValueError, "64 hexadecimal"):
+                scan_visual_logos(**common, source_sha256="xyz")
 
 
 if __name__ == "__main__":

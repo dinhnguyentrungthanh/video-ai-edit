@@ -1499,7 +1499,27 @@ def scan_visual_logos(
     analysis_height = max(2, round(source_height * analysis_width / source_width / 2) * 2)
     scan_end = start_seconds + scan_duration
     effective_sample_interval = effective_sample_every(sample_every, exhaustive)
-    input_sha256 = performance.call('source_hash', validated_source_sha256, input_path, source_sha256)
+    source_check = None
+    if source_sha256 is not None:
+        # The job's recorded checksum keys the cache immediately; the file is
+        # re-hashed in the background and must match before routing cache or
+        # scan.json is written (verify_source), so a changed source still fails.
+        if not re.fullmatch(r"[0-9a-fA-F]{64}", str(source_sha256)):
+            raise ValueError("source_sha256 must contain 64 hexadecimal characters")
+        from biliflow.source_hash import BackgroundSha256
+        input_sha256 = str(source_sha256).casefold()
+        source_check = BackgroundSha256(input_path)
+    else:
+        input_sha256 = performance.call('source_hash', validated_source_sha256, input_path, None)
+
+    def verify_source() -> None:
+        nonlocal source_check
+        if source_check is None:
+            return
+        actual = performance.call('source_hash', source_check.result)
+        source_check = None
+        if actual != input_sha256:
+            raise ValueError("Source checksum changed before visual-logo scan")
     brand_memory = load_brand_memory(root)
     memory_records = [
         item for item in brand_memory.get("records", []) if isinstance(item, dict)
@@ -1640,6 +1660,7 @@ def scan_visual_logos(
                     window_sample_counts[key] = 1
                     coverage_fallback_count += 1
             if not exhaustive:
+                verify_source()
                 _write_routing_cache(
                     cache_path, source_sha256=input_sha256, cache_key=cache_key,
                     windows=windows, window_sample_counts=window_sample_counts,
@@ -1655,6 +1676,7 @@ def scan_visual_logos(
                 parallel_routing_metrics = routing_pool.metrics()
 
     if routing_only:
+        verify_source()
         return {
             "routing_only": True,
             "routing_cache": {"hit": routing_cache_hit, "key": cache_key,
@@ -1978,6 +2000,7 @@ def scan_visual_logos(
     for thumbnail in audit_thumbnails_dir.glob("window-*.jpg"):
         if thumbnail.name not in referenced_audit_thumbnails:
             thumbnail.unlink(missing_ok=True)
+    verify_source()
     temporary_output = report_dir / "scan.json.tmp"
     temporary_output.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     temporary_output.replace(report_dir / "scan.json")

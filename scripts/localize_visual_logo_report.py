@@ -102,6 +102,32 @@ def _extract_frame(ffmpeg: Path, video: Path, timestamp: float) -> Image.Image:
     return Image.open(io.BytesIO(completed.stdout)).convert("RGB")
 
 
+# Frames for the next intervals are extracted by FFmpeg while the GPU runs
+# Florence on the current one; each frame comes from the same command as before.
+FRAME_PREFETCH = 4
+
+
+def _prefetched_frames(ffmpeg: Path, video: Path, timestamps: list[float], extract=None):
+    """Yield frames in order, keeping at most FRAME_PREFETCH extractions ahead."""
+    from concurrent.futures import ThreadPoolExecutor
+    extract = extract or _extract_frame
+    with ThreadPoolExecutor(max_workers=FRAME_PREFETCH) as pool:
+        pending = {}
+        for index in range(min(FRAME_PREFETCH, len(timestamps))):
+            pending[index] = pool.submit(extract, ffmpeg, video, timestamps[index])
+        for index in range(len(timestamps)):
+            future = pending.pop(index)
+            ahead = index + FRAME_PREFETCH
+            if ahead < len(timestamps):
+                pending[ahead] = pool.submit(extract, ffmpeg, video, timestamps[ahead])
+            try:
+                yield future
+            except GeneratorExit:
+                for waiting in pending.values():
+                    waiting.cancel()
+                raise
+
+
 def _run_task(model, processor, image: Image.Image, task: str, text: str | None) -> dict:
     prompt = task + (text or "")
     inputs = processor(text=prompt, images=image, return_tensors="pt")
@@ -193,9 +219,10 @@ def main() -> int:
 
     started = time.perf_counter()
     localized = 0
-    for index, interval in enumerate(intervals, start=1):
+    frames = _prefetched_frames(ffmpeg, video, [_timestamp(interval) for interval in intervals])
+    for index, (interval, frame) in enumerate(zip(intervals, frames, strict=True), start=1):
         timestamp = _timestamp(interval)
-        image = performance.call('frame_extract', _extract_frame, ffmpeg, video, timestamp)
+        image = performance.call('frame_extract', frame.result)
         confirmation = interval.get("visual_logo_confirmation", {})
         memory_match = confirmation.get("features", {}).get("brand_memory")
         learned_region = approved_brand_memory_region(

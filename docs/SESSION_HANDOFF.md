@@ -51,7 +51,10 @@ routing cache during OCR (`scan-text --prewarm-logo-routing` -> child
 `scan-visual-logo --routing-only --decode nvdec`). Full pipeline 22m33s -> 17m45s,
 identical outputs (`troy-full-fast-20260929-150440`). Plan/results: §13 of
 docs/CLAUDE_SCAN_OPTIMIZATION_HANDOFF.md. Benchmark OCR-stage wrapper
-`scripts/benchmark-text-stage.ps1` keeps the warm-up in the benchmark cache. 301/301 tests. RoutingPool entry points must be
+`scripts/benchmark-text-stage.ps1` keeps the warm-up in the benchmark cache.
+Phase E committed as `12a59a3`. Phase F (uncommitted until the user asks): background
+source hashing + parallel localization frame extraction; full pipeline 17m45s -> 16m35s,
+identical outputs (`troy-full-fast-20260929-164440`). Low-priority warm-up was rejected. 301/301 tests. RoutingPool entry points must be
 `python -m biliflow` or `__main__`-guarded scripts (spawned workers).
 
 ## Last verified production-style run

@@ -1,5 +1,23 @@
 # Scan performance work — 2026-09-28
 
+## Background hashing and parallel localization frames (phase F) — 2026-09-29
+
+| Stage | Before (`troy-full-fast-20260929-150440`) | After (`troy-full-fast-20260929-164440`) |
+| --- | ---: | ---: |
+| Preflight | 18.471 | 18.468 |
+| OCR (+ routing warm-up) | 685.164 | 668.215 (source hash hidden) |
+| Visual logo | 133.454 | 115.970 (source hash hidden) |
+| Localization | 220.101 | 185.003 (frame extraction parallel) |
+| Review + audit | 7.544 | 7.220 |
+| **Total** | **1064.760 (17m45s)** | **994.903 (16m35s)** |
+
+Outputs identical (reports, 858 JPEGs, review 6/294, Structure Audit PASS).
+Localization-only rerun on the same `scan.json`: Florence frame wait 27.2 -> 0.4 s,
+DINO extraction 19.0 -> 7.2 s, identical outputs and 112/112 frames
+(`f3-localization-20260929-162220`). BELOW_NORMAL priority for the routing
+warm-up (`troy-full-fast-20260929-162635`) left OCR `model_step` unchanged
+(613 -> 618 s) and slowed routing 499 -> 596 s, so it was not kept.
+
 ## Routing warm-up during OCR (phase E) — 2026-09-29
 
 "Tăng tốc xử lý" runs `scan-visual-logo --routing-only` (NVDEC decode, 3 workers)
