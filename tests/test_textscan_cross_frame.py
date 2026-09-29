@@ -106,6 +106,17 @@ class ScanTextCrossFrameTests(unittest.TestCase):
                 self.assertEqual(stats["frames_emitted"], 11)
                 self.assertEqual(stats["max_group_frames"], min(window, 11))
 
+    def test_unverified_stream_requested_as_nvdec_falls_back_to_identical_cpu_scan(self):
+        serial, serial_previews, _ = self.scan("serial-for-decode")
+        report, previews, _ = self.scan("nvdec-fallback", decode_backend="nvdec")
+        self.assertEqual(normalize(report), normalize(serial))
+        self.assertEqual(previews, serial_previews)
+        decode = report["metrics"]["decode"]
+        self.assertEqual((decode["requested"], decode["effective"]), ("nvdec", "cpu"))
+        self.assertIn("not verified for ffv1", decode["fallback_reason"])
+        self.assertEqual(serial["metrics"]["decode"],
+                         {"requested": "cpu", "effective": "cpu", "fallback_reason": None})
+
     def test_frame_window_validation(self):
         from biliflow.textscan import scan_text
         common = dict(project_root=self.root, input_path=self.video, report_dir=self.root / "reports/x",

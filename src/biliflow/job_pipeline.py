@@ -148,10 +148,31 @@ def pipeline_stages(
 ) -> list[PipelineStage]:
     ocr_recognition_batch_size = normalize_ocr_batch_size(ocr_recognition_batch_size)
     fast_scan = normalize_fast_scan(fast_scan)
+    root = root.resolve(strict=True)
+    source = source.resolve(strict=True)
+    if content_style not in {"animation", "live_action", "mixed"}:
+        raise ValueError("Content style must be confirmed before processing")
+    profiles = load_profiles(root)
+    if profile not in profiles:
+        raise ValueError(f"Unknown profile: {profile}")
+    config = profiles[profile]
     if fast_scan:
+        # The OCR stage also warms the logo routing cache in a child process.
+        # These values must equal the logo stage's routing arguments below, or
+        # the cache key differs and the logo stage recomputes routing itself.
         text_speed_arguments: tuple[object, ...] = (
             "--recognition-batch-size", FAST_SCAN_OCR_BATCH_SIZE,
             "--recognition-frame-window", FAST_SCAN_OCR_FRAME_WINDOW,
+            "--prewarm-logo-routing",
+            "--logo-sample-every", config["logo_sample_every"],
+            "--logo-boundary-sample-every", config["logo_boundary_sample_every"],
+            "--logo-boundary-seconds", config["logo_boundary_seconds"],
+            "--logo-scene-change-threshold", config["logo_scene_change_threshold"],
+            "--logo-coverage-bucket-seconds", config["logo_coverage_bucket_seconds"],
+            "--logo-coverage-fallbacks-per-bucket", config["logo_coverage_fallbacks_per_bucket"],
+            "--logo-routing-workers", FAST_SCAN_LOGO_ROUTING_WORKERS,
+            "--logo-decode", "nvdec",
+            *(("--logo-source-sha256", source_sha256) if source_sha256 else ()),
         )
         logo_speed_arguments: tuple[object, ...] = (
             "--routing-workers", FAST_SCAN_LOGO_ROUTING_WORKERS,
@@ -162,14 +183,6 @@ def pipeline_stages(
             if ocr_recognition_batch_size != 1 else ()
         )
         logo_speed_arguments = ()
-    root = root.resolve(strict=True)
-    source = source.resolve(strict=True)
-    if content_style not in {"animation", "live_action", "mixed"}:
-        raise ValueError("Content style must be confirmed before processing")
-    profiles = load_profiles(root)
-    if profile not in profiles:
-        raise ValueError(f"Unknown profile: {profile}")
-    config = profiles[profile]
     selected_detectors = normalize_detector_groups(detector_groups)
     safety_selected = any(
         value in selected_detectors for value in ("adult", "gore", "violence")

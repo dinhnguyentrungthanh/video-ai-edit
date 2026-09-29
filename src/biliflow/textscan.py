@@ -501,8 +501,12 @@ def scan_text(
     prefetch_frames: int = 0,
     recognition_batch_size: int = 1,
     recognition_frame_window: int = 1,
+    decode_backend: str = "cpu",
 ) -> dict:
+    from biliflow import nvdec
+
     performance = ScanPerformance()
+    nvdec.validate_backend(decode_backend)
     if not isinstance(prefetch_frames, int) or not 0 <= prefetch_frames <= 4:
         raise ValueError("prefetch_frames must be an integer from 0 to 4")
     if recognition_batch_size not in (1, 2, 4, 8):
@@ -543,6 +547,10 @@ def scan_text(
     )
     source_width, source_height = _video_size(probe)
     analysis_height = max(2, round(source_height * analysis_width / source_width / 2) * 2)
+    effective_decode, decode_fallback = nvdec.resolve_backend(
+        decode_backend, probe=probe, ffmpeg_path=ffmpeg_path, input_path=input_path,
+        start_seconds=start_seconds,
+    )
 
     with performance.measure('model_load'):
         if reader is None:
@@ -579,8 +587,9 @@ def scan_text(
     frame_bytes = analysis_width * analysis_height * 3
     command = [
         str(ffmpeg_path), "-hide_banner", "-loglevel", "error",
+        *nvdec.input_arguments(effective_decode),
         "-ss", str(start_seconds), "-i", str(input_path), "-t", str(scan_duration),
-        "-vf", f"fps={fps},scale={analysis_width}:{analysis_height}:flags=bilinear",
+        "-vf", nvdec.sampling_filter(fps, analysis_width, analysis_height, effective_decode),
         "-an", "-sn", "-f", "rawvideo", "-pix_fmt", "rgb24", "pipe:1",
     ]
     report_dir.mkdir(parents=True, exist_ok=True)
@@ -830,6 +839,8 @@ def scan_text(
         "metrics": {
             "recognition_batch_size": recognition_batch_size,
             "recognition_frame_window": recognition_frame_window,
+            "decode": {"requested": decode_backend, "effective": effective_decode,
+                       "fallback_reason": decode_fallback},
             "cross_frame_recognition": (
                 {**cross_frame_reader.stats.as_dict(), "byte_budget": cross_frame_reader.byte_budget}
                 if cross_frame_reader is not None else None

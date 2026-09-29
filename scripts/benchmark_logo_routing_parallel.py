@@ -146,7 +146,7 @@ class RoutingCaptured(Exception):
     pass
 
 
-def run_pipeline_once(src, start, duration, workers, directory):
+def run_pipeline_once(src, start, duration, workers, directory, decode="cpu"):
     """Actual cold routing control flow; returns (snapshot, timings)."""
     snapshot, timing = {}, {}
     choose, hasher = scanner.select_candidate_windows, scanner.validated_source_sha256
@@ -191,7 +191,7 @@ def run_pipeline_once(src, start, duration, workers, directory):
                 model_path=ROOT / "models/qwen2_vl_2b_instruct", ffmpeg_path=FFMPEG, ffprobe_path=FFPROBE,
                 start_seconds=start, duration_seconds_limit=duration, sample_every=2.0,
                 boundary_sample_every=.25, boundary_seconds=30.0, max_candidate_windows=80,
-                routing_workers=workers)
+                routing_workers=workers, decode_backend=decode)
         except RoutingCaptured:
             pass
         else:
@@ -252,7 +252,7 @@ def route_once(args):
     if args.low_priority:
         # Windows children (FFmpeg, pool workers) inherit BELOW_NORMAL.
         psutil.Process().nice(psutil.BELOW_NORMAL_PRIORITY_CLASS)
-    snapshot, timing = run_pipeline_once(source(args.source), 0, None, args.workers, directory / "scan")
+    snapshot, timing = run_pipeline_once(source(args.source), 0, None, args.workers, directory / "scan", args.decode)
     (directory / "route.json").write_text(json.dumps({"timing": timing, "snapshot": snapshot}, ensure_ascii=False),
                                           encoding="utf-8")
 
@@ -273,11 +273,12 @@ def overlap(args):
         text_dir = run_dir / "text"
         ocr_cmd = [python, "-m", "biliflow", "scan-text", "--input", str(src), "--report-dir", str(text_dir),
                    "--sample-every", "3.0", "--device", "cuda",
-                   "--recognition-batch-size", "8", "--recognition-frame-window", str(args.window)]
+                   "--recognition-batch-size", "8", "--recognition-frame-window", str(args.window),
+                   "--decode", args.ocr_decode]
         # O: normal-priority routing with --workers; L: BELOW_NORMAL routing with --low-workers.
         workers = args.low_workers if label == "L" else args.workers
         route_cmd = [python, str(Path(__file__).resolve()), "route-once", "--workers", str(workers),
-                     "--source", args.source, "--out", str(run_dir / "routing"),
+                     "--source", args.source, "--out", str(run_dir / "routing"), "--decode", args.routing_decode,
                      *(["--low-priority"] if label == "L" else [])]
         run_dir.mkdir(parents=True)
         (run_dir / "routing").mkdir()
@@ -302,6 +303,7 @@ def overlap(args):
         report = json.loads((text_dir / "text-scan.json").read_text(encoding="utf-8"))
         ocr_reference = ocr_reference or report
         row = {"index": index, "mode": label, "ocr_wall_seconds": finished["ocr"],
+               "ocr_decode": report["metrics"].get("decode"),
                "ocr_report_elapsed_seconds": report["metrics"]["elapsed_seconds"],
                "ocr_model_step_seconds": report["metrics"]["performance"]["phases"]["model_step"]["wall_seconds"],
                "ocr_equal_to_first": _normalize(report) == _normalize(ocr_reference),
@@ -316,7 +318,9 @@ def overlap(args):
         print(json.dumps(row), flush=True)
     result = {"scope": "Real OCR stage CLI with and without concurrent full-film CPU routing; "
                        "no VLM, localization, review or export", **git_state(),
-              "order": list(args.order), "workers": args.workers, "window": args.window, "runs": runs,
+              "order": list(args.order), "workers": args.workers, "window": args.window,
+              "ocr_decode": args.ocr_decode, "routing_decode": args.routing_decode,
+              "low_workers": args.low_workers, "runs": runs,
               "medians": {m: {k: statistics.median(r[k] for r in runs if r["mode"] == m)
                               for k in ("ocr_wall_seconds", "both_finished_seconds")}
                           for m in dict.fromkeys(args.order)},
@@ -355,6 +359,8 @@ def main():
     o.add_argument("--window", type=int, default=4)
     o.add_argument("--order", default="AOOA")
     o.add_argument("--low-workers", type=int, default=2)
+    o.add_argument("--ocr-decode", choices=("cpu", "nvdec"), default="cpu")
+    o.add_argument("--routing-decode", choices=("cpu", "nvdec"), default="cpu")
     o.add_argument("--routing-reference", required=True,
                    help="project-relative reference_snapshots.json from a full-film pipeline run")
     r = sub.add_parser("route-once")
@@ -362,6 +368,7 @@ def main():
     r.add_argument("--workers", type=int, required=True)
     r.add_argument("--out", required=True)
     r.add_argument("--low-priority", action="store_true")
+    r.add_argument("--decode", choices=("cpu", "nvdec"), default="cpu")
     args = parser.parse_args()
     {"cpu": cpu, "pipeline": pipeline, "overlap": overlap, "route-once": route_once}[args.command](args)
 

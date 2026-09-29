@@ -43,6 +43,28 @@ ACTIVE_STATES = {
 }
 
 
+def terminate_process_tree(process: subprocess.Popen) -> None:
+    try:
+        if os.name == "nt":
+            # CTRL_BREAK can stop the PowerShell/Python wrapper while an
+            # FFmpeg child survives as an orphan. Kill the complete process
+            # tree so an immediate pause really releases CPU, GPU and file
+            # handles before the stage is restarted.
+            subprocess.run(
+                ["taskkill", "/PID", str(process.pid), "/T", "/F"],
+                capture_output=True,
+                text=True,
+                creationflags=subprocess.CREATE_NO_WINDOW,
+                check=False,
+            )
+        else:
+            process.terminate()
+        process.wait(timeout=8)
+    except (OSError, subprocess.TimeoutExpired):
+        process.kill()
+        process.wait(timeout=5)
+
+
 class JobScheduler:
     """One durable worker for GPU scans and final renders.
 
@@ -533,25 +555,7 @@ class JobScheduler:
             self.store.update_job(job_id, state="QUEUED", current_stage=None, progress=progress)
 
     def _terminate_process(self, process: subprocess.Popen) -> None:
-        try:
-            if os.name == "nt":
-                # CTRL_BREAK can stop the PowerShell/Python wrapper while an
-                # FFmpeg child survives as an orphan. Kill the complete process
-                # tree so an immediate pause really releases CPU, GPU and file
-                # handles before the stage is restarted.
-                subprocess.run(
-                    ["taskkill", "/PID", str(process.pid), "/T", "/F"],
-                    capture_output=True,
-                    text=True,
-                    creationflags=subprocess.CREATE_NO_WINDOW,
-                    check=False,
-                )
-            else:
-                process.terminate()
-            process.wait(timeout=8)
-        except (OSError, subprocess.TimeoutExpired):
-            process.kill()
-            process.wait(timeout=5)
+        terminate_process_tree(process)
 
     def _cleanup_interrupted_stage(self, job_id: int, stage_name: str) -> None:
         if stage_name != "render":

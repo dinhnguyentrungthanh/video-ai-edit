@@ -4,7 +4,10 @@
            localization, review/structure audit) through the real stage
            commands, with an isolated SQLite store, a benchmark-marked report
            root and fresh routing/GroundingDINO caches. --fast-scan selects the
-           Dashboard "Tăng tốc xử lý" option. No Visual AI, safety or export.
+           Dashboard "Tăng tốc xử lý" option. --prewarm-overlap (E3b prototype)
+           runs the logo stage's own routing, NVDEC-decoded, concurrently with
+           the OCR stage so the logo stage reads a warm routing cache.
+           No Visual AI, safety or export.
   compare  Read-only comparison of two trials: reports (runtime/confidence/cache
            telemetry excluded), preview/scanner JPEG hashes and review proposals.
 Production job #39, its review queue, source file and brand memory are only read.
@@ -26,6 +29,8 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 PRODUCTION_JOB_ID = 39
 COLD_STAGE = ROOT / "scripts/benchmark-cold-ad-stage.ps1"
+TEXT_STAGE = ROOT / "scripts/benchmark-text-stage.ps1"
+PREWARM = ROOT / "scripts/benchmark_prewarm_routing.py"
 
 
 def digest(path: Path) -> str:
@@ -77,7 +82,7 @@ def run(args) -> None:
                                   fast_scan=args.fast_scan)
     definitions = scheduler._definitions(store.get_job(job["id"]))
     manifest = {
-        "trial": key, "fast_scan": args.fast_scan,
+        "trial": key, "fast_scan": args.fast_scan, "prewarm_overlap": args.prewarm_overlap,
         "git_head": subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip(),
         "git_diff_src_sha256": hashlib.sha256(subprocess.check_output(["git", "diff", "--", "src"], cwd=ROOT)).hexdigest(),
         "scope": "advertising only; no Visual AI, safety detectors or export",
@@ -103,6 +108,16 @@ def run(args) -> None:
             manifest["stages"].append(row)
             save()
             started = perf_counter()
+            prewarm = None
+            if name == "text" and args.prewarm_overlap:
+                logo_argv = list(definitions["visual_logo"].commands[0].argv)
+                cli_args = logo_argv[logo_argv.index(str(ROOT / "scripts/run.ps1")) + 1:]
+                prewarm_argv = [sys.executable, str(PREWARM), *cli_args, "--decode", "nvdec"]
+                row["prewarm"] = {"argv": prewarm_argv}
+                prewarm_log = (evidence / "prewarm.log").open("w", encoding="utf-8")
+                prewarm = subprocess.Popen(prewarm_argv, cwd=ROOT, stdout=prewarm_log, stderr=subprocess.STDOUT,
+                                           env=dict(os.environ, BILIFLOW_BENCHMARK_CACHE=str(cache)),
+                                           creationflags=subprocess.CREATE_NO_WINDOW)
             if name == "preflight":
                 scheduler._run_preflight(store.get_job(job["id"]))
             else:
@@ -110,6 +125,9 @@ def run(args) -> None:
                     argv = list(command.argv)
                     if any(value in argv for value in ("scan-visual-logo", "augment-grounding-regions")):
                         argv[argv.index(str(ROOT / "scripts/run.ps1"))] = str(COLD_STAGE)
+                    elif "--prewarm-logo-routing" in argv:
+                        # Integrated prewarm child must also use the benchmark cache namespace.
+                        argv[argv.index(str(ROOT / "scripts/run.ps1"))] = str(TEXT_STAGE)
                     row["commands"].append({"production": list(command.argv), "executed": argv})
                     save()
                     env = dict(os.environ, BILIFLOW_BENCHMARK_CACHE=str(cache))
@@ -119,6 +137,18 @@ def run(args) -> None:
                     for artifact in command.expected_artifacts:
                         validate_json_artifact(artifact)
                         scheduler._register_artifact(job["id"], name, artifact)
+            if prewarm is not None:
+                row["prewarm"]["ocr_command_seconds"] = perf_counter() - started
+                code = prewarm.wait()
+                prewarm_log.close()
+                row["prewarm"].update(exit_code=code, finished_after_seconds=perf_counter() - started)
+                if code:
+                    raise RuntimeError(f"Routing prewarm failed with exit code {code}; see prewarm.log")
+            if name == "visual_logo" and (args.prewarm_overlap or args.fast_scan):
+                logo_report = json.loads((report_root / "visual-logo/scan.json").read_text(encoding="utf-8"))
+                row["routing_cache_hit"] = logo_report["routing_cache"]["hit"]
+                if not row["routing_cache_hit"]:
+                    raise RuntimeError("Logo stage did not reuse the prewarmed routing cache")
             store.update_stage(job["id"], name, state="COMPLETED", progress=1, completed_at=now_iso())
             scheduler._after_success(job["id"], name, definition)
             row.update(state="COMPLETED", seconds=perf_counter() - started, completed_at=now_iso())
@@ -230,14 +260,17 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = parser.add_subparsers(dest="command", required=True)
     r = sub.add_parser("run")
-    r.add_argument("--label", required=True, choices=("standard", "fast"))
+    r.add_argument("--label", required=True, choices=("standard", "fast", "overlap"))
     r.add_argument("--fast-scan", action="store_true")
+    r.add_argument("--prewarm-overlap", action="store_true")
     c = sub.add_parser("compare")
     c.add_argument("--baseline", required=True)
     c.add_argument("--candidate", required=True)
     args = parser.parse_args()
-    if args.command == "run" and args.fast_scan != (args.label == "fast"):
-        raise ValueError("--label fast requires --fast-scan and vice versa")
+    if args.command == "run":
+        expected = {"standard": (False, False), "fast": (True, False), "overlap": (True, True)}[args.label]
+        if (args.fast_scan, args.prewarm_overlap) != expected:
+            raise ValueError("--label must match --fast-scan/--prewarm-overlap (overlap needs both)")
     {"run": run, "compare": compare}[args.command](args)
 
 

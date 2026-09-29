@@ -1,5 +1,27 @@
 # Scan performance work — 2026-09-28
 
+## Routing warm-up during OCR (phase E) — 2026-09-29
+
+"Tăng tốc xử lý" runs `scan-visual-logo --routing-only` (NVDEC decode, 3 workers)
+as a child of the OCR stage; the logo stage then reads the routing cache.
+
+| Stage | Before (`troy-full-fast-20260929-141826`) | After (`troy-full-fast-20260929-150440`) |
+| --- | ---: | ---: |
+| Preflight | 18.229 | 18.471 |
+| OCR (+ routing warm-up) | 596.096 | 685.164 |
+| Visual logo | 511.650 | 133.454 (cache hit) |
+| Localization | 219.623 | 220.101 |
+| Review + audit | 7.362 | 7.544 |
+| **Total** | **1352.992 (22m33s)** | **1064.760 (17m45s), -21.3%** |
+
+Identical text/logo reports, 858/858 JPEGs, review 6/294, Structure Audit PASS.
+NVDEC decode (GPU-side `fps` before `hwdownload`) is verified frame-identical on
+11,322 frames; it cuts decoder CPU ~96% but is 4.6% slower for the OCR stage alone,
+so OCR keeps software decode. Overlap measurements and gates: §13 of
+`docs/CLAUDE_SCAN_OPTIMIZATION_HANDOFF.md`; evidence `nvdec-equivalence-20260929-122204`,
+`ocr-cross-frame-downstream-20260929-123524`, `stage-overlap-20260929-13*`,
+`troy-full-overlap-20260929-144100`.
+
 ## Full advertising pipeline with "Tăng tốc xử lý" (fast_scan) — 2026-09-29
 
 User-authorized, one session, same machine, isolated SQLite/report root and fresh

@@ -418,7 +418,11 @@ def downstream(args):
     if args.production_report:
         production = json.loads((ROOT / args.production_report).resolve(strict=True).read_text(encoding="utf-8"))
     stats_before = {str(src): (src.stat().st_size, src.stat().st_mtime_ns) for src, _, _ in segments}
-    modes = {"A": dict(recognition_batch_size=1), "B": dict(recognition_batch_size=8, recognition_frame_window=args.window)}
+    def mode(kind, decode):
+        base = (dict(recognition_batch_size=1) if kind == "serial"
+                else dict(recognition_batch_size=8, recognition_frame_window=args.window))
+        return {**base, "decode_backend": decode}
+    modes = {"A": mode(args.a_mode, args.a_decode), "B": mode(args.b_mode, args.b_decode)}
 
     def run_segment(directory, source, start, duration, mode):
         common = dict(project_root=ROOT, input_path=source, model_dir=ROOT / "models/easyocr",
@@ -441,6 +445,7 @@ def downstream(args):
             "tracking_seconds": phases["tracking"]["wall_seconds"],
             "frames": report["frames_scanned"], "tracks": len(report["tracks"]),
             "cross_frame": report["metrics"]["cross_frame_recognition"],
+            "decode": report["metrics"]["decode"],
             "candidate_coverage_complete": queue["candidate_coverage"]["complete"],
             "review_items": len(queue["items"]), "advisory_items": len(queue.get("advisory_items", []))}
 
@@ -601,6 +606,10 @@ def main():
     down.add_argument("--segments", type=int, default=len(DEFAULT_SEGMENTS), choices=range(1, len(DEFAULT_SEGMENTS) + 1))
     down.add_argument("--full-source", help="input glob (e.g. '*Troy*') to scan the whole film instead of excerpts")
     down.add_argument("--production-report", help="project-relative serial text-scan.json for a read-only check")
+    down.add_argument("--a-mode", choices=("serial", "fast"), default="serial")
+    down.add_argument("--b-mode", choices=("serial", "fast"), default="fast")
+    down.add_argument("--a-decode", choices=("cpu", "nvdec"), default="cpu")
+    down.add_argument("--b-decode", choices=("cpu", "nvdec"), default="cpu")
     stop = sub.add_parser("cancel")
     stop.add_argument("--trials", type=int, default=3, choices=(1, 2, 3))
     worker = sub.add_parser("cancel-worker")

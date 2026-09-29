@@ -713,13 +713,16 @@ def is_instruction_echo(text: str) -> bool:
 
 def _iter_frames(
     *, ffmpeg_path: Path, input_path: Path, start: float, duration: float,
-    sample_every: float, width: int, height: int,
+    sample_every: float, width: int, height: int, decode_backend: str = "cpu",
 ):
+    from biliflow import nvdec
+
     frame_bytes = width * height * 3
     command = [
         str(ffmpeg_path), "-hide_banner", "-loglevel", "error",
+        *nvdec.input_arguments(decode_backend),
         "-ss", f"{start:.3f}", "-i", str(input_path), "-t", f"{duration:.3f}",
-        "-vf", f"fps={1.0 / sample_every},scale={width}:{height}:flags=bilinear",
+        "-vf", nvdec.sampling_filter(1.0 / sample_every, width, height, decode_backend),
         "-an", "-sn", "-f", "rawvideo", "-pix_fmt", "rgb24", "pipe:1",
     ]
     process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
@@ -1443,11 +1446,25 @@ def scan_visual_logos(
     coverage_bucket_seconds: float = 300.0,
     coverage_fallbacks_per_bucket: int = 2,
     routing_workers: int = 1,
+    decode_backend: str = "cpu",
+    routing_only: bool = False,
 ) -> dict:
+    """Scan for visual brand candidates.
+
+    ``routing_only`` runs exactly the routing section (same code and cache key)
+    and returns once the routing cache is written or found, before the VLM
+    loads and without writing anything to ``report_dir``. It is used to warm the
+    cache while another stage runs.
+    """
+    from biliflow import nvdec
+
     performance = ScanPerformance()
+    nvdec.validate_backend(decode_backend)
     if (not isinstance(routing_workers, int) or isinstance(routing_workers, bool)
             or not 1 <= routing_workers <= 8):
         raise ValueError("routing_workers must be an integer from 1 to 8")
+    if routing_only and exhaustive:
+        raise ValueError("routing_only warms the routing cache, which exhaustive scans do not use")
     root = project_root.resolve(strict=True)
     input_path = input_path.resolve(strict=True)
     report_dir = _inside((root / "reports").resolve(strict=True), report_dir, "Report directory")
@@ -1474,6 +1491,10 @@ def scan_visual_logos(
     if scan_duration <= 0:
         raise ValueError("duration_seconds must be positive")
     source_width, source_height = _video_size(probe)
+    effective_decode, decode_fallback = nvdec.resolve_backend(
+        decode_backend, probe=probe, ffmpeg_path=ffmpeg_path, input_path=input_path,
+        start_seconds=start_seconds,
+    )
     analysis_width = 320
     analysis_height = max(2, round(source_height * analysis_width / source_width / 2) * 2)
     scan_end = start_seconds + scan_duration
@@ -1547,7 +1568,7 @@ def scan_visual_logos(
                 boundary_frames = performance.iterate("frame_pipe_wait", _iter_frames(
                     ffmpeg_path=ffmpeg_path, input_path=input_path, start=left,
                     duration=right - left, sample_every=boundary_sample_every,
-                    width=analysis_width, height=analysis_height,
+                    width=analysis_width, height=analysis_height, decode_backend=effective_decode,
                 ))
                 for timestamp, frame, features in _iter_routed_frames(
                     boundary_frames, memory_records, performance, routing_pool,
@@ -1569,7 +1590,7 @@ def scan_visual_logos(
             sampled_frames = performance.iterate("frame_pipe_wait", _iter_frames(
                 ffmpeg_path=ffmpeg_path, input_path=input_path, start=start_seconds,
                 duration=scan_duration, sample_every=effective_sample_interval,
-                width=analysis_width, height=analysis_height,
+                width=analysis_width, height=analysis_height, decode_backend=effective_decode,
             ))
             for timestamp, frame, features in _iter_routed_frames(
                 sampled_frames, memory_records, performance, routing_pool,
@@ -1632,6 +1653,23 @@ def scan_visual_logos(
             if routing_pool is not None:
                 routing_pool.close()
                 parallel_routing_metrics = routing_pool.metrics()
+
+    if routing_only:
+        return {
+            "routing_only": True,
+            "routing_cache": {"hit": routing_cache_hit, "key": cache_key,
+                              "path": cache_path.relative_to(root).as_posix()},
+            "frames_scanned": frames_scanned,
+            "candidate_windows": len(windows),
+            "metrics": {
+                "performance": performance.snapshot(),
+                "routing_workers": routing_workers,
+                "parallel_routing": parallel_routing_metrics,
+                "decode": {"requested": decode_backend, "effective": effective_decode,
+                           "fallback_reason": decode_fallback},
+                "elapsed_seconds": round(time.perf_counter() - started, 3),
+            },
+        }
 
     candidate_windows_before_limit = len(windows)
     effective_candidate_limit = adaptive_candidate_budget(
@@ -1906,6 +1944,8 @@ def scan_visual_logos(
             "performance": performance.snapshot(),
             "routing_workers": routing_workers,
             "parallel_routing": parallel_routing_metrics,
+            "decode": {"requested": decode_backend, "effective": effective_decode,
+                       "fallback_reason": decode_fallback},
             "elapsed_seconds": round(elapsed, 3),
             "video_seconds_per_processing_second": round(scan_duration / elapsed, 3) if elapsed else None,
             "peak_process_ram_bytes": peak_rss,

@@ -422,3 +422,154 @@ hành thí nghiệm ngắn; cuối cùng cung cấp kết quả, diff và đề 
 ```
 
 Prompt trên là hướng dẫn người dùng có thể gửi để giao việc triển khai. Việc tạo tài liệu này tự nó không khởi động các thí nghiệm được mô tả.
+
+## 13. Cập nhật 29/09/2026 — kết quả A–D và kế hoạch giai đoạn E
+
+### 13.1. Trạng thái sau commit `c025486`
+
+- A (recognition xuyên frame): OCR cả phim 752,6 → 631,2 giây (trung vị A/B/B/A), đầu ra giống hệt.
+- B (batch detection, cuDNN autotune): loại, không nhanh hơn.
+- C (`RoutingPool`, routing logo song song): routing cả phim 430,7 → 355,1 giây, đầu ra giống hệt.
+- D (tùy chọn "Tăng tốc xử lý" = A + C, **bật mặc định** theo quyết định người dùng): pipeline quảng cáo cả phim 25m32s → **22m57s**; report, 858 JPEG, review 6/294, Structure Audit giống hệt/PASS.
+- Chạy chồng routing với OCR (giải mã phần mềm cho cả hai): chỉ lợi 2,4–2,9 phút vì CPU bão hòa; chưa áp dụng.
+
+### 13.2. Thời gian hiện tại (chế độ Tăng tốc xử lý, 22m57s)
+
+| Stage | Giây | Thành phần chính |
+| --- | ---: | --- |
+| Preflight | 18,5 | Hash nguồn |
+| OCR | 613,2 | `model_step` 539,8 (GPU-bound; detect CRAFT ~110 ms/frame), hash 18,8, tracking 16,5, chờ pipe 12,9 |
+| Logo | 518,2 | **chờ pipe FFmpeg 342,2** (routing bị giới hạn bởi giải mã), VLM 96,0 + nạp 8,7, hash 19,2, chờ worker chỉ 4,5 |
+| Localization | 219,7 | Florence/region localization 143,8, GroundingDINO 39,3, còn lại nạp model/IO |
+| Review + audit | 7,1 | |
+
+### 13.3. Phát hiện mới: chi phí CPU của giải mã 1080p
+
+Đo trên Troy 600–1200 s (10 phút), đúng bộ lọc hiện tại:
+
+| Cách giải mã | Wall | CPU của FFmpeg | Pixel so với hiện tại |
+| --- | ---: | ---: | --- |
+| Phần mềm (hiện tại) | 15,2 s | ~141 s | — |
+| NVDEC, `fps` lọc trên GPU rồi mới `hwdownload` | 19,1 s | ~5,3 s | giống hệt (framemd5: 300 frame lưới logo, 200 frame lưới OCR) |
+
+Lệnh NVDEC đã thử: `-hwaccel cuda -hwaccel_output_format cuda ... -vf "fps=…,hwdownload,format=nv12,format=yuv420p,scale=W:H:flags=bilinear"`. Lần thử trước (`-hwaccel cuda` không giữ frame trên GPU) chậm vì tải mọi frame 1080p về RAM.
+
+Ý nghĩa: mỗi lần giải mã cả phim bằng phần mềm tốn ~2.750 giây-CPU (khoảng 9 luồng bận liên tục). OCR và logo mỗi bên giải mã riêng, nên khi chạy chồng CPU 6 nhân bão hòa. NVDEC giảm ~96% CPU nhưng wall chậm hơn ~26% (giới hạn engine giải mã ~790 frame/s).
+
+### 13.4. Giả thuyết giai đoạn E
+
+1. Stage OCR là GPU-bound; giải mã bằng NVDEC không làm stage chậm hơn (NVDEC là engine riêng, 375 s < 540 s model) và trả lại CPU cho EasyOCR/tracking.
+2. Khi OCR không còn dùng CPU để giải mã, có thể **tính routing logo (giải mã phần mềm + 3 worker) song song trong lúc OCR chạy**, ghi vào routing cache. Stage logo sau đó gặp cache nóng, chỉ còn hash + VLM (~130 s thay vì ~518 s). Lợi ích tối đa lý thuyết ~5–6 phút (tổng ~17–18 phút); con số thật phải đo.
+3. Stage logo tự nó không nên chuyển sang NVDEC (wall chậm hơn khi routing đã bị giới hạn bởi giải mã), trừ khi đo cho thấy khác.
+
+Không làm: giảm độ phân giải, bỏ frame, `-skip_frame`, `-flags2 +fast` (đổi pixel), đổi model/threshold/precision.
+
+### 13.5. Các bước, cổng kiểm tra và điều kiện dừng
+
+**E1 — Chứng minh pixel giống hệt (chỉ đo, không sửa code production)**
+
+- framemd5 phần mềm và NVDEC trên **cả phim Troy** cho lưới OCR (fps 1/3, 960×540) và lưới logo (fps 0,5, 320×180), cộng hai đoạn biên 30 s ở 0,25 s.
+- Conan 20 và Conan 21 (profile Main, 23,976 fps): các đoạn có `-ss 0`, giữa phim và sát cuối file; cùng lưới như trên.
+- Cổng: 100% frame giống hệt, cùng số frame, cùng timestamp. Chỉ một frame khác → loại NVDEC cho lưới đó và ghi lại bằng chứng.
+
+**E2 — Stage OCR với NVDEC (A/B/B/A trên cả phim, chế độ Tăng tốc xử lý)**
+
+- Thêm tùy chọn thử nghiệm `scan-text --decode cpu|nvdec` (mặc định `cpu`), chỉ đổi lệnh FFmpeg.
+- Đo wall của stage, `model_step`, CPU hệ thống, VRAM; so report/preview/review như các lượt trước.
+- Cổng: đầu ra giống hệt; stage OCR không chậm hơn quá 2%. Nếu chậm hơn → giữ `cpu` cho OCR và dừng E3.
+
+**E3 — Đo lại chạy chồng khi OCR dùng NVDEC**
+
+- OCR (NVDEC) chạy cùng lúc với routing cả phim (giải mã phần mềm, 3 worker), hai biến thể: ưu tiên thường và BELOW_NORMAL; thêm biến thể routing cũng dùng NVDEC để kiểm tra giới hạn engine.
+- Chỉ số: OCR chậm đi bao nhiêu, routing có xong trước OCR không, tổng thời gian so với chạy nối tiếp.
+- Cổng: OCR chậm đi ≤ 10% và tổng (OCR ∥ routing) + stage logo cache nóng nhỏ hơn cách hiện tại ≥ 3 phút. Không đạt → dừng, chỉ giữ E2 nếu E2 có lợi.
+
+**E4 — Thiết kế tích hợp (chỉ khi E3 đạt)**
+
+- Tách phần routing của `scan_visual_logos` thành hàm dùng chung (không đổi logic); thêm lệnh CPU-only `prewarm-visual-logo-routing` gọi đúng hàm đó rồi ghi routing cache (atomic như hiện tại).
+- Stage OCR (khi `fast_scan`) khởi chạy prewarm như process con với BELOW_NORMAL, dùng đúng tham số logo của profile; khi OCR xong thì chờ prewarm rồi mới kết thúc stage. Nhờ vậy không có hai process cùng ghi một cache key (file `.tmp` có tên cố định).
+- Prewarm lỗi → ghi log, không làm hỏng stage OCR; stage logo tự tính cold như cũ. Brand memory đổi giữa chừng → cache key khác → stage logo tính cold. Pause/cancel → scheduler giết cả cây process như hiện tại.
+- NVDEC không dùng được (codec/driver/lỗi trước frame đầu) → chạy lại toàn bộ bằng `cpu` từ đầu. Lỗi giữa chừng → stage thất bại rõ ràng; không bao giờ ghép frame từ hai bộ giải mã.
+- Không sửa `run.ps1`; lệnh mới không nằm trong danh sách GPU mutex vì chỉ dùng CPU.
+
+**E5 — Test**
+
+- Unit: lựa chọn backend và fallback, lệnh FFmpeg, prewarm lỗi không làm hỏng OCR, cancel giết cả process con, cache key giữ nguyên, lệnh standard (tắt Tăng tốc xử lý) không đổi.
+- Test thật: cancel CUDA + FFmpeg (NVDEC) + prewarm; full suite.
+
+**E6 — A/B cả pipeline**
+
+- Chế độ hiện tại so với E, state/cache riêng, cùng phiên. Đầu ra phải giống hệt (report, JPEG, review, Structure Audit). Cập nhật tài liệu, hỏi người dùng trước khi commit.
+
+### 13.6. Rủi ro đã biết
+
+- NVDEC có thể khác pixel trên một số luồng (interlaced/PAFF, lỗi bitstream, driver mới) → E1 kiểm từng frame; giữ harness để kiểm lại khi đổi driver/FFmpeg.
+- Tranh chấp GPU giữa NVDEC và CUDA khi OCR chạy → E2 đo trực tiếp.
+- Laptop nóng lên khi CPU/GPU cùng bận lâu → chạy theo thứ tự đối xứng, ghi lại xung nhịp/nhiệt GPU.
+- Process chạy ẩn trong stage OCR khó quan sát trên Dashboard → ghi log riêng, telemetry trong report.
+- Worker `RoutingPool` là process spawn: mọi entry point phải là `python -m biliflow` hoặc script có guard `__main__`.
+
+### 13.7. Ngoài phạm vi E
+
+- Localization (~220 s): phân tích riêng sau (giai đoạn F), vì liên quan model Florence/GroundingDINO.
+- Detect CRAFT (~430 s) là GPU-bound ở độ phân giải hiện tại; không đổi độ phân giải/precision.
+- Dùng chung một lần giải mã cho OCR và logo (một FFmpeg nhiều đầu ra): chỉ xét lại nếu NVDEC thất bại ở E1/E2.
+
+### 13.8. Kết quả E1/E2 và điều chỉnh kế hoạch (29/09/2026)
+
+- **E1 đạt:** 11.322/11.322 frame giống hệt (pts, kích thước, MD5 RGB24): cả phim Troy (lưới OCR 3.921, lưới logo 5.881, hai đoạn biên 240), sáu đoạn Conan 20/21 (đầu/giữa/cuối, biên 0,25 s) và Troy 5000–5300 s. Driver 576.80. Bằng chứng: `reports/benchmarks/nvdec-equivalence-20260929-122204/`.
+- **E2 không đạt cổng ≤ 2%:** OCR cả phim ở chế độ Tăng tốc xử lý, A/B/B/A: CPU 586,8/585,1 s, NVDEC 613,0/613,0 s (+4,6%); `model_step` +5,2% vì NVDEC và CUDA chia sẻ GPU. Đầu ra giống hệt (chênh confidence 0; track khớp report production). Bằng chứng: `ocr-cross-frame-downstream-20260929-123524/`. → **Không dùng NVDEC cho OCR chạy một mình.**
+- **Điều chỉnh E3 (trước khi đo):** mục tiêu thật là tổng thời gian khi routing chạy chồng với OCR. Đo các biến thể, mỗi biến thể một lượt, có lượt OCR đơn lẻ (CPU) ở đầu và cuối làm mốc:
+  - V1: OCR giải mã NVDEC + routing giải mã CPU (3 worker, ưu tiên thường).
+  - V3: OCR giải mã CPU + routing giải mã NVDEC (3 worker, ưu tiên thường) — CPU chỉ còn một lần giải mã; OCR chịu tranh chấp NVDEC/CUDA.
+  - Cổng E3 giữ nguyên: OCR chậm đi ≤ 10% và tiết kiệm ≥ 3 phút so với chạy nối tiếp (OCR đơn lẻ + stage logo hiện tại). Không đạt → dừng giai đoạn E, giữ trạng thái `c025486`, ghi bằng chứng.
+- Để đo V3, thêm tùy chọn thử nghiệm `scan-visual-logo --decode cpu|nvdec` (mặc định `cpu`, cùng chính sách fallback như OCR); chưa đưa vào pipeline.
+
+### 13.9. Kết quả E3 và quyết định dừng (29/09/2026)
+
+Stage OCR thật (CLI, chế độ Tăng tốc xử lý) chạy một mình hoặc cùng lúc với routing cả phim (3 worker). Bằng chứng: `reports/benchmarks/stage-overlap-20260929-131800/`, `-132756/`, `-133946/`, `-135110/`.
+
+| Lượt | OCR (s) | OCR chậm đi | Routing xong (s) | CPU hệ thống |
+| --- | ---: | ---: | ---: | ---: |
+| OCR một mình (đầu) | 595,0 | — | — | 68% |
+| V1: OCR NVDEC ∥ routing CPU | 708,2 | +18,8% | 437,8 | 71% |
+| V3: OCR CPU ∥ routing NVDEC | 683,3 | +14,6% | 483,5 | 72% |
+| OCR một mình (cuối) | 597,7 | — | — | 69% |
+
+- Đầu ra: report OCR và snapshot routing (window, feature, JPEG, lựa chọn VLM) giống mốc ở mọi lượt; nguồn, brand-memory, queue production không đổi.
+- Cổng E3 không đạt ở điều kiện "OCR chậm đi ≤ 10%". Ước tính (chưa đo) V3 + stage logo cache nóng giảm tổng ~4 phút so với cách hiện tại, nhưng không nới cổng sau khi đã thấy kết quả.
+- Theo kế hoạch: **dừng giai đoạn E**, giữ `c025486` làm trạng thái production. Tùy chọn thử nghiệm `--decode cpu|nvdec` (mặc định `cpu`) cho `scan-text`/`scan-visual-logo` và harness liên quan đang ở working tree, chưa commit; chỉ giữ lại nếu người dùng quyết định làm E4 với cổng mới.
+- Quyết định cần người dùng: chấp nhận OCR chậm ~15% để đổi lấy ~4 phút tổng (cần làm E4: lệnh prewarm routing, process con ưu tiên thấp trong stage OCR, kiểm thử cancel/lỗi, A/B cả pipeline), hoặc dừng tại đây.
+
+### 13.10. Quyết định người dùng và cổng mới cho E3b (29/09/2026, ghi TRƯỚC khi đo)
+
+Người dùng đồng ý đánh đổi vì chạy chồng không đổi đầu ra (chỉ đổi thời điểm chạy). Cổng "OCR chậm ≤ 10%" được thay bằng tiêu chí trên **tổng pipeline**, đặt trước khi đo:
+
+- **E3b (prototype, không sửa pipeline production):** harness chạy pipeline quảng cáo cả phim; trong stage OCR, một process chạy song song chính là lệnh `scan-visual-logo` của stage logo (cùng argv + `--decode nvdec`) nhưng dừng ngay sau khi ghi routing cache vào namespace benchmark; stage logo sau đó phải gặp cache hit. So với một lượt pipeline hiện tại (`c025486`, Tăng tốc xử lý) chạy trước trong cùng phiên.
+- **Cổng:** tổng thời gian giảm **≥ 3 phút (180 s)**; report OCR/logo/localized, toàn bộ JPEG, đề xuất review và Structure Audit giống lượt hiện tại (chỉ khác telemetry đã liệt kê); stage logo xác nhận cache hit; dữ liệu production bảo toàn.
+- Đạt → E4 (tích hợp thật + test pause/cancel/lỗi + đo lại cả pipeline bằng code tích hợp). Không đạt → dừng E, gỡ tùy chọn `--decode` khỏi `src`, giữ bằng chứng.
+
+### 13.11. Kết quả E3b — ĐẠT (29/09/2026)
+
+| Stage | Hiện tại `troy-full-fast-20260929-141826` | Prototype `troy-full-overlap-20260929-144100` |
+| --- | ---: | ---: |
+| Preflight | 18,2 | 18,8 |
+| OCR (+ routing làm nóng song song) | 596,1 | 681,5 |
+| Logo | 511,7 | 133,0 (routing cache hit) |
+| Localization | 219,6 | 219,6 |
+| Review + audit | 7,4 | 7,3 |
+| **Tổng** | **1.353,0 s (22m33s)** | **1.060,2 s (17m40s), −292,8 s (−21,6%)** |
+
+Report OCR/logo: 0 khác biệt; localized: 3 trường thời gian; 858/858 JPEG; review 6/294 trùng; coverage đủ; Structure Audit PASS; dữ liệu production bảo toàn. Routing làm nóng (NVDEC, 3 worker) xong trước khi OCR kết thúc.
+
+### 13.12. Thiết kế E4 (tích hợp thật)
+
+1. `scan_visual_logos(routing_only=True)` / `scan-visual-logo --routing-only`: chạy đúng đoạn routing hiện có (cùng cache key, cùng code), trả về ngay sau khi ghi routing cache hoặc gặp cache hit; không nạp VLM, không ghi gì vào report dir.
+2. `scan-text --prewarm-logo-routing` kèm tham số logo của profile (`--logo-sample-every`, `--logo-boundary-sample-every`, `--logo-boundary-seconds`, `--logo-scene-change-threshold`, `--logo-coverage-bucket-seconds`, `--logo-coverage-fallbacks-per-bucket`, `--logo-routing-workers`, `--logo-source-sha256`): CLI khởi chạy `python -m biliflow scan-visual-logo --routing-only --decode nvdec ...` làm process con trước khi quét OCR; OCR xong thì chờ process con. Hàm `scan_text` không đổi.
+3. Process con lỗi → cảnh báo, stage OCR vẫn thành công, stage logo tự tính cold. OCR lỗi/bị ngắt → kết thúc process con rồi báo lỗi. Pause/cancel của scheduler giết cả cây process.
+4. `pipeline_stages(fast_scan=True)` thêm các cờ trên cho stage OCR với **chính các giá trị** truyền cho stage logo; test so khớp tham số hai stage để cache key không lệch. Tham số lệch chỉ làm stage logo tính cold (vẫn đúng, chỉ chậm hơn).
+5. Test: routing-only không nạp model/không ghi report; lỗi/ngắt của process con; khớp tham số; lệnh standard không đổi; full suite. Sau đó E6: A/B cả pipeline bằng code tích hợp, so với lượt hiện tại.
+
+### 13.13. Kết quả E4/E6 — ĐẠT (29/09/2026)
+
+Tích hợp theo 13.12; 319/319 test. A/B cả pipeline bằng code tích hợp (`troy-full-fast-20260929-150440`) so với lượt hiện tại cùng ngày (`troy-full-fast-20260929-141826`): **22m33s → 17m45s (−288 s, −21,3%)**; OCR 596,1 → 685,2 s, logo 511,7 → 133,5 s (cache hit), localization 219,6 → 220,1 s. Report OCR/logo giống hệt, localized chỉ khác 3 trường thời gian, 858/858 JPEG, review 6/294 trùng, Structure Audit PASS; job/queue/nguồn/brand-memory production bảo toàn; không file nào trong `cache/` production thay đổi (harness chuyển process làm nóng sang namespace benchmark qua `scripts/benchmark-text-stage.ps1`).

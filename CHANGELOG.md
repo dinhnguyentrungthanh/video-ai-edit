@@ -1,3 +1,9 @@
+# Unreleased — warm logo routing during OCR ("Tăng tốc xử lý") — 2026-09-29
+
+- "Tăng tốc xử lý" now also warms the visual-logo routing cache while the OCR stage runs: `scan-text --prewarm-logo-routing` starts `scan-visual-logo --routing-only` (same routing code and cache key, no VLM, no report files) as a child process with the logo stage's own routing settings, NVDEC decoding and 3 workers. A failed warm-up only makes the logo stage compute routing itself; OCR failure or interruption kills the child's whole process tree. Standard mode is unchanged.
+- Add `nvdec` decode backend (`--decode`, default `cpu`) with GPU-side frame dropping; allowed only for 8-bit yuv420p H.264, else falls back to software before the first frame. Verified identical framemd5 (pts + RGB24) on 11,322 frames: full Troy OCR/logo/boundary grids and six Conan 20/21 excerpts. NVDEC for OCR alone is 4.6% slower (not used there).
+- User-authorized full Troy advertising A/B, same machine and day, isolated caches: 22m33s -> 17m45s (-288 s, -21.3%). OCR 596 -> 685 s (shares the machine with routing), logo 512 -> 133 s (routing cache hit). Text and logo reports identical, localized report differs in 3 timing fields, 858/858 JPEGs, review 6/294 equal, Structure Audit PASS; production job, queue, source, brand memory and caches untouched. 319/319 tests pass.
+
 # Unreleased — parallel logo routing and per-job "Tăng tốc xử lý" — 2026-09-29
 
 - Add `RoutingPool`: visual-logo CPU routing (regional features + brand-memory match) computed in spawned worker processes with bounded in-flight frames and results consumed strictly in frame order. Both functions are pure, so outputs are identical; `scan-visual-logo --routing-workers 1..8`, default 1 (serial path unchanged). Workers use one OpenCV thread each.

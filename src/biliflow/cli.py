@@ -170,6 +170,15 @@ def build_parser() -> argparse.ArgumentParser:
              "results are consumed in frame order; default 1 (serial)",
     )
     visual_logo.add_argument(
+        "--routing-only", action="store_true",
+        help="Only compute and cache CPU routing (no VLM, no report files); used to warm the cache",
+    )
+    visual_logo.add_argument(
+        "--decode", choices=["cpu", "nvdec"], default="cpu",
+        help="Experimental NVDEC decoding for routing frames (verified pixel-identical for "
+             "8-bit H.264); falls back to cpu before scanning if unavailable; default cpu",
+    )
+    visual_logo.add_argument(
         "--exhaustive", action="store_true",
         help="Send every timeline window to local Qwen and sample the full video at least twice per second",
     )
@@ -236,6 +245,25 @@ def build_parser() -> argparse.ArgumentParser:
         "--recognition-frame-window", type=int, choices=range(1, 9), default=1, metavar="1-8",
         help="Experimental: share identical-width recognition batches across this many "
              "consecutive frames; requires --recognition-batch-size > 1; default 1",
+    )
+    text_scan.add_argument(
+        "--prewarm-logo-routing", action="store_true",
+        help="Run scan-visual-logo --routing-only as a child process during OCR so the logo "
+             "stage reads a warm routing cache; the --logo-* values must equal the logo stage's",
+    )
+    text_scan.add_argument("--logo-sample-every", type=float)
+    text_scan.add_argument("--logo-boundary-sample-every", type=float)
+    text_scan.add_argument("--logo-boundary-seconds", type=float)
+    text_scan.add_argument("--logo-scene-change-threshold", type=float)
+    text_scan.add_argument("--logo-coverage-bucket-seconds", type=float)
+    text_scan.add_argument("--logo-coverage-fallbacks-per-bucket", type=int)
+    text_scan.add_argument("--logo-routing-workers", type=int, choices=range(1, 9), metavar="1-8")
+    text_scan.add_argument("--logo-source-sha256")
+    text_scan.add_argument("--logo-decode", choices=["cpu", "nvdec"], default="nvdec")
+    text_scan.add_argument(
+        "--decode", choices=["cpu", "nvdec"], default="cpu",
+        help="Experimental: NVDEC decoding with GPU-side frame dropping (verified pixel-identical "
+             "for 8-bit H.264); falls back to cpu before scanning if unavailable; default cpu",
     )
     text_scan.add_argument(
         "--semantic-model", type=Path,
@@ -448,27 +476,49 @@ def main() -> int:
         ensure_model_allowed(root, args.model_dir)
         if not args.skip_semantic_routing:
             ensure_model_allowed(root, args.semantic_model)
-        payload = scan_text(
-            project_root=root,
-            input_path=args.input,
-            report_dir=args.report_dir,
-            model_dir=args.model_dir,
-            ffmpeg_path=args.ffmpeg,
-            ffprobe_path=args.ffprobe,
-            sample_every=args.sample_every,
-            analysis_width=args.analysis_width,
-            minimum_confidence=args.minimum_confidence,
-            max_report_tracks=args.max_report_tracks,
-            start_seconds=args.start_seconds,
-            duration_seconds_limit=args.duration_seconds,
-            languages=tuple(args.languages),
-            device_name=args.device,
-            semantic_model_dir=None if args.skip_semantic_routing else args.semantic_model,
-            policy_path=None if args.skip_semantic_routing else args.policy,
-            semantic_seed_path=None if args.skip_semantic_routing else args.semantic_seed,
-            recognition_batch_size=args.recognition_batch_size,
-            recognition_frame_window=args.recognition_frame_window,
-        )
+        prewarm = None
+        if args.prewarm_logo_routing:
+            from biliflow.routing_prewarm import LOGO_ROUTING_OPTIONS, RoutingPrewarm, prewarm_command
+            settings = {logo: getattr(args, text[2:].replace("-", "_"))
+                        for text, logo in LOGO_ROUTING_OPTIONS}
+            prewarm = RoutingPrewarm(
+                prewarm_command(input_path=args.input, report_dir=args.report_dir, settings=settings),
+                cwd=root, log_path=args.report_dir / "logo-routing-prewarm.log",
+            )
+        try:
+            payload = scan_text(
+                project_root=root,
+                input_path=args.input,
+                report_dir=args.report_dir,
+                model_dir=args.model_dir,
+                ffmpeg_path=args.ffmpeg,
+                ffprobe_path=args.ffprobe,
+                sample_every=args.sample_every,
+                analysis_width=args.analysis_width,
+                minimum_confidence=args.minimum_confidence,
+                max_report_tracks=args.max_report_tracks,
+                start_seconds=args.start_seconds,
+                duration_seconds_limit=args.duration_seconds,
+                languages=tuple(args.languages),
+                device_name=args.device,
+                semantic_model_dir=None if args.skip_semantic_routing else args.semantic_model,
+                policy_path=None if args.skip_semantic_routing else args.policy,
+                semantic_seed_path=None if args.skip_semantic_routing else args.semantic_seed,
+                recognition_batch_size=args.recognition_batch_size,
+                recognition_frame_window=args.recognition_frame_window,
+                decode_backend=args.decode,
+            )
+        except BaseException:
+            if prewarm is not None:
+                prewarm.stop()
+            raise
+        if prewarm is not None:
+            # A failed warm-up is not an OCR failure: the logo stage then
+            # computes routing itself, exactly as without prewarming.
+            code = prewarm.finish()
+            if code:
+                print(f"Cảnh báo: routing logo làm nóng thất bại (mã {code}); stage logo sẽ tự tính.",
+                      file=sys.stderr)
         print(json.dumps({
             "report": str((args.report_dir / "text-scan.json").resolve()),
             "frames_scanned": payload["frames_scanned"],
@@ -739,7 +789,12 @@ def main() -> int:
             coverage_bucket_seconds=args.coverage_bucket_seconds,
             coverage_fallbacks_per_bucket=args.coverage_fallbacks_per_bucket,
             routing_workers=args.routing_workers,
+            decode_backend=args.decode,
+            routing_only=args.routing_only,
         )
+        if args.routing_only:
+            print(json.dumps(payload, indent=2, ensure_ascii=False))
+            return 0
         print(json.dumps({
             "report": str((args.report_dir / "scan.json").resolve()),
             "frames_scanned": payload["frames_scanned"],

@@ -1,3 +1,9 @@
+## Phase E: routing warm-up during OCR — 2026-09-29
+
+- Plan-first phase (docs/CLAUDE_SCAN_OPTIMIZATION_HANDOFF.md §13): E1 NVDEC pixel identity PASS (11,322 frames); E2 NVDEC-for-OCR rejected (+4.6%); E3 overlap gate "OCR ≤ 10% slower" failed (OCR +15–19%) → user accepted the trade-off with a pre-registered total-pipeline gate (≥ 3 min faster, identical outputs); E3b prototype PASS (22m33s → 17m40s).
+- E4/E6 integrated in `fast_scan` (default on): OCR stage runs `scan-visual-logo --routing-only --decode nvdec --routing-workers 3` as a child; full pipeline 22m33s → **17m45s** with identical outputs (`reports/benchmarks/troy-full-fast-20260929-150440/comparison.json`; baseline `troy-full-fast-20260929-141826`).
+- Next candidates (not started): background source hashing in the OCR stage (~20–40 s), localization profiling (~220 s), a labelled ground-truth set to measure detection recall/precision, and the recorded Conan Movie 20 watermark-vs-head misdetection.
+
 ## Phase C/D: parallel logo routing and "Tăng tốc xử lý" — 2026-09-29
 
 - `RoutingPool` (src/biliflow/visual_logo_scanner.py) computes routing features in worker processes, consumed in frame order; `--routing-workers` default 1. Full Troy routing 430.7 -> 355.1s (-17.6%) with identical windows/selection/JPEGs (`reports/benchmarks/logo-routing-parallel-pipeline-20260929-081117/`). CPU-only evidence: `logo-routing-parallel-cpu-20260929-080248/`.

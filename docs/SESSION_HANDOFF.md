@@ -46,8 +46,12 @@ routing -17.6%). Phase D done: per-job Dashboard option "Tăng tốc xử lý"
 advertising A/B same session: 25m32s -> 22m57s (-10.2%), identical outputs,
 Structure Audit PASS (`troy-full-standard-20260929-093619`, `troy-full-fast-20260929-100152`).
 Stage overlap measured, not adopted (+18-35% OCR slowdown, ~2.4-2.9 min gain).
-Next: user asked for a carefully reviewed plan before shared decode work; see the
-phase E section of docs/CLAUDE_SCAN_OPTIMIZATION_HANDOFF.md. 301/301 tests. RoutingPool entry points must be
+Phase E done (uncommitted until the user asks): fast_scan also warms the logo
+routing cache during OCR (`scan-text --prewarm-logo-routing` -> child
+`scan-visual-logo --routing-only --decode nvdec`). Full pipeline 22m33s -> 17m45s,
+identical outputs (`troy-full-fast-20260929-150440`). Plan/results: §13 of
+docs/CLAUDE_SCAN_OPTIMIZATION_HANDOFF.md. Benchmark OCR-stage wrapper
+`scripts/benchmark-text-stage.ps1` keeps the warm-up in the benchmark cache. 301/301 tests. RoutingPool entry points must be
 `python -m biliflow` or `__main__`-guarded scripts (spawned workers).
 
 ## Last verified production-style run

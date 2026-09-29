@@ -122,8 +122,11 @@ class JobFastScanTests(unittest.TestCase):
         cache = StageArtifactCache(ROOT)
         for a, b in zip(standard, fast):
             if a.name == "text":
-                self.assertEqual(b.commands[0].argv[-4:], ("--recognition-batch-size", "8",
-                                                            "--recognition-frame-window", "4"))
+                argv = b.commands[0].argv
+                start = argv.index("--recognition-batch-size")
+                self.assertEqual(argv[start:start + 5], ("--recognition-batch-size", "8",
+                                                        "--recognition-frame-window", "4",
+                                                        "--prewarm-logo-routing"))
             elif a.name == "visual_logo":
                 self.assertEqual(b.commands[0].argv[-2:], ("--routing-workers", "3"))
             else:
@@ -134,6 +137,26 @@ class JobFastScanTests(unittest.TestCase):
                               commands=[s.commands[0].argv], artifact_paths=s.commands[0].expected_artifacts)
                     for s in (a, b)]
             self.assertNotEqual(*keys)
+
+    def test_prewarm_routing_arguments_equal_logo_stage_routing_arguments(self):
+        # A mismatch would silently change the routing cache key (logo stage
+        # recomputes); keep the two stages' routing inputs identical.
+        from biliflow.routing_prewarm import LOGO_ROUTING_OPTIONS
+        for profile in ("careful", "fast"):
+            stages = {s.name: s for s in pipeline_stages(**self.options(fast_scan=True, source_sha256="f" * 64)
+                                                         | {"profile": profile})}
+            text, logo = stages["text"].commands[0].argv, stages["visual_logo"].commands[0].argv
+            for text_option, logo_option in LOGO_ROUTING_OPTIONS:
+                if logo_option == "--decode":
+                    self.assertNotIn("--decode", logo)  # decode is not part of the cache key
+                    continue
+                with self.subTest(profile=profile, option=logo_option):
+                    self.assertIn(logo_option, logo)
+                    self.assertEqual(text[text.index(text_option) + 1], logo[logo.index(logo_option) + 1])
+
+    def test_standard_mode_never_prewarms(self):
+        stages = {s.name: s for s in pipeline_stages(**self.options())}
+        self.assertNotIn("--prewarm-logo-routing", stages["text"].commands[0].argv)
 
     def test_fast_scan_overrides_legacy_ocr_batch_without_changing_its_meaning(self):
         legacy = {s.name: s for s in pipeline_stages(**self.options(ocr_recognition_batch_size=8))}
