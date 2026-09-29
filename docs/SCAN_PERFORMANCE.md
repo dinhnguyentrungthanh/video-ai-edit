@@ -1,5 +1,114 @@
 # Scan performance work — 2026-09-28
 
+## Full advertising pipeline with "Tăng tốc xử lý" (fast_scan) — 2026-09-29
+
+User-authorized, one session, same machine, isolated SQLite/report root and fresh
+routing/GroundingDINO caches (`scripts/benchmark_full_advertising.py`). Standard
+ran first, so any thermal drift penalizes the fast run.
+
+| Stage | Standard (s) | Tăng tốc xử lý (s) |
+| --- | ---: | ---: |
+| Preflight | 18.640 | 18.475 |
+| OCR/text semantics | 702.782 | 613.188 |
+| Visual logo routing + confirmation | 574.149 | 518.161 |
+| Localization | 229.338 | 219.656 |
+| Build review + structural audit | 7.408 | 7.140 |
+| **Total** | **1532.347 (25m32s)** | **1376.650 (22m57s), -10.2%** |
+
+Outputs: text and logo reports identical; localized report differs only in three
+timing fields; 858/858 JPEGs identical; review proposals 6 primary / 294 advisory
+equal; 123/123 source candidates represented; Structure Audit PASS; job #39, its
+queue, the source and brand memory unchanged. Evidence:
+`reports/benchmarks/troy-full-standard-20260929-093619/`,
+`reports/benchmarks/troy-full-fast-20260929-100152/comparison.json`.
+
+## Frame-parallel logo routing (phase C)
+
+`RoutingPool` computes `regional_logo_candidate_features` + brand-memory routing
+for each (frame, previous frame) pair in spawned worker processes (one OpenCV
+thread each) and yields results in frame order, so the downstream window logic
+is untouched. Both functions are pure; outputs are identical by construction and
+verified exactly.
+
+| Measurement | Serial | Parallel |
+| --- | ---: | ---: |
+| In-memory, 270 frames (2/3/4/5 workers) | 9.27s | 5.91 / 4.49 / 4.11 / 4.02s |
+| Real routing incl. decode, two 10-min excerpts (2/3/4 workers) | 45.48s | 35.9 / 34.5 / 34.5s |
+| Full Troy routing, S/P/P/S, 4 workers | 430.7s | 355.1s (-17.6%) |
+
+FFmpeg decode of 1080p is now the floor (~15s per 10 minutes of film,
+uncontended); NVDEC (`-hwaccel cuda`) and explicit FFmpeg thread counts were
+slower. Default OpenCV threading inside workers is slower (1.89x vs 2.25x).
+Evidence: `logo-routing-parallel-cpu-20260929-080248/`,
+`logo-routing-parallel-pipeline-20260929-081117/`.
+
+Stage overlap (routing concurrently with the OCR stage) was measured and not
+adopted: normal priority OCR 604 -> 817s, BELOW_NORMAL 2-worker routing OCR
+604 -> 715s; saving versus sequential only ~2.4-2.9 minutes, because both stages
+decode the full film and saturate the 6-core CPU. Evidence: `stage-overlap-*`.
+The next meaningful lever is a shared decode for OCR and logo routing.
+
+## Cross-frame OCR recognition batches (opt-in experiment)
+
+Implements phase A of `docs/CLAUDE_SCAN_OPTIMIZATION_HANDOFF.md`. `CrossFrameReader`
+runs EasyOCR detection per frame exactly as serial, crops each box exactly as the
+serial path, and groups crops from up to N consecutive frames only when their
+exact padded width matches (widths are multiples of 64, so matches are common).
+Results are restored by (frame, crop) and frames reach tracking in original order
+with their own image. Bounded by frame count and a 32 MiB frame+crop budget.
+Default window 1 keeps existing serial and batch-8 behavior.
+
+| Measurement (7 excerpts, 150 frames) | Serial A | Cross-frame B (batch 8, window 4) |
+| --- | ---: | ---: |
+| Recognition calls (simulated from real widths) | 496 | 172 (batch-8 per frame: 330) |
+| In-memory OCR detect+recognize, median of 4 | 27.167s | 21.646s (-20.3%) |
+| In-memory recognition only | 10.666s | 4.911s (-54.0%) |
+| Real scan_text excluding source hash, median of 2 | 35.839s | 30.191s (-15.8%) |
+| scan_text model_step | 30.675s | 24.995s (-18.5%) |
+
+Per excerpt (real scan, excluding hash): Troy 0s -23.4%, Troy 48s -28.4%,
+Troy 418s +3.2% (one B outlier; other B equals A), Troy 940s -3.1%, Conan 21
+4200s -12.9%, 6630s -3.9%, Conan 20 240s -8.6%. Detection time is unchanged,
+so single-watermark sections (most of a film) save only recognition overhead;
+do not extrapolate the excerpt aggregate to a full film.
+
+Equivalence: identical raw points/text, acceptance and confidence sort order;
+identical reports except score/metrics fields, identical preview JPEGs and review
+projections, full candidate coverage. Max score delta 3.6e-6 raw, 2e-6 in reports;
+no threshold crossing. CUDA peak allocated is unchanged. Real CUDA + FFmpeg
+cancellation during a shared batch stops cleanly (3/3, 0.34-0.36s).
+
+Evidence: `reports/benchmarks/ocr-cross-frame-occupancy-20260928-224612/`,
+`ocr-cross-frame-abba-20260928-224943/`, `ocr-cross-frame-downstream-20260928-225858/`,
+`ocr-cross-frame-cancel-20260928-230913/`. Commands (GPU mutex launcher):
+
+```powershell
+.\scriptsenchmark-ocr-cross-frame.ps1 occupancy
+.\scriptsenchmark-ocr-cross-frame.ps1 abba
+.\scriptsenchmark-ocr-cross-frame.ps1 downstream
+.\scriptsenchmark-ocr-cross-frame.ps1 cancel
+```
+
+Full Troy OCR stage, user-authorized, A/B/B/A in one process with shared model
+load (`ocr-cross-frame-downstream-20260928-231957/`): serial 729.5 / 775.6s,
+cross-frame 629.0 / 633.5s; median 752.6 -> 631.2s (-16.1%), model_step 689.7 ->
+570.7s. 8,446 crops in 2,406 recognition calls; no budget flush (max 5.9 MiB
+pending). Every run: 3,921 frames, 250 tracks, 250 identical previews, 4 primary /
+12 advisory items; tracks also equal production job #39's serial report except
+scores. Max score delta 2.1e-5. The second serial run was 46s slower than the
+first (laptop thermal/OS cache not controlled); even best serial vs worst
+cross-frame is -13.2%.
+
+Phase B (batched text detection) rejected: one CRAFT forward over 4 same-size
+frames is output-equivalent but not faster (detect 16.05 vs 15.94s over 150
+frames) and raises CUDA allocated 458 -> 1262 MiB. cuDNN autotuning is also
+output-equivalent with no speed change. Detection is GPU-bound here; its ~110 ms
+per frame now dominates OCR. Evidence: `ocr-cross-frame-abba-20260929-000902/`
+(rejected code kept there) and `ocr-cross-frame-abba-20260929-001335/`.
+
+Not yet done: job/Dashboard option with persistence and cache identity; logo CPU
+work (phase C). Keep the default at window 1.
+
 ## Full advertising measurement after RGB optimization
 
 Authorized run `troy-rgb-cold-full-20260928-194937`, code HEAD `41c1443`, original

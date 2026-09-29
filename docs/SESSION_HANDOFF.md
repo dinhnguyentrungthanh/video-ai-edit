@@ -25,6 +25,31 @@ The improvement sequence now present on local `main` is:
 
 Always confirm this section with `git status` and `git log` because it becomes stale after new work.
 
+## Latest bounded experiment — cross-frame OCR recognition (uncommitted when written)
+
+Opt-in `recognition_frame_window` (CLI `--recognition-frame-window`, 1..8, default 1,
+requires batch size > 1) shares exact-width recognition batches across consecutive
+frames; detection stays per frame and serial. Not wired into job pipeline/Dashboard.
+Seven original-source excerpts, A/B/B/A: identical reports (except scores/metrics),
+previews and review mappings; max score delta 2e-6 in reports. Scan without source
+hash 35.839 -> 30.191s (-15.8%), OCR model -18.5%; text-heavy sections -23..-28%,
+single-watermark sections ~0..-4%. Real CUDA/FFmpeg cancel 3/3 clean. 291/291 tests.
+Full Troy OCR stage A/B/B/A (user-authorized, `ocr-cross-frame-downstream-20260928-231957`):
+median 752.6 -> 631.2s (-16.1%), identical outputs, tracks equal production report.
+Phase B rejected: batched detection (no gain, 2.7x CUDA memory) and cuDNN autotune
+(no gain); code only under `reports/benchmarks/ocr-cross-frame-abba-20260929-000902/`.
+Evidence: `reports/benchmarks/ocr-cross-frame-*`; harness `scripts/benchmark_ocr_cross_frame.py`.
+Phases A-D committed on this branch at the user's request (2026-09-29); no merge/push.
+Phase C done: frame-parallel logo routing (`--routing-workers`, exact; full Troy
+routing -17.6%). Phase D done: per-job Dashboard option "Tăng tốc xử lý"
+(`fast_scan`, ON by default since 2026-09-29) = OCR batch 8 + window 4 + 3 routing workers. Full
+advertising A/B same session: 25m32s -> 22m57s (-10.2%), identical outputs,
+Structure Audit PASS (`troy-full-standard-20260929-093619`, `troy-full-fast-20260929-100152`).
+Stage overlap measured, not adopted (+18-35% OCR slowdown, ~2.4-2.9 min gain).
+Next: user asked for a carefully reviewed plan before shared decode work; see the
+phase E section of docs/CLAUDE_SCAN_OPTIMIZATION_HANDOFF.md. 301/301 tests. RoutingPool entry points must be
+`python -m biliflow` or `__main__`-guarded scripts (spawned workers).
+
 ## Last verified production-style run
 
 COMPLETED user-authorized full measurement: `troy-rgb-cold-full-20260928-194937`.

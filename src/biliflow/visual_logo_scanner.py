@@ -910,6 +910,98 @@ def _route_with_brand_memory(
     return output
 
 
+_ROUTING_WORKER_MEMORY: list[dict] = []
+
+
+def _init_routing_worker(memory_records: list[dict], opencv_threads: int | None) -> None:
+    global _ROUTING_WORKER_MEMORY
+    _ROUTING_WORKER_MEMORY = memory_records
+    if opencv_threads is not None:
+        cv2.setNumThreads(opencv_threads)
+
+
+def _route_frame_in_worker(frame_rgb: np.ndarray, previous_rgb: np.ndarray | None):
+    started = time.perf_counter()
+    features = regional_logo_candidate_features(frame_rgb, previous_rgb)
+    middle = time.perf_counter()
+    features = _route_with_brand_memory(frame_rgb, features, _ROUTING_WORKER_MEMORY)
+    return features, middle - started, time.perf_counter() - middle
+
+
+class RoutingPool:
+    """Frame-parallel CPU routing with results consumed strictly in input order.
+
+    Both routing functions are pure functions of (frame, previous frame,
+    memory records), so each worker computes exactly what the serial loop
+    would; only the wall-clock schedule changes. In-flight frames are bounded.
+    Workers are spawned processes: the entry point must be ``python -m biliflow``
+    or a script guarded by ``if __name__ == "__main__"``, as for any
+    multiprocessing code on Windows.
+    """
+
+    def __init__(self, workers: int, memory_records: list[dict], *,
+                 opencv_threads: int | None = 1, in_flight_per_worker: int = 4):
+        if not isinstance(workers, int) or isinstance(workers, bool) or not 2 <= workers <= 8:
+            raise ValueError("routing workers must be an integer from 2 to 8")
+        from concurrent.futures import ProcessPoolExecutor
+        self.workers = workers
+        self.max_in_flight = workers * in_flight_per_worker
+        self.opencv_threads = opencv_threads
+        self.worker_feature_seconds = 0.0
+        self.worker_brand_memory_seconds = 0.0
+        self.frames = 0
+        self._executor = ProcessPoolExecutor(
+            max_workers=workers, initializer=_init_routing_worker,
+            initargs=(memory_records, opencv_threads),
+        )
+
+    def close(self) -> None:
+        self._executor.shutdown(wait=True, cancel_futures=True)
+
+    def metrics(self) -> dict:
+        return {
+            "workers": self.workers, "max_in_flight": self.max_in_flight,
+            "worker_opencv_threads": self.opencv_threads, "frames": self.frames,
+            "worker_feature_seconds": round(self.worker_feature_seconds, 6),
+            "worker_brand_memory_seconds": round(self.worker_brand_memory_seconds, 6),
+        }
+
+    def iterate(self, frames, performance: ScanPerformance):
+        from collections import deque
+        pending = deque()
+        previous = None
+
+        def collect():
+            timestamp, frame, future = pending.popleft()
+            features, feature_seconds, memory_seconds = performance.call('logo_routing_wait', future.result)
+            self.worker_feature_seconds += feature_seconds
+            self.worker_brand_memory_seconds += memory_seconds
+            self.frames += 1
+            return timestamp, frame, features
+
+        for timestamp, frame in frames:
+            pending.append((timestamp, frame, self._executor.submit(_route_frame_in_worker, frame, previous)))
+            previous = frame
+            if len(pending) >= self.max_in_flight:
+                yield collect()
+        while pending:
+            yield collect()
+
+
+def _iter_routed_frames(frames, memory_records: list[dict], performance: ScanPerformance,
+                        pool: RoutingPool | None = None):
+    """Yield (timestamp, frame, routed features) in order; serial without a pool."""
+    if pool is not None:
+        yield from pool.iterate(frames, performance)
+        return
+    previous = None
+    for timestamp, frame in frames:
+        features = performance.call('logo_feature_extraction', regional_logo_candidate_features, frame, previous)
+        features = performance.call('logo_brand_memory', _route_with_brand_memory, frame, features, memory_records)
+        yield timestamp, frame, features
+        previous = frame
+
+
 def write_visual_logo_audit_html(report_dir: Path, records: list[dict]) -> Path:
     cards = []
     for record in sorted(records, key=lambda item: float(item["start_seconds"])):
@@ -1350,8 +1442,12 @@ def scan_visual_logos(
     scene_change_threshold: float = 0.22,
     coverage_bucket_seconds: float = 300.0,
     coverage_fallbacks_per_bucket: int = 2,
+    routing_workers: int = 1,
 ) -> dict:
     performance = ScanPerformance()
+    if (not isinstance(routing_workers, int) or isinstance(routing_workers, bool)
+            or not 1 <= routing_workers <= 8):
+        raise ValueError("routing_workers must be an integer from 1 to 8")
     root = project_root.resolve(strict=True)
     input_path = input_path.resolve(strict=True)
     report_dir = _inside((root / "reports").resolve(strict=True), report_dir, "Report directory")
@@ -1419,6 +1515,7 @@ def scan_visual_logos(
     coverage_fallback_count = 0
     scene_routed_count = 0
     routing_cache_hit = cached is not None
+    parallel_routing_metrics = None
 
     boundary_ranges: list[tuple[float, float]] = []
     boundary_transitions: list[tuple[float, float]] = []
@@ -1443,90 +1540,98 @@ def scan_visual_logos(
         scene_routed_count = int(cached.get("scene_routed_count", 0))
         print(f"Visual-logo routing cache hit: {cache_path}", flush=True)
     else:
-        for left, right in boundary_ranges:
-            boundary_previous = None
-            for timestamp, frame in performance.iterate("frame_pipe_wait", _iter_frames(
-                ffmpeg_path=ffmpeg_path, input_path=input_path, start=left,
-                duration=right - left, sample_every=boundary_sample_every,
+        routing_pool = RoutingPool(routing_workers, memory_records) if routing_workers > 1 else None
+        try:
+            for left, right in boundary_ranges:
+                boundary_previous = None
+                boundary_frames = performance.iterate("frame_pipe_wait", _iter_frames(
+                    ffmpeg_path=ffmpeg_path, input_path=input_path, start=left,
+                    duration=right - left, sample_every=boundary_sample_every,
+                    width=analysis_width, height=analysis_height,
+                ))
+                for timestamp, frame, features in _iter_routed_frames(
+                    boundary_frames, memory_records, performance, routing_pool,
+                ):
+                    if boundary_previous is not None:
+                        boundary_transitions.append(
+                            (timestamp, _frame_change_score(boundary_previous, frame))
+                        )
+                    key = _window_key(timestamp, window_seconds)
+                    key = (key[0], min(full_duration, key[1]))
+                    boundary_keys.add(key)
+                    _add_window_frame(windows, key, timestamp=timestamp, frame=frame, features=features)
+                    window_sample_counts[key] = window_sample_counts.get(key, 0) + 1
+                    frames_scanned += 1
+                    boundary_previous = frame
+
+            previous = None
+            coverage_candidates: dict[int, list[dict]] = {}
+            sampled_frames = performance.iterate("frame_pipe_wait", _iter_frames(
+                ffmpeg_path=ffmpeg_path, input_path=input_path, start=start_seconds,
+                duration=scan_duration, sample_every=effective_sample_interval,
                 width=analysis_width, height=analysis_height,
-            )):
-                features = performance.call('logo_feature_extraction', regional_logo_candidate_features, frame, boundary_previous)
-                features = performance.call('logo_brand_memory', _route_with_brand_memory, frame, features, memory_records)
-                if boundary_previous is not None:
-                    boundary_transitions.append(
-                        (timestamp, _frame_change_score(boundary_previous, frame))
+            ))
+            for timestamp, frame, features in _iter_routed_frames(
+                sampled_frames, memory_records, performance, routing_pool,
+            ):
+                in_dense_boundary = any(left <= timestamp < right for left, right in boundary_ranges)
+                change_score = _frame_change_score(previous, frame) if previous is not None else 0.0
+                scene_route = (
+                    change_score >= scene_change_threshold
+                    and float(features["score"]) >= max(0.30, candidate_threshold * 0.70)
+                )
+                candidate = exhaustive or float(features["score"]) >= candidate_threshold or scene_route
+                key = _window_key(timestamp, window_seconds)
+                key = (key[0], min(full_duration, key[1]))
+                if not in_dense_boundary and candidate:
+                    _add_window_frame(windows, key, timestamp=timestamp, frame=frame, features=features)
+                    window_sample_counts[key] = window_sample_counts.get(key, 0) + 1
+                    heuristic_hits += 1
+                    scene_routed_count += int(scene_route and float(features["score"]) < candidate_threshold)
+                elif not in_dense_boundary:
+                    bucket = max(0, int((timestamp - start_seconds) // coverage_bucket_seconds))
+                    retain_coverage_candidate(
+                        coverage_candidates, bucket,
+                        {
+                            "timestamp_seconds": timestamp,
+                            "frame": frame.copy(),
+                            "features": features,
+                        },
+                        maximum_per_bucket=coverage_fallbacks_per_bucket,
                     )
-                key = _window_key(timestamp, window_seconds)
-                key = (key[0], min(full_duration, key[1]))
-                boundary_keys.add(key)
-                _add_window_frame(windows, key, timestamp=timestamp, frame=frame, features=features)
-                window_sample_counts[key] = window_sample_counts.get(key, 0) + 1
+                previous = frame
                 frames_scanned += 1
-                boundary_previous = frame
+                if frames_scanned % 500 == 0:
+                    print(f"Visual-logo candidate scan: {frames_scanned} frames", flush=True)
+                peak_rss = max(peak_rss, process.memory_info().rss)
 
-        previous = None
-        coverage_candidates: dict[int, list[dict]] = {}
-        for timestamp, frame in performance.iterate("frame_pipe_wait", _iter_frames(
-            ffmpeg_path=ffmpeg_path, input_path=input_path, start=start_seconds,
-            duration=scan_duration, sample_every=effective_sample_interval,
-            width=analysis_width, height=analysis_height,
-        )):
-            features = performance.call('logo_feature_extraction', regional_logo_candidate_features, frame, previous)
-            features = performance.call('logo_brand_memory', _route_with_brand_memory, frame, features, memory_records)
-            in_dense_boundary = any(left <= timestamp < right for left, right in boundary_ranges)
-            change_score = _frame_change_score(previous, frame) if previous is not None else 0.0
-            scene_route = (
-                change_score >= scene_change_threshold
-                and float(features["score"]) >= max(0.30, candidate_threshold * 0.70)
-            )
-            candidate = exhaustive or float(features["score"]) >= candidate_threshold or scene_route
-            key = _window_key(timestamp, window_seconds)
-            key = (key[0], min(full_duration, key[1]))
-            if not in_dense_boundary and candidate:
-                _add_window_frame(windows, key, timestamp=timestamp, frame=frame, features=features)
-                window_sample_counts[key] = window_sample_counts.get(key, 0) + 1
-                heuristic_hits += 1
-                scene_routed_count += int(scene_route and float(features["score"]) < candidate_threshold)
-            elif not in_dense_boundary:
-                bucket = max(0, int((timestamp - start_seconds) // coverage_bucket_seconds))
-                retain_coverage_candidate(
-                    coverage_candidates, bucket,
-                    {
-                        "timestamp_seconds": timestamp,
-                        "frame": frame.copy(),
-                        "features": features,
-                    },
-                    maximum_per_bucket=coverage_fallbacks_per_bucket,
+            for candidates in coverage_candidates.values():
+                for candidate in candidates:
+                    timestamp = float(candidate["timestamp_seconds"])
+                    key = _window_key(timestamp, window_seconds)
+                    key = (key[0], min(full_duration, key[1]))
+                    if key in windows:
+                        continue
+                    _add_window_frame(
+                        windows, key, timestamp=timestamp, frame=candidate["frame"],
+                        features=candidate["features"],
+                    )
+                    window_sample_counts[key] = 1
+                    coverage_fallback_count += 1
+            if not exhaustive:
+                _write_routing_cache(
+                    cache_path, source_sha256=input_sha256, cache_key=cache_key,
+                    windows=windows, window_sample_counts=window_sample_counts,
+                    boundary_keys=boundary_keys,
+                    boundary_transitions=boundary_transitions,
+                    frames_scanned=frames_scanned, heuristic_hits=heuristic_hits,
+                    coverage_fallback_count=coverage_fallback_count,
+                    scene_routed_count=scene_routed_count,
                 )
-            previous = frame
-            frames_scanned += 1
-            if frames_scanned % 500 == 0:
-                print(f"Visual-logo candidate scan: {frames_scanned} frames", flush=True)
-            peak_rss = max(peak_rss, process.memory_info().rss)
-
-        for candidates in coverage_candidates.values():
-            for candidate in candidates:
-                timestamp = float(candidate["timestamp_seconds"])
-                key = _window_key(timestamp, window_seconds)
-                key = (key[0], min(full_duration, key[1]))
-                if key in windows:
-                    continue
-                _add_window_frame(
-                    windows, key, timestamp=timestamp, frame=candidate["frame"],
-                    features=candidate["features"],
-                )
-                window_sample_counts[key] = 1
-                coverage_fallback_count += 1
-        if not exhaustive:
-            _write_routing_cache(
-                cache_path, source_sha256=input_sha256, cache_key=cache_key,
-                windows=windows, window_sample_counts=window_sample_counts,
-                boundary_keys=boundary_keys,
-                boundary_transitions=boundary_transitions,
-                frames_scanned=frames_scanned, heuristic_hits=heuristic_hits,
-                coverage_fallback_count=coverage_fallback_count,
-                scene_routed_count=scene_routed_count,
-            )
+        finally:
+            if routing_pool is not None:
+                routing_pool.close()
+                parallel_routing_metrics = routing_pool.metrics()
 
     candidate_windows_before_limit = len(windows)
     effective_candidate_limit = adaptive_candidate_budget(
@@ -1799,6 +1904,8 @@ def scan_visual_logos(
         "model": json.loads((model_path / "manifest.json").read_text(encoding="utf-8")),
         "metrics": {
             "performance": performance.snapshot(),
+            "routing_workers": routing_workers,
+            "parallel_routing": parallel_routing_metrics,
             "elapsed_seconds": round(elapsed, 3),
             "video_seconds_per_processing_second": round(scan_duration / elapsed, 3) if elapsed else None,
             "peak_process_ram_bytes": peak_rss,

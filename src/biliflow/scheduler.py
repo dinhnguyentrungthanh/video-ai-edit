@@ -17,6 +17,8 @@ from biliflow.job_pipeline import (
     PipelineStage,
     StageCommand,
     normalize_detector_groups,
+    DEFAULT_FAST_SCAN,
+    normalize_fast_scan,
     normalize_ocr_batch_size,
     pipeline_stages,
     run_command,
@@ -107,14 +109,19 @@ class JobScheduler:
     def ocr_batch_size(self, job_id: int) -> int:
         return normalize_ocr_batch_size(self.store.setting(f"ocr_batch_size:{job_id}", 1))
 
+    def fast_scan(self, job_id: int) -> bool:
+        return normalize_fast_scan(self.store.setting(f"fast_scan:{job_id}", DEFAULT_FAST_SCAN))
+
     def configure_and_queue(
         self, job_id: int, *, content_style: str, profile: str,
         pipeline_key: str | None = None,
         detector_groups: list[str] | tuple[str, ...] | None = None,
         ocr_recognition_batch_size: int | None = None,
+        fast_scan: bool | None = None,
     ) -> dict:
         batch_size = (self.ocr_batch_size(job_id) if ocr_recognition_batch_size is None
                       else normalize_ocr_batch_size(ocr_recognition_batch_size))
+        fast = self.fast_scan(job_id) if fast_scan is None else normalize_fast_scan(fast_scan)
         if pipeline_key is not None:
             self.store.set_setting(f"pipeline_key:{job_id}", pipeline_key)
         selected_detectors = normalize_detector_groups(
@@ -125,6 +132,7 @@ class JobScheduler:
             f"detector_groups:{job_id}", list(selected_detectors)
         )
         self.store.set_setting(f"ocr_batch_size:{job_id}", batch_size)
+        self.store.set_setting(f"fast_scan:{job_id}", fast)
         job = self.store.update_job(
             job_id, content_style=content_style, profile=profile, state="QUEUED",
             current_stage=None, stop_mode=None, error=None, progress=0.0,
@@ -135,11 +143,13 @@ class JobScheduler:
             source_sha256=job["source_sha256"],
             detector_groups=selected_detectors,
             ocr_recognition_batch_size=batch_size,
+            fast_scan=fast,
         )
         self.store.replace_stages(job_id, [item.name for item in definitions])
         self.store.add_event(
             job_id, "JOB_QUEUED", f"Queued with {profile} profile",
-            payload={"detector_groups": list(selected_detectors), "ocr_recognition_batch_size": batch_size},
+            payload={"detector_groups": list(selected_detectors), "ocr_recognition_batch_size": batch_size,
+                     "fast_scan": fast},
         )
         self._wake.set()
         return self.store.get_job(job_id)
@@ -148,6 +158,7 @@ class JobScheduler:
         self, job_id: int,
         *, detector_groups: list[str] | tuple[str, ...] | None = None,
         ocr_recognition_batch_size: int | None = None,
+        fast_scan: bool | None = None,
     ) -> dict:
         job = self.store.get_job(job_id)
         if self.active and self.active["job_id"] == job_id:
@@ -161,6 +172,7 @@ class JobScheduler:
             pipeline_key=pipeline_key,
             detector_groups=detector_groups,
             ocr_recognition_batch_size=ocr_recognition_batch_size,
+            fast_scan=fast_scan,
         )
         value = self.store.update_job(
             job_id, active_queue_path=None, active_revision=None,
@@ -257,6 +269,7 @@ class JobScheduler:
             source_sha256=job["source_sha256"],
             detector_groups=self.detector_groups(int(job["id"])),
             ocr_recognition_batch_size=self.ocr_batch_size(int(job["id"])),
+            fast_scan=self.fast_scan(int(job["id"])),
         )}
         render = self.store.setting(f"render:{job['id']}")
         if render:

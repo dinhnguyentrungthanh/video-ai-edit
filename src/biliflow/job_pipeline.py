@@ -116,6 +116,23 @@ def _report_paths(
     return reports
 
 
+# Fast scan changes only how work is scheduled; each setting was validated on
+# a full film to produce the same tracks, previews, routing windows and review
+# items as the standard path (docs/SCAN_PERFORMANCE.md).
+# Product default for jobs without a stored choice (user decision 2026-09-29,
+# after the full-film A/B above). pipeline_stages itself stays explicit.
+DEFAULT_FAST_SCAN = True
+FAST_SCAN_OCR_BATCH_SIZE = 8
+FAST_SCAN_OCR_FRAME_WINDOW = 4
+FAST_SCAN_LOGO_ROUTING_WORKERS = 3
+
+
+def normalize_fast_scan(value: object) -> bool:
+    if type(value) is not bool:
+        raise ValueError("Quét nhanh phải là bật (true) hoặc tắt (false)")
+    return value
+
+
 def normalize_ocr_batch_size(value: object) -> int:
     if type(value) is not int or value not in (1, 8):
         raise ValueError("OCR phải là chế độ chuẩn (1) hoặc tăng tốc thử nghiệm (8)")
@@ -127,8 +144,24 @@ def pipeline_stages(
     source_sha256: str | None = None,
     detector_groups: list[str] | tuple[str, ...] | None = None,
     ocr_recognition_batch_size: int = 1,
+    fast_scan: bool = False,
 ) -> list[PipelineStage]:
     ocr_recognition_batch_size = normalize_ocr_batch_size(ocr_recognition_batch_size)
+    fast_scan = normalize_fast_scan(fast_scan)
+    if fast_scan:
+        text_speed_arguments: tuple[object, ...] = (
+            "--recognition-batch-size", FAST_SCAN_OCR_BATCH_SIZE,
+            "--recognition-frame-window", FAST_SCAN_OCR_FRAME_WINDOW,
+        )
+        logo_speed_arguments: tuple[object, ...] = (
+            "--routing-workers", FAST_SCAN_LOGO_ROUTING_WORKERS,
+        )
+    else:
+        text_speed_arguments = (
+            ("--recognition-batch-size", ocr_recognition_batch_size)
+            if ocr_recognition_batch_size != 1 else ()
+        )
+        logo_speed_arguments = ()
     root = root.resolve(strict=True)
     source = source.resolve(strict=True)
     if content_style not in {"animation", "live_action", "mixed"}:
@@ -253,8 +286,7 @@ def pipeline_stages(
             run_command(
                 root, "scan-text", "--input", source, "--report-dir", text,
                 "--sample-every", config["text_sample_every"], "--device", "cuda",
-                *(("--recognition-batch-size", ocr_recognition_batch_size)
-                  if ocr_recognition_batch_size != 1 else ()),
+                *text_speed_arguments,
             ),
             (text / "text-scan.json",),
         ),), uses_gpu=True,
@@ -274,6 +306,7 @@ def pipeline_stages(
                 "--coverage-fallbacks-per-bucket", config["logo_coverage_fallbacks_per_bucket"],
                 *(("--source-sha256", source_sha256) if source_sha256 else ()),
                 "--device", "cuda",
+                *logo_speed_arguments,
             ),
             (logo / "scan.json",),
         ),), uses_gpu=True,

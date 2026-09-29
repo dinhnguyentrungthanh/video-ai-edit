@@ -500,6 +500,7 @@ def scan_text(
     reader=None,
     prefetch_frames: int = 0,
     recognition_batch_size: int = 1,
+    recognition_frame_window: int = 1,
 ) -> dict:
     performance = ScanPerformance()
     if not isinstance(prefetch_frames, int) or not 0 <= prefetch_frames <= 4:
@@ -508,6 +509,11 @@ def scan_text(
         raise ValueError("recognition_batch_size must be 1, 2, 4 or 8")
     if recognition_batch_size > 1 and (device_name != "cuda" or languages != ("vi", "en")):
         raise ValueError("Experimental recognition batching requires CUDA and vi/en")
+    if (not isinstance(recognition_frame_window, int) or isinstance(recognition_frame_window, bool)
+            or not 1 <= recognition_frame_window <= 8):
+        raise ValueError("recognition_frame_window must be an integer from 1 to 8")
+    if recognition_frame_window > 1 and recognition_batch_size == 1:
+        raise ValueError("recognition_frame_window > 1 requires recognition_batch_size > 1")
     input_path = input_path.resolve(strict=True)
     project_root = project_root.resolve(strict=True)
     report_dir = report_dir.resolve()
@@ -557,11 +563,17 @@ def scan_text(
                 download_enabled=False,
             )
 
+    cross_frame_reader = None
     if recognition_batch_size > 1:
-        from biliflow.ocr_batch_experiment import SameWidthReader
+        from biliflow.ocr_batch_experiment import CrossFrameReader, SameWidthReader
         if not str(getattr(reader, "device", "")).startswith("cuda"):
             raise ValueError("Experimental recognition batching requires a CUDA OCR reader")
-        reader = SameWidthReader(reader, batch_size=recognition_batch_size)
+        if recognition_frame_window > 1:
+            cross_frame_reader = CrossFrameReader(
+                reader, batch_size=recognition_batch_size, frame_window=recognition_frame_window,
+            )
+        else:
+            reader = SameWidthReader(reader, batch_size=recognition_batch_size)
 
     fps = 1.0 / sample_every
     frame_bytes = analysis_width * analysis_height * 3
@@ -584,28 +596,38 @@ def scan_text(
     all_tracks: list[Track] = []
     ffmpeg = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     frame_reader = FramePrefetch(ffmpeg, frame_bytes, _read_exact, depth=prefetch_frames)
-    try:
-        assert ffmpeg.stdout is not None
-        frame_reader.__enter__()
+
+    def decoded_frames():
+        decoded = 0
         while True:
             data = performance.call('frame_pipe_wait', frame_reader.read)
             if not data:
-                break
+                return
             if len(data) != frame_bytes:
                 raise RuntimeError(f"Incomplete raw frame: {len(data)} of {frame_bytes} bytes")
-            timestamp = start_seconds + frames_scanned * sample_every
-            frame_array = np.frombuffer(data, dtype=np.uint8).reshape(
+            yield start_seconds + decoded * sample_every, np.frombuffer(data, dtype=np.uint8).reshape(
                 (analysis_height, analysis_width, 3)
             )
+            decoded += 1
+
+    def recognized_frames():
+        options = dict(detail=1, paragraph=False, batch_size=1, workers=0, decoder="greedy")
+        if cross_frame_reader is None:
+            for timestamp, frame_array in decoded_frames():
+                yield timestamp, frame_array, performance.call('model_step', reader.readtext, frame_array, **options)
+            return
+        # Frames are committed to tracking one by one, in order, after their
+        # window's shared recognition calls; model_step excludes pipe waits.
+        results = cross_frame_reader.iter_readtext(decoded_frames(), image_of=lambda item: item[1], **options)
+        while (result := performance.call('model_step', next, results, None)) is not None:
+            (timestamp, frame_array), raw_detections = result
+            yield timestamp, frame_array, raw_detections
+
+    try:
+        assert ffmpeg.stdout is not None
+        frame_reader.__enter__()
+        for timestamp, frame_array, raw_detections in recognized_frames():
             frame_image = Image.fromarray(frame_array)
-            raw_detections = performance.call('model_step', reader.readtext,
-                frame_array,
-                detail=1,
-                paragraph=False,
-                batch_size=1,
-                workers=0,
-                decoder="greedy",
-            )
             with performance.measure('tracking'):
                 detections = []
                 for points, text, confidence in raw_detections:
@@ -807,6 +829,11 @@ def scan_text(
         "tracks": summaries,
         "metrics": {
             "recognition_batch_size": recognition_batch_size,
+            "recognition_frame_window": recognition_frame_window,
+            "cross_frame_recognition": (
+                {**cross_frame_reader.stats.as_dict(), "byte_budget": cross_frame_reader.byte_budget}
+                if cross_frame_reader is not None else None
+            ),
             "frame_prefetch": {"requested_depth": prefetch_frames, "effective_depth": frame_reader.depth,
                                "buffer_budget_bytes": 32 * 1024**2},
             "performance": performance.snapshot(),

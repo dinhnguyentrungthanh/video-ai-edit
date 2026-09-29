@@ -165,6 +165,11 @@ def build_parser() -> argparse.ArgumentParser:
     visual_logo.add_argument("--coverage-bucket-seconds", type=float, default=300.0)
     visual_logo.add_argument("--coverage-fallbacks-per-bucket", type=int, default=2)
     visual_logo.add_argument(
+        "--routing-workers", type=int, choices=range(1, 9), default=1, metavar="1-8",
+        help="Experimental: compute CPU routing features in this many worker processes; "
+             "results are consumed in frame order; default 1 (serial)",
+    )
+    visual_logo.add_argument(
         "--exhaustive", action="store_true",
         help="Send every timeline window to local Qwen and sample the full video at least twice per second",
     )
@@ -226,6 +231,11 @@ def build_parser() -> argparse.ArgumentParser:
     text_scan.add_argument(
         "--recognition-batch-size", type=int, choices=[1, 2, 4, 8], default=1,
         help="Experimental CUDA vi/en recognition batching by identical crop width; default serial",
+    )
+    text_scan.add_argument(
+        "--recognition-frame-window", type=int, choices=range(1, 9), default=1, metavar="1-8",
+        help="Experimental: share identical-width recognition batches across this many "
+             "consecutive frames; requires --recognition-batch-size > 1; default 1",
     )
     text_scan.add_argument(
         "--semantic-model", type=Path,
@@ -457,6 +467,7 @@ def main() -> int:
             policy_path=None if args.skip_semantic_routing else args.policy,
             semantic_seed_path=None if args.skip_semantic_routing else args.semantic_seed,
             recognition_batch_size=args.recognition_batch_size,
+            recognition_frame_window=args.recognition_frame_window,
         )
         print(json.dumps({
             "report": str((args.report_dir / "text-scan.json").resolve()),
@@ -727,6 +738,7 @@ def main() -> int:
             scene_change_threshold=args.scene_change_threshold,
             coverage_bucket_seconds=args.coverage_bucket_seconds,
             coverage_fallbacks_per_bucket=args.coverage_fallbacks_per_bucket,
+            routing_workers=args.routing_workers,
         )
         print(json.dumps({
             "report": str((args.report_dir / "scan.json").resolve()),

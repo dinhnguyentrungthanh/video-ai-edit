@@ -1,3 +1,19 @@
+## Phase C/D: parallel logo routing and "Tăng tốc xử lý" — 2026-09-29
+
+- `RoutingPool` (src/biliflow/visual_logo_scanner.py) computes routing features in worker processes, consumed in frame order; `--routing-workers` default 1. Full Troy routing 430.7 -> 355.1s (-17.6%) with identical windows/selection/JPEGs (`reports/benchmarks/logo-routing-parallel-pipeline-20260929-081117/`). CPU-only evidence: `logo-routing-parallel-cpu-20260929-080248/`.
+- Per-job `fast_scan` ("Tăng tốc xử lý" checkbox on start/rerun; ON by default via `DEFAULT_FAST_SCAN`) = OCR batch 8 + window 4 + 3 routing workers. Full advertising A/B in one session: 25m32s -> 22m57s (-10.2%), outputs identical (`reports/benchmarks/troy-full-standard-20260929-093619/`, `troy-full-fast-20260929-100152/` with `comparison.json`).
+- Stage overlap (routing during OCR) measured in `stage-overlap-*` directories: ~2.4-2.9 min extra saving at the cost of 18-35% slower OCR and a pipeline change; not implemented. The remaining lever is the duplicated full-film decode (OCR and logo each decode 1080p separately).
+- User decided (2026-09-29): "Tăng tốc xử lý" is the default for jobs without a stored choice; each job can still untick it. Next: plan-first shared decode (see `docs/CLAUDE_SCAN_OPTIMIZATION_HANDOFF.md`).
+
+## Cross-frame OCR recognition experiment — 2026-09-28
+
+- Phase A of `docs/CLAUDE_SCAN_OPTIMIZATION_HANDOFF.md` is implemented as opt-in only: `CrossFrameReader` in `src/biliflow/ocr_batch_experiment.py`, `scan_text(recognition_frame_window=1..8)` and CLI `--recognition-frame-window`. Default 1 keeps the existing serial/batch-8 paths; job pipeline and Dashboard do not pass the new option.
+- Evidence (baseline HEAD `ac3646b` + working-tree change; RTX 2060, torch 2.14.0+cu126, EasyOCR 1.7.2): `reports/benchmarks/ocr-cross-frame-occupancy-20260928-224612/`, `ocr-cross-frame-abba-20260928-224943/`, `ocr-cross-frame-downstream-20260928-225858/` (includes `unittest.log` 291/291, `SUMMARY.md`), `ocr-cross-frame-cancel-20260928-230913/`. Harness `scripts/benchmark_ocr_cross_frame.py`, launcher `scripts/benchmark-ocr-cross-frame.ps1` (GPU mutex; `run.ps1` untouched).
+- Seven excerpts (Troy 0/48/418/940, Conan 21 4200/6630, Conan 20 240): same text/boxes/acceptance/tracks/previews/review mappings as serial; scores differ by at most 3.6e-6 raw / 2e-6 in reports. OCR model time -18.5% and scan-without-hash -15.8% (median, A/B/B/A). Gains concentrate in text-heavy sections; single-watermark sections gain about 4% in the controlled in-memory run and are within noise in full scans.
+- Full Troy OCR stage A/B/B/A (`reports/benchmarks/ocr-cross-frame-downstream-20260928-231957/`, user-authorized): median 752.6 -> 631.2s (-16.1%, about 2 minutes); conservative -13.2%. Identical tracks/previews/review items across all runs and versus the production serial report. Whole advertising pipeline (~30 min) would drop by roughly 2 minutes; logo routing/localization are untouched.
+- Phase B rejected (`ocr-cross-frame-abba-20260929-000902/`, `-001335/`): batched detection gives no speedup and 2.7x CUDA memory; cuDNN autotuning gives no change. CRAFT detection is GPU-bound at 960x544. Code kept only in that evidence directory.
+- Not yet done: Dashboard/job option with per-job persistence and stage-cache identity, full-pipeline timing with the option, adult/gore/violence untouched (not rerun). User asked not to commit until all phases are done; everything above is uncommitted on this branch.
+
 ## Full advertising measurement after RGB optimization — 2026-09-28
 
 - User-authorized Troy trial `troy-rgb-cold-full-20260928-194937` completed with serial OCR and fresh isolated routing/GroundingDINO caches. Actual pipeline stages use separate SQLite/review and benchmark import protection; production source/cache/job/review/brand memory are preserved.
