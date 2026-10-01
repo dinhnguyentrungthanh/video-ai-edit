@@ -10,7 +10,7 @@
            No Visual AI, safety or export.
   compare  Read-only comparison of two trials: reports (runtime/confidence/cache
            telemetry excluded), preview/scanner JPEG hashes and review proposals.
-The production job (--job-id, default 39 Troy; 38 Conan Movie 20), its review queue,
+The production job (--job-id, default 39 Troy; 38 Conan Movie 20; 37 Conan Movie 21), its review queue,
 source file and brand memory are only read.
 """
 from __future__ import annotations
@@ -28,8 +28,10 @@ from time import perf_counter
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
-# Authorized production jobs (read-only): 39 Troy (live action), 38 Conan Movie 20 (animation).
-AUTHORIZED_JOBS = {39: ("troy", "Troy", "live_action"), 38: ("conan20", "Movie 20", "animation")}
+# Authorized production jobs (read-only): 39 Troy (live action), 38 Conan Movie 20 and
+# 37 Conan Movie 21 (animation; Golden Set v1 sources, docs/QUALITY_PLAN.md).
+AUTHORIZED_JOBS = {39: ("troy", "Troy", "live_action"), 38: ("conan20", "Movie 20", "animation"),
+                   37: ("conan21", "Movie 21", "animation")}
 COLD_STAGE = ROOT / "scripts/benchmark-cold-ad-stage.ps1"
 TEXT_STAGE = ROOT / "scripts/benchmark-text-stage.ps1"
 PREWARM = ROOT / "scripts/benchmark_prewarm_routing.py"
@@ -267,10 +269,116 @@ def compare(args) -> None:
         raise SystemExit("Fast scan output differs from the standard trial")
 
 
-def review_diff(args) -> None:
-    """G1: logo branch must be identical; list every OCR/review difference for the user."""
+REVIEW_FIELDS = ("category", "review_kind", "candidate_type", "start_seconds", "end_seconds", "suggested_decision",
+                 "suggested_region_source_pixels", "labels", "priority", "detected_intervals", "region_classification")
+
+
+def review_projection(item):
+    return {k: item.get(k) for k in REVIEW_FIELDS}
+
+
+def diff_review_queues(baseline: dict, candidate: dict) -> tuple[list[dict], dict, bool]:
+    """Match primary and advisory items of two review queues (FP32 baseline vs FP16 candidate).
+
+    Returns (rows, summary, primary_problem); rows hold unmatched or changed items only.
+    """
+    def overlap(a, b):
+        start, end = max(a["start_seconds"], b["start_seconds"]), min(a["end_seconds"], b["end_seconds"])
+        union = max(a["end_seconds"], b["end_seconds"]) - min(a["start_seconds"], b["start_seconds"])
+        return max(0.0, end - start) / union if union > 0 else float(a["start_seconds"] == b["start_seconds"])
+
+    def region_delta(a, b):
+        ra, rb = a.get("suggested_region_source_pixels"), b.get("suggested_region_source_pixels")
+        if not ra or not rb:
+            return None if ra == rb else "only one side has a region"
+        return max(abs(ra[k] - rb[k]) for k in ("x", "y", "width", "height"))
+
+    rows, summary = [], {}
+    for group in ("items", "advisory_items"):
+        left = list(baseline.get(group, []))
+        right = list(candidate.get(group, []))
+        unmatched_right = list(right)
+        identical = 0
+        for item in left:
+            exact = next((c for c in unmatched_right if review_projection(c) == review_projection(item)), None)
+            if exact is not None:
+                unmatched_right.remove(exact)
+                identical += 1
+                continue
+            candidates = [c for c in unmatched_right if c["category"] == item["category"] and overlap(item, c) > 0]
+            best = max(candidates, key=lambda c: overlap(item, c), default=None)
+            if best is None:
+                rows.append({"group": group, "kind": "chỉ có ở FP32 (mất khi dùng FP16)",
+                             "baseline": item, "candidate": None})
+                continue
+            unmatched_right.remove(best)
+            changes = {k: [item.get(k), best.get(k)] for k in REVIEW_FIELDS if item.get(k) != best.get(k)}
+            rows.append({"group": group, "kind": "khác chi tiết", "baseline": item, "candidate": best,
+                         "changes": changes, "region_delta_px": region_delta(item, best),
+                         "decision_changed": item.get("suggested_decision") != best.get("suggested_decision")})
+        for item in unmatched_right:
+            rows.append({"group": group, "kind": "chỉ có ở FP16 (mục mới)", "baseline": None, "candidate": item})
+        group_rows = [r for r in rows if r["group"] == group]
+        summary[group] = {"baseline": len(left), "candidate": len(right), "identical": identical,
+                          "changed": sum(1 for r in group_rows if r["kind"] == "khác chi tiết"),
+                          "only_fp32": sum(1 for r in group_rows if r["candidate"] is None),
+                          "only_fp16": sum(1 for r in group_rows if r["baseline"] is None)}
+    primary_problem = any(r["group"] == "items" and (r["candidate"] is None or r["baseline"] is None
+                                                     or r.get("decision_changed")) for r in rows)
+    return rows, summary, primary_problem
+
+
+def review_difference_rows(rows: list[dict]) -> list[dict]:
+    return [{k: v for k, v in r.items() if k not in {"baseline", "candidate"}}
+            | {"baseline": review_projection(r["baseline"]) if r["baseline"] else None,
+               "candidate": review_projection(r["candidate"]) if r["candidate"] else None} for r in rows]
+
+
+def render_review_diff(rows: list[dict], summary: dict, intro_html: str) -> str:
+    """Vietnamese HTML of review-level differences with each side's preview images."""
     import base64
     import html as html_lib
+
+    def images(item, limit=2):
+        tags = []
+        for path in (item or {}).get("preview_images", [])[:limit]:
+            file = ROOT / path
+            if file.is_file():
+                data = base64.b64encode(file.read_bytes()).decode("ascii")
+                tags.append(f'<img src="data:image/jpeg;base64,{data}" alt="">')
+        return "".join(tags) or "<em>(không có ảnh)</em>"
+
+    def describe(item):
+        if not item:
+            return "—"
+        region = item.get("suggested_region_source_pixels") or {}
+        return html_lib.escape(f"{item.get('category')} · {item.get('start_seconds')}–{item.get('end_seconds')} s · "
+                               f"{item.get('suggested_decision')} · vùng {region}")
+
+    cards = []
+    for r in rows:
+        extra = ""
+        if r.get("changes"):
+            extra = "<ul>" + "".join(
+                f"<li><b>{html_lib.escape(k)}</b>: {html_lib.escape(str(v[0]))} → {html_lib.escape(str(v[1]))}</li>"
+                for k, v in r["changes"].items()) + "</ul>"
+        scope = "mục chính" if r["group"] == "items" else "advisory"
+        cards.append(
+            f'<section><h3>{html_lib.escape(r["kind"])} · {scope}</h3><div class="cols">'
+            f'<div><h4>FP32 (hiện tại)</h4><p>{describe(r["baseline"])}</p>{images(r["baseline"])}</div>'
+            f'<div><h4>FP16</h4><p>{describe(r["candidate"])}</p>{images(r["candidate"])}</div></div>{extra}</section>')
+    style = ("body{font-family:system-ui,sans-serif;margin:24px;max-width:1200px}"
+             "section{border:1px solid #ccc;border-radius:8px;padding:12px;margin:12px 0}"
+             ".cols{display:grid;grid-template-columns:1fr 1fr;gap:16px}"
+             "img{max-width:100%;margin:4px 0;border:1px solid #ddd}")
+    body = "".join(cards) or "<p>Không có khác biệt nào ở mức review.</p>"
+    return ('<!doctype html><html lang="vi"><head><meta charset="utf-8"><title>Khác biệt FP16 và FP32</title>'
+            f"<style>{style}</style></head><body><h1>Khác biệt kết quả review: FP16 so với FP32</h1>"
+            f"{intro_html}<p>Tóm tắt: {html_lib.escape(json.dumps(summary, ensure_ascii=False))}</p>{body}</body></html>")
+
+
+def review_diff(args) -> None:
+    """G1: logo branch must be identical; list every OCR/review difference for the user."""
     bases = {"baseline": ROOT / "reports/jobs" / args.baseline, "candidate": ROOT / "reports/jobs" / args.candidate}
     for key in (args.baseline, args.candidate):
         if Path(key).name != key:
@@ -318,56 +426,8 @@ def review_diff(args) -> None:
                       for d in folder_images]
             safety[f"{folder}/*.jpg"] = hashes[0] == hashes[1]
 
-    fields = ("category", "review_kind", "candidate_type", "start_seconds", "end_seconds", "suggested_decision",
-              "suggested_region_source_pixels", "labels", "priority", "detected_intervals", "region_classification")
-    queues = {side: read(base / "review-queue.json") for side, base in bases.items()}
-
-    def project(item):
-        return {k: item.get(k) for k in fields}
-
-    def overlap(a, b):
-        start, end = max(a["start_seconds"], b["start_seconds"]), min(a["end_seconds"], b["end_seconds"])
-        union = max(a["end_seconds"], b["end_seconds"]) - min(a["start_seconds"], b["start_seconds"])
-        return max(0.0, end - start) / union if union > 0 else float(a["start_seconds"] == b["start_seconds"])
-
-    def region_delta(a, b):
-        ra, rb = a.get("suggested_region_source_pixels"), b.get("suggested_region_source_pixels")
-        if not ra or not rb:
-            return None if ra == rb else "only one side has a region"
-        return max(abs(ra[k] - rb[k]) for k in ("x", "y", "width", "height"))
-
-    rows, summary = [], {}
-    for group in ("items", "advisory_items"):
-        left = list(queues["baseline"].get(group, []))
-        right = list(queues["candidate"].get(group, []))
-        unmatched_right = list(right)
-        identical = 0
-        for item in left:
-            exact = next((c for c in unmatched_right if project(c) == project(item)), None)
-            if exact is not None:
-                unmatched_right.remove(exact)
-                identical += 1
-                continue
-            candidates = [c for c in unmatched_right if c["category"] == item["category"] and overlap(item, c) > 0]
-            best = max(candidates, key=lambda c: overlap(item, c), default=None)
-            if best is None:
-                rows.append({"group": group, "kind": "chỉ có ở FP32 (mất khi dùng FP16)",
-                             "baseline": item, "candidate": None})
-                continue
-            unmatched_right.remove(best)
-            changes = {k: [item.get(k), best.get(k)] for k in fields if item.get(k) != best.get(k)}
-            rows.append({"group": group, "kind": "khác chi tiết", "baseline": item, "candidate": best,
-                         "changes": changes, "region_delta_px": region_delta(item, best),
-                         "decision_changed": item.get("suggested_decision") != best.get("suggested_decision")})
-        for item in unmatched_right:
-            rows.append({"group": group, "kind": "chỉ có ở FP16 (mục mới)", "baseline": None, "candidate": item})
-        group_rows = [r for r in rows if r["group"] == group]
-        summary[group] = {"baseline": len(left), "candidate": len(right), "identical": identical,
-                          "changed": sum(1 for r in group_rows if r["kind"] == "khác chi tiết"),
-                          "only_fp32": sum(1 for r in group_rows if r["candidate"] is None),
-                          "only_fp16": sum(1 for r in group_rows if r["baseline"] is None)}
-    primary_problem = any(r["group"] == "items" and (r["candidate"] is None or r["baseline"] is None
-                                                     or r.get("decision_changed")) for r in rows)
+    rows, summary, primary_problem = diff_review_queues(
+        read(bases["baseline"] / "review-queue.json"), read(bases["candidate"] / "review-queue.json"))
     texts = {side: read(base / "text/text-scan.json") for side, base in bases.items()}
     text_summary = {k: [texts["baseline"].get(k), texts["candidate"].get(k)]
                     for k in ("frames_scanned", "tracks_before_limit", "review_candidate_count", "routing_counts")}
@@ -375,50 +435,11 @@ def review_diff(args) -> None:
               "safety_reports_identical": safety,
               "review_summary": summary, "text_summary": text_summary,
               "primary_items_unchanged": not primary_problem,
-              "differences": [{k: v for k, v in r.items() if k not in {"baseline", "candidate"}}
-                              | {"baseline": project(r["baseline"]) if r["baseline"] else None,
-                                 "candidate": project(r["candidate"]) if r["candidate"] else None} for r in rows]}
+              "differences": review_difference_rows(rows)}
     (out / "review-diff.json").write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")
-
-    def images(item, limit=2):
-        tags = []
-        for path in (item or {}).get("preview_images", [])[:limit]:
-            file = ROOT / path
-            if file.is_file():
-                data = base64.b64encode(file.read_bytes()).decode("ascii")
-                tags.append(f'<img src="data:image/jpeg;base64,{data}" alt="">')
-        return "".join(tags) or "<em>(không có ảnh)</em>"
-
-    def describe(item):
-        if not item:
-            return "—"
-        region = item.get("suggested_region_source_pixels") or {}
-        return html_lib.escape(f"{item.get('category')} · {item.get('start_seconds')}–{item.get('end_seconds')} s · "
-                               f"{item.get('suggested_decision')} · vùng {region}")
-
-    cards = []
-    for r in rows:
-        extra = ""
-        if r.get("changes"):
-            extra = "<ul>" + "".join(
-                f"<li><b>{html_lib.escape(k)}</b>: {html_lib.escape(str(v[0]))} → {html_lib.escape(str(v[1]))}</li>"
-                for k, v in r["changes"].items()) + "</ul>"
-        scope = "mục chính" if r["group"] == "items" else "advisory"
-        cards.append(
-            f'<section><h3>{html_lib.escape(r["kind"])} · {scope}</h3><div class="cols">'
-            f'<div><h4>FP32 (hiện tại)</h4><p>{describe(r["baseline"])}</p>{images(r["baseline"])}</div>'
-            f'<div><h4>FP16</h4><p>{describe(r["candidate"])}</p>{images(r["candidate"])}</div></div>{extra}</section>')
-    style = ("body{font-family:system-ui,sans-serif;margin:24px;max-width:1200px}"
-             "section{border:1px solid #ccc;border-radius:8px;padding:12px;margin:12px 0}"
-             ".cols{display:grid;grid-template-columns:1fr 1fr;gap:16px}"
-             "img{max-width:100%;margin:4px 0;border:1px solid #ddd}")
-    body = "".join(cards) or "<p>Không có khác biệt nào ở mức review.</p>"
-    page = ("<!doctype html><html lang=\"vi\"><head><meta charset=\"utf-8\"><title>Khác biệt FP16 và FP32</title>"
-            f"<style>{style}</style></head><body><h1>Khác biệt kết quả review: FP16 so với FP32</h1>"
-            f"<p>Lượt FP32: <code>{args.baseline}</code> · Lượt FP16: <code>{args.candidate}</code></p>"
-            f"<p>Nhánh logo giống hệt: <b>{all(logo.values())}</b> · Mục chính không đổi: <b>{not primary_problem}</b></p>"
-            f"<p>Tóm tắt: {html_lib.escape(json.dumps(summary, ensure_ascii=False))}</p>{body}</body></html>")
-    (out / "review-diff.html").write_text(page, encoding="utf-8")
+    intro = (f"<p>Lượt FP32: <code>{args.baseline}</code> · Lượt FP16: <code>{args.candidate}</code></p>"
+             f"<p>Nhánh logo giống hệt: <b>{all(logo.values())}</b> · Mục chính không đổi: <b>{not primary_problem}</b></p>")
+    (out / "review-diff.html").write_text(render_review_diff(rows, summary, intro), encoding="utf-8")
     print(json.dumps({k: result[k] for k in ("logo_branch_identical", "safety_reports_identical",
                                              "review_summary", "text_summary",
                                              "primary_items_unchanged")}, ensure_ascii=False, indent=2))
@@ -428,7 +449,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = parser.add_subparsers(dest="command", required=True)
     r = sub.add_parser("run")
-    r.add_argument("--label", required=True, choices=("standard", "fast", "overlap", "fp16"))
+    r.add_argument("--label", required=True, choices=("standard", "fast", "overlap", "fp16", "golden"))
     r.add_argument("--detect-fp16", action="store_true")
     r.add_argument("--job-id", type=int, default=39, choices=sorted(AUTHORIZED_JOBS))
     r.add_argument("--detectors", nargs="+", default=["advertising"],
@@ -444,7 +465,8 @@ def main():
     args = parser.parse_args()
     if args.command == "run":
         expected = {"standard": (False, False, False), "fast": (True, False, False),
-                    "overlap": (True, True, False), "fp16": (True, False, True)}[args.label]
+                    "overlap": (True, True, False), "fp16": (True, False, True),
+                    "golden": (True, False, False)}[args.label]
         if (args.fast_scan, args.prewarm_overlap, args.detect_fp16) != expected:
             raise ValueError("--label must match --fast-scan/--prewarm-overlap/--detect-fp16")
     {"run": run, "compare": compare, "review-diff": review_diff}[args.command](args)

@@ -62,6 +62,7 @@ def summarize_job(root: Path, job_id: int) -> dict:
                 keys = {
                     "localize_logo": ("localization_performance", "grounding_performance"),
                     "confirm_violence": ("confirmation_performance",),
+                    "verify_adult": ("verification_performance",),
                 }.get(stage["name"], ("performance",))
                 profiles.append({
                     "report": path.relative_to(root).as_posix(),

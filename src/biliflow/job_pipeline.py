@@ -92,6 +92,7 @@ def run_command(root: Path, command: str, *arguments: object) -> tuple[str, ...]
 def _report_paths(
     root: Path, job_key: str, style: str,
     detector_groups: tuple[str, ...],
+    *, adult_verified: bool = False,
 ) -> list[Path]:
     base = root / "reports" / "jobs" / job_key
     reports: list[Path] = []
@@ -103,7 +104,11 @@ def _report_paths(
         ]
     if style in {"live_action", "mixed"}:
         if "adult" in detector_groups:
-            reports.append(base / "adult" / "scan.json")
+            # The verified copy holds the same intervals plus the second-stage
+            # scores; it exists whenever this pipeline runs verify_adult.
+            reports.append(base / "adult" / (
+                "scan-verified.json" if adult_verified else "scan.json"
+            ))
         if "gore" in detector_groups:
             reports.append(base / "gore" / "scan.json")
         if "violence" in detector_groups:
@@ -129,6 +134,25 @@ FAST_SCAN_LOGO_ROUTING_WORKERS = 3
 # identical on Troy and Conan Movie 20 (all detector groups) before adoption
 # (docs/CLAUDE_SCAN_OPTIMIZATION_HANDOFF.md §16).
 FAST_SCAN_DETECT_PRECISION = "fp16"
+# The anime tagger forward under float16 autocast is not bit-identical either; on full
+# Conan Movie 20 and 21 every review item and safety interval was identical and the
+# stage took ~208 s instead of ~670 s (docs/CLAUDE_SCAN_OPTIMIZATION_HANDOFF.md §17).
+FAST_SCAN_ANIMATION_PRECISION = "fp16"
+# Same approach for the live-action violence ViT in the shared gore/violence stage: on full
+# Troy the VLM-confirmed intervals and every review item were identical and the stage took
+# 581 s instead of 1,136 s (docs/CLAUDE_SCAN_OPTIMIZATION_HANDOFF.md §18).
+FAST_SCAN_VIOLENCE_PRECISION = "fp16"
+
+# Nudity shot completion ("R3", scanner --shot-completion) for the live-action adult
+# scan in every mode: edges move out to the hard cut of a strongly adult shot, never
+# creating intervals or changing thresholds. Validated on Troy and Golden v1/v1.1
+# (reports/benchmarks/r3-validation-20261001); enabled by the user 2026-10-01. The
+# anime tagger stage (animation_safety) is not affected.
+ADULT_SHOT_COMPLETION = True
+# Second-stage 18+ verifier (verify-adult, docs/ADULT_FALSE_ALARM_PLAN.md step 2). Runs
+# for live_action and mixed jobs with adult selected so build-review can move weak
+# live-action candidates to the optional list; mixed/animation queues move nothing.
+ADULT_VERIFICATION = True
 
 
 def normalize_fast_scan(value: object) -> bool:
@@ -149,7 +173,9 @@ def pipeline_stages(
     detector_groups: list[str] | tuple[str, ...] | None = None,
     ocr_recognition_batch_size: int = 1,
     fast_scan: bool = False,
+    adult_verification: bool | None = None,
 ) -> list[PipelineStage]:
+    """``adult_verification=False`` rebuilds the stages of a job queued before verify_adult existed."""
     ocr_recognition_batch_size = normalize_ocr_batch_size(ocr_recognition_batch_size)
     fast_scan = normalize_fast_scan(fast_scan)
     root = root.resolve(strict=True)
@@ -182,12 +208,16 @@ def pipeline_stages(
         logo_speed_arguments: tuple[object, ...] = (
             "--routing-workers", FAST_SCAN_LOGO_ROUTING_WORKERS,
         )
+        animation_speed_arguments: tuple[object, ...] = ("--precision", FAST_SCAN_ANIMATION_PRECISION)
+        live_safety_speed_arguments: tuple[object, ...] = ("--violence-precision", FAST_SCAN_VIOLENCE_PRECISION)
     else:
         text_speed_arguments = (
             ("--recognition-batch-size", ocr_recognition_batch_size)
             if ocr_recognition_batch_size != 1 else ()
         )
         logo_speed_arguments = ()
+        animation_speed_arguments = ()
+        live_safety_speed_arguments = ()
     selected_detectors = normalize_detector_groups(detector_groups)
     safety_selected = any(
         value in selected_detectors for value in ("adult", "gore", "violence")
@@ -206,6 +236,7 @@ def pipeline_stages(
                     root, "scan-animation-safety", "--input", source,
                     "--report-dir", target, "--sample-fps",
                     config["animation_sample_fps"], "--device", "cuda",
+                    *animation_speed_arguments,
                 ),
                 tuple(
                     target / category / "scan.json"
@@ -234,10 +265,25 @@ def pipeline_stages(
                         "--sequence-context-seconds",
                         config["adult_sequence_context_seconds"],
                         "--content-style", "live_action", "--device", "cuda",
+                        *(("--shot-completion",) if ADULT_SHOT_COMPLETION else ()),
                     ),
                     (adult / "scan.json",),
                 ),), uses_gpu=True,
             ))
+            # Triage only ever applies to live-action queues scanned at the calibrated 2 fps,
+            # so mixed jobs and the 1 fps "fast" profile skip the extra GPU stage.
+            verify = ADULT_VERIFICATION if adult_verification is None else adult_verification
+            if verify and content_style == "live_action" and float(config["adult_sample_fps"]) == 2.0:
+                stages.append(PipelineStage(
+                    "verify_adult", "SCANNING_SAFETY",
+                    (StageCommand(
+                        run_command(
+                            root, "verify-adult", "--report", adult / "scan.json",
+                            "--output", adult / "scan-verified.json", "--device", "cuda",
+                        ),
+                        (adult / "scan-verified.json",),
+                    ),), uses_gpu=True,
+                ))
         shared_live_safety = (
             "gore" in selected_detectors and "violence" in selected_detectors
         )
@@ -250,7 +296,7 @@ def pipeline_stages(
                         "--report-dir", base,
                         "--gore-sample-fps", config["gore_sample_fps"],
                         "--violence-sample-fps", config["violence_sample_fps"],
-                        "--device", "cuda",
+                        "--device", "cuda", *live_safety_speed_arguments,
                     ),
                     (gore / "scan.json", violence / "scan.json"),
                 ),), uses_gpu=True,
@@ -353,11 +399,13 @@ def pipeline_stages(
     review_arguments: list[object] = []
     reports = _report_paths(
         root, job_key, content_style, selected_detectors,
+        adult_verified=any(stage.name == "verify_adult" for stage in stages),
     )
     for report in reports:
         review_arguments += ["--report", report]
     for detector in selected_detectors:
         review_arguments += ["--selected-detector", detector]
+    review_arguments += ["--content-style", content_style]
     review_arguments += ["--queue", queue]
     stages.append(PipelineStage(
         "build_review", "BUILDING_REVIEW",

@@ -285,6 +285,10 @@ class JobScheduler:
         return value
 
     def _definitions(self, job: dict[str, Any]) -> dict[str, PipelineStage]:
+        # A job queued before verify_adult existed keeps its stored stage list; its
+        # build_review must then read adult/scan.json, not a verified copy never made.
+        stored = [stage["name"] for stage in self.store.stages(int(job["id"]))]
+        legacy_adult = bool(stored) and "adult" in stored and "verify_adult" not in stored
         result = {item.name: item for item in pipeline_stages(
             root=self.root, job_key=self._pipeline_key(job), source=Path(job["source_path"]),
             content_style=job["content_style"], profile=job["profile"],
@@ -292,6 +296,7 @@ class JobScheduler:
             detector_groups=self.detector_groups(int(job["id"])),
             ocr_recognition_batch_size=self.ocr_batch_size(int(job["id"])),
             fast_scan=self.fast_scan(int(job["id"])),
+            adult_verification=False if legacy_adult else None,
         )}
         render = self.store.setting(f"render:{job['id']}")
         if render:

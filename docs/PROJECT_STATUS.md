@@ -1,3 +1,36 @@
+## Q3 (2026-10-01): watermark region, nudity shot completion, Golden Set v1.1
+
+- Conan 21 watermark blur no longer leaves "Phim" visible; Golden region 13/13 with nothing else changed.
+- Nudity shot completion R3 implemented but off by default (needs validation on Golden v1.1 T6).
+- Golden Set v1.1 (6 segments, 18+/violence/blood positives and fight hard negatives) ready for labelling.
+- Next: review cards that show a frame strip and an inline player (plan approved, backend in progress).
+
+## Quality track Q2: Golden Set v1 audit and baseline — 2026-09-30
+
+- Labels audited from video evidence and corrected with the user's approval: revision 457, 19 labels (12 watermark, 1 Troy watermark re-boxed, 1 adult, 5 gore).
+- Baseline (`reports/benchmarks/golden-baseline-v1-20260930-225627`): nothing missed in the 13 segments; the weakness is false alarms (precision 65% advertising, 11% adult, 24% gore, 0% violence) and one Conan 21 watermark blur box that leaves "Phim" visible.
+- Troy's active revision has no adult/gore/violence scan (advertising only) and is READY_TO_EXPORT; the adult detector misses clothed kissing and the first 6 s of the bed scene near minute 16 (outside v1). Next: v1.1 segments for 18+/violence, then precision work (docs/QUALITY_PLAN.md §17).
+
+## Phase H-live: live-action safety stages — 2026-09-30
+
+- L1 (exact prefetch) in `scan` and `scan-live-safety`: full Troy byte-identical; adult 596 -> 361 s, gore+violence 1,813 -> 1,136 s.
+- L2 `--violence-precision fp16` measured on full Troy: stage 1,136 -> 581 s, every review item identical after VLM confirmation. Enabled in "Tăng tốc xử lý" after user approval; measured full Troy pipeline with all groups: ~67 min -> 41m47s, review queue identical (`troy-allgroups-full-fast-20260930-162534`). Evidence: `reports/benchmarks/live-safety-h/`. 393/393 tests.
+
+## Phase H: animation safety stage — 2026-09-30
+
+- H1 (exact batch prefetch) is in the scanner: Conan 21 stage 800.7 -> 670.9 s, byte-identical reports/images on both Conan films.
+- H2 fp16 measured on full Conan 20/21 (review items and intervals identical, stage ~208 s instead of ~670 s) and, after user approval, part of "Tăng tốc xử lý" (H3). Measured full pipeline, Conan 20 all groups: 27m22s -> 15m50s (-42%), review items identical (`conan20-allgroups-full-fast-20260930-073627`).
+- Multi-agent review of the Golden Set tooling and Phase H: 16 confirmed issues fixed before any labels exist (matching rules, fail-closed gates, label store safety). 386/386 tests. Evidence: `reports/benchmarks/anime-safety-h/`.
+
+## Quality track Q0–Q1: Golden Set v1 tooling — 2026-09-29
+
+- User approved `docs/QUALITY_PLAN.md` (start with the three existing sources; new videos later). Detailed Q0–Q1 plan and pre-measurement adjustments: §12.
+- Manifest `annotations/golden/v1/segments.json`: 13 segments, 64 min (Troy T1–T4, Conan 20 C20A–E, Conan 21 C21A–D; 7 dev / 6 holdout), SHA-256 verified.
+- 404 labeling suggestions (272 from earlier review queues, 132 from 27 min of dense per-segment scans).
+- Tooling: `scripts/golden_prefill.py` (manifest/collect/dense), labeling page `scripts/golden-label.ps1` → http://127.0.0.1:8766, `scripts/evaluate_golden.py` (score/run/compare with gates), modules `golden_set`, `golden_scoring`, `golden_label_app`. 361/361 tests.
+- Found while planning: the user's earlier decisions (Troy revision 1: 294 decisions incl. 11 adult BLURs; Conan 21: nearly all gore/violence KEEP) become labeling suggestions; `annotations/` is gitignored, so labels rely on atomic writes + history + backups.
+- Next: the user labels the 13 segments (≈2.5–3.5 h on the PC), then Q2 baseline scorecard (`evaluate_golden.py run`, ≈70 min machine).
+
 ## FP16 text detection in "Tăng tốc xử lý" and GroundingDINO fix — 2026-09-29
 
 - fast_scan (default on) now also runs CRAFT detection under float16 autocast (`--detect-precision fp16`). Not bit-identical: validated at review level on Troy (6/294 items identical), Conan Movie 20 advertising (2/393) and Conan Movie 20 with all detector groups (69/393; adult/gore/violence and logo reports byte-identical). OCR stage −59…−128 s; Troy pipeline 16m35s → 14m27s. Plan/results: §15–16 of `docs/CLAUDE_SCAN_OPTIMIZATION_HANDOFF.md`.

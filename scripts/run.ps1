@@ -16,7 +16,7 @@ $UsesCuda = -not ($BiliflowArgs -contains '--device' -and $BiliflowArgs[([Array]
 $GpuCommands = @(
     'scan', 'scan-text', 'classify-text', 'scan-content',
     'scan-animation-safety', 'scan-live-safety', 'scan-visual-logo',
-    'confirm-violence', 'benchmark-images', 'benchmark-videos', 'benchmark-ad-pipeline',
+    'confirm-violence', 'verify-adult', 'benchmark-images', 'benchmark-videos', 'benchmark-ad-pipeline',
     'localize-visual-logo', 'augment-grounding-regions', 'benchmark-scan-timing', 'benchmark-frame-prefetch', 'benchmark-ocr-batch', 'benchmark-ocr-contiguous'
 )
 $MutexName = $null

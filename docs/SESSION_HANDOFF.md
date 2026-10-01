@@ -1,6 +1,6 @@
 # BiliFlow session handoff
 
-Updated: 2026-09-28 (Asia/Bangkok)
+Updated: 2026-09-29 (Asia/Bangkok)
 
 This is the short, authoritative starting point for a new Codex account or chat. It complements the detailed history in `PROJECT_STATUS.md` and `CHANGELOG.md`.
 
@@ -24,6 +24,103 @@ The improvement sequence now present on local `main` is:
 5. `0b4ff3c Map logo candidates by geometry track`
 
 Always confirm this section with `git status` and `git log` because it becomes stale after new work.
+
+## Current work — 2026-10-01 afternoon (uncommitted)
+
+- 18+ triage (conservative, live action) + verify_adult stage + R3 on: implemented, skeptic-reviewed, gates passed
+  (`reports/benchmarks/adult-triage-20261001-131834`). Review page focus mode + review evidence + Host check done.
+  Golden v1 r469, v1.1 r115 (implied-nudity rule). Baseline v1+v1.1: `reports/benchmarks/golden-baseline-v1v11-20261001-095204`.
+- The user's Control Center still runs the old code until restarted (Stop-BiliFlow.cmd / Start-BiliFlow.cmd).
+  Code edits invalidate stage caches: the next scan of each film recomputes every stage.
+- Next proposals: carry reviewed decisions forward on a rerun (today only unresolved items are preserved), then
+  anime gore false alarms (plan §7). Nothing committed since f54cc09; commit only when the user asks.
+
+## Current work — 2026-10-01 (uncommitted)
+
+- Done and skeptic-approved: Conan 21 region fix (region 13/13, `reports/benchmarks/golden-q3b-region-final-20261001`),
+  R3 nudity shot completion (off by default), Golden Set v1.1 tooling. v1.1 manifest + hints built
+  (`annotations/golden/v1.1/segments.json`, `reports/benchmarks/golden-v1.1/prefill/suggestions.json`);
+  the user labels it with `Golden-Label-v1.1.cmd` / `Golden-Label-Phone-v1.1.cmd`.
+- In progress: review-evidence backend + Control Center Host-check fix (spec `temp/q3-handoff/review-evidence-backend-spec.md`,
+  plan `docs/REVIEW_EVIDENCE_PLAN.md`). UI waits for the user's feedback on the mockup `temp/review-mockup/`.
+- Troy #39 rev 4 reviewed (151 KEEP / 8 BLUR), READY_TO_EXPORT; 16:17-16:23 not covered until R3 is enabled.
+
+## PAUSED 2026-10-01 00:15 — resume here when the user says "tiếp tục"
+
+The user shut the PC down for the night. Everything was paused cleanly: review workflows stopped, Control
+Center stopped, no BiliFlow process left, full suite 474/474 OK on the paused tree. Nothing committed.
+
+Uncommitted work waiting for an independent skeptic review (author reports in `temp/q3-handoff/`):
+1. Conan 21 watermark region fix v2 (`src/biliflow/review_workflow.py`, `tests/test_review_workflow.py`):
+   `region-fix-v2-author.md`; first review findings in `temp/q3-handoff/review-b/` and `b-region-report.md`.
+   After review: score the rebuilt queues against `reports/benchmarks/golden-baseline-v1-r469-20260930-235857`
+   (labels revision 469; expect advertising region 13/13, nothing worse).
+2. Nudity shot completion R3, off by default (`scanner.py`, new `shot_cuts.py`, `cli.py --shot-completion`,
+   `tests/test_shot_cuts.py`): `r3-shot-completion-author.md`, design `c1-report.md`. Not wired into jobs;
+   needs validation on a second film (Golden v1.1 T6) before the user decides to enable it.
+3. Golden Set v1.1 tooling, option A (`golden_set.py`, `golden_scoring.py`, `golden_label_app.py`,
+   `evaluate_golden.py`, `golden_prefill.py`, `golden_label_server.py`, tests): `golden-v11-tooling-author.md`,
+   proposal `c2-proposal.md`. The user decided battles with visible slashing/stabbing count (flag for review),
+   so keep T7/T8; clear `GOLDEN_V1_1_PENDING_DECISION`, then build the v1.1 manifest and hints (collect after
+   Troy revision 4) for the user to label (~40 min).
+
+Troy #39 revision 4 was reviewed by the user (151 KEEP, 8 BLUR incl. 15:28-15:50 after the hint); 16:17-16:23 is still
+not covered until R3 is enabled and Troy re-scanned. Review-card gap (QUALITY_PLAN §18 d): one preview frame, no video.
+Previously pending: review Troy #39 revision 4 on the Dashboard (159 items; minutes 14-18: clothed = KEEP,
+15:28-15:50 and 16:23-17:07 = BLUR/CUT); label v1.1; say when to commit.
+
+## Current work — Golden Set v1 audited and scored (uncommitted when written)
+
+- Labels: revision 457 after the user-approved audit (QUALITY_PLAN.md §17; plan and evidence in
+  `reports/benchmarks/golden-v1/audit-20260930`, applied with `scripts/golden_audit_corrections.py`).
+- Baseline scorecard: `reports/benchmarks/golden-baseline-v1-20260930-225627` (Conan 21 trial
+  `conan21-allgroups-full-golden-20260930-222720`). Use it as the reference for `compare --gate`.
+- Open findings: Conan 21 watermark region refinement cuts off "Phim"; Troy #39 active revision is
+  advertising-only (no 18+ scan) yet READY_TO_EXPORT; adult detector misses clothed kissing and
+  977–983 s (`reports/benchmarks/golden-v1/troy-adult-check-20260930`). Troy 870–1110 s is not in v1.
+- The user asked to commit only when told to; nothing since f54cc09 is committed.
+
+## Current work — Phase H-live (live-action safety speed), uncommitted when written
+
+Plan and results: docs/CLAUDE_SCAN_OPTIMIZATION_HANDOFF.md §18. L1 exact prefetch is in `scan` and
+`scan-live-safety` (full Troy byte-identical). L2 `scan-live-safety --violence-precision fp16` passed its
+review-level gate on full Troy (`reports/benchmarks/live-safety-h/full-20260930-144244`) and, after user
+approval, is wired into "Tăng tốc xử lý" (`FAST_SCAN_VIOLENCE_PRECISION`). Long benchmarks are launched as independent processes
+(WMI `Win32_Process.Create`) because a background shell dies with the session.
+
+## Current work — Phase H (animation safety speed), uncommitted when written
+
+The user asked to keep improving while Golden Set labeling waits for the PC. Phase H
+(docs/CLAUDE_SCAN_OPTIMIZATION_HANDOFF.md §17): H1 exact batch prefetch is in the scanner;
+H2 `scan-animation-safety --precision fp16` passed its full-film gates on Conan 20/21
+(`reports/benchmarks/anime-safety-h/full-20260929-231545`) and, after user approval, is wired into
+"Tăng tốc xử lý" (H3, `FAST_SCAN_ANIMATION_PRECISION`); 387/387 tests. The user asked not to commit until the quality track has real
+results.
+
+## Current work — quality track (Golden Set v1), uncommitted when written
+
+Speed work is committed through `f54cc09` (fast_scan incl. FP16 CRAFT; Troy advertising 25m32s -> 14m27s).
+The user then approved `docs/QUALITY_PLAN.md` and asked to start with the three existing
+sources (Troy #39, Conan 20 #38, Conan 21 #37) and verify new videos later. Q0–Q1 tooling is
+built and tested (361/361), not committed (commit only when the user asks):
+
+- Manifest: `annotations/golden/v1/segments.json` (13 segments, 64 min, SHA-256 verified).
+  Labels: `annotations/golden/v1/events.json` + `label-history.jsonl` + `backups/` (gitignored:
+  never delete; they are user work).
+- Suggestions: `python scripts/golden_prefill.py collect` -> `reports/benchmarks/golden-v1/prefill/suggestions.json`
+  (404: 272 from all job revisions and latest benchmark queues + 132 from the dense per-segment
+  scans in `reports/benchmarks/golden-v1/prefill/dense`, 27 min). Re-running `collect` with the same inputs
+  keeps suggestion ids; it refuses to drop ids that labels reference unless `--force`.
+- Labeling page: `Golden-Label.cmd` / `.\scripts\golden-label.ps1` -> http://127.0.0.1:8766 (PC only). Phone on the home Wi-Fi: `Golden-Label-Phone.cmd` (random access code, link printed and saved to `reports/benchmarks/golden-v1/phone-link.txt`); stop every labeling page with `Golden-Label-Stop.cmd` (QUALITY_PLAN.md §16). One server at a time (events.lock).
+- Scoring: `python scripts/evaluate_golden.py run` (≈70 min, isolated trials, then scorecard in
+  `reports/benchmarks/golden-<timestamp>/`), `score --queue ...`, `compare --gate detector|speed`.
+  Rules and gates are in `docs/QUALITY_PLAN.md` §4, §7, §12 and `src/biliflow/golden_scoring.py`;
+  do not loosen them after seeing numbers.
+- `reports/benchmarks/golden-smoke-20260929-214612` was scored with throw-away labels from `temp/`;
+  it is a pipeline check, not a measurement.
+
+Next: the user labels all 13 segments; then run the Q2 baseline scorecard and propose Q3
+fixes from the measured misses (must_catch first).
 
 ## Latest bounded experiment — cross-frame OCR recognition (uncommitted when written)
 
@@ -276,7 +373,7 @@ This run skipped `adult`, `gore`, and `violence`. It validates advertisement/log
 
 1. **Human-check the new Troy advertising queue.** Confirm the full-timeline XEMBZ.NET region is tight and that the two opening CUT proposals are correct. This is a review task, not another detector change.
 2. **Run one fresh all-detector Troy regression when requested.** Confirm the V0.7.20 adult interval and V0.7.23 high-priority intervals appear in the current Review UI. The latest verified V0.7.24 run was advertising-only.
-3. **Benchmark across Troy, Conan, and Shin.** Record recall-oriented logo coverage, false review groups, stage durations, and output correctness. Do not claim general logo accuracy from Troy alone.
+3. **Golden Set v1 (quality plan).** Tooling ready (see "Current work"); waiting for the user's labels on 13 Troy/Conan segments, then the Q2 baseline scorecard. Shin sources no longer exist; add new representative videos as v1.1 later. Do not claim general accuracy from these three sources alone.
 4. **Reduce scan time without lowering coverage.** Phase timing instrumentation is complete on the improvement branch. Collect these timings on the next authorized run; older reports cannot supply them. The last advertising-only Troy rerun took roughly 27 minutes: OCR about 13 minutes and visual-logo routing/localization about 14 minutes. The requested 5-10 minute full-video target is not yet achieved.
 5. **Performance work after measurement.** Dependency-scoped exact stage cache is implemented. OCR prefetch remains off because its benefit was negligible. Opt-in same-width OCR passes sampled/synthetic/native-source comparisons plus actual GPU worker cancellation. The native Troy pilot improves total OCR scan time 7.51%, not full pipeline time. Keep serial default; a controlled full advertising opt-in comparison remains to be requested/integrated. There is no OOM/exhaustion guarantee. Inspect repeated source hashing/shared decoding next without weakening content identity. Keep source SHA/config/model revisions and existing bounded cleanup policy. Do not reduce sampling density or model thresholds without an A/B regression.
 6. **Optional export acceleration comes later.** NVENC is currently blocked by the installed driver/FFmpeg API mismatch. Smart Render is unsafe for timelines with persistent blur unless continuity and full output validation are proven. CPU libx264 remains the production path.

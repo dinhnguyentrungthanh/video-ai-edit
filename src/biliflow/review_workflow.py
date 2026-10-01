@@ -15,6 +15,21 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Iterable
 
+from biliflow.adult_verification import (
+    ADULT_TRIAGE_EVIDENCE,
+    ADULT_TRIAGE_LEVELS,
+    CREDITS_LABEL,
+    CREDITS_VERIFIER_GUARD,
+    TRIAGE_SCAN_SAMPLE_FPS,
+    TRIAGE_SCAN_THRESHOLD,
+    VERIFIER_CALIBRATED_REVISION,
+    VERIFIER_FRAME_SIZE,
+    VERIFIER_MODEL_DIR,
+    VERIFIER_SAMPLE_FPS,
+    VERIFIER_TARGET_LABEL,
+    normalize_adult_triage_level,
+    verification_is_calibrated,
+)
 from biliflow.brand_memory import forget_review_item, remember_review_item
 from biliflow.job_pipeline import DEFAULT_DETECTOR_GROUPS
 from biliflow.blur_filter import (
@@ -235,11 +250,60 @@ def _intersection_over_smaller(first: dict, second: dict) -> float:
     return intersection / smaller
 
 
+def _coverage(inner: dict, outer: dict) -> float:
+    """Share of ``inner`` that lies inside ``outer``."""
+    ax1, ay1 = int(inner["x"]), int(inner["y"])
+    ax2, ay2 = ax1 + int(inner["width"]), ay1 + int(inner["height"])
+    bx1, by1 = int(outer["x"]), int(outer["y"])
+    bx2, by2 = bx1 + int(outer["width"]), by1 + int(outer["height"])
+    intersection = max(0, min(ax2, bx2) - max(ax1, bx1)) * max(
+        0, min(ay2, by2) - max(ay1, by1)
+    )
+    return intersection / max(1, int(inner["width"]) * int(inner["height"]))
+
+
+def _has_approved_brand_region(item: dict) -> bool:
+    """The proposed box is the region a user approved in brand memory."""
+    evidence = item.get("model_evidence") or {}
+    return "brand_memory" in set(evidence.get("region_sources") or [])
+
+
+def _is_text_line_fragment(part: dict, whole: dict) -> bool:
+    """Whether ``whole`` continues the text line of ``part`` well beyond it.
+
+    A complete OCR read of a mark is often a few pixels wider than a tight
+    read (padding). A fragment such as "Online.net" of "PhimOnline.net" misses
+    at least one glyph: the fuller reads extend it along the line by half a
+    text height or more and it spans clearly less of the line. Reads that are
+    much taller than the fragment describe an emblem around the text, not the
+    same line, and keep the existing emblem handling.
+    """
+    horizontal = int(whole["width"]) >= int(whole["height"])
+    start, length, cross = ("x", "width", "height") if horizontal else ("y", "height", "width")
+    part_start, part_length = int(part[start]), int(part[length])
+    whole_start, whole_length = int(whole[start]), int(whole[length])
+    if int(whole[cross]) > int(part[cross]) * 1.5:
+        return False
+    beyond = max(
+        part_start - whole_start,
+        (whole_start + whole_length) - (part_start + part_length),
+    )
+    return (
+        part_length <= whole_length * 0.85
+        and beyond >= int(part[cross]) * 0.5
+    )
+
+
 def _dominant_region_cluster(regions: list[dict]) -> list[dict]:
     """Keep the repeated spatial target and reject nearby OCR outliers."""
     clusters: list[list[dict]] = []
+    # Geometry breaks area ties so the result does not depend on item order.
     for region in sorted(
-        regions, key=lambda value: int(value["width"]) * int(value["height"]),
+        regions, key=lambda value: (
+            int(value["width"]) * int(value["height"]),
+            int(value["y"]), int(value["x"]),
+            int(value["height"]), int(value["width"]),
+        ),
     ):
         area = max(1, int(region["width"]) * int(region["height"]))
         for cluster in clusters:
@@ -274,18 +338,28 @@ def refine_persistent_logo_regions(items: list[dict]) -> list[dict]:
     the same spatial mark are safer for the final blur. The human gate remains
     required; this only improves the proposed region shown for review.
     """
+    # Every track is judged against the boxes as built, and the refinements are
+    # applied afterwards: a track refined earlier in the list must not become
+    # evidence for the next one, so the result does not depend on item order.
+    built_regions = {
+        id(item): item.get("suggested_region_source_pixels") for item in items
+    }
+    refinements: list[tuple[dict, dict]] = []
     for item in items:
-        region = item.get("suggested_region_source_pixels")
+        region = built_regions[id(item)]
         if (
             item.get("category") not in {"visual_logo", "text"}
             or item.get("candidate_type") != "persistent_overlay"
             or not isinstance(region, dict)
+            # A user-approved brand-memory box is never replaced by OCR reads.
+            or _has_approved_brand_region(item)
         ):
             continue
         area = int(region["width"]) * int(region["height"])
         supporting: list[dict] = []
+        wider_reads: list[dict] = []
         for other in items:
-            other_region = other.get("suggested_region_source_pixels")
+            other_region = built_regions[id(other)]
             if (
                 other is item
                 or other.get("category") != "visual_logo"
@@ -296,13 +370,19 @@ def refine_persistent_logo_regions(items: list[dict]) -> list[dict]:
             ):
                 continue
             other_area = int(other_region["width"]) * int(other_region["height"])
-            sources = set(other.get("model_evidence", {}).get("region_sources") or [])
+            sources = set((other.get("model_evidence") or {}).get("region_sources") or [])
             if (
-                "ocr" in sources
-                and other_area <= area * 0.65
-                and _intersection_over_smaller(region, other_region) >= 0.70
+                "ocr" not in sources
+                or _intersection_over_smaller(region, other_region) < 0.70
             ):
+                continue
+            if other_area <= area * 0.65:
                 supporting.append(other_region)
+            elif other_area <= area * 2.0:
+                # Too large to prove the box is oversized, but still a read of
+                # the same spot, possibly with a little more padding than the
+                # track box; used below to detect a fragmentary consensus.
+                wider_reads.append(other_region)
         supporting = _dominant_region_cluster(supporting)
         if len(supporting) < 2:
             continue
@@ -311,6 +391,36 @@ def refine_persistent_logo_regions(items: list[dict]) -> list[dict]:
             refined = union_pixel_regions(refined, candidate)
         assert refined is not None
         refined_area = int(refined["width"]) * int(refined["height"])
+        # OCR can repeatedly read only part of a mark, e.g. "Online.net" of
+        # the "PhimOnline.net" watermark, and that fragment then looks like a
+        # tight consensus. When repeated fuller reads contain it and continue
+        # its text line, shrinking to the fragment would leave readable parts
+        # of the mark unblurred: use the extent of those fuller reads instead.
+        # Fuller reads that only add padding do not stop a legitimate trim.
+        fuller_reads = _dominant_region_cluster([
+            value for value in wider_reads
+            if int(value["width"]) * int(value["height"]) > refined_area
+            and _intersection_over_smaller(refined, value) >= 0.70
+        ])
+        full_mark = None
+        for candidate in fuller_reads:
+            full_mark = union_pixel_regions(full_mark, candidate)
+        if (
+            len(fuller_reads) >= 2
+            and full_mark is not None
+            and _is_text_line_fragment(refined, full_mark)
+        ):
+            refinements.append((item, {
+                "method": "repeated_full_mark_ocr_support",
+                "support_count": len(fuller_reads),
+                "original_region": region,
+                # A fuller read only needs to contain 70% of the fragment, so
+                # keep the fragment inside the box as well.
+                "refined_region": union_pixel_regions(full_mark, refined),
+                "ocr_fragment_region": refined,
+                "ocr_fragment_support_count": len(supporting),
+            }))
+            continue
         if (
             item.get("category") == "text"
             and refined_area / max(1, area) < 0.75
@@ -334,13 +444,15 @@ def refine_persistent_logo_regions(items: list[dict]) -> list[dict]:
                 "height": int(region["height"]) - trim * 2,
             }
             method = "grounding_box_padding_trim"
-        item["suggested_region_source_pixels"] = refined
-        item["region_refinement"] = {
+        refinements.append((item, {
             "method": method,
             "support_count": len(supporting),
             "original_region": region,
             "refined_region": refined,
-        }
+        }))
+    for item, refinement in refinements:
+        item["suggested_region_source_pixels"] = refinement["refined_region"]
+        item["region_refinement"] = refinement
     return items
 
 
@@ -383,9 +495,16 @@ def reconcile_persistent_overlay_items(
         ):
             records.append(record)
         owner["supporting_candidate_count"] = len(records)
+    # A box the user approved in brand memory owns its watermark: it is
+    # reconciled first, and an OCR or unapproved visual box absorbs it only
+    # when that box covers the approved one.
     persistent_owners = sorted(
         items,
-        key=lambda item: 0 if item.get("category") == "visual_logo" else 1,
+        key=lambda item: (
+            0 if item.get("category") == "visual_logo"
+            and _has_approved_brand_region(item)
+            else 1 if item.get("category") == "visual_logo" else 2
+        ),
     )
     for visual in persistent_owners:
         visual_region = visual.get("suggested_region_source_pixels")
@@ -396,6 +515,10 @@ def reconcile_persistent_overlay_items(
             or not isinstance(visual_region, dict)
         ):
             continue
+        owner_is_approved_brand = _has_approved_brand_region(visual)
+        # The approved box joins an OCR track of the same mark at the overlap
+        # at which the track would otherwise have absorbed that brand card.
+        required_track_overlap = 0.60 if owner_is_approved_brand else 0.75
         for text_item in items if visual.get("category") == "visual_logo" else []:
             text_region = text_item.get("suggested_region_source_pixels")
             if (
@@ -404,7 +527,8 @@ def reconcile_persistent_overlay_items(
                 or text_item.get("category") != "text"
                 or text_item.get("candidate_type") != "persistent_overlay"
                 or not isinstance(text_region, dict)
-                or _intersection_over_smaller(visual_region, text_region) < 0.75
+                or _intersection_over_smaller(visual_region, text_region)
+                < required_track_overlap
                 or float(text_item["start_seconds"]) >= float(visual["end_seconds"])
                 or float(text_item["end_seconds"]) <= float(visual["start_seconds"])
             ):
@@ -447,6 +571,20 @@ def reconcile_persistent_overlay_items(
         # Region-level confirmations and short OCR fragments fully contained
         # by the same watermark are supporting evidence, not extra decisions.
         # Absorb them so one click covers the complete approved timeline.
+        # A persistent OCR track already joined to this card is evidence of
+        # the same mark: a card inside that track's box that proposes the same
+        # action is support even when the owner's own (for example approved)
+        # box is tighter. Cards without a proposal keep their advisory path.
+        # The card must still overlap the owner's own box (0.60, as for an
+        # external brand): only that box is blurred after one approval, so a
+        # card elsewhere in a long track stays its own decision.
+        track_regions = [
+            record["region_source_pixels"]
+            for record in visual.get("supporting_detections") or []
+            if record.get("category") == "text"
+            and record.get("candidate_type") == "persistent_overlay"
+            and isinstance(record.get("region_source_pixels"), dict)
+        ]
         for support in items:
             support_region = support.get("suggested_region_source_pixels")
             support_overlap = (
@@ -460,6 +598,16 @@ def reconcile_persistent_overlay_items(
                 }
                 else 0.80
             )
+            inside_joined_track = (
+                isinstance(support_region, dict)
+                and support_overlap >= 0.60
+                and support.get("suggested_decision") is not None
+                and support.get("suggested_decision") == visual.get("suggested_decision")
+                and any(
+                    _coverage(support_region, track_region) >= 0.80
+                    for track_region in track_regions
+                )
+            )
             if (
                 support is visual
                 or id(support) in removed
@@ -470,7 +618,14 @@ def reconcile_persistent_overlay_items(
                 }
                 or support.get("review_kind") == "title_overlay"
                 or not isinstance(support_region, dict)
-                or support_overlap < required_overlap
+                # An approved brand box is only absorbed by another owner
+                # whose own box covers it; a fragment would lose part of it.
+                or (
+                    _has_approved_brand_region(support)
+                    and not owner_is_approved_brand
+                    and _coverage(support_region, visual_region) < 0.95
+                )
+                or (support_overlap < required_overlap and not inside_joined_track)
                 or float(support["start_seconds"]) < float(visual["start_seconds"])
                 or float(support["end_seconds"]) > float(visual["end_seconds"])
                 or (
@@ -631,6 +786,245 @@ def revalidate_preserved_review_items(
         ))
         advisory.append(item)
     return required, advisory
+
+
+CONTENT_STYLES = ("animation", "live_action", "mixed", "unknown")
+# Tolerance for a source interval that must still overlap the item that cites it.
+_ADULT_REF_OVERLAP_TOLERANCE = 1.0
+
+
+def _candidate_reference(value: object) -> tuple[str, int] | None:
+    report, separator, index = str(value).rpartition("#interval:")
+    if not separator or not report:
+        return None
+    try:
+        position = int(index)
+    except ValueError:
+        return None
+    return (report.replace("\\", "/"), position) if position >= 0 else None
+
+
+def _calibrated_nsfw_scan(payload: dict) -> bool:
+    try:
+        return (
+            abs(float(payload.get("sample_fps")) - TRIAGE_SCAN_SAMPLE_FPS) < 1e-9
+            and abs(float(payload.get("threshold")) - TRIAGE_SCAN_THRESHOLD) < 1e-9
+        )
+    except (TypeError, ValueError):
+        return False
+
+
+def triage_adult_items(
+    items: list[dict], scan_payloads: dict[str, dict],
+    job_content_style: str | None, level: str | None = None,
+) -> tuple[list[dict], list[dict], dict]:
+    """Move weak, undecided live-action 18+ candidates to the optional list.
+
+    Returns ``(required, advisory, audit)`` in the style of
+    ``revalidate_preserved_review_items``. Nothing is deleted: a moved item keeps
+    every interval and source reference, appears under "Xem tất cả ứng viên"
+    and returns to the main list as soon as the reviewer decides it. Settings
+    and evidence live in ``biliflow.adult_verification``.
+
+    Only items with ``category == "adult"``, no decision, and every source
+    reference resolving to a live-action nsfw-nano scan run at the calibrated
+    settings are considered, and only when the job is ``live_action`` (mixed,
+    animation and an unknown style move nothing). R1 moves an item whose every
+    interval is labelled "hentai" (credits). The two-signal rule moves an item
+    only when n_seeds < k and the verifier's NSFW max < t; a missing, failed or
+    uncalibrated verification keeps the item in the main list.
+    """
+    level = normalize_adult_triage_level(level)
+    settings = ADULT_TRIAGE_LEVELS[level]
+    two_signal = settings["two_signal"]
+    # A verified copy may also be listed under its scan.json path; report it once.
+    reports_by_payload: dict[int, str] = {}
+    for report, payload in scan_payloads.items():
+        reports_by_payload.setdefault(id(payload), report)
+    audit: dict = {
+        "level": level,
+        "content_style": job_content_style,
+        "credits_rule": bool(settings["credits_rule"]),
+        "two_signal": dict(two_signal) if two_signal else None,
+        "scan_calibration": {
+            "sample_fps": TRIAGE_SCAN_SAMPLE_FPS, "threshold": TRIAGE_SCAN_THRESHOLD,
+        },
+        "verifier": {
+            "model": VERIFIER_MODEL_DIR, "target_label": VERIFIER_TARGET_LABEL,
+            "calibrated_revision": VERIFIER_CALIBRATED_REVISION,
+            "sample_fps": VERIFIER_SAMPLE_FPS, "frame_size": VERIFIER_FRAME_SIZE,
+        },
+        "verification_reports": {
+            report: str((payload.get("adult_verification") or {}).get("state") or "MISSING")
+            for report, payload in sorted(scan_payloads.items())
+            if payload.get("scan_type") == "nsfw" and reports_by_payload.get(id(payload)) == report
+        },
+        "evidence": ADULT_TRIAGE_EVIDENCE,
+        "applied": False,
+        "reason": None,
+        "evaluated_items": 0,
+        "moved_items": 0,
+        "moved_seconds": 0.0,
+        "moved_by_rule": {"credits": 0, "two_signal": 0},
+        "kept_by_reason": {},
+        "note": (
+            "Moved items stay in advisory_items with every interval and source reference; "
+            "none is deleted or marked safe."
+        ),
+    }
+    if not settings["credits_rule"] and two_signal is None:
+        audit["reason"] = "level_off"
+        return list(items), [], audit
+    if job_content_style != "live_action":
+        audit["reason"] = (
+            "content_style_missing" if not job_content_style
+            else "content_style_not_live_action"
+        )
+        return list(items), [], audit
+    audit["applied"] = True
+    kept_by_reason: dict[str, int] = {}
+    required: list[dict] = []
+    advisory: list[dict] = []
+    for original in items:
+        if original.get("category") != "adult":
+            required.append(original)
+            continue
+        if original.get("decision") is not None:
+            # A human decision is never moved, whatever the detectors say.
+            kept_by_reason["decided"] = kept_by_reason.get("decided", 0) + 1
+            required.append(original)
+            continue
+        audit["evaluated_items"] += 1
+        try:
+            item_start = float(original.get("start_seconds"))
+            item_end = float(original.get("end_seconds"))
+        except (TypeError, ValueError):
+            item_start = item_end = None
+        resolved: list[tuple[dict, dict]] = []
+        seen_intervals: set[tuple[int, int]] = set()
+        problem = None
+        references = list(dict.fromkeys(
+            str(value) for value in original.get("source_candidate_refs") or []
+        ))
+        if not references:
+            problem = "no_source_refs"
+        for reference in references:
+            parsed = _candidate_reference(reference)
+            payload = scan_payloads.get(parsed[0]) if parsed else None
+            intervals = payload.get("intervals") if isinstance(payload, dict) else None
+            if (
+                parsed is None or not isinstance(intervals, list)
+                or parsed[1] >= len(intervals) or not isinstance(intervals[parsed[1]], dict)
+            ):
+                problem = "unresolved_source_refs"
+                break
+            if payload.get("scan_type") != "nsfw" or payload.get("content_style") != "live_action":
+                problem = "not_live_action_nsfw_scan"
+                break
+            interval = intervals[parsed[1]]
+            try:
+                overlaps = item_start is not None and (
+                    float(interval["start_seconds"]) <= item_end + _ADULT_REF_OVERLAP_TOLERANCE
+                    and float(interval["end_seconds"]) >= item_start - _ADULT_REF_OVERLAP_TOLERANCE
+                )
+            except (KeyError, TypeError, ValueError):
+                overlaps = False
+            if not overlaps:
+                problem = "stale_source_refs"
+                break
+            # A scan.json reference and its verified alias name the same interval:
+            # count its seeds once.
+            if (id(payload), parsed[1]) not in seen_intervals:
+                seen_intervals.add((id(payload), parsed[1]))
+                resolved.append((payload, interval))
+        info: dict = {
+            "outcome": "kept", "rule": None, "reason": problem, "level": level,
+            "n_seeds": None, "labels": [], "verifier_max": None,
+            "k": two_signal["k"] if two_signal else None,
+            "t": two_signal["t"] if two_signal else None,
+            "model": VERIFIER_MODEL_DIR, "revision": None,
+        }
+        rule = None
+        if problem is None:
+            interval_labels = [
+                str(interval.get("predicted_label") or "").strip().casefold()
+                for _, interval in resolved
+            ]
+            n_seeds = 0
+            for _, interval in resolved:
+                try:
+                    n_seeds += max(0, int(interval.get("sample_count") or 0))
+                except (TypeError, ValueError):
+                    pass
+            verifications = [interval.get("adult_verification") for _, interval in resolved]
+            calibrated = [verification_is_calibrated(value) for value in verifications]
+            verifier_max = (
+                max(float(value["nsfw_max"]) for value in verifications) if all(calibrated) else None
+            )
+            revisions = sorted({
+                str(value.get("revision")) for value in verifications
+                if isinstance(value, dict) and value.get("revision")
+            })
+            info.update(
+                n_seeds=n_seeds,
+                labels=sorted(set(interval_labels) - {""}),
+                verifier_max=round(verifier_max, 6) if verifier_max is not None else None,
+                revision=revisions[0] if len(revisions) == 1 else (revisions or None),
+            )
+            if not all(_calibrated_nsfw_scan(payload) for payload, _ in resolved):
+                info["reason"] = "uncalibrated_scan"
+            elif settings["credits_rule"] and all(
+                label == CREDITS_LABEL for label in interval_labels
+            ) and not (verifier_max is not None and verifier_max >= CREDITS_VERIFIER_GUARD):
+                rule = "credits"
+            elif two_signal is None:
+                info["reason"] = "no_rule_for_level"
+            elif any(not isinstance(value, dict) for value in verifications):
+                info["reason"] = "verification_missing"
+            elif any(value.get("state") != "SCORED" for value in verifications):
+                info["reason"] = "verification_failed"
+            elif verifier_max is None:
+                info["reason"] = "verification_uncalibrated"
+            elif n_seeds < two_signal["k"] and verifier_max < two_signal["t"]:
+                rule = "two_signal"
+            else:
+                info["reason"] = "strong_evidence"
+        if rule is None:
+            item = dict(original)
+            item["adult_triage"] = info
+            reason = str(info["reason"])
+            kept_by_reason[reason] = kept_by_reason.get(reason, 0) + 1
+            required.append(item)
+            continue
+        info.update(outcome="advisory", rule=rule, reason=None)
+        if rule == "credits":
+            sentence = (
+                "Mọi khung 18+ của mục này chỉ mang nhãn 'hentai' (thường là chữ hoặc "
+                "credits trên nền tối) trong phim người đóng; chuyển sang Ứng viên phụ, "
+                "không xóa và không coi là đã an toàn"
+            )
+        else:
+            sentence = (
+                f"Hai bộ kiểm cùng yếu: chỉ {info['n_seeds']} khung vượt ngưỡng 18+ "
+                f"(dưới {two_signal['k']}) và bộ kiểm thứ hai chấm NSFW cao nhất "
+                f"{info['verifier_max']:.2f} (dưới {two_signal['t']:g}); chuyển sang "
+                "Ứng viên phụ, không xóa và không coi là đã an toàn"
+            )
+        item = dict(original)
+        item["advisory"] = True
+        item["priority"] = "context"
+        # Weak evidence is not proof of safety: no action is suggested.
+        item["suggested_decision"] = None
+        item["adult_triage"] = info
+        item["reasons"] = list(dict.fromkeys(list(item.get("reasons") or []) + [sentence]))
+        audit["moved_items"] += 1
+        audit["moved_by_rule"][rule] += 1
+        if item_start is not None and item_end is not None:
+            audit["moved_seconds"] += max(0.0, item_end - item_start)
+        advisory.append(item)
+    audit["moved_seconds"] = round(audit["moved_seconds"], 3)
+    audit["kept_by_reason"] = dict(sorted(kept_by_reason.items()))
+    return required, advisory, audit
 
 
 def preserve_unresolved_review_items(
@@ -1478,11 +1872,50 @@ def _render_queue_html(root: Path, queue_path: Path, payload: dict) -> None:
     queue_path.with_suffix(".html").write_text(document, encoding="utf-8")
 
 
+def _verified_report_alias(root: Path, reports_root: Path, payload: dict) -> str | None:
+    """Scan report a verified 18+ copy was made from, once proven unchanged.
+
+    A verified copy whose scan.json changed afterwards would show stale
+    intervals, so it is refused instead of silently reviewed.
+    """
+    verification = payload.get("adult_verification")
+    if not isinstance(verification, dict):
+        return None
+    relative = str(verification.get("source_report") or "").replace("\\", "/")
+    expected = str(verification.get("source_report_sha256") or "")
+    if not relative or not expected:
+        return None
+    try:
+        source = _inside(reports_root, root / relative, "Verified source report")
+    except ValueError:
+        return None
+    if not source.is_file():
+        return None
+    if _sha256(source) != expected:
+        raise ValueError(
+            f"18+ verification is stale: {relative} changed after verify-adult; "
+            "run verify-adult again"
+        )
+    return _relative(root, source)
+
+
 def build_review_queue(
     *, project_root: Path, report_paths: list[Path], queue_path: Path,
     merge_gap_seconds: float = 1.0,
     selected_detectors: list[str] | None = None,
+    content_style: str | None = None,
+    adult_triage_level: str | None = None,
 ) -> dict:
+    """Build one review queue from scan reports.
+
+    ``content_style`` is the job's confirmed style; only ``live_action`` lets
+    ``triage_adult_items`` move weak 18+ candidates to the optional list. Callers
+    that omit it (older scripts, benchmarks) get the queue without that triage.
+    ``adult_triage_level`` overrides ``ADULT_TRIAGE_LEVEL`` for measurements.
+    """
+    if content_style is not None and content_style not in CONTENT_STYLES:
+        raise ValueError(f"Unknown content style: {content_style}")
+    adult_triage_level = normalize_adult_triage_level(adult_triage_level)
     root = project_root.resolve(strict=True)
     reports_root = (root / "reports").resolve(strict=True)
     queue_path = _inside(reports_root, queue_path, "Queue path")
@@ -1504,6 +1937,7 @@ def build_review_queue(
     title_references: list[dict] = []
     in_film_text_references: list[dict] = []
     used_reports = []
+    scan_payloads: dict[str, dict] = {}
     detector_coverage_by_report: dict[str, dict] = {}
     for candidate in report_paths:
         report_path = _inside(reports_root, candidate, "Report path")
@@ -1511,6 +1945,7 @@ def build_review_queue(
         payload = _read_json(report_path)
         if payload.get("status") not in {"COMPLETED", "REVIEW_REQUIRED"}:
             raise ValueError(f"Report is not reviewable: {report_path}")
+        verification_alias = _verified_report_alias(root, reports_root, payload)
         current_source = Path(str(payload["input"])).resolve(strict=True)
         if source_path is None:
             source_path = current_source
@@ -1527,6 +1962,11 @@ def build_review_queue(
         source_duration = current_duration
         relative_report = _relative(root, report_path)
         used_reports.append(relative_report)
+        scan_payloads[relative_report] = payload
+        if verification_alias:
+            # Unresolved items preserved from a queue built on the unverified
+            # scan cite scan.json; the verified copy holds the same intervals.
+            scan_payloads.setdefault(verification_alias, payload)
         selection_coverage = payload.get("candidate_selection_coverage")
         if isinstance(selection_coverage, dict):
             detector_coverage_by_report[relative_report] = {
@@ -1610,6 +2050,12 @@ def build_review_queue(
                 items, source_duration=source_duration,
             )
             items = group_safety_review_events(items)
+    # After preserved items are restored and re-checked, before ordering: a
+    # moved item must not be promoted, and a decided one is never moved.
+    items, triaged_adult_items, adult_triage = triage_adult_items(
+        items, scan_payloads, content_style, adult_triage_level,
+    )
+    advisory_items.extend(triaged_adult_items)
     items = promote_strong_adult_priorities(items)
     items = sorted(items, key=lambda item: (
         _PRIORITY_RANK.get(item["priority"], 2),
@@ -1671,6 +2117,8 @@ def build_review_queue(
             ),
         },
         "merge_gap_seconds": merge_gap_seconds,
+        "content_style": content_style,
+        "adult_triage": adult_triage,
         "allowed_decisions": list(DECISIONS),
         "counts": _counts(items),
         "items": items,
@@ -2104,62 +2552,318 @@ def review_resource_status(*, project_root: Path, queue_path: Path) -> dict:
             "expected_heat": "moderate_during_render_only",
             "full_export_enabled": False,
         },
+        "evidence_preview": {
+            "on_demand_ffmpeg_frames": True, "uses_gpu": False,
+            "encodes_video": False,
+        },
     }
 
 
 def _interactive_html(token: str) -> str:
-    return f"""<!doctype html><html lang="vi"><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1"><title>BiliFlow Review</title>
+    """Focus-mode review page: one item at a time, a shared player and lazy evidence.
+
+    The page is a plain template (not an f-string) and the session token is
+    substituted once. Every API path is built from ``const API='/api/'`` so the
+    Control Center can rewrite it to ``/api/jobs/<id>/review/``. Rendering
+    rules: polling never re-creates the focus card or resets the player; it
+    only patches counts, list statuses and the side panel of the focus item
+    when that item's visible state changed elsewhere.
+    """
+    page = r"""<!doctype html><html lang="vi"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1"><title>BiliFlow Review</title><link rel="icon" href="data:,">
 <style>
-:root{{--bg:#0e1116;--card:#171c24;--line:#303846;--text:#eef3fa;--muted:#9aa8ba;--blue:#4da3ff;--green:#3ccf91;--red:#ff657a;--amber:#f4ba4a}}
-*{{box-sizing:border-box}}body{{margin:0;background:var(--bg);color:var(--text);font:15px system-ui,sans-serif}}body.saving button{{pointer-events:none;opacity:.65}}header{{position:sticky;top:0;z-index:4;background:#0e1116f2;border-bottom:1px solid var(--line);padding:16px 24px}}header .back{{position:absolute;right:24px;top:16px}}h1{{margin:0 190px 8px 0;font-size:22px}}#summary{{color:var(--muted)}}.bar{{height:8px;background:#252b35;border-radius:8px;margin-top:10px;overflow:hidden}}.bar span{{display:block;height:100%;background:var(--green)}}#resources{{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:8px;padding:12px 24px 0}}.resource{{background:#141922;border:1px solid var(--line);padding:10px;border-radius:9px}}.resource strong{{display:block;font-size:17px;margin-top:3px}}.resource-note{{grid-column:1/-1;color:var(--muted)}}#export-panel{{margin:12px 24px 0;padding:12px;background:#141922;border:1px solid var(--line);border-radius:9px;display:flex;gap:12px;align-items:center;flex-wrap:wrap}}#export-panel button{{background:#6b2632;font-weight:700}}#export-status{{color:var(--muted)}}nav{{display:flex;gap:8px;flex-wrap:wrap;padding:14px 24px}}button{{border:1px solid var(--line);background:#242b36;color:var(--text);padding:9px 12px;border-radius:8px;cursor:pointer}}button:disabled{{opacity:.45;cursor:not-allowed}}button:hover{{border-color:var(--blue)}}button.active{{outline:2px solid var(--blue)}}button.bulk{{background:#15523d}}button.accept{{margin-left:auto;background:#17466d}}button.candidate-filter{{background:#664a14;border-color:#a87821;font-weight:700}}main{{display:grid;grid-template-columns:repeat(auto-fit,minmax(340px,1fr));gap:14px;padding:0 24px 30px}}article{{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:14px}}article.high{{border-color:#855f1e}}.meta{{display:flex;gap:8px;flex-wrap:wrap;color:var(--muted);margin-bottom:10px}}.badge{{padding:3px 7px;border-radius:12px;background:#252c37}}.suggestion{{color:#91c9ff;border:1px solid #345b80}}.scope-detail{{margin:8px 0;padding:9px 10px;border-radius:8px;background:#17283d;border:1px solid #315c85;color:#d7eaff}}.scope-detail strong{{display:block;margin-bottom:4px}}.scope-detail.track{{background:#153b31;border-color:#28765d;color:#baf4dc}}.scope-detail.advisory{{background:#3b2c12;border-color:#8b651d;color:#ffe1a0}}.coverage{{margin:8px 0;padding:8px 10px;border-radius:8px;background:#153b31;color:#89e4bd}}.visual-ai{{margin:8px 0;padding:9px 10px;border-radius:8px;background:#172f4b;border:1px solid #386d9d;color:#cce7ff}}.images{{display:flex;gap:8px;overflow:auto;min-height:150px}}img{{height:160px;max-width:100%;object-fit:contain;border-radius:7px;background:#090b0e}}.region-pair{{display:flex;gap:6px;align-items:center;flex:0 0 auto}}canvas.region-frame{{height:160px;width:auto;max-width:420px;border-radius:7px;background:#090b0e}}canvas.region-crop{{width:auto;height:auto;max-width:240px;max-height:140px;border:2px solid var(--red);border-radius:7px;background:#090b0e}}.region-detail{{margin:8px 0;padding:8px 10px;border-radius:8px;background:#301b20;border:1px solid #8c3947;color:#ffd6dc}}.labels{{min-height:42px;margin:10px 0;color:#d7e0ec}}.actions{{display:flex;gap:7px;flex-wrap:wrap}}.decision-block{{width:100%;padding:10px;border:1px solid var(--line);border-radius:9px;background:#121720}}.decision-block strong,.decision-block small{{display:block;margin-bottom:8px}}.decision-block small{{color:var(--muted)}}.decision-buttons{{display:flex;gap:7px;flex-wrap:wrap}}.keep{{background:#164a38}}.blur{{background:#17466d}}.blur-full{{background:#514086}}.cut{{background:#6b2632}}.context{{background:#664a14}}.clear{{margin-left:auto}}.selected{{outline:2px solid white}}.empty{{padding:40px;color:var(--muted)}}
-#export-panel label{{display:flex;gap:7px;align-items:center;color:var(--muted)}}#export-panel select,#export-panel input{{background:#0e1116;color:var(--text);border:1px solid var(--line);border-radius:7px;padding:8px}}#custom-size-wrap[hidden]{{display:none}}#custom-output-gb{{width:90px}}#export-status{{flex-basis:100%}}
-</style></head><body><header><h1>Xác nhận nội dung BiliFlow</h1><button class="back" onclick="location.href='/'">← Quay lại Dashboard</button><div id="summary">Đang tải…</div><div class="bar"><span id="progress" style="width:0"></span></div></header>
-<section id="resources"></section><section id="export-panel"><label>Dung lượng video<select id="output-size-mode" onchange="toggleCustomOutputSize()"><option value="default">Tối đa 3,5 GB (mặc định)</option><option value="custom">Giới hạn tùy chỉnh</option><option value="unlimited">Không giới hạn dung lượng</option></select></label><label id="custom-size-wrap" hidden>Tối đa<input id="custom-output-gb" type="number" min="0.05" max="1000" step="0.1" value="3.5">GB</label><button id="finalize" onclick="finalizeExport()" disabled>Hoàn tất duyệt và xuất video</button><span id="export-status">Hãy giải quyết toàn bộ mục trước khi xuất.</span></section><nav><button data-filter="pending" class="active">Chưa duyệt</button><button id="candidate-filter" class="candidate-filter" data-filter="candidates">Ứng viên phụ</button><button data-filter="high">Ưu tiên cao</button><button data-filter="all">Tất cả mục chính</button><button data-filter="visual_ai">Visual AI</button><button data-filter="visual_logo">Logo / quảng cáo</button><button data-filter="adult">18+</button><button data-filter="gore">Máu me</button><button data-filter="violence">Bạo lực</button><button data-filter="text">Chữ</button><button class="accept" onclick="bulkAccept()">Duyệt tất cả đề xuất đang lọc</button><button class="bulk" onclick="bulkKeep()">Giữ nguyên tất cả đang lọc</button></nav><main id="items"></main>
+:root{--bg:#0d1117;--card:#161b22;--card2:#1c232d;--line:#2a323d;--text:#e9eef5;--muted:#8d99a8;--keep:#2fbf71;--blur:#f2a93b;--cut:#ef5466;--more:#7c8ba1;--violence:#ff7a45;--adult:#e05bd0;--gore:#ef5466;--ad:#4da3ff;--accent:#4da3ff;--cat:#ff7a45;--hh:112px}
+*{box-sizing:border-box}html{color-scheme:dark}body{margin:0;background:var(--bg);color:var(--text);font:15px/1.45 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+button,select,input{font:inherit}button{cursor:pointer}button:disabled{opacity:.45;cursor:not-allowed}[hidden]{display:none!important}:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+body.saving button{pointer-events:none;opacity:.65}
+header{position:sticky;top:0;z-index:20;background:rgba(13,17,23,.94);backdrop-filter:blur(8px);border-bottom:1px solid var(--line);padding:12px 20px}
+.top{display:flex;align-items:center;gap:10px 14px;flex-wrap:wrap}h1.title{margin:0;font-size:18px;font-weight:700;min-width:0;max-width:52ch;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.count{color:var(--muted);font-variant-numeric:tabular-nums;white-space:nowrap}
+.progress{flex:1;min-width:140px;height:6px;background:#232a34;border-radius:6px;overflow:hidden}.progress span{display:block;height:100%;width:0;background:var(--keep);transition:width .25s}
+.back{background:transparent;border:1px solid var(--line);color:var(--muted);padding:6px 10px;border-radius:9px;font-size:13px;white-space:nowrap}.back:hover{color:var(--text);border-color:var(--muted)}
+details.export{position:relative}details.export>summary{list-style:none;cursor:pointer;display:flex;gap:6px;align-items:center;border:1px solid var(--line);border-radius:9px;padding:6px 10px;font-size:13px;color:var(--muted);white-space:nowrap}details.export>summary::-webkit-details-marker{display:none}details.export>summary:hover{border-color:var(--muted)}
+details.export>summary .label{color:var(--text);font-weight:600}details.export>summary b{font-weight:600}details.export>summary b:empty{display:none}details.export>summary .chev{font-size:11px;transition:transform .2s}details.export[open]>summary .chev{transform:rotate(180deg)}details.export.ready>summary{border-color:var(--keep)}details.export.ready>summary b{color:var(--keep)}
+.export-body{position:absolute;right:0;top:calc(100% + 8px);width:min(760px,calc(100vw - 32px));max-height:calc(100vh - 120px);overflow:auto;z-index:30;background:var(--card);border:1px solid var(--line);border-radius:12px;box-shadow:0 18px 50px rgba(0,0,0,.55);padding:14px;display:grid;gap:12px}.summary{color:var(--muted);font-size:13px}
+.chips{display:flex;gap:8px;margin-top:10px;overflow-x:auto;padding-bottom:2px;align-items:center;scrollbar-width:thin}
+.chip{border:1px solid var(--line);background:transparent;color:var(--muted);padding:6px 12px;border-radius:999px;font-size:14px;white-space:nowrap}.chip:hover{color:var(--text)}.chip.on{background:var(--text);color:#0d1117;border-color:var(--text);font-weight:600}
+.chip-select{background:transparent;color:var(--muted);border:1px dashed var(--line);border-radius:999px;padding:6px 10px;font-size:14px;max-width:190px}.chip-select.on{color:#0d1117;background:var(--text);border-style:solid;font-weight:600}.chip-select option{background:var(--card);color:var(--text)}
+.warn-line{margin-top:8px;color:#ffd38a;font-size:13px}
+#resources{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:8px}.resource{background:var(--card2);border:1px solid var(--line);padding:8px 10px;border-radius:9px;color:var(--muted);font-size:13px}.resource strong{display:block;font-size:15px;margin-top:2px;color:var(--text)}.resource-note{grid-column:1/-1;color:var(--muted);font-size:13px}
+#export-panel{display:flex;gap:12px;align-items:center;flex-wrap:wrap}#export-panel label{display:flex;gap:7px;align-items:center;color:var(--muted)}#export-panel select,#export-panel input{background:var(--bg);color:var(--text);border:1px solid var(--line);border-radius:7px;padding:7px}#custom-output-gb{width:90px}
+#finalize{background:var(--cut);color:#fff;border:0;border-radius:9px;padding:9px 14px;font-weight:700}#export-status{flex-basis:100%;color:var(--muted);font-size:13px}
+.layout{display:grid;grid-template-columns:280px minmax(0,1fr);gap:16px;max-width:1360px;margin:14px auto 28px;padding:0 16px}
+.list{background:var(--card);border:1px solid var(--line);border-radius:16px;overflow:hidden;align-self:start;position:sticky;top:calc(var(--hh) + 12px);display:flex;flex-direction:column;max-height:calc(100vh - var(--hh) - 28px)}
+.list h3{margin:0;padding:12px 14px;font-size:14px;color:var(--muted);border-bottom:1px solid var(--line);display:flex;justify-content:space-between;align-items:center;gap:8px;font-weight:600}
+.sheet-close{display:none;background:transparent;border:0;color:var(--muted);font-size:18px;line-height:1;padding:0 4px;margin-left:8px}
+.rows{position:relative;overflow:auto;flex:1;min-height:0;overscroll-behavior:contain}
+.row{display:grid;grid-template-columns:10px minmax(0,1fr) auto;gap:10px;align-items:center;width:100%;padding:9px 14px;border:0;border-bottom:1px solid #1f2630;background:transparent;color:var(--text);font-size:14px;text-align:left;content-visibility:auto;contain-intrinsic-size:auto 46px}
+.row:hover{background:#1b222c}.row.on{background:#22303f;box-shadow:inset 3px 0 0 var(--accent)}.row small{color:var(--muted);display:block;font-size:12px;font-variant-numeric:tabular-nums}
+.dot{width:10px;height:10px;border-radius:50%}
+.st{font-size:12px;font-weight:700;padding:2px 8px;border-radius:999px;white-space:nowrap}.st-keep{background:rgba(47,191,113,.15);color:var(--keep)}.st-blur{background:rgba(242,169,59,.15);color:var(--blur)}.st-cut{background:rgba(239,84,102,.15);color:var(--cut)}.st-more{background:rgba(124,139,161,.22);color:#c3cedb}.st-pending{background:#2a323d;color:var(--muted)}
+.list-empty{padding:20px 14px;color:var(--muted);font-size:14px}
+.list-foot{border-top:1px solid var(--line);padding:10px;display:grid;gap:8px}.list-foot button{background:var(--card2);border:1px solid var(--line);color:var(--text);padding:8px;border-radius:9px;font-size:13px}.list-foot button:hover{border-color:var(--muted)}
+.sheet-backdrop{display:none}main{min-width:0}.mobile-list{display:none}
+.navbar{display:flex;gap:8px;align-items:center;margin-bottom:10px}.navbar button{background:var(--card);border:1px solid var(--line);color:var(--text);padding:8px 12px;border-radius:9px;font-size:14px;white-space:nowrap}.navbar button:hover:not(:disabled){border-color:var(--muted)}
+.navbar .grow{flex:1}.save{color:var(--muted);font-size:13px}.save:empty{display:none}
+.auto{color:var(--muted);font-size:13px;display:flex;gap:6px;align-items:center;cursor:pointer;user-select:none}.auto input{accent-color:var(--keep);margin:0}
+.card{background:var(--card);border:1px solid var(--line);border-radius:16px;overflow:hidden;display:grid;grid-template-columns:minmax(0,1.55fr) minmax(280px,1fr)}
+.media{background:#000;display:flex;flex-direction:column;min-width:0}
+.player{position:relative;aspect-ratio:16/9;background:#000;overflow:hidden}
+.player video,.player .poster{position:absolute;inset:0;width:100%;height:100%;object-fit:contain;background:#000}.player .poster{z-index:1}.player.covered video{visibility:hidden}
+.player .loading{position:absolute;inset:0;display:grid;place-items:center;color:var(--muted);font-size:14px;z-index:1}
+.player .play{position:absolute;inset:0;margin:auto;width:68px;height:68px;border-radius:50%;border:0;background:rgba(255,255,255,.92);display:grid;place-items:center;box-shadow:0 6px 24px rgba(0,0,0,.45);z-index:2;transition:opacity .15s}
+.player .play::after{content:"";margin-left:6px;border-left:22px solid #111;border-top:14px solid transparent;border-bottom:14px solid transparent}
+.player.playing .play{opacity:0}.player.playing:hover .play{opacity:.85}.player.playing .play::after{margin:0;width:20px;height:22px;border:0;border-left:7px solid #111;border-right:7px solid #111}.player.no-video .play{display:none}
+.player .time{position:absolute;left:12px;bottom:12px;background:rgba(0,0,0,.7);padding:3px 9px;border-radius:6px;font-variant-numeric:tabular-nums;font-size:13px;z-index:2}
+.player .pnote{position:absolute;left:12px;right:12px;top:12px;background:rgba(0,0,0,.78);padding:6px 10px;border-radius:8px;font-size:13px;color:#ffd38a;z-index:2}
+.timeline{position:relative;height:30px;background:var(--card2);border-top:1px solid #000;cursor:pointer}
+.timeline .seg{position:absolute;top:12px;height:6px;background:#2c3542;border-radius:4px}.timeline .win{position:absolute;top:11px;height:8px;background:rgba(255,122,69,.3);border-radius:4px}
+.timeline .hit{position:absolute;top:9px;width:3px;height:12px;margin-left:-1px;border-radius:2px;background:var(--violence)}
+.timeline .peak{position:absolute;top:8px;width:14px;height:14px;margin-left:-7px;border-radius:50%;background:#fff;border:3px solid var(--cat)}
+.timeline .head{position:absolute;top:3px;bottom:3px;width:2px;margin-left:-1px;background:var(--accent);border-radius:1px;pointer-events:none}
+.strip{display:grid;grid-template-columns:repeat(8,minmax(0,1fr));gap:6px;padding:10px;background:var(--card2)}
+.thumb{position:relative;display:block;padding:0;border-radius:8px;overflow:hidden;border:2px solid transparent;background:#0b0e13;aspect-ratio:16/9;color:var(--text)}
+.thumb img{display:block;width:100%;height:100%;object-fit:cover}.thumb img:not([src]){visibility:hidden}
+.thumb span{position:absolute;left:3px;bottom:3px;background:rgba(0,0,0,.72);font-size:10px;line-height:13px;padding:0 4px;border-radius:4px;font-variant-numeric:tabular-nums}
+.thumb.hit{border-color:rgba(255,122,69,.6)}.thumb.peak{border-color:#fff}.thumb.peak::after{content:"Rõ nhất";position:absolute;top:3px;left:3px;background:#fff;color:#111;font-size:10px;line-height:13px;font-weight:700;padding:0 5px;border-radius:4px}.thumb.on{box-shadow:0 0 0 2px var(--accent)}
+.thumb.ghost{cursor:default;background:linear-gradient(90deg,#141a22,#1f2732,#141a22);background-size:200% 100%;animation:shimmer 1.2s linear infinite}@keyframes shimmer{to{background-position:-200% 0}}@media (prefers-reduced-motion:reduce){.thumb.ghost{animation:none}}
+.media-region{padding:10px;display:grid;gap:10px;background:#000;align-content:start}
+.media-region canvas.region-frame{display:block;width:100%;height:auto;border-radius:8px;background:#090b0e}.media-region canvas.region-crop{display:block;max-width:100%;max-height:150px;width:auto;height:auto;justify-self:center;border:2px solid var(--cut);border-radius:8px;background:#090b0e}
+.region-more{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}.shots{display:grid;gap:8px}.shots img{display:block;width:100%;height:auto;max-height:420px;object-fit:contain;border-radius:8px;background:#090b0e}.no-media{padding:40px 16px;color:var(--muted);text-align:center}
+.side{padding:20px 20px 18px;display:flex;flex-direction:column;gap:14px;min-width:0}
+.pill{display:inline-flex;align-items:center;gap:6px;font-weight:700;font-size:13px;letter-spacing:.04em;padding:4px 10px;border-radius:999px;background:rgba(255,255,255,.06);background:color-mix(in srgb,var(--cat) 15%,transparent);color:var(--cat);width:max-content}.pill::before{content:"";width:8px;height:8px;border-radius:50%;background:currentColor}
+h2{margin:0;font-size:24px;font-variant-numeric:tabular-nums}.sub{color:var(--muted);margin-top:2px}.hint{font-size:13px;color:#9cc7f5}
+.focus-box{background:var(--card2);border:1px solid var(--line);border-radius:12px;padding:12px 14px}.focus-box b{color:#fff}.focus-box button{margin-top:10px;width:100%;background:transparent;border:1px solid var(--accent);color:var(--accent);padding:9px;border-radius:9px;font-weight:600;font-size:14px}.focus-box button:hover{background:rgba(77,163,255,.1)}.focus-box small{display:block;margin-top:8px;color:var(--muted)}
+.decide-head{font-size:13px;color:var(--muted);margin-bottom:-6px}
+.decide{display:grid;grid-template-columns:1fr 1fr;gap:10px}.side>.decide{margin-top:auto}
+.decide button{border:0;border-radius:12px;padding:14px 10px;font-size:16px;font-weight:700;color:#0d1117;display:flex;flex-direction:column;align-items:center;gap:2px}.decide button:hover{filter:brightness(1.08)}
+.decide small{font-weight:500;font-size:12px;opacity:.75}.decide .k{background:var(--keep)}.decide .b{background:var(--blur)}.decide .c{background:var(--cut);color:#fff}.decide .m{background:#2a323d;color:var(--text)}.decide button.sel{box-shadow:0 0 0 3px var(--card),0 0 0 5px #fff}.decide button.sel small{opacity:1;font-weight:700}
+.chosen{font-size:13px;color:var(--muted);text-align:center}.chosen b{color:var(--text)}.linkish{background:none;border:0;padding:0;color:var(--accent);text-decoration:underline;font-size:13px}
+details.tech{font-size:13px;color:var(--muted)}details.tech>summary{list-style:none;cursor:pointer;text-align:center;width:max-content;margin:0 auto;border-bottom:1px dashed var(--muted)}details.tech>summary::-webkit-details-marker{display:none}details.tech>summary::after{content:" ▸"}details.tech[open]>summary::after{content:" ▾"}
+.tech-body{display:grid;gap:8px;margin-top:10px;text-align:left}.tech-body .meta{color:var(--muted);overflow-wrap:anywhere}
+.scope-detail{padding:9px 10px;border-radius:8px;background:#17283d;border:1px solid #315c85;color:#d7eaff}.scope-detail strong{display:block;margin-bottom:4px}.scope-detail.track{background:#153b31;border-color:#28765d;color:#baf4dc}.scope-detail.advisory{background:#3b2c12;border-color:#8b651d;color:#ffe1a0}
+.coverage{padding:8px 10px;border-radius:8px;background:#153b31;color:#89e4bd;font-size:13px}.visual-ai{padding:9px 10px;border-radius:8px;background:#172f4b;border:1px solid #386d9d;color:#cce7ff}.region-detail{padding:8px 10px;border-radius:8px;background:#301b20;border:1px solid #8c3947;color:#ffd6dc}
+.evidence{padding:8px 10px;border-radius:8px;background:var(--card2);border:1px solid var(--line);color:#c9d3df}.evidence strong{display:block;margin-bottom:4px;color:var(--text)}.labels{color:#c9d3df;overflow-wrap:anywhere}
+.decision-block{padding:10px;border:1px solid var(--line);border-radius:12px;background:var(--card2)}.decision-block strong{display:block;margin-bottom:4px}.decision-block small{display:block;margin-bottom:8px;color:var(--muted);font-size:12px}
+.region-decide{display:grid;grid-template-columns:1fr 1fr;gap:8px}.region-decide button{border:1px solid var(--line);border-radius:10px;padding:10px 8px;font-size:13px;font-weight:600;color:var(--text);background:#202833}.region-decide .rk.sel{background:rgba(47,191,113,.18);border-color:var(--keep)}.region-decide .rb.sel{background:rgba(242,169,59,.18);border-color:var(--blur)}
+.empty{background:var(--card);border:1px solid var(--line);border-radius:16px;padding:40px 24px;color:var(--muted);text-align:center}
+.next{margin:14px 0 0;color:var(--muted);font-size:13px;text-align:center}.next .keys{display:block;margin-top:4px;opacity:.75}
+@media (max-width:820px){header{position:static;padding:12px 16px}h1.title{font-size:17px;flex:1;max-width:none}.progress{order:3;flex-basis:100%}details.export{order:4}.back{order:5;margin-left:auto;font-size:12px;padding:5px 8px}.export-body{left:0;right:auto}
+.layout{grid-template-columns:1fr;margin-top:12px}.list{display:none;position:fixed;left:0;right:0;bottom:0;top:auto;z-index:40;max-height:78vh;border-radius:16px 16px 0 0;box-shadow:0 -10px 40px rgba(0,0,0,.6)}.list.open{display:flex}.sheet-close{display:inline-block}.sheet-backdrop.open{display:block;position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:39}
+.mobile-list{display:block;width:100%;text-align:left;background:var(--card);border:1px solid var(--line);border-radius:12px;padding:10px 14px;margin-bottom:10px;color:var(--muted);font-size:14px}.mobile-list b{color:var(--text)}
+.navbar{flex-wrap:wrap}.navbar button{flex:1;padding:8px 6px}.navbar .grow{display:none}.navbar .auto{flex-basis:100%;justify-content:center}.save{flex-basis:100%;text-align:center;order:5}
+.card{grid-template-columns:1fr}.strip{grid-template-columns:repeat(4,minmax(0,1fr))}.side{padding:16px}.decide button{padding:13px 8px;font-size:15px}h2{font-size:21px}.next .keys{display:none}}
+</style></head><body>
+<header id="top"><div class="top"><h1 class="title" id="title">Duyệt nội dung</h1><span class="count" id="count">Đang tải…</span><div class="progress" aria-hidden="true"><span id="progress"></span></div><details class="export" id="export-section"><summary><span class="label">Xuất video</span><b id="export-summary"></b><span class="chev" aria-hidden="true">▾</span></summary><div class="export-body"><div class="summary" id="summary">Đang tải…</div><section id="resources"></section><section id="export-panel"><label>Dung lượng video<select id="output-size-mode" onchange="toggleCustomOutputSize()"><option value="default">Tối đa 3,5 GB (mặc định)</option><option value="custom">Giới hạn tùy chỉnh</option><option value="unlimited">Không giới hạn dung lượng</option></select></label><label id="custom-size-wrap" hidden>Tối đa<input id="custom-output-gb" type="number" min="0.05" max="1000" step="0.1" value="3.5">GB</label><button id="finalize" type="button" onclick="finalizeExport()" disabled>Hoàn tất duyệt và xuất video</button><span id="export-status">Hãy giải quyết toàn bộ mục trước khi xuất.</span></section></div></details><button class="back" type="button" onclick="location.href='/'">← Quay lại Dashboard</button></div>
+<div class="chips" id="chips" role="toolbar" aria-label="Bộ lọc"><button class="chip on" type="button" data-filter="pending" id="chip-pending">Chưa duyệt</button><button class="chip" type="button" data-filter="adult">18+</button><button class="chip" type="button" data-filter="gore">Máu me</button><button class="chip" type="button" data-filter="violence">Bạo lực</button><button class="chip" type="button" data-filter="ads">Quảng cáo</button><button class="chip" type="button" data-filter="all">Tất cả</button><select id="more-filter" class="chip-select" aria-label="Lọc khác"><option value="">Lọc khác…</option><option value="high">Ưu tiên cao</option><option value="visual_ai">Visual AI</option><option value="visual_logo">Logo</option><option value="text">Chữ</option><option value="candidates" id="candidate-filter">Ứng viên phụ</option></select></div>
+<div class="warn-line" id="scope-warning" hidden></div></header>
+<div class="layout"><aside class="list" id="list" aria-label="Danh sách mục"><h3><span id="list-title">Chưa duyệt</span><span><span id="list-count">0</span><button class="sheet-close" id="sheet-close" type="button" aria-label="Đóng danh sách">✕</button></span></h3><div class="rows" id="rows"></div><div class="list-foot"><button class="accept" type="button" onclick="bulkAccept()">Duyệt tất cả đề xuất đang lọc</button><button class="bulk" type="button" onclick="bulkKeep()">Giữ nguyên tất cả đang lọc</button></div></aside><div class="sheet-backdrop" id="sheet-backdrop"></div>
+<main><button class="mobile-list" id="mobile-list" type="button">Mục <b id="mobile-pos">–</b> · <u>Danh sách để chọn lại ▾</u></button>
+<div class="navbar"><button id="prev" type="button" title="Mục trước (phím ←)">← Trước</button><button id="next" type="button" title="Mục sau (phím →)">Sau →</button><button id="undo" type="button" disabled>↶ Hoàn tác</button><span class="save" id="save-state" aria-live="polite"></span><span class="grow"></span><label class="auto"><input type="checkbox" id="auto-next" checked> Tự sang mục chưa duyệt kế tiếp</label></div>
+<section class="card" id="focus" hidden><div class="media"><div id="media-safety"><div class="player covered" id="player"><video id="video" preload="none" playsinline disablepictureinpicture></video><img class="poster" id="poster" alt="" hidden><div class="loading" id="poster-loading" hidden>Đang tải khung hình…</div><button class="play" id="play-btn" type="button" aria-label="Phát hoặc dừng (Space)"></button><div class="time" id="ptime"></div><div class="pnote" id="pnote" hidden></div></div><div class="timeline" id="timeline" title="Bấm để tua tới thời điểm này"></div><div class="strip" id="strip"></div></div><div class="media-region" id="media-region" hidden></div></div><div class="side" id="side"></div></section>
+<div class="empty" id="empty">Đang tải…</div><p class="next" id="next-note"><span id="next-text"></span><span class="keys">Phím 1–4 chọn · ←/→ chuyển mục · Space phát/dừng · Z hoàn tác</span></p></main></div>
 <script>
-let token={json.dumps(token)};let queue=null;let resources=null;let exportJob={{status:'IDLE'}};let filter='pending';let saving=false;let exportSettingsInitialized=false;let queueRefreshRunning=false;
-const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({{'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}}[c]));
-const clock=s=>{{const m=Math.floor(s/60),v=(s-m*60).toFixed(1).padStart(4,'0');return `${{String(m).padStart(2,'0')}}:${{v}}`;}};
-async function readJson(response){{let data=null;try{{data=await response.json();}}catch(_error){{}}if(!response.ok)throw new Error(data?.error||`Máy chủ trả về lỗi ${{response.status}}`);return data;}}
-async function requestJson(path,options={{}}){{let response;try{{response=await fetch(path,options);}}catch(_error){{throw new Error('Mất kết nối với Review. Hãy tải lại trang; các lựa chọn đã lưu trước đó vẫn được giữ nguyên.');}}return readJson(response);}}
-async function load(){{try{{[queue,resources,exportJob]=await Promise.all([requestJson('/api/queue',{{cache:'no-store'}}),requestJson('/api/resources',{{cache:'no-store'}}),requestJson('/api/export',{{cache:'no-store'}})]);initializeExportSettings();render();}}catch(error){{document.querySelector('#summary').textContent=error.message;}}}}
-function queueIdentity(value){{if(!value)return '';const reports=(value.reports||[]).map(x=>typeof x==='string'?x:(x.path||x.report||JSON.stringify(x))).join('|');return [value.created_at||'',value.source?.input_sha256||'',reports].join('::');}}
-function queueVersion(value){{if(!value)return '';const counts=value.counts||{{}};return [queueIdentity(value),value.updated_at||'',value.status||'',counts.total||0,counts.pending||0].join('::');}}
-async function refreshQueue(){{if(saving||queueRefreshRunning)return;queueRefreshRunning=true;try{{const latest=await requestJson('/api/queue',{{cache:'no-store'}});if(queueVersion(latest)!==queueVersion(queue)){{const revisionChanged=queueIdentity(latest)!==queueIdentity(queue);queue=latest;if(revisionChanged){{exportSettingsInitialized=false;exportJob=await requestJson('/api/export',{{cache:'no-store'}});}}resources=await requestJson('/api/resources',{{cache:'no-store'}});initializeExportSettings();render();}}}}catch(_error){{}}finally{{queueRefreshRunning=false;}}}}
-function isLogoItem(x){{return x.category==='visual_logo'||x.review_kind==='logo_overlay'||x.review_kind==='logo_candidate';}}
-function visible(x){{if(filter==='pending')return !x.decision;if(filter==='high')return x.priority==='high';if(filter==='all')return true;if(filter==='visual_ai')return !!x.ai_visual_audit;if(filter==='visual_logo')return isLogoItem(x);if(filter==='text')return x.category==='text'&&x.review_kind!=='logo_overlay';return x.category===filter;}}
-const size=n=>n>1073741824?`${{(n/1073741824).toFixed(1)}} GB`:`${{(n/1048576).toFixed(1)}} MB`;
-function initializeExportSettings(){{if(exportSettingsInitialized)return;const policy=queue.export_size_policy||{{mode:'default',maximum_output_gb:3.5}},mode=['default','custom','unlimited'].includes(policy.mode)?policy.mode:'default';document.querySelector('#output-size-mode').value=mode;if(mode==='custom'&&Number(policy.maximum_output_gb)>0)document.querySelector('#custom-output-gb').value=Number(policy.maximum_output_gb);exportSettingsInitialized=true;toggleCustomOutputSize();}}
-function toggleCustomOutputSize(){{document.querySelector('#custom-size-wrap').hidden=document.querySelector('#output-size-mode').value!=='custom';}}
-function outputSizeSelection(){{const mode=document.querySelector('#output-size-mode').value;if(mode==='unlimited')return{{size_mode:'unlimited',description:'không giới hạn dung lượng'}};if(mode==='default')return{{size_mode:'default',description:'tối đa 3,5 GB'}};const maximum=Number(document.querySelector('#custom-output-gb').value);if(!Number.isFinite(maximum)||maximum<0.05||maximum>1000)throw new Error('Giới hạn tùy chỉnh phải từ 0,05 đến 1.000 GB.');return{{size_mode:'custom',max_output_gb:maximum,description:`tối đa ${{maximum.toLocaleString('vi-VN')}} GB`}};}}
-function pendingDescription(){{const pending=queue.items.filter(x=>!x.decision),names={{violence:'Bạo lực',gore:'Máu me',adult:'18+',visual_logo:'Logo / quảng cáo',text:'Chữ'}};if(!pending.length)return 'Đã duyệt đủ. Bạn có thể xuất video.';return `Còn ${{pending.length}} mục chưa duyệt: ${{pending.slice(0,3).map(x=>`${{names[x.category]||x.category}} ${{clock(x.start_seconds)}}–${{clock(x.end_seconds)}}`).join('; ')}}. Hãy chọn Giữ nguyên cảnh, Làm mờ toàn cảnh, Cắt cả cảnh hoặc Cần xem thêm.`;}}
-function render(){{const c=queue.counts,done=c.total-c.pending,scope=queue.detection_scope||{{}},scopeNames={{advertising:'Quảng cáo / logo',adult:'18+',gore:'Máu me',violence:'Bạo lực'}},selected=(scope.selected||[]).map(x=>scopeNames[x]||x),skipped=(scope.skipped||[]).map(x=>scopeNames[x]||x);const fullTracks=queue.items.filter(x=>x.candidate_type==='persistent_overlay'&&trackCoversFullVideo(x)).length,rangeTracks=queue.items.filter(x=>x.candidate_type==='persistent_overlay'&&!trackCoversFullVideo(x)).length,advisory=(queue.advisory_items||[]).length,visual=queue.visual_ai_audit?.assessment_count||0;document.querySelector('#summary').textContent=`${{done}}/${{c.total}} mục chính đã duyệt · ${{c.pending}} mục chính còn lại · ${{fullTracks}} track toàn video · ${{rangeTracks}} track theo khoảng · ${{advisory}} ứng viên phụ · Đã quét: ${{selected.length?selected.join(', '):'phạm vi cũ'}} · Visual AI ${{visual}} mục · Trạng thái: ${{queue.status}}`;document.querySelector('#candidate-filter').textContent=`Ứng viên phụ (${{advisory}})`;document.querySelector('#progress').style.width=`${{c.total?done/c.total*100:100}}%`;if(resources){{const range=resources.estimated_preview_megabytes_range;document.querySelector('#resources').innerHTML=`<div class="resource">Video nguồn<strong>${{size(resources.source_bytes)}}</strong></div><div class="resource">Ảnh và report<strong>${{size(resources.report_bytes)}}</strong></div><div class="resource">Ổ E còn trống<strong>${{size(resources.disk_free_bytes)}}</strong></div><div class="resource">Preview dự kiến<strong>${{resources.estimated_preview_seconds}} giây · khoảng ${{range[0]}}–${{range[1]}} MB</strong></div><div class="resource-note">Review chỉ tải ảnh và không chạy model. ${{skipped.length?`Không quét trong lượt này: ${{skipped.join(', ')}}. Ít thẻ hơn không có nghĩa các nhóm này đã an toàn. `:''}}Có ${{c.total}} mục chính bắt buộc duyệt và ${{advisory}} ứng viên phụ không chặn xuất. Track toàn video, track theo khoảng và nhóm sự kiện được ghi riêng; nhóm sự kiện chỉ áp dụng các khoảng phát hiện gốc, không sửa khoảng trống.</div>`;}}const active=['QUEUED','RENDERING'].includes(exportJob.status);const ready=queue.status==='READY_FOR_EDIT_PLAN'&&!active;document.querySelector('#finalize').disabled=!ready;const exportText={{IDLE:pendingDescription(),WAITING_REVIEW:pendingDescription(),READY_TO_EXPORT:'Đã duyệt đủ. Bạn có thể xuất video.',QUEUED:'Đã xếp hàng xuất video.',RENDERING:'Đang render và kiểm tra video…',COMPLETED:`Hoàn tất: ${{exportJob.output||''}}`,FAILED:`Xuất thất bại: ${{exportJob.error||'không rõ lỗi'}}`}};document.querySelector('#export-status').textContent=exportText[exportJob.status]||pendingDescription();const source=filter==='candidates'?(queue.advisory_items||[]):queue.items;const data=filter==='candidates'?source:source.filter(visible);document.querySelector('#items').innerHTML=data.length?data.map(card).join(''):'<div class="empty">Không có mục nào trong bộ lọc này.</div>';drawRegionPreviews();}}
-function actionName(x,decision){{if(decision==='KEEP')return 'Giữ nguyên';if(decision==='CUT')return 'Cắt cả cảnh';if(decision==='BLUR')return x.suggested_region_source_pixels?(isLogoItem(x)?'Làm mờ logo':'Làm mờ vùng chữ/logo'):'Làm mờ toàn cảnh';return decision;}}
-function trackCoversFullVideo(x){{const duration=Number(queue.source?.duration_seconds||0),tolerance=Math.max(1.5,duration*.0005);return duration>0&&Number(x.start_seconds)<=tolerance&&Number(x.end_seconds)>=duration-tolerance;}}
-function decisionScope(x){{const intervals=Array.isArray(x.detected_intervals)?x.detected_intervals:[],from=clock(x.start_seconds),to=clock(x.end_seconds);if(x.advisory)return{{kind:'advisory',title:'Ứng viên kiểm tra thêm — chưa thuộc quyết định chính',detail:`Bằng chứng chưa đủ để ghép mục này vào track chính. Thẻ chính khác không tự xử lý mục này. Nếu bạn chọn một hành động, mục sẽ được đưa vào kế hoạch và chỉ áp dụng ${{from}}–${{to}}.`}};if(x.candidate_type==='persistent_overlay'||x.temporal_policy==='continuous_persistent_overlay'){{const full=trackCoversFullVideo(x),support=Number(x.supporting_candidate_count||0);return{{kind:'track',title:full?'QUYẾT ĐỊNH TOÀN VIDEO':'QUYẾT ĐỊNH TOÀN KHOẢNG XUẤT HIỆN',detail:`Một lựa chọn cho vùng khoanh đỏ áp dụng từ ${{from}} đến ${{to}}${{full?' — toàn bộ video':''}}. ${{support?`Track này đại diện thêm ${{support}} lần phát hiện cùng vùng đã lưu trong Audit. `:''}}Logo ở vị trí hoặc track khác vẫn cần quyết định riêng.`}};}}if(x.temporal_policy==='discrete_detected_intervals'&&intervals.length>1)return{{kind:'grouped',title:`NHÓM SỰ KIỆN — ${{intervals.length}} khoảng phát hiện`,detail:`Một lựa chọn được áp dụng riêng cho ${{intervals.length}} khoảng gốc trong ${{from}}–${{to}}; các khoảng trống giữa chúng không bị cắt hoặc làm mờ.`}};if(intervals.length>1)return{{kind:'grouped',title:`Đại diện cho ${{intervals.length}} lần phát hiện đã gom`,detail:`Các lần phát hiện gần nhau đã được gom thành cửa sổ ${{from}}–${{to}}; quyết định áp dụng toàn bộ cửa sổ này. Không tự lan sang cảnh khác.`}};return{{kind:'single',title:'CHỈ ĐOẠN HIỆN TẠI',detail:`Quyết định chỉ áp dụng ${{from}}–${{to}}. Đây không phải lựa chọn đại diện cho mọi quảng cáo hoặc logo cùng loại trong toàn phim.`}};}}
-function scopeBlock(x){{const scope=decisionScope(x);return `<div class="scope-detail ${{scope.kind}}"><strong>Phạm vi áp dụng: ${{esc(scope.title)}}</strong>${{esc(scope.detail)}}</div>`;}}
-function regionOverlap(a,b){{if(!a||!b||a==='FULL_FRAME'||b==='FULL_FRAME')return 0;const left=Math.max(a.x,b.x),top=Math.max(a.y,b.y),right=Math.min(a.x+a.width,b.x+b.width),bottom=Math.min(a.y+a.height,b.y+b.height),intersection=Math.max(0,right-left)*Math.max(0,bottom-top),smaller=Math.min(a.width*a.height,b.width*b.height);return smaller?intersection/smaller:0;}}
-function overlapCoverage(x){{const covered=queue.items.filter(other=>other.id!==x.id&&other.decision==='BLUR'&&other.start_seconds<x.end_seconds&&other.end_seconds>x.start_seconds);if(!covered.length)return '';const persistent=covered.filter(other=>other.candidate_type==='persistent_overlay'&&other.decision_region_source_pixels&&other.decision_region_source_pixels!=='FULL_FRAME');const full=covered.filter(other=>other.decision_region_source_pixels==='FULL_FRAME');const parts=[];if(persistent.length){{const owner=persistent[0],r=owner.decision_region_source_pixels,current=x.suggested_region_source_pixels||x.decision_region_source_pixels,same=regionOverlap(r,current)>=.6,label=esc((owner.labels||[])[0]||'logo/watermark'),scope=trackCoversFullVideo(owner)?'toàn video':`${{clock(owner.start_seconds)}}–${{clock(owner.end_seconds)}}`;parts.push(same?`Track <strong>${{label}}</strong> cùng vùng này đã được duyệt làm mờ ${{scope}}; thẻ hiện tại chỉ là bằng chứng hỗ trợ.`:`Track <strong>${{label}}</strong> ở vùng khác đã được duyệt làm mờ ${{scope}} (x=${{r.x}}, y=${{r.y}}, rộng=${{r.width}}, cao=${{r.height}}). Vùng đỏ hiện tại vẫn là ứng viên riêng.`);}}if(full.length)parts.push(`${{full.length}} đoạn trùng thời gian đã được duyệt làm mờ toàn cảnh.`);return parts.length?`<div class="coverage">${{parts.join(' ')}}</div>`:'';}}
-function regionOwner(x){{if(x.suggested_region_source_pixels&&Array.isArray(x.source_frame_size))return x;if(x.advisory)return null;return queue.items.find(other=>other.id!==x.id&&isLogoItem(other)&&other.decision==='BLUR'&&(other.suggested_region_source_pixels||other.decision_region_source_pixels)&&Array.isArray(other.source_frame_size)&&other.start_seconds<x.end_seconds&&other.end_seconds>x.start_seconds)||null;}}
-function regionName(owner){{if(owner?.decision==='BLUR')return 'logo thương hiệu đã xác nhận';if(owner?.decision==='KEEP')return 'tiêu đề/nội dung phim đã xác nhận';const names={{movie_title:'tiêu đề phim',approved_non_brand:'nội dung phim đã xác nhận',external_brand:'logo thương hiệu',external_brand_candidate:'ứng viên logo thương hiệu',branded_end_card:'end-card thương hiệu',promotional_segment:'đoạn quảng bá',unknown:'chưa phân loại'}};return names[owner?.region_classification]||'vùng chưa phân loại';}}
-function regionImages(x,owner){{if(!owner)return x.preview_images.slice(0,3).map(p=>`<img src="/media/${{encodeURIComponent(p)}}" loading="lazy">`).join('');const r=owner.suggested_region_source_pixels||owner.decision_region_source_pixels;if(!r||r==='FULL_FRAME')return x.preview_images.slice(0,3).map(p=>`<img src="/media/${{encodeURIComponent(p)}}" loading="lazy">`).join('');return x.preview_images.slice(0,3).map((p,index)=>`<div class="region-pair"><canvas class="region-frame" data-src="/media/${{encodeURIComponent(p)}}" data-x="${{r.x}}" data-y="${{r.y}}" data-w="${{r.width}}" data-h="${{r.height}}" data-sw="${{owner.source_frame_size[0]}}" data-sh="${{owner.source_frame_size[1]}}"></canvas>${{index===0?`<canvas class="region-crop" data-src="/media/${{encodeURIComponent(p)}}" data-x="${{r.x}}" data-y="${{r.y}}" data-w="${{r.width}}" data-h="${{r.height}}" data-sw="${{owner.source_frame_size[0]}}" data-sh="${{owner.source_frame_size[1]}}"></canvas>`:''}}</div>`).join('');}}
-function drawRegionPreviews(){{document.querySelectorAll('canvas.region-frame,canvas.region-crop').forEach(canvas=>{{const image=new Image();image.onload=()=>{{const sourceW=Number(canvas.dataset.sw),sourceH=Number(canvas.dataset.sh),scale=Math.min(image.naturalWidth/sourceW,image.naturalHeight/sourceH),offsetX=(image.naturalWidth-sourceW*scale)/2,offsetY=(image.naturalHeight-sourceH*scale)/2,sx=Number(canvas.dataset.x)*scale+offsetX,sy=Number(canvas.dataset.y)*scale+offsetY,sw=Number(canvas.dataset.w)*scale,sh=Number(canvas.dataset.h)*scale,ctx=canvas.getContext('2d');if(canvas.classList.contains('region-crop')){{const padX=sw*.12,padY=sh*.18,x=Math.max(0,sx-padX),y=Math.max(0,sy-padY),w=Math.min(image.naturalWidth-x,sw+padX*2),h=Math.min(image.naturalHeight-y,sh+padY*2);canvas.width=360;canvas.height=Math.max(100,Math.round(360*h/w));ctx.drawImage(image,x,y,w,h,0,0,canvas.width,canvas.height);ctx.strokeStyle='#ff304f';ctx.lineWidth=5;ctx.strokeRect((sx-x)/w*canvas.width,(sy-y)/h*canvas.height,sw/w*canvas.width,sh/h*canvas.height);}}else{{canvas.width=Math.min(640,image.naturalWidth);canvas.height=Math.round(canvas.width*image.naturalHeight/image.naturalWidth);ctx.drawImage(image,0,0,canvas.width,canvas.height);const kx=canvas.width/image.naturalWidth,ky=canvas.height/image.naturalHeight;ctx.fillStyle='rgba(255,48,79,.15)';ctx.fillRect(sx*kx,sy*ky,sw*kx,sh*ky);ctx.strokeStyle='#ff304f';ctx.lineWidth=4;ctx.strokeRect(sx*kx,sy*ky,sw*kx,sh*ky);}}}};image.src=canvas.dataset.src;}});}}
-function card(x){{const owner=regionOwner(x),r=owner&&(owner.suggested_region_source_pixels||owner.decision_region_source_pixels),imgs=regionImages(x,owner),d=x.decision,ownerDecision=owner?.decision,full=d==='BLUR'&&x.decision_region_source_pixels==='FULL_FRAME',suggestion=x.suggested_decision?`<span class="badge suggestion">Đề xuất: ${{esc(actionName(x,x.suggested_decision))}}</span>`:'',category=x.review_kind||x.category,visualAI=x.ai_visual_audit?`<div class="visual-ai"><strong>Visual AI:</strong> ${{esc(x.ai_visual_audit.classification)}} · tin cậy ${{Math.round(100*Number(x.ai_visual_audit.confidence||0))}}% · đề xuất ${{esc(actionName(x,x.ai_visual_audit.suggested_decision))}} · vùng ${{esc(x.ai_visual_audit.region_assessment)}}<br>${{esc(x.ai_visual_audit.reasoning)}}</div>`:'',evidence=x.model_evidence?`<div class="labels">AI cục bộ: ${{esc(JSON.stringify(x.model_evidence))}}</div>`:'',borrowed=owner&&owner.id!==x.id,regionStatus=regionName(owner),regionDetail=owner&&r&&r!=='FULL_FRAME'?`<div class="region-detail">Chỉ nội dung nằm trong khung đỏ này đang được phân loại. Vùng khoanh đỏ: <strong>${{esc(regionStatus)}}</strong> · x=${{r.x}}, y=${{r.y}}, rộng=${{r.width}}, cao=${{r.height}}${{borrowed?` · vùng liên kết áp dụng ${{clock(owner.start_seconds)}}–${{clock(owner.end_seconds)}}`:''}}</div>`:'<div class="region-detail">Chưa có vùng được định vị nên không thể phân loại logo hay tiêu đề một cách an toàn.</div>',regionControls=owner&&r&&r!=='FULL_FRAME'?`<div class="decision-block"><strong>${{borrowed?'Xử lý riêng vùng logo khoanh đỏ':'Phân loại vùng khoanh đỏ'}}</strong>${{borrowed?`<small>Vùng logo áp dụng ${{clock(owner.start_seconds)}}–${{clock(owner.end_seconds)}}. Quyết định toàn cảnh bên dưới chỉ áp dụng ${{clock(x.start_seconds)}}–${{clock(x.end_seconds)}}; nếu chọn Cắt cả cảnh, đoạn bị cắt không cần làm mờ.</small>`:'<small>Chỉ lựa chọn theo phần nằm trong khung đỏ, không theo logo hoặc chữ ở vị trí khác trong ảnh.</small>'}}<div class="decision-buttons"><button class="keep ${{ownerDecision==='KEEP'?'selected':''}}" onclick="decide('${{owner.id}}','KEEP',false,'Đã xác nhận vùng khoanh đỏ là tiêu đề hoặc nội dung hợp lệ của phim')">Đây là tiêu đề/nội dung phim — giữ lại</button><button class="blur ${{ownerDecision==='BLUR'?'selected':''}}" onclick="decide('${{owner.id}}','BLUR',false,'Đã xác nhận vùng khoanh đỏ là logo thương hiệu')">Đây là logo thương hiệu — làm mờ</button></div></div>`:'';return `<article class="${{esc(x.priority)}}"><div class="meta"><span class="badge">${{esc(category)}}</span><span class="badge">${{esc(x.priority)}}</span>${{suggestion}}<span>${{clock(x.start_seconds)}}–${{clock(x.end_seconds)}}</span><span>điểm ${{x.max_score==null?'—':Number(x.max_score).toFixed(3)}}</span></div><div class="images">${{imgs}}</div>${{scopeBlock(x)}}${{regionDetail}}${{overlapCoverage(x)}}<div class="labels">${{esc(x.labels.join(', ')||x.reasons.join(', '))}}</div>${{visualAI}}${{evidence}}<div class="actions">${{regionControls}}<div class="decision-block"><strong>Quyết định cho toàn cảnh ${{esc(category)}} · ${{clock(x.start_seconds)}}–${{clock(x.end_seconds)}}</strong><div class="decision-buttons"><button class="keep ${{d==='KEEP'?'selected':''}}" onclick="decide('${{x.id}}','KEEP')">Giữ nguyên cảnh</button><button class="blur-full ${{full?'selected':''}}" onclick="decide('${{x.id}}','BLUR',true)">Làm mờ toàn cảnh</button><button class="cut ${{d==='CUT'?'selected':''}}" onclick="decide('${{x.id}}','CUT')">Cắt cả cảnh</button><button class="context ${{d==='NEEDS_MORE_CONTEXT'?'selected':''}}" onclick="decide('${{x.id}}','NEEDS_MORE_CONTEXT')">Cần xem thêm</button>${{d?`<button class="clear" onclick="clearDecision('${{x.id}}')">Bỏ chọn</button>`:''}}</div></div></div></article>`;}}
-async function post(path,body,retried=false){{if(saving)return;saving=true;document.body.classList.add('saving');try{{let response;try{{response=await fetch(path,{{method:'POST',headers:{{'Content-Type':'application/json','X-BiliFlow-Token':token}},body:JSON.stringify(body)}});}}catch(_error){{throw new Error('Mất kết nối với Review. Hãy tải lại trang; các lựa chọn đã lưu trước đó vẫn được giữ nguyên.');}}if(response.status===403&&!retried){{const session=await requestJson('/api/session',{{cache:'no-store'}});token=session.token;saving=false;document.body.classList.remove('saving');return await post(path,body,true);}}queue=await readJson(response);resources=await requestJson('/api/resources',{{cache:'no-store'}});render();}}finally{{saving=false;document.body.classList.remove('saving');}}}}
-async function decide(id,decision,needsFullFrame=false,note=null){{try{{const item=queue.items.find(x=>x.id===id),ai=item?.ai_visual_audit,aiDecision=ai?.suggested_decision,confidence=Number(ai?.confidence||0);if(aiDecision&&confidence>=.9&&decision!==aiDecision&&['KEEP','BLUR','CUT'].includes(aiDecision)&&['KEEP','BLUR','CUT'].includes(decision)){{const message=`Visual AI tin cậy ${{Math.round(confidence*100)}}% đề xuất “${{actionName(item,aiDecision)}}” vì vùng đỏ được nhận là ${{ai.classification||'nội dung phim'}}. Bạn vẫn muốn chọn “${{actionName(item,decision)}}” cho đúng vùng đỏ này?`;if(!confirm(message))return;}}let full_frame=false;if(decision==='BLUR'&&needsFullFrame){{full_frame=confirm('Bạn có xác nhận làm mờ toàn bộ khung hình trong đoạn này?');if(!full_frame)return;}}await post('/api/decision',{{id,decision,full_frame,note}});}}catch(e){{alert(e.message);}}}}
-async function clearDecision(id){{try{{await post('/api/clear',{{id}});}}catch(e){{alert(e.message);}}}}
-async function bulkKeep(){{const count=queue.items.filter(visible).filter(x=>!x.decision).length;if(!count){{alert('Không có mục chưa duyệt trong bộ lọc này.');return;}}if(!confirm(`Giữ nguyên ${{count}} mục chưa duyệt đang hiển thị? Thao tác này không blur hoặc cắt video.`))return;try{{await post('/api/bulk-keep',{{filter}});}}catch(e){{alert(e.message);}}}}
-async function bulkAccept(){{const count=queue.items.filter(visible).filter(x=>!x.decision&&x.suggested_decision).length;if(!count){{alert('Không có đề xuất chưa duyệt trong bộ lọc này.');return;}}if(!confirm(`Áp dụng ${{count}} đề xuất đang hiển thị? Bạn vẫn có thể bỏ chọn từng mục trước khi xuất.`))return;try{{await post('/api/bulk-accept',{{filter}});}}catch(e){{alert(e.message);}}}}
-async function finalizeExport(){{if(queue.status!=='READY_FOR_EDIT_PLAN'){{alert('Vẫn còn mục chưa có quyết định cuối cùng.');return;}}try{{const selection=outputSizeSelection();if(!confirm(`Khóa các lựa chọn hiện tại và bắt đầu xuất video hoàn chỉnh (${{selection.description}})?`))return;const response=await fetch('/api/finalize',{{method:'POST',headers:{{'Content-Type':'application/json','X-BiliFlow-Token':token}},body:JSON.stringify(selection)}});exportJob=await readJson(response);queue.export_size_policy=exportJob.export_size_policy||queue.export_size_policy;render();}}catch(e){{alert(e.message);}}}}
-document.querySelectorAll('nav button[data-filter]').forEach(b=>b.onclick=()=>{{document.querySelectorAll('nav button[data-filter]').forEach(x=>x.classList.remove('active'));b.classList.add('active');filter=b.dataset.filter;render();}});load();
+const API='/api/';
+let token=__BILIFLOW_REVIEW_TOKEN__;let mediaKey=null;let queue=null;let resources=null;let exportJob={status:'IDLE'};let filter='pending';let focusId=null;let previousFocusId=null;let autoNext=true;let busy=false;let exportSettingsInitialized=false;let queueRefreshRunning=false;
+let writeChain=Promise.resolve();let pendingWrites=0;let localEpoch=0;let resyncNeeded=false;let reopenAfterResync=null;let sessionRefresh=null;let resourcesTimer=null;let prefetchTimer=null;let saveTimer=null;let techOpen=false;let sheetOpen=false;let mediaGen=0;let regionKey='';let sideItemId=null;
+let itemMap=new Map();let listIds=[];const rowById=new Map();const sticky=new Set();const undoStack=[];
+const evidenceCache=new Map();const evidenceLoading=new Map();const frameBlobs=new Map();const frameUrgent=[];const frameLater=[];let frameActive=0;
+const pstate={id:null,start:0,end:0,reveal:false,loaded:false,pending:null,seekFor:null,available:true,reason:null,srcKey:null,want:null,keyRetries:0};
+const reviewStats={fullRenders:0,focusRenders:0,sideRenders:0,listBuilds:0,rowUpdates:0,polls:0,pollChanges:0,evidenceFetches:0,frameFetches:0,writeRetries:0,writeFailures:0,sessionRefreshes:0,mediaKeyChanges:0,frameKeyRetries:0,videoErrors:0};window.reviewStats=reviewStats;
+try{autoNext=localStorage.getItem('biliflow.review.autoNext')!=='0';}catch(_error){}
+const $=s=>document.querySelector(s);const video=$('#video'),playerBox=$('#player'),posterImg=$('#poster');
+const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const clock=s=>{const m=Math.floor(s/60),v=(s-m*60).toFixed(1).padStart(4,'0');return `${String(m).padStart(2,'0')}:${v}`;};
+const mmss=s=>{const v=Math.max(0,Math.floor(Number(s)||0));return `${Math.floor(v/60)}:${String(v%60).padStart(2,'0')}`;};
+const mmssTenth=s=>{const v=Math.max(0,Number(s)||0),m=Math.floor(v/60);return `${m}:${(v-m*60).toFixed(1).padStart(4,'0')}`;};
+const span=x=>`${mmss(x.start_seconds)}–${mmss(x.end_seconds)}`;
+function durationText(seconds){const s=Math.max(0,Number(seconds)||0);return s<120?`${Math.max(1,Math.round(s))} giây`:`${Math.round(s/60)} phút`;}
+const size=n=>n>1073741824?`${(n/1073741824).toFixed(1)} GB`:`${(n/1048576).toFixed(1)} MB`;
+function setText(el,value){if(el&&el.textContent!==value)el.textContent=value;}
+function setHtml(el,value){if(el&&el.__html!==value){el.__html=value;el.innerHTML=value;}}
+async function readJson(response){let data=null;try{data=await response.json();}catch(_error){}if(!response.ok){const error=new Error(data?.error||`Máy chủ trả về lỗi ${response.status}`);error.status=response.status;throw error;}return data;}
+function offlineError(){const error=new Error('Mất kết nối với Review. Hãy tải lại trang; các lựa chọn đã lưu trước đó vẫn được giữ nguyên.');error.status=0;return error;}
+async function requestJson(path,options={}){let response;try{response=await fetch(path,options);}catch(_error){throw offlineError();}return readJson(response);}
+const SAFETY={adult:['18+','var(--adult)'],gore:['Máu me','var(--gore)'],violence:['Bạo lực','var(--violence)']};
+const KIND_NAMES={logo_overlay:'Logo',logo_candidate:'Ứng viên logo',opening_promotion:'Quảng cáo mở đầu',text_candidate:'Ứng viên chữ',title_overlay:'Tiêu đề phim',in_film_text:'Chữ trong phim'};
+const FILTER_TITLES={pending:'Chưa duyệt',adult:'18+',gore:'Máu me',violence:'Bạo lực',ads:'Quảng cáo',all:'Tất cả mục',high:'Ưu tiên cao',visual_ai:'Visual AI',visual_logo:'Logo',text:'Chữ',candidates:'Ứng viên phụ'};
+const STATUS={KEEP:['Giữ','st-keep'],BLUR:['Làm mờ','st-blur'],CUT:['Cắt','st-cut'],NEEDS_MORE_CONTEXT:['Cần xem','st-more']};
+function isSafety(x){return !!x&&Object.prototype.hasOwnProperty.call(SAFETY,x.category);}
+function catName(x){if(isSafety(x))return SAFETY[x.category][0];return KIND_NAMES[x.review_kind]||(x.category==='text'?'Chữ':x.category==='visual_logo'?'Logo / quảng cáo':String(x.category||'Khác'));}
+function catColor(x){return isSafety(x)?SAFETY[x.category][1]:'var(--ad)';}
+function statusOf(x){return STATUS[x.decision]||['Chưa duyệt','st-pending'];}
+function isLogoItem(x){return x.category==='visual_logo'||x.review_kind==='logo_overlay'||x.review_kind==='logo_candidate';}
+function isAdItem(x){return x.category==='visual_logo'||x.category==='text'||isLogoItem(x);}
+function visible(x){if(filter==='pending')return !x.decision||sticky.has(x.id);if(filter==='high')return x.priority==='high';if(filter==='all')return true;if(filter==='visual_ai')return !!x.ai_visual_audit;if(filter==='visual_logo')return isLogoItem(x);if(filter==='ads')return isAdItem(x);if(filter==='text')return x.category==='text'&&x.review_kind!=='logo_overlay';return x.category===filter;}
+function byTime(a,b){return (Number(a.start_seconds)-Number(b.start_seconds))||(Number(a.end_seconds)-Number(b.end_seconds))||String(a.id).localeCompare(String(b.id));}
+function filteredItems(){if(!queue)return [];const data=filter==='candidates'?(queue.advisory_items||[]).slice():queue.items.filter(visible);return data.sort(byTime);}
+function indexQueue(){itemMap=new Map();for(const x of queue.items||[])itemMap.set(x.id,x);for(const x of queue.advisory_items||[])if(!itemMap.has(x.id))itemMap.set(x.id,x);}
+function countsFrom(items){const decisions={KEEP:0,BLUR:0,CUT:0,NEEDS_MORE_CONTEXT:0};let pending=0;for(const x of items){if(Object.prototype.hasOwnProperty.call(decisions,x.decision))decisions[x.decision]++;else pending++;}return{total:items.length,pending,decisions};}
+function statusFrom(items){if(items.some(x=>x.decision==='NEEDS_MORE_CONTEXT'))return 'NEEDS_MORE_CONTEXT';if(items.some(x=>!x.decision))return 'REVIEW_REQUIRED';return 'READY_FOR_EDIT_PLAN';}
+function queueIdentity(value){if(!value)return '';const reports=(value.reports||[]).map(x=>typeof x==='string'?x:(x.path||x.report||JSON.stringify(x))).join('|');return [value.created_at||'',value.source?.input_sha256||'',reports].join('::');}
+function queueVersion(value){if(!value)return '';const counts=value.counts||{};return [queueIdentity(value),value.updated_at||'',value.status||'',counts.total||0,counts.pending||0].join('::');}
+async function load(){try{const [q,r,e,s]=await Promise.all([requestJson(API+'queue',{cache:'no-store'}),requestJson(API+'resources',{cache:'no-store'}).catch(()=>null),requestJson(API+'export',{cache:'no-store'}).catch(()=>({status:'IDLE'})),requestJson(API+'session',{cache:'no-store'}).catch(()=>null)]);queue=q;resources=r;exportJob=e||{status:'IDLE'};if(s){if(s.token)token=s.token;mediaKey=s.media_key||null;}indexQueue();if(!countsFrom(queue.items).pending&&queue.items.length)filter='all';initializeExportSettings();const started=performance.now();render();reviewStats.firstRenderMs=Math.round((performance.now()-started)*10)/10;reviewStats.readyAtMs=Math.round(performance.now());}catch(error){setText($('#count'),error.message);setText($('#empty'),error.message);setText($('#summary'),error.message);}}
+function render(){reviewStats.fullRenders++;renderChips();renderList();if(!focusId||!itemMap.has(focusId)||!listIds.includes(focusId))focusId=pickFocus();updateHeader();renderFocus();}
+function renderChips(){document.querySelectorAll('#chips .chip').forEach(b=>b.classList.toggle('on',b.dataset.filter===filter));const more=$('#more-filter'),extra=['high','visual_ai','visual_logo','text','candidates'].includes(filter);more.value=extra?filter:'';more.classList.toggle('on',extra);}
+function sourceTitle(){const path=String(queue?.source?.path||''),name=path.split(/[\\/]/).pop().replace(/\.[^.]+$/,'').replace(/[._]+/g,' ').trim(),year=name.match(/^(.*?\b(?:19|20)\d{2})\b/);return (year?year[1]:name)||'video';}
+function updateHeader(){if(!queue)return;const c=countsFrom(queue.items),done=c.total-c.pending,advisory=(queue.advisory_items||[]).length;setText($('#count'),`${done}/${c.total} xong`);const width=`${c.total?done/c.total*100:100}%`;if($('#progress').style.width!==width)$('#progress').style.width=width;setText($('#chip-pending'),`Chưa duyệt (${c.pending})`);setText($('#candidate-filter'),`Ứng viên phụ (${advisory})`);const title=`Duyệt nội dung · ${sourceTitle()}`;setText($('#title'),title);if(document.title!==title)document.title=title;const names={advertising:'Quảng cáo / logo',adult:'18+',gore:'Máu me',violence:'Bạo lực'},skipped=((queue.detection_scope||{}).skipped||[]).map(x=>names[x]||x),warn=$('#scope-warning');warn.hidden=!skipped.length;if(skipped.length)setText(warn,`Không quét trong lượt này: ${skipped.join(', ')}. Ít mục hơn không có nghĩa các nhóm này đã an toàn.`);setText($('#next-text'),nextNote(c));renderExport();updateNavState();}
+function nextNote(c){if(!c.pending)return 'Đã duyệt đủ mọi mục chính. Bấm “Xuất video” ở trên để xuất.';let inList=0;for(const id of listIds){const x=itemMap.get(id);if(x&&!x.decision)inList++;}const where=filter==='pending'||inList===c.pending?'':` (${inList} trong bộ lọc này)`;return `Còn ${c.pending} mục chưa duyệt${where} · ${autoNext?'mục kế tiếp tự hiện sau khi chọn':'bấm “Sau →” để sang mục kế'}`;}
+function renderExport(){if(!queue)return;const c=countsFrom(queue.items),done=c.total-c.pending,scope=queue.detection_scope||{},scopeNames={advertising:'Quảng cáo / logo',adult:'18+',gore:'Máu me',violence:'Bạo lực'},selected=(scope.selected||[]).map(x=>scopeNames[x]||x),skipped=(scope.skipped||[]).map(x=>scopeNames[x]||x);let fullTracks=0,rangeTracks=0;for(const x of queue.items){if(x.candidate_type==='persistent_overlay'){if(trackCoversFullVideo(x))fullTracks++;else rangeTracks++;}}const advisory=(queue.advisory_items||[]).length,visual=queue.visual_ai_audit?.assessment_count||0,status=queue.status;
+setText($('#summary'),`${done}/${c.total} mục chính đã duyệt · ${c.pending} mục chính còn lại · ${fullTracks} track toàn video · ${rangeTracks} track theo khoảng · ${advisory} ứng viên phụ · Đã quét: ${selected.length?selected.join(', '):'phạm vi cũ'} · Visual AI ${visual} mục · Trạng thái: ${status}`);
+if(resources){const range=resources.estimated_preview_megabytes_range||[0,0];setHtml($('#resources'),`<div class="resource">Video nguồn<strong>${size(resources.source_bytes)}</strong></div><div class="resource">Ảnh và report<strong>${size(resources.report_bytes)}</strong></div><div class="resource">Ổ E còn trống<strong>${size(resources.disk_free_bytes)}</strong></div><div class="resource">Preview dự kiến<strong>${resources.estimated_preview_seconds} giây · khoảng ${range[0]}–${range[1]} MB</strong></div><div class="resource-note">Review không chạy model AI. Khung xem nhanh được trích bằng FFmpeg (CPU) khi mở từng mục, lưu tạm có giới hạn và tự dọn; video phát thẳng từ file gốc, không tạo bản sao. ${skipped.length?`Không quét trong lượt này: ${skipped.join(', ')}. Ít thẻ hơn không có nghĩa các nhóm này đã an toàn. `:''}Có ${c.total} mục chính bắt buộc duyệt và ${advisory} ứng viên phụ không chặn xuất. Track toàn video, track theo khoảng và nhóm sự kiện được ghi riêng; nhóm sự kiện chỉ áp dụng các khoảng phát hiện gốc, không sửa khoảng trống.</div>`);}
+const active=['QUEUED','RENDERING'].includes(exportJob.status),ready=status==='READY_FOR_EDIT_PLAN'&&!active;$('#finalize').disabled=!ready;const exportText={IDLE:pendingDescription(),WAITING_REVIEW:pendingDescription(),READY_TO_EXPORT:'Đã duyệt đủ. Bạn có thể xuất video.',QUEUED:'Đã xếp hàng xuất video.',RENDERING:'Đang render và kiểm tra video…',COMPLETED:`Hoàn tất: ${exportJob.output||''}`,FAILED:`Xuất thất bại: ${exportJob.error||'không rõ lỗi'}`};setText($('#export-status'),exportText[exportJob.status]||pendingDescription());
+setText($('#export-summary'),active?'đang xuất…':exportJob.status==='COMPLETED'?'đã xuất':exportJob.status==='FAILED'?'lỗi':ready?'sẵn sàng':status==='NEEDS_MORE_CONTEXT'?'còn mục cần xem':'');$('#export-section').classList.toggle('ready',ready);}
+function initializeExportSettings(){if(exportSettingsInitialized)return;const policy=queue.export_size_policy||{mode:'default',maximum_output_gb:3.5},mode=['default','custom','unlimited'].includes(policy.mode)?policy.mode:'default';$('#output-size-mode').value=mode;if(mode==='custom'&&Number(policy.maximum_output_gb)>0)$('#custom-output-gb').value=Number(policy.maximum_output_gb);exportSettingsInitialized=true;toggleCustomOutputSize();}
+function toggleCustomOutputSize(){$('#custom-size-wrap').hidden=$('#output-size-mode').value!=='custom';}
+function outputSizeSelection(){const mode=$('#output-size-mode').value;if(mode==='unlimited')return{size_mode:'unlimited',description:'không giới hạn dung lượng'};if(mode==='default')return{size_mode:'default',description:'tối đa 3,5 GB'};const maximum=Number($('#custom-output-gb').value);if(!Number.isFinite(maximum)||maximum<0.05||maximum>1000)throw new Error('Giới hạn tùy chỉnh phải từ 0,05 đến 1.000 GB.');return{size_mode:'custom',max_output_gb:maximum,description:`tối đa ${maximum.toLocaleString('vi-VN')} GB`};}
+function pendingDescription(){const pending=queue.items.filter(x=>!x.decision),names={violence:'Bạo lực',gore:'Máu me',adult:'18+',visual_logo:'Logo / quảng cáo',text:'Chữ'};if(!pending.length)return 'Đã duyệt đủ. Bạn có thể xuất video.';return `Còn ${pending.length} mục chưa duyệt: ${pending.slice(0,3).map(x=>`${names[x.category]||x.category} ${clock(x.start_seconds)}–${clock(x.end_seconds)}`).join('; ')}. Hãy chọn Giữ nguyên, Làm mờ cả cảnh, Cắt cảnh hoặc Cần xem thêm.`;}
+function rowHtml(x){const [label,cls]=statusOf(x);return `<button type="button" class="row${x.id===focusId?' on':''}" data-id="${esc(x.id)}"><span class="dot" style="background:${catColor(x)}"></span><span>${esc(catName(x))}<small>${span(x)}</small></span><span class="st ${cls}">${label}</span></button>`;}
+function renderList(){reviewStats.listBuilds++;const data=filteredItems(),rows=$('#rows');listIds=data.map(x=>x.id);rowById.clear();rows.innerHTML=data.length?data.map(rowHtml).join(''):'<div class="list-empty">Không có mục nào trong bộ lọc này.</div>';for(const el of rows.children)if(el.dataset.id)rowById.set(el.dataset.id,el);setText($('#list-title'),FILTER_TITLES[filter]||'Danh sách');setText($('#list-count'),String(data.length));markActiveRow();}
+function updateListStatuses(){const data=filteredItems();if(data.length!==listIds.length||data.some((x,i)=>x.id!==listIds[i])){renderList();return;}for(const x of data){const row=rowById.get(x.id);if(!row)continue;const [label,cls]=statusOf(x),pill=row.lastElementChild;if(pill.textContent!==label){pill.textContent=label;pill.className=`st ${cls}`;reviewStats.rowUpdates++;}}}
+function markActiveRow(){const old=$('#rows .row.on');if(old&&old.dataset.id!==focusId)old.classList.remove('on');const row=rowById.get(focusId);if(row){row.classList.add('on');ensureRowVisible(row);}}
+function ensureRowVisible(row){const box=$('#rows');if(!box.clientHeight)return;const top=row.offsetTop,bottom=top+row.offsetHeight;if(top<box.scrollTop)box.scrollTop=top;else if(bottom>box.scrollTop+box.clientHeight)box.scrollTop=bottom-box.clientHeight;}
+function updateNavState(){const i=listIds.indexOf(focusId);$('#prev').disabled=!listIds.length||i===0;$('#next').disabled=!listIds.length||i===listIds.length-1;const undoButton=$('#undo'),last=undoStack[undoStack.length-1],item=last&&itemMap.get(last.id);undoButton.disabled=!undoStack.length||busy;undoButton.title=item?(last.advisory?`Lựa chọn cho ứng viên phụ ${catName(item)} ${span(item)} không hoàn tác được (phím Z để xem lý do)`:`Hoàn tác lựa chọn cho ${catName(item)} ${span(item)} (phím Z)`):'Chưa có lựa chọn nào trong phiên này để hoàn tác';setText($('#mobile-pos'),listIds.length?`${i>=0?i+1:'–'}/${listIds.length}`:'0/0');}
+function pickFocus(){for(const id of listIds){const x=itemMap.get(id);if(x&&!x.decision)return id;}return listIds[0]||null;}
+function nextUndecided(fromId){const n=listIds.length;if(!n)return null;let start=listIds.indexOf(fromId);if(start<0){const current=itemMap.get(fromId);start=-1;if(current)for(let i=0;i<n;i++){const x=itemMap.get(listIds[i]);if(x&&byTime(x,current)<0)start=i;}}for(let k=1;k<=n;k++){const id=listIds[(start+k+n)%n],x=itemMap.get(id);if(id!==fromId&&x&&!x.decision)return id;}return null;}
+function selectItem(id){if(!id||!itemMap.has(id))return;closeSheet();if(id===focusId)return;previousFocusId=focusId;focusId=id;renderFocus();}
+function step(delta){if(!listIds.length)return;const i=listIds.indexOf(focusId),j=i<0?(delta>0?0:listIds.length-1):Math.min(listIds.length-1,Math.max(0,i+delta));selectItem(listIds[j]);}
+function setFilter(next){if(!next||next===filter||!queue)return;filter=next;sticky.clear();renderChips();renderList();if(!listIds.includes(focusId)){previousFocusId=focusId;focusId=pickFocus();renderFocus();}else updateNavState();updateHeader();}
+function openSheet(){sheetOpen=true;$('#list').classList.add('open');$('#sheet-backdrop').classList.add('open');const row=rowById.get(focusId);if(row)ensureRowVisible(row);}
+function closeSheet(){if(!sheetOpen)return;sheetOpen=false;$('#list').classList.remove('open');$('#sheet-backdrop').classList.remove('open');}
+function renderFocus(){reviewStats.focusRenders++;mediaGen++;const x=itemMap.get(focusId),card=$('#focus'),empty=$('#empty');markActiveRow();updateNavState();if(!x){card.hidden=true;empty.hidden=false;setText(empty,!queue?'Đang tải…':countsFrom(queue.items).pending?'Không có mục nào trong bộ lọc này.':`Đã duyệt đủ ${queue.items.length} mục chính. Bấm “Xuất video” ở trên để xuất.`);pausePlayer();sideItemId=null;return;}
+card.hidden=false;empty.hidden=true;card.style.setProperty('--cat',catColor(x));const safety=isSafety(x);$('#media-safety').hidden=!safety;$('#media-region').hidden=safety;if(safety){if(regionKey){regionKey='';$('#media-region').textContent='';}setupSafetyMedia(x);}else{pausePlayer();renderRegionMedia(x,true);}renderSide(x);keepFrames();schedulePrefetch();}
+function previewSrc(x){const p=(x.preview_images||[])[0];return p?'/media/'+encodeURIComponent(p):null;}
+function thumbTime(p){const m=/-(\d+(?:\.\d+)?)s\.(?:jpg|jpeg|png)$/i.exec(String(p||''));return m?Number(m[1]):null;}
+function setupSafetyMedia(x){const start=Number(x.start_seconds),end=Number(x.end_seconds);if(pstate.id!==x.id||pstate.start!==start||pstate.end!==end){pausePlayer();pstate.id=x.id;pstate.start=start;pstate.end=end;pstate.seekFor=null;pstate.pending=null;coverVideo();setPoster(null,!!mediaKey);hideNote();setTime(start);}playerBox.classList.toggle('no-video',!videoAllowed());const gen=mediaGen,cached=evidenceCache.get(x.id);if(cached!==undefined||!mediaKey){const ev=cached===undefined?null:cached;renderTimeline(x,ev);renderStrip(x,ev);if(!ev&&!pstate.reveal)setPoster(previewSrc(x));return;}renderTimeline(x,null);renderStrip(x,undefined);loadEvidence(x.id).then(ev=>{if(gen!==mediaGen||focusId!==x.id)return;renderTimeline(x,ev);renderStrip(x,ev);if(!ev&&!pstate.reveal)setPoster(previewSrc(x));playerBox.classList.toggle('no-video',!videoAllowed());renderSide(x);});}
+function pickStrip(frames,n=8){const list=(frames||[]).slice().sort((a,b)=>a.t-b.t);if(list.length<=n)return list;const chosen=new Set(),strongest=list.findIndex(f=>f.kind==='strongest');if(strongest>=0)chosen.add(strongest);const take=(indexes,slots)=>{if(slots<=0||!indexes.length)return;if(indexes.length<=slots){indexes.forEach(i=>chosen.add(i));return;}for(let s=0;s<slots;s++)chosen.add(indexes[Math.min(indexes.length-1,Math.floor((s+.5)*indexes.length/slots))]);};const seeds=list.map((f,i)=>f.kind==='seed'&&!chosen.has(i)?i:-1).filter(i=>i>=0);take(seeds,Math.ceil((n-chosen.size)/2));take(list.map((_f,i)=>chosen.has(i)?-1:i).filter(i=>i>=0),n-chosen.size);return [...chosen].sort((a,b)=>a-b).slice(0,n).map(i=>list[i]);}
+function stripFrames(x,ev){if(ev&&mediaKey&&(ev.frames||[]).length)return pickStrip(ev.frames,8).map(f=>({t:f.t,kind:f.kind,remote:true}));return (x.preview_images||[]).slice(0,8).map(p=>({t:thumbTime(p),kind:'preview',src:'/media/'+encodeURIComponent(p)}));}
+function renderStrip(x,ev){const strip=$('#strip'),gen=String(mediaGen);strip.dataset.gen=gen;if(ev===undefined){strip.innerHTML='<div class="thumb ghost"></div>'.repeat(8);return;}const frames=stripFrames(x,ev),label=(x.end_seconds-x.start_seconds)<30?mmssTenth:mmss;strip.innerHTML=frames.map((f,i)=>`<button type="button" class="thumb${f.kind==='strongest'?' peak':f.kind==='seed'?' hit':''}" data-i="${i}" data-t="${f.t==null?'':f.t}" aria-label="Khung ${f.t==null?i+1:label(f.t)}"><img alt="" loading="lazy" decoding="async"${f.src?` src="${esc(f.src)}"`:''}>${f.t==null?'':`<span>${label(f.t)}</span>`}</button>`).join('');const remote=frames.map((f,i)=>({f,i})).filter(v=>v.f.remote);if(!remote.length)return;const peak=remote.find(v=>v.f.kind==='strongest')||remote[0],order=[peak,...remote.filter(v=>v!==peak)],promises=queueFrames(x.id,order.map(v=>v.f.t),true);order.forEach((v,k)=>promises[k].then(obj=>{if(!obj||strip.dataset.gen!==gen)return;const img=strip.querySelector(`.thumb[data-i="${v.i}"] img`);if(img)img.src=obj;if(v===peak&&pstate.id===x.id&&!pstate.reveal)setPoster(obj);}));}
+function tlPos(t){const len=Math.max(.001,pstate.end-pstate.start);return 2+96*Math.min(1,Math.max(0,(Number(t)-pstate.start)/len));}
+function thin(values,limit){if(values.length<=limit)return values;const out=[];for(let s=0;s<limit;s++)out.push(values[Math.floor((s+.5)*values.length/limit)]);return out;}
+function renderTimeline(x,ev){const bar=(a,b,cls)=>{const left=tlPos(a),right=tlPos(b);return `<div class="${cls}" style="left:${left.toFixed(2)}%;width:${Math.max(.6,right-left).toFixed(2)}%"></div>`;};const segments=ev?.detected_intervals?.length?ev.detected_intervals:(x.detected_intervals||[]).map(d=>({start:d.start_seconds,end:d.end_seconds}));let html=(segments.length?segments:[{start:x.start_seconds,end:x.end_seconds}]).map(s=>bar(s.start,s.end,'seg')).join('');const seeds=ev?.seeds;if(seeds&&!seeds.known)html+=(seeds.windows||[]).map(w=>bar(w.start,w.end,'win')).join('');const ticks=seeds?.known?thin((seeds.samples||[]).map(s=>s.t),120):(ev?.frames||[]).filter(f=>f.kind==='seed').map(f=>f.t);html+=ticks.map(t=>`<div class="hit" style="left:${tlPos(t).toFixed(2)}%"></div>`).join('');const peak=ev?.strongest?.t??thumbTime((x.preview_images||[])[0]);if(peak!=null)html+=`<div class="peak" style="left:${tlPos(peak).toFixed(2)}%" title="Rõ nhất lúc ${mmss(peak)}"></div>`;html+='<div class="head" id="thead" hidden></div>';$('#timeline').innerHTML=html;}
+function renderRegionMedia(x,force){const owner=regionOwner(x),r=owner&&(owner.suggested_region_source_pixels||owner.decision_region_source_pixels),key=JSON.stringify([x.id,owner?.id||null,r||null,(x.preview_images||[]).slice(0,3)]);if(!force&&key===regionKey)return;regionKey=key;const box=$('#media-region');box.innerHTML=regionMediaHtml(x,owner,r);drawRegionPreviews(box);}
+function regionMediaHtml(x,owner,r){const images=(x.preview_images||[]).slice(0,3),src=p=>'/media/'+encodeURIComponent(p);if(!images.length)return '<div class="no-media">Không có ảnh xem trước cho mục này.</div>';if(!owner||!r||r==='FULL_FRAME'||!Array.isArray(owner.source_frame_size))return `<div class="shots">${images.map(p=>`<img src="${src(p)}" loading="lazy" alt="">`).join('')}</div>`;const data=p=>`data-src="${src(p)}" data-x="${Number(r.x)}" data-y="${Number(r.y)}" data-w="${Number(r.width)}" data-h="${Number(r.height)}" data-sw="${Number(owner.source_frame_size[0])}" data-sh="${Number(owner.source_frame_size[1])}"`;return `<canvas class="region-frame" ${data(images[0])}></canvas><canvas class="region-crop" ${data(images[0])}></canvas>${images.length>1?`<div class="region-more">${images.slice(1).map(p=>`<canvas class="region-frame" ${data(p)}></canvas>`).join('')}</div>`:''}`;}
+function drawRegionPreviews(root){root.querySelectorAll('canvas.region-frame,canvas.region-crop').forEach(canvas=>{const image=new Image();image.onload=()=>{if(!canvas.isConnected)return;const sourceW=Number(canvas.dataset.sw),sourceH=Number(canvas.dataset.sh),scale=Math.min(image.naturalWidth/sourceW,image.naturalHeight/sourceH),offsetX=(image.naturalWidth-sourceW*scale)/2,offsetY=(image.naturalHeight-sourceH*scale)/2,sx=Number(canvas.dataset.x)*scale+offsetX,sy=Number(canvas.dataset.y)*scale+offsetY,sw=Number(canvas.dataset.w)*scale,sh=Number(canvas.dataset.h)*scale,ctx=canvas.getContext('2d');if(canvas.classList.contains('region-crop')){const padX=sw*.12,padY=sh*.18,x=Math.max(0,sx-padX),y=Math.max(0,sy-padY),w=Math.min(image.naturalWidth-x,sw+padX*2),h=Math.min(image.naturalHeight-y,sh+padY*2);canvas.width=360;canvas.height=Math.max(100,Math.round(360*h/w));ctx.drawImage(image,x,y,w,h,0,0,canvas.width,canvas.height);ctx.strokeStyle='#ff304f';ctx.lineWidth=5;ctx.strokeRect((sx-x)/w*canvas.width,(sy-y)/h*canvas.height,sw/w*canvas.width,sh/h*canvas.height);}else{canvas.width=Math.min(960,image.naturalWidth);canvas.height=Math.round(canvas.width*image.naturalHeight/image.naturalWidth);ctx.drawImage(image,0,0,canvas.width,canvas.height);const kx=canvas.width/image.naturalWidth,ky=canvas.height/image.naturalHeight;ctx.fillStyle='rgba(255,48,79,.15)';ctx.fillRect(sx*kx,sy*ky,sw*kx,sh*ky);ctx.strokeStyle='#ff304f';ctx.lineWidth=4;ctx.strokeRect(sx*kx,sy*ky,sw*kx,sh*ky);}};image.src=canvas.dataset.src;});}
+function renderSide(x){const html=isSafety(x)?safetySide(x):adSide(x),side=$('#side');if(sideItemId===x.id&&side.__html===html)return;side.__html=html;side.innerHTML=html;sideItemId=x.id;reviewStats.sideRenders++;}
+function videoReason(info){if(!mediaKey)return 'Trang này chỉ có ảnh xem trước, không phát video.';const reasons={unsupported_container:'Trình duyệt không phát được định dạng video này; hãy xem dải khung hình.',source_changed:'Video nguồn đã thay đổi sau khi quét; chỉ xem được khung hình.',source_missing:'Không tìm thấy video nguồn.',source_unknown:'Không rõ video nguồn.',decode_error:'Trình duyệt không giải mã được video này; hãy xem dải khung hình.'};return reasons[info?.reason]||'Không phát được video trong trình duyệt; hãy xem dải khung hình.';}
+function currentVideoInfo(ev){return pstate.reason?{reason:pstate.reason}:ev?.video;}
+function safetySubtitle(x,ev){const parts=[durationText(x.end_seconds-x.start_seconds)],seeds=ev?.seeds;if(seeds&&seeds.count>0){if(seeds.known)parts.push(`máy nghi ngờ ở ${seeds.count} khung`);else{const w=seeds.windows||[];parts.push(w.length===1?`máy nghi ngờ ở ${seeds.count} khung trong ${mmss(w[0].start)}–${mmss(w[0].end)}`:`máy nghi ngờ ở ${seeds.count} khung trong ${w.length} đoạn`);}}const n=(x.detected_intervals||[]).length;if(n>1)parts.push(`${n} khoảng phát hiện`);return parts.join(' · ');}
+function suggestionLine(x){const parts=[];if(x.suggested_decision)parts.push(`Đề xuất: ${esc(actionName(x,x.suggested_decision))}`);if(x.advisory)parts.push('Ứng viên phụ — không chặn xuất, chỉ áp dụng nếu bạn chọn');return parts.length?`<div class="hint">${parts.join(' · ')}</div>`:'';}
+function decideButtons(x){const d=x.decision,full=d==='BLUR'&&x.decision_region_source_pixels==='FULL_FRAME',b=(cls,decision,label,key,selected)=>`<button type="button" class="${cls}${selected?' sel':''}" data-act="decide" data-decision="${decision}"${decision==='BLUR'?' data-full="1"':''} aria-pressed="${selected?'true':'false'}">${label}<small>${selected?'✓ đã chọn':`phím ${key}`}</small></button>`;return `<div class="decide">${b('k','KEEP','Giữ nguyên',1,d==='KEEP')}${b('b','BLUR','Làm mờ cả cảnh',2,full)}${b('c','CUT','Cắt cảnh',3,d==='CUT')}${b('m','NEEDS_MORE_CONTEXT','Cần xem thêm',4,d==='NEEDS_MORE_CONTEXT')}</div>`;}
+function decisionLabel(x){if(x.decision==='BLUR'&&x.decision_region_source_pixels==='FULL_FRAME')return 'Làm mờ toàn cảnh';if(x.decision==='BLUR')return isLogoItem(x)?'Làm mờ logo':'Làm mờ vùng chữ/logo';if(x.decision==='NEEDS_MORE_CONTEXT')return 'Cần xem thêm';return actionName(x,x.decision);}
+function chosenLine(x){return x.decision?`<div class="chosen">Đã chọn: <b>${esc(decisionLabel(x))}</b> · <button type="button" class="linkish" data-act="clear">Bỏ chọn</button></div>`:'';}
+function safetySide(x){const ev=evidenceCache.get(x.id),peak=ev?.strongest?.t??thumbTime((x.preview_images||[])[0]),playable=videoAllowed()&&(!ev?.video||ev.video.available);return `<span class="pill">${esc(catName(x).toUpperCase())}</span><div><h2>${mmss(x.start_seconds)} – ${mmss(x.end_seconds)}</h2><div class="sub">${esc(safetySubtitle(x,ev))}</div></div>${suggestionLine(x)}<div class="focus-box">${peak!=null?`Rõ nhất lúc <b>${mmss(peak)}</b> (khung viền trắng). `:''}Xem đoạn này rồi chọn bên dưới.${playable?'<button type="button" data-act="play">▶ Phát đoạn này</button>':`<small>${esc(videoReason(currentVideoInfo(ev)))}</small>`}</div>${decideButtons(x)}${chosenLine(x)}${techDetails(x,ev,true)}`;}
+function scopeShort(x){const scope=decisionScope(x);if(scope.kind==='advisory')return 'Ứng viên phụ — không chặn xuất';if(scope.kind==='track')return trackCoversFullVideo(x)?'Một quyết định cho toàn video':'Một quyết định cho cả khoảng xuất hiện';if(scope.kind==='grouped')return `Nhóm ${(x.detected_intervals||[]).length} khoảng phát hiện`;return 'Chỉ đoạn này';}
+function adSide(x){const owner=regionOwner(x),r=owner&&(owner.suggested_region_source_pixels||owner.decision_region_source_pixels);return `<span class="pill">${esc(catName(x).toUpperCase())}</span><div><h2>${mmss(x.start_seconds)} – ${mmss(x.end_seconds)}</h2><div class="sub">${esc(durationText(x.end_seconds-x.start_seconds))} · ${esc(scopeShort(x))}</div></div>${suggestionLine(x)}${overlapCoverage(x)}${regionControlsHtml(x,owner,r)}<div class="decide-head">Quyết định cho toàn cảnh ${esc(catName(x))} · ${span(x)}</div>${decideButtons(x)}${chosenLine(x)}${techDetails(x,null,false)}`;}
+function techDetails(x,ev,withRegionControls){const owner=regionOwner(x),r=owner&&(owner.suggested_region_source_pixels||owner.decision_region_source_pixels),category=x.review_kind||x.category,score=x.max_score==null?'—':Number(x.max_score).toFixed(3),parts=[`<div class="meta">${esc(category)} · ưu tiên ${esc(x.priority||'—')} · điểm ${score} · ${clock(x.start_seconds)}–${clock(x.end_seconds)} · ${esc(x.id)}</div>`,scopeBlock(x)];if(isSafety(x))parts.push(overlapCoverage(x));if(!isSafety(x)||(owner&&r&&r!=='FULL_FRAME'))parts.push(regionDetailHtml(x,owner,r));if(withRegionControls)parts.push(regionControlsHtml(x,owner,r));parts.push(`<div class="labels">${esc((x.labels||[]).join(', ')||(x.reasons||[]).join(', '))}</div>`,visualAiHtml(x),evidenceHtml(ev));if(x.model_evidence)parts.push(`<div class="labels">AI cục bộ: ${esc(JSON.stringify(x.model_evidence))}</div>`);return `<details class="tech"${techOpen?' open':''}><summary>Chi tiết kỹ thuật</summary><div class="tech-body">${parts.join('')}</div></details>`;}
+function evidenceHtml(ev){if(!ev)return '';const seeds=ev.seeds||{},windows=seeds.windows||[],context=ev.context||{},rows=[`Ngưỡng máy dò ${seeds.threshold??'—'} · lấy mẫu ${ev.sample_fps??'—'} khung/giây · ${seeds.known?'đã lưu thời điểm từng khung nghi ngờ':'bản quét cũ: chưa lưu thời điểm từng khung nghi ngờ'}`];if(ev.strongest)rows.push(`Điểm cao nhất ${Number(ev.strongest.score??0).toFixed(3)} lúc ${clock(ev.strongest.t)}`);if(windows.length)rows.push(`Cửa sổ máy dò: ${windows.map(w=>`${clock(w.start)}–${clock(w.end)} (${w.count} khung)`).join('; ')}`);if((context.extended||[]).length)rows.push(`Mở rộng theo ngữ cảnh: ${context.extended.map(w=>`${clock(w.start)}–${clock(w.end)}`).join('; ')}${context.threshold!=null?` (ngưỡng ${context.threshold})`:''}`);if(ev.ignored_ref_count)rows.push(`${ev.ignored_ref_count} tham chiếu không đọc được đã bỏ qua`);return `<div class="evidence"><strong>Bằng chứng máy dò</strong>${rows.map(v=>`<div>${esc(v)}</div>`).join('')}</div>`;}
+function visualAiHtml(x){const a=x.ai_visual_audit;return a?`<div class="visual-ai"><strong>Visual AI:</strong> ${esc(a.classification)} · tin cậy ${Math.round(100*Number(a.confidence||0))}% · đề xuất ${esc(actionName(x,a.suggested_decision))} · vùng ${esc(a.region_assessment)}<br>${esc(a.reasoning)}</div>`:'';}
+function regionDetailHtml(x,owner,r){const borrowed=owner&&owner.id!==x.id,regionStatus=regionName(owner);return owner&&r&&r!=='FULL_FRAME'?`<div class="region-detail">Chỉ nội dung nằm trong khung đỏ này đang được phân loại. Vùng khoanh đỏ: <strong>${esc(regionStatus)}</strong> · x=${Number(r.x)}, y=${Number(r.y)}, rộng=${Number(r.width)}, cao=${Number(r.height)}${borrowed?` · vùng liên kết áp dụng ${clock(owner.start_seconds)}–${clock(owner.end_seconds)}`:''}</div>`:'<div class="region-detail">Chưa có vùng được định vị nên không thể phân loại logo hay tiêu đề một cách an toàn.</div>';}
+function regionControlsHtml(x,owner,r){if(!owner||!r||r==='FULL_FRAME')return '';const borrowed=owner.id!==x.id,ownerDecision=owner.decision;return `<div class="decision-block"><strong>${borrowed?'Xử lý riêng vùng logo khoanh đỏ':'Phân loại vùng khoanh đỏ'}</strong>${borrowed?`<small>Vùng logo áp dụng ${clock(owner.start_seconds)}–${clock(owner.end_seconds)}. Quyết định toàn cảnh bên dưới chỉ áp dụng ${clock(x.start_seconds)}–${clock(x.end_seconds)}; nếu chọn Cắt cả cảnh, đoạn bị cắt không cần làm mờ.</small>`:'<small>Chỉ lựa chọn theo phần nằm trong khung đỏ, không theo logo hoặc chữ ở vị trí khác trong ảnh.</small>'}<div class="region-decide"><button type="button" class="rk${ownerDecision==='KEEP'?' sel':''}" data-act="region" data-owner="${esc(owner.id)}" data-decision="KEEP">Đây là tiêu đề/nội dung phim — giữ lại</button><button type="button" class="rb${ownerDecision==='BLUR'?' sel':''}" data-act="region" data-owner="${esc(owner.id)}" data-decision="BLUR">Đây là logo thương hiệu — làm mờ</button></div></div>`;}
+function actionName(x,decision){if(decision==='KEEP')return 'Giữ nguyên';if(decision==='CUT')return 'Cắt cả cảnh';if(decision==='BLUR')return x.suggested_region_source_pixels?(isLogoItem(x)?'Làm mờ logo':'Làm mờ vùng chữ/logo'):'Làm mờ toàn cảnh';if(decision==='NEEDS_MORE_CONTEXT')return 'Cần xem thêm';return decision;}
+function trackCoversFullVideo(x){const duration=Number(queue.source?.duration_seconds||0),tolerance=Math.max(1.5,duration*.0005);return duration>0&&Number(x.start_seconds)<=tolerance&&Number(x.end_seconds)>=duration-tolerance;}
+function decisionScope(x){const intervals=Array.isArray(x.detected_intervals)?x.detected_intervals:[],from=clock(x.start_seconds),to=clock(x.end_seconds);if(x.advisory)return{kind:'advisory',title:'Ứng viên kiểm tra thêm — chưa thuộc quyết định chính',detail:`Bằng chứng chưa đủ để ghép mục này vào track chính. Thẻ chính khác không tự xử lý mục này. Nếu bạn chọn một hành động, mục sẽ được đưa vào kế hoạch và chỉ áp dụng ${from}–${to}.`};if(x.candidate_type==='persistent_overlay'||x.temporal_policy==='continuous_persistent_overlay'){const full=trackCoversFullVideo(x),support=Number(x.supporting_candidate_count||0);return{kind:'track',title:full?'QUYẾT ĐỊNH TOÀN VIDEO':'QUYẾT ĐỊNH TOÀN KHOẢNG XUẤT HIỆN',detail:`Một lựa chọn cho vùng khoanh đỏ áp dụng từ ${from} đến ${to}${full?' — toàn bộ video':''}. ${support?`Track này đại diện thêm ${support} lần phát hiện cùng vùng đã lưu trong Audit. `:''}Logo ở vị trí hoặc track khác vẫn cần quyết định riêng.`};}if(x.temporal_policy==='discrete_detected_intervals'&&intervals.length>1)return{kind:'grouped',title:`NHÓM SỰ KIỆN — ${intervals.length} khoảng phát hiện`,detail:`Một lựa chọn được áp dụng riêng cho ${intervals.length} khoảng gốc trong ${from}–${to}; các khoảng trống giữa chúng không bị cắt hoặc làm mờ.`};if(intervals.length>1)return{kind:'grouped',title:`Đại diện cho ${intervals.length} lần phát hiện đã gom`,detail:`Các lần phát hiện gần nhau đã được gom thành cửa sổ ${from}–${to}; quyết định áp dụng toàn bộ cửa sổ này. Không tự lan sang cảnh khác.`};return{kind:'single',title:'CHỈ ĐOẠN HIỆN TẠI',detail:`Quyết định chỉ áp dụng ${from}–${to}. Đây không phải lựa chọn đại diện cho mọi quảng cáo hoặc logo cùng loại trong toàn phim.`};}
+function scopeBlock(x){const scope=decisionScope(x);return `<div class="scope-detail ${scope.kind}"><strong>Phạm vi áp dụng: ${esc(scope.title)}</strong>${esc(scope.detail)}</div>`;}
+function regionOverlap(a,b){if(!a||!b||a==='FULL_FRAME'||b==='FULL_FRAME')return 0;const left=Math.max(a.x,b.x),top=Math.max(a.y,b.y),right=Math.min(a.x+a.width,b.x+b.width),bottom=Math.min(a.y+a.height,b.y+b.height),intersection=Math.max(0,right-left)*Math.max(0,bottom-top),smaller=Math.min(a.width*a.height,b.width*b.height);return smaller?intersection/smaller:0;}
+function overlapCoverage(x){const covered=queue.items.filter(other=>other.id!==x.id&&other.decision==='BLUR'&&other.start_seconds<x.end_seconds&&other.end_seconds>x.start_seconds);if(!covered.length)return '';const persistent=covered.filter(other=>other.candidate_type==='persistent_overlay'&&other.decision_region_source_pixels&&other.decision_region_source_pixels!=='FULL_FRAME');const full=covered.filter(other=>other.decision_region_source_pixels==='FULL_FRAME');const parts=[];if(persistent.length){const owner=persistent[0],r=owner.decision_region_source_pixels,current=x.suggested_region_source_pixels||x.decision_region_source_pixels,same=regionOverlap(r,current)>=.6,label=esc((owner.labels||[])[0]||'logo/watermark'),scope=trackCoversFullVideo(owner)?'toàn video':`${clock(owner.start_seconds)}–${clock(owner.end_seconds)}`;parts.push(same?`Track <strong>${label}</strong> cùng vùng này đã được duyệt làm mờ ${scope}; thẻ hiện tại chỉ là bằng chứng hỗ trợ.`:`Track <strong>${label}</strong> ở vùng khác đã được duyệt làm mờ ${scope} (x=${Number(r.x)}, y=${Number(r.y)}, rộng=${Number(r.width)}, cao=${Number(r.height)}). Vùng đỏ hiện tại vẫn là ứng viên riêng.`);}if(full.length)parts.push(`${full.length} đoạn trùng thời gian đã được duyệt làm mờ toàn cảnh.`);return parts.length?`<div class="coverage">${parts.join(' ')}</div>`:'';}
+function regionOwner(x){if(x.suggested_region_source_pixels&&Array.isArray(x.source_frame_size))return x;if(x.advisory)return null;return queue.items.find(other=>other.id!==x.id&&isLogoItem(other)&&other.decision==='BLUR'&&(other.suggested_region_source_pixels||other.decision_region_source_pixels)&&Array.isArray(other.source_frame_size)&&other.start_seconds<x.end_seconds&&other.end_seconds>x.start_seconds)||null;}
+function regionName(owner){if(owner?.decision==='BLUR')return 'logo thương hiệu đã xác nhận';if(owner?.decision==='KEEP')return 'tiêu đề/nội dung phim đã xác nhận';const names={movie_title:'tiêu đề phim',approved_non_brand:'nội dung phim đã xác nhận',external_brand:'logo thương hiệu',external_brand_candidate:'ứng viên logo thương hiệu',branded_end_card:'end-card thương hiệu',promotional_segment:'đoạn quảng bá',unknown:'chưa phân loại'};return names[owner?.region_classification]||'vùng chưa phân loại';}
+function refreshFocusIfChanged(){const x=itemMap.get(focusId);if(!x){focusId=pickFocus();renderFocus();return;}if(isSafety(x)){if(pstate.id===x.id&&(pstate.start!==Number(x.start_seconds)||pstate.end!==Number(x.end_seconds))){renderFocus();return;}}else renderRegionMedia(x,false);renderSide(x);updateNavState();}
+async function refreshQueue(){if(!queue||pendingWrites||busy||queueRefreshRunning||document.hidden)return;queueRefreshRunning=true;reviewStats.polls++;const epoch=localEpoch;try{const latest=await requestJson(API+'queue',{cache:'no-store'});if(epoch!==localEpoch||pendingWrites)return;if(queueVersion(latest)!==queueVersion(queue)){reviewStats.pollChanges++;await applyQueueUpdate(latest);}}catch(_error){}finally{queueRefreshRunning=false;}}
+async function applyQueueUpdate(latest){if(queueIdentity(latest)!==queueIdentity(queue)){queue=latest;indexQueue();evidenceCache.clear();sticky.clear();undoStack.length=0;pruneFrames(new Set());exportSettingsInitialized=false;try{exportJob=await requestJson(API+'export',{cache:'no-store'});resources=await requestJson(API+'resources',{cache:'no-store'});}catch(_error){}initializeExportSettings();render();return;}queue=latest;indexQueue();if(filter==='pending')for(const id of listIds){if(itemMap.get(id)?.decision)sticky.add(id);}updateListStatuses();updateHeader();refreshFocusIfChanged();scheduleResources();}
+function loadEvidence(id){if(evidenceCache.has(id))return Promise.resolve(evidenceCache.get(id));if(!mediaKey)return Promise.resolve(null);let pending=evidenceLoading.get(id);if(pending)return pending;reviewStats.evidenceFetches++;pending=requestJson(`${API}evidence?item=${encodeURIComponent(id)}`,{cache:'no-store'}).then(value=>{evidenceCache.set(id,value);if(value?.video&&value.video.available===false){pstate.available=false;pstate.reason=value.video.reason||null;}return value;}).catch(()=>null).finally(()=>evidenceLoading.delete(id));evidenceLoading.set(id,pending);return pending;}
+function frameKey(id,t){return `${id}\n${t}`;}
+function frameUrl(id,t,key=mediaKey){return `${API}frame?item=${encodeURIComponent(id)}&t=${encodeURIComponent(String(t))}&k=${encodeURIComponent(key||'')}`;}
+function queueFrames(id,times,urgent){const promote=[],promises=times.map(t=>{const key=frameKey(id,t);let entry=frameBlobs.get(key);if(!entry){entry={item:id,t,obj:null,queued:true,urgent:false,retries:0,resolve:null};entry.promise=new Promise(resolve=>{entry.resolve=resolve;});frameBlobs.set(key,entry);if(!urgent)frameLater.push(key);}if(urgent&&entry.queued&&!entry.urgent){entry.urgent=true;const k=frameLater.indexOf(key);if(k>=0)frameLater.splice(k,1);promote.push(key);}return entry.promise;});if(promote.length)frameUrgent.unshift(...promote);pumpFrames();return promises;}
+async function fetchFrame(key,entry){const used=mediaKey;let r;try{r=await fetch(frameUrl(entry.item,entry.t,used),{cache:'no-store'});}catch(_error){return null;}if(r.ok)return r.blob().catch(()=>null);if(r.status===403&&entry.retries<2&&frameBlobs.get(key)===entry){entry.retries++;reviewStats.frameKeyRetries++;if(used===mediaKey)await refreshSession();if(mediaKey&&mediaKey!==used&&frameBlobs.get(key)===entry)return 'retry';}return null;}
+function pumpFrames(){while(frameActive<2){const key=frameUrgent.length?frameUrgent.shift():frameLater.shift();if(key===undefined)return;const entry=frameBlobs.get(key);if(!entry||!entry.queued)continue;entry.queued=false;frameActive++;reviewStats.frameFetches++;fetchFrame(key,entry).then(result=>{frameActive--;if(result==='retry'){entry.queued=true;frameUrgent.unshift(key);}else if(result&&frameBlobs.get(key)===entry){entry.obj=URL.createObjectURL(result);entry.resolve(entry.obj);}else{if(frameBlobs.get(key)===entry)frameBlobs.delete(key);entry.resolve(null);}pumpFrames();});}}
+function pruneFrames(keep){for(const [url,entry] of frameBlobs){if(keep.has(entry.item))continue;frameBlobs.delete(url);if(entry.obj)URL.revokeObjectURL(entry.obj);if(entry.queued)entry.resolve(null);}}
+function keepFrames(){pruneFrames(new Set([focusId,previousFocusId,nextUndecided(focusId)].filter(Boolean)));}
+function schedulePrefetch(){clearTimeout(prefetchTimer);prefetchTimer=setTimeout(prefetchNext,600);}
+async function prefetchNext(){const from=focusId,nextId=nextUndecided(from);if(!nextId||!mediaKey)return;const x=itemMap.get(nextId);if(!x||!isSafety(x))return;const ev=await loadEvidence(nextId);if(!ev||focusId!==from||nextUndecided(from)!==nextId)return;const frames=pickStrip(ev.frames,8).sort((a,b)=>(b.kind==='strongest')-(a.kind==='strongest'));queueFrames(nextId,frames.map(f=>f.t),false);}
+function videoAllowed(){return !!mediaKey&&pstate.available;}
+function coverVideo(){playerBox.classList.add('covered');pstate.reveal=false;const head=$('#thead');if(head)head.hidden=true;}
+function setPoster(src,loading=false){if(src){if(posterImg.getAttribute('src')!==src)posterImg.src=src;posterImg.hidden=false;}else{posterImg.removeAttribute('src');posterImg.hidden=true;}$('#poster-loading').hidden=!(loading&&!src);}
+function revealVideo(){playerBox.classList.remove('covered');posterImg.hidden=true;$('#poster-loading').hidden=true;pstate.reveal=true;}
+function showNote(text){const note=$('#pnote');note.textContent=text;note.hidden=false;}
+function hideNote(){$('#pnote').hidden=true;}
+function pausePlayer(){if(!video.paused)video.pause();}
+function setTime(t){setText($('#ptime'),`${mmss(t)} / đoạn ${mmss(pstate.start)}–${mmss(pstate.end)}`);const head=$('#thead');if(head){head.style.left=`${tlPos(t).toFixed(2)}%`;head.hidden=!pstate.reveal;}}
+function ensureVideo(){if(!videoAllowed())return false;if(!pstate.loaded){pstate.loaded=true;pstate.srcKey=mediaKey;video.preload='metadata';video.src=`${API}video?k=${encodeURIComponent(mediaKey)}`;}return true;}
+function seekTo(t,play){if(!ensureVideo())return false;const id=pstate.id;pstate.want={id,t,play:!!play};const run=()=>{if(pstate.id!==id)return;pstate.seekFor=id;try{video.currentTime=t;}catch(_error){}if(play){const p=video.play();if(p&&p.catch)p.catch(()=>{});}};if(video.readyState>=1)run();else pstate.pending=run;return true;}
+function playRange(){if(!videoAllowed()){showNote(videoReason(currentVideoInfo(evidenceCache.get(pstate.id))));return;}if(pstate.reveal&&video.currentTime>=pstate.start&&video.currentTime<pstate.end-.2){pstate.want={id:pstate.id,t:video.currentTime,play:true};const p=video.play();if(p&&p.catch)p.catch(()=>{});return;}seekTo(pstate.start,true);}
+function togglePlay(){const x=itemMap.get(focusId);if(!x||!isSafety(x))return;if(!video.paused){video.pause();return;}playRange();}
+function releaseVideo(){pstate.loaded=false;pstate.pending=null;video.pause();video.removeAttribute('src');video.load();coverVideo();}
+video.addEventListener('loadedmetadata',()=>{pstate.keyRetries=0;const run=pstate.pending;pstate.pending=null;if(run)run();});
+video.addEventListener('seeked',()=>{if(pstate.seekFor===pstate.id){revealVideo();setTime(video.currentTime);}});
+video.addEventListener('playing',()=>{if(pstate.seekFor===pstate.id)revealVideo();playerBox.classList.add('playing');});
+video.addEventListener('pause',()=>playerBox.classList.remove('playing'));
+video.addEventListener('timeupdate',()=>{if(!pstate.reveal)return;const t=video.currentTime;setTime(t);if(!video.paused&&t>=pstate.end)video.pause();});
+video.addEventListener('error',()=>{if(!pstate.loaded)return;const used=pstate.srcKey,w=pstate.want&&pstate.want.id===pstate.id?pstate.want:null,now=video.currentTime,wasPlaying=playerBox.classList.contains('playing'),code=video.error?video.error.code:0,want=w?{t:pstate.reveal&&Number.isFinite(now)&&now>=pstate.start&&now<=pstate.end?now:w.t,play:w.play||wasPlaying}:null;pstate.loaded=false;pstate.pending=null;playerBox.classList.remove('playing');coverVideo();videoFailed(used,want,code);});
+function restorePoster(){const x=itemMap.get(focusId);if(!x||!isSafety(x)||pstate.reveal)return;const strong=$('#strip .thumb.peak img')?.getAttribute('src');setPoster(strong||previewSrc(x));}
+async function probeVideo(key){if(!key)return 0;try{const r=await fetch(`${API}video?k=${encodeURIComponent(key)}`,{headers:{Range:'bytes=0-0'},cache:'no-store'});try{if(r.body)r.body.cancel();}catch(_error){}return r.status;}catch(_error){return 0;}}
+async function videoFailed(used,want,code=0){const id=pstate.id;reviewStats.videoErrors++;const status=used&&used!==mediaKey?403:await probeVideo(used);if(status===403&&pstate.keyRetries<2){if(used===mediaKey)await refreshSession();if(mediaKey&&mediaKey!==used){pstate.keyRetries++;if(pstate.id===id&&!pstate.loaded&&want)seekTo(want.t,want.play);return;}}const reason={404:'source_missing',409:'source_changed',415:'unsupported_container'}[status]||(status>=200&&status<300&&(code===3||code===4)?'decode_error':null);restorePoster();if(!reason){if(pstate.id===id)showNote('Chưa tải được video lúc này (mất kết nối hoặc phiên Review vừa đổi). Bấm ▶ để thử lại; dải khung hình bên dưới vẫn xem được.');return;}pstate.available=false;pstate.reason=reason;playerBox.classList.add('no-video');const x=itemMap.get(focusId);if(x&&isSafety(x))renderSide(x);showNote(videoReason({reason}));}
+function refreshSession(){if(sessionRefresh)return sessionRefresh;reviewStats.sessionRefreshes++;sessionRefresh=requestJson(API+'session',{cache:'no-store'}).then(s=>{if(s?.token)token=s.token;const before=mediaKey;if(s?.media_key)mediaKey=s.media_key;if(mediaKey!==before){mediaKeyChanged();return true;}return false;}).catch(()=>false).finally(()=>{sessionRefresh=null;});return sessionRefresh;}
+function mediaKeyChanged(){reviewStats.mediaKeyChanges++;if(pstate.loaded&&video.paused){pstate.loaded=false;pstate.pending=null;video.removeAttribute('src');video.load();coverVideo();restorePoster();}const x=itemMap.get(focusId);if(!x||!isSafety(x))return;playerBox.classList.toggle('no-video',!videoAllowed());if(evidenceCache.get(x.id)&&$('#strip .thumb:not(.ghost) img:not([src])'))renderStrip(x,evidenceCache.get(x.id));renderSide(x);}
+function isAdvisoryItem(x){return !!x&&(!!x.advisory||(queue?.advisory_items||[]).includes(x));}
+function pushUndo(item,advisory=false){undoStack.push({id:item.id,advisory,prev:{decision:item.decision||null,region:item.decision_region_source_pixels??null,note:item.decision_note??null}});if(undoStack.length>100)undoStack.shift();}
+function syncLocalCounts(){queue.counts=countsFrom(queue.items);queue.status=statusFrom(queue.items);}
+function applyLocalDecision(item,decision,region,note){item.decision=decision;item.decision_region_source_pixels=region;item.decision_note=note;item.decided_at=new Date().toISOString();syncLocalCounts();}
+function applyLocalClear(item){item.decision=null;item.decision_region_source_pixels=null;item.decision_note=null;item.decided_at=null;syncLocalCounts();}
+function afterLocalChange(id,advance){if(filter==='pending'&&listIds.includes(id))sticky.add(id);updateListStatuses();updateHeader();if(advance){const next=nextUndecided(id);if(next&&next!==focusId){previousFocusId=focusId;focusId=next;renderFocus();return;}}const x=itemMap.get(focusId);if(x)renderSide(x);updateNavState();}
+function setSaveState(){clearTimeout(saveTimer);const el=$('#save-state');if(pendingWrites){setText(el,'Đang lưu…');return;}setText(el,'Đã lưu');saveTimer=setTimeout(()=>setText(el,''),1500);}
+function scheduleResources(){clearTimeout(resourcesTimer);resourcesTimer=setTimeout(async()=>{try{resources=await requestJson(API+'resources',{cache:'no-store'});renderExport();}catch(_error){}},1500);}
+async function resync(){try{await applyQueueUpdate(await requestJson(API+'queue',{cache:'no-store'}));}catch(error){alert(error.message);}const id=reopenAfterResync;reopenAfterResync=null;if(id&&itemMap.has(id)){if(!listIds.includes(id))setFilter('all');selectItem(id);}}
+const WRITE_RETRY_MS=[300,900];
+async function postWrite(kind,body){for(let attempt=1;;attempt++){try{return await postJson(kind,body);}catch(error){error.attempts=attempt;const transient=!error.status||error.status>=500;if(!transient||attempt>WRITE_RETRY_MS.length)throw error;reviewStats.writeRetries++;await new Promise(resolve=>setTimeout(resolve,WRITE_RETRY_MS[attempt-1]));}}}
+function writeFailureMessage(kind,body,error){const x=itemMap.get(body?.id),where=x?`${catName(x)} ${span(x)}`:String(body?.id||''),what=kind==='clear'?'bỏ chọn':`“${body?.decision==='BLUR'&&body?.full_frame?'Làm mờ cả cảnh':x?actionName(x,body?.decision):String(body?.decision||'')}”`,raw=String(error?.message||''),detail=error?.status>=500&&/WinError|Errno|denied|[\\/]/i.test(raw)?'máy chủ chưa ghi được file hàng đợi (file đang bị đọc hoặc khóa)':raw;return `Chưa lưu được lựa chọn ${what} cho mục ${where}${error?.attempts>1?` (đã thử ${error.attempts} lần)`:''}. Mục này sẽ trở về trạng thái đã lưu trên máy và được mở lại để bạn chọn lại. Chi tiết: ${detail}`;}
+function enqueueWrite(kind,body){pendingWrites++;localEpoch++;setSaveState();updateNavState();const run=()=>postWrite(kind,body).then(payload=>{if(pendingWrites===1&&payload&&Array.isArray(payload.items))return applyQueueUpdate(payload);}).catch(error=>{resyncNeeded=true;reviewStats.writeFailures++;if(body?.id)reopenAfterResync=body.id;alert(writeFailureMessage(kind,body,error));}).finally(()=>{pendingWrites--;setSaveState();if(!pendingWrites){if(resyncNeeded){resyncNeeded=false;resync();}scheduleResources();}});writeChain=writeChain.then(run,run);return writeChain;}
+async function postJson(kind,body,retried=false){let response;try{response=await fetch(API+kind,{method:'POST',headers:{'Content-Type':'application/json','X-BiliFlow-Token':token},body:JSON.stringify(body)});}catch(_error){throw offlineError();}if(response.status===403&&!retried){await refreshSession();return postJson(kind,body,true);}return readJson(response);}
+async function decide(id,decision,needsFullFrame=false,note=null){if(busy||!queue)return;try{const item=itemMap.get(id);if(!item)throw new Error('Không tìm thấy mục này trong hàng đợi hiện tại.');const ai=item.ai_visual_audit,aiDecision=ai?.suggested_decision,confidence=Number(ai?.confidence||0);if(aiDecision&&confidence>=.9&&decision!==aiDecision&&['KEEP','BLUR','CUT'].includes(aiDecision)&&['KEEP','BLUR','CUT'].includes(decision)){const message=`Visual AI tin cậy ${Math.round(confidence*100)}% đề xuất “${actionName(item,aiDecision)}” vì vùng đỏ được nhận là ${ai.classification||'nội dung phim'}. Bạn vẫn muốn chọn “${actionName(item,decision)}” cho đúng vùng đỏ này?`;if(!confirm(message))return;}let full_frame=false;if(decision==='BLUR'&&needsFullFrame){full_frame=confirm('Bạn có xác nhận làm mờ toàn bộ khung hình trong đoạn này?');if(!full_frame)return;}if(decision==='BLUR'&&!full_frame&&!item.suggested_region_source_pixels)throw new Error('Mục này chưa có vùng được định vị; hãy chọn Làm mờ cả cảnh.');pushUndo(item,!item.decision&&isAdvisoryItem(item));applyLocalDecision(item,decision,decision==='BLUR'?(full_frame?'FULL_FRAME':item.suggested_region_source_pixels):null,note);afterLocalChange(id,autoNext&&id===focusId);enqueueWrite('decision',{id,decision,full_frame,note});}catch(e){alert(e.message);}}
+async function clearDecision(id){if(busy||!queue)return;const item=itemMap.get(id);if(!item||!item.decision)return;pushUndo(item);applyLocalClear(item);afterLocalChange(id,false);enqueueWrite('clear',{id});}
+function undo(){if(busy||!queue)return;const entry=undoStack.pop();if(!entry){updateNavState();return;}const item=itemMap.get(entry.id);if(!item){alert('Mục cần hoàn tác không còn trong hàng đợi hiện tại.');updateNavState();return;}if(entry.advisory){if(item.id!==focusId&&listIds.includes(item.id)){previousFocusId=focusId;focusId=item.id;renderFocus();}else updateNavState();alert(advisoryUndoMessage(item));return;}const prev=entry.prev;if(prev.decision){applyLocalDecision(item,prev.decision,prev.region,prev.note);enqueueWrite('decision',{id:item.id,decision:prev.decision,full_frame:prev.region==='FULL_FRAME',note:prev.note});}else{applyLocalClear(item);enqueueWrite('clear',{id:item.id});}if(filter==='pending'&&listIds.includes(item.id))sticky.add(item.id);updateListStatuses();updateHeader();if(item.id!==focusId&&listIds.includes(item.id)){previousFocusId=focusId;focusId=item.id;renderFocus();}else renderSide(itemMap.get(focusId)||item);updateNavState();}
+function advisoryUndoMessage(x){return `Không hoàn tác được lựa chọn cho ứng viên phụ ${catName(x)} ${span(x)}: khi bạn chọn, mục này đã được chuyển vào danh sách chính. Bỏ chọn lúc này sẽ biến nó thành mục bắt buộc chưa duyệt và chặn xuất video, nên lựa chọn “${decisionLabel(x)}” được giữ nguyên. Nếu muốn đổi, hãy chọn lại Giữ nguyên, Làm mờ, Cắt hoặc Cần xem thêm cho mục này.`;}
+function keyDecision(n){const x=itemMap.get(focusId);if(!x)return;const choice={1:['KEEP',false],2:['BLUR',true],3:['CUT',false],4:['NEEDS_MORE_CONTEXT',false]}[n];if(choice)decide(x.id,choice[0],choice[1]);}
+function isTyping(target){if(!target||target===document.body)return false;if(target.isContentEditable||target.tagName==='TEXTAREA'||target.tagName==='SELECT')return true;return target.tagName==='INPUT'&&!['checkbox','radio','button','submit','reset'].includes(String(target.type).toLowerCase());}
+function spaceActivates(target){return !!(target&&target!==document.body&&target.closest&&target.closest('button,summary,a[href],input,select,textarea,label,[role="button"],[contenteditable="true"]'));}
+function onKeyDown(e){if(e.defaultPrevented||e.ctrlKey||e.metaKey||e.altKey||isTyping(e.target))return;const k=e.key;if(k==='Escape'&&(sheetOpen||$('#export-section').open)){closeSheet();$('#export-section').open=false;return;}if(e.repeat&&k!=='ArrowLeft'&&k!=='ArrowRight')return;if(k>='1'&&k<='4'&&k.length===1){e.preventDefault();keyDecision(Number(k));}else if(k==='ArrowLeft'){e.preventDefault();step(-1);}else if(k==='ArrowRight'){e.preventDefault();step(1);}else if(k===' '||k==='Spacebar'){if(spaceActivates(e.target))return;e.preventDefault();togglePlay();}else if(k==='z'||k==='Z'){e.preventDefault();undo();}}
+async function runBlocking(task){if(busy)return;busy=true;document.body.classList.add('saving');updateNavState();try{await writeChain;await task();}catch(e){alert(e.message);}finally{busy=false;document.body.classList.remove('saving');updateNavState();}}
+function bulkFilters(){return {pending:['pending'],all:['all'],high:['high'],adult:['adult'],gore:['gore'],violence:['violence'],text:['text'],visual_logo:['visual_logo'],ads:['visual_logo','text']}[filter]||null;}
+async function bulkKeep(){if(!queue)return;const filters=bulkFilters();if(!filters){alert('Bộ lọc này không hỗ trợ thao tác hàng loạt.');return;}const count=queue.items.filter(visible).filter(x=>!x.decision).length;if(!count){alert('Không có mục chưa duyệt trong bộ lọc này.');return;}if(!confirm(`Giữ nguyên ${count} mục chưa duyệt đang hiển thị? Thao tác này không blur hoặc cắt video.`))return;await runBlocking(async()=>{let payload=null;for(const value of filters)payload=await postJson('bulk-keep',{filter:value});if(payload)await applyQueueUpdate(payload);scheduleResources();});}
+async function bulkAccept(){if(!queue)return;const filters=bulkFilters();if(!filters){alert('Bộ lọc này không hỗ trợ thao tác hàng loạt.');return;}const count=queue.items.filter(visible).filter(x=>!x.decision&&x.suggested_decision).length;if(!count){alert('Không có đề xuất chưa duyệt trong bộ lọc này.');return;}if(!confirm(`Áp dụng ${count} đề xuất đang hiển thị? Bạn vẫn có thể bỏ chọn từng mục trước khi xuất.`))return;await runBlocking(async()=>{let payload=null;for(const value of filters)payload=await postJson('bulk-accept',{filter:value});if(payload)await applyQueueUpdate(payload);scheduleResources();});}
+async function finalizeExport(){await writeChain;if(queue.status!=='READY_FOR_EDIT_PLAN'){alert('Vẫn còn mục chưa có quyết định cuối cùng.');return;}try{const selection=outputSizeSelection();if(!confirm(`Khóa các lựa chọn hiện tại và bắt đầu xuất video hoàn chỉnh (${selection.description})?`))return;const response=await fetch(API+'finalize',{method:'POST',headers:{'Content-Type':'application/json','X-BiliFlow-Token':token},body:JSON.stringify(selection)});exportJob=await readJson(response);queue.export_size_policy=exportJob.export_size_policy||queue.export_size_policy;renderExport();}catch(e){alert(e.message);}}
+document.querySelectorAll('#chips .chip').forEach(b=>b.addEventListener('click',()=>setFilter(b.dataset.filter)));
+$('#more-filter').addEventListener('change',e=>{if(e.target.value)setFilter(e.target.value);e.target.blur();});
+$('#rows').addEventListener('click',e=>{const row=e.target.closest('.row');if(row)selectItem(row.dataset.id);});
+$('#side').addEventListener('click',e=>{const b=e.target.closest('button[data-act]');if(!b)return;const x=itemMap.get(focusId);if(!x)return;const act=b.dataset.act;b.blur();if(act==='decide')decide(x.id,b.dataset.decision,b.dataset.full==='1');else if(act==='region')decide(b.dataset.owner,b.dataset.decision,false,b.dataset.decision==='KEEP'?'Đã xác nhận vùng khoanh đỏ là tiêu đề hoặc nội dung hợp lệ của phim':'Đã xác nhận vùng khoanh đỏ là logo thương hiệu');else if(act==='clear')clearDecision(x.id);else if(act==='play')playRange();});
+$('#side').addEventListener('toggle',e=>{if(e.target.matches&&e.target.matches('details.tech'))techOpen=e.target.open;},true);
+$('#strip').addEventListener('click',e=>{const b=e.target.closest('.thumb');if(!b||b.classList.contains('ghost'))return;const img=b.querySelector('img'),t=b.dataset.t===''?null:Number(b.dataset.t);$('#strip').querySelectorAll('.thumb.on').forEach(n=>n.classList.remove('on'));b.classList.add('on');b.blur();if(t!=null&&Number.isFinite(t)){setTime(t);if(videoAllowed()){pausePlayer();seekTo(t,false);}}if(img&&img.getAttribute('src')&&!pstate.reveal)setPoster(img.getAttribute('src'));});
+$('#timeline').addEventListener('click',e=>{const box=e.currentTarget.getBoundingClientRect();if(!box.width||!videoAllowed())return;const ratio=((e.clientX-box.left)/box.width*100-2)/96,t=pstate.start+Math.min(1,Math.max(0,ratio))*(pstate.end-pstate.start);setTime(t);seekTo(t,false);});
+$('#play-btn').addEventListener('click',e=>{e.currentTarget.blur();togglePlay();});
+playerBox.addEventListener('click',e=>{if(e.target===video||e.target===posterImg)togglePlay();});
+$('#prev').addEventListener('click',e=>{e.currentTarget.blur();step(-1);});
+$('#next').addEventListener('click',e=>{e.currentTarget.blur();step(1);});
+$('#undo').addEventListener('click',e=>{e.currentTarget.blur();undo();});
+$('#auto-next').checked=autoNext;$('#auto-next').addEventListener('change',e=>{autoNext=e.target.checked;try{localStorage.setItem('biliflow.review.autoNext',autoNext?'1':'0');}catch(_error){}if(queue)updateHeader();});
+$('#mobile-list').addEventListener('click',openSheet);$('#sheet-close').addEventListener('click',closeSheet);$('#sheet-backdrop').addEventListener('click',closeSheet);
+document.addEventListener('keydown',onKeyDown);
+document.addEventListener('click',e=>{if(!e.detail||!e.target.closest)return;const owner=e.target.closest('button,label');if(owner)setTimeout(()=>{const a=document.activeElement;if(a&&a!==document.body&&owner.contains(a)&&!isTyping(a))a.blur();},0);});
+document.addEventListener('click',e=>{const panel=$('#export-section');if(panel.open&&!panel.contains(e.target))panel.open=false;});
+document.addEventListener('visibilitychange',()=>{if(document.hidden)pausePlayer();});
+window.addEventListener('pagehide',releaseVideo);
+if(window.ResizeObserver)new ResizeObserver(()=>document.documentElement.style.setProperty('--hh',`${$('#top').offsetHeight}px`)).observe($('#top'));
+load();
 setInterval(refreshQueue,3000);
-setInterval(async()=>{{if(['QUEUED','RENDERING'].includes(exportJob.status)){{try{{exportJob=await requestJson('/api/export',{{cache:'no-store'}});render();}}catch(_error){{}}}}}},3000);
+setInterval(async()=>{if(['QUEUED','RENDERING'].includes(exportJob.status)){try{exportJob=await requestJson(API+'export',{cache:'no-store'});renderExport();}catch(_error){}}},3000);
 </script></body></html>"""
+    return page.replace("__BILIFLOW_REVIEW_TOKEN__", json.dumps(str(token)).replace("<", "\\u003c"))
 
 
 def serve_review_ui(
     *, project_root: Path, queue_path: Path, host: str = "127.0.0.1", port: int = 8765,
 ) -> None:
+    # Imported here: control_center imports this module at load time.
+    from biliflow.control_center import _host_allowed as host_allowed
+
     root = project_root.resolve(strict=True)
     reports_root = (root / "reports").resolve(strict=True)
     queue_path = _inside(reports_root, queue_path, "Queue path").resolve(strict=True)
@@ -2264,22 +2968,40 @@ def serve_review_ui(
                 "application/json; charset=utf-8",
             )
 
+        def _host_allowed(self) -> bool:
+            # Same DNS-rebinding guard as the Control Center: the page embeds
+            # the session token and /media/ serves 18+ thumbnails.
+            if host_allowed(self.headers.get("Host"), host):
+                return True
+            self._json(403, {"error": "Địa chỉ truy cập không hợp lệ"})
+            return False
+
         def do_GET(self) -> None:
+            if not self._host_allowed():
+                return
             parsed = urllib.parse.urlparse(self.path)
             if parsed.path == "/":
                 self._send(200, _interactive_html(token).encode("utf-8"), "text/html; charset=utf-8")
                 return
             if parsed.path == "/api/queue":
-                self._json(200, _read_json(queue_path))
+                # Reads share the write lock: on Windows a decision's
+                # Path.replace fails while another thread has the queue open.
+                with write_lock:
+                    payload = _read_json(queue_path)
+                self._json(200, payload)
                 return
             if parsed.path == "/api/session":
                 self._json(200, {"token": token})
                 return
             if parsed.path == "/api/resources":
-                self._json(200, review_resource_status(project_root=root, queue_path=queue_path))
+                with write_lock:
+                    payload = review_resource_status(project_root=root, queue_path=queue_path)
+                self._json(200, payload)
                 return
             if parsed.path == "/api/export":
-                self._json(200, export_status())
+                with write_lock:
+                    payload = export_status()
+                self._json(200, payload)
                 return
             if parsed.path.startswith("/media/"):
                 relative = urllib.parse.unquote(parsed.path.removeprefix("/media/"))
@@ -2294,6 +3016,8 @@ def serve_review_ui(
             self._json(404, {"error": "Không tìm thấy"})
 
         def do_POST(self) -> None:
+            if not self._host_allowed():
+                return
             if self.headers.get("X-BiliFlow-Token") != token:
                 self._json(403, {"error": "Phiên review không hợp lệ"})
                 return

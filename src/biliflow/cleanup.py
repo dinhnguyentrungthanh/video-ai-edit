@@ -13,6 +13,12 @@ FILE_CACHE_POLICIES = {
         "max_age": timedelta(days=30),
         "max_bytes": 2 * 1024**3,
     },
+    # Review evidence strip frames are re-extracted on demand from the
+    # read-only source, so they only need to outlive one review session.
+    "cache/review-frames": {
+        "max_age": timedelta(days=14),
+        "max_bytes": 1024**3,
+    },
 }
 
 
@@ -28,6 +34,7 @@ def cleanup_candidates(project_root: Path, now: datetime | None = None) -> list[
         "cache/visual-logo": timedelta(days=30),
         "cache/ad_candidate_pipeline": timedelta(days=30),
         "cache/stage-results": timedelta(days=14),
+        "cache/review-frames": timedelta(days=14),
     }
     candidates = []
     for directory, retention in policies.items():

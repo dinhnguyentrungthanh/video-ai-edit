@@ -5,6 +5,13 @@ import json
 import sys
 from pathlib import Path
 
+from biliflow.adult_verification import (
+    ADULT_TRIAGE_LEVEL,
+    ADULT_TRIAGE_LEVELS,
+    VERIFIER_BATCH_SIZE,
+    VERIFIER_MODEL_DIR,
+    verify_adult_report,
+)
 from biliflow.brand_memory import rebuild_brand_memory
 from biliflow.cleanup import cleanup_candidates
 from biliflow.animation_safety_scanner import scan_animation_safety
@@ -16,6 +23,7 @@ from biliflow.license_policy import audit_project_models, ensure_model_allowed
 from biliflow.final_renderer import approve_previews, render_final_output
 from biliflow.scanner import scan_nsfw
 from biliflow.review_workflow import (
+    CONTENT_STYLES,
     build_edit_plan,
     build_review_queue,
     record_review_decision,
@@ -68,6 +76,11 @@ def build_parser() -> argparse.ArgumentParser:
     scan.add_argument("--review-merge-gap-seconds", type=float, default=3.0)
     scan.add_argument("--sequence-context-threshold", type=float, default=0.70)
     scan.add_argument("--sequence-context-seconds", type=float, default=8.0)
+    scan.add_argument(
+        "--shot-completion",
+        action="store_true",
+        help="Opt-in: move live-action interval edges to the hard cut of a strongly adult shot",
+    )
 
     content_scan = sub.add_parser(
         "scan-content", help="Scan a video with the local gore or violence classifier"
@@ -128,6 +141,10 @@ def build_parser() -> argparse.ArgumentParser:
     live_safety.add_argument("--merge-gap-seconds", type=float, default=2.0)
     live_safety.add_argument("--padding-seconds", type=float, default=1.0)
     live_safety.add_argument("--device", choices=["cuda", "cpu"], default="cuda")
+    live_safety.add_argument(
+        "--violence-precision", choices=["fp32", "fp16"], default="fp32",
+        help="Experimental: run the violence ViT forward in float16 autocast (not bit-identical); default fp32",
+    )
 
     confirm_violence = sub.add_parser(
         "confirm-violence",
@@ -222,6 +239,10 @@ def build_parser() -> argparse.ArgumentParser:
         "--gore-context-temporal-minimum-hits", type=int, default=4
     )
     animation_scan.add_argument("--device", choices=["cuda", "cpu"], default="cuda")
+    animation_scan.add_argument(
+        "--precision", choices=["fp32", "fp16"], default="fp32",
+        help="Experimental: run the tagger forward in float16 autocast (not bit-identical); default fp32",
+    )
 
     text_scan = sub.add_parser("scan-text", help="Find and track text regions for ad review")
     text_scan.add_argument("--input", type=Path, required=True)
@@ -370,6 +391,28 @@ def build_parser() -> argparse.ArgumentParser:
     review.add_argument("--selected-detector", action="append", default=[])
     review.add_argument("--queue", type=Path, required=True)
     review.add_argument("--merge-gap-seconds", type=float, default=1.0)
+    review.add_argument(
+        "--content-style", choices=list(CONTENT_STYLES),
+        help="The job's confirmed style; only live_action moves weak 18+ candidates to the "
+             "optional list (never deletes them). Omitted: no 18+ triage",
+    )
+    review.add_argument(
+        "--adult-triage-level", choices=list(ADULT_TRIAGE_LEVELS),
+        help=f"Measurement override of the 18+ triage level (default {ADULT_TRIAGE_LEVEL})",
+    )
+
+    verify_adult = sub.add_parser(
+        "verify-adult",
+        help="Score every 18+ interval with a second local model (scores only; never removes intervals)",
+    )
+    verify_adult.add_argument("--report", type=Path, required=True)
+    verify_adult.add_argument("--output", type=Path, required=True)
+    verify_adult.add_argument(
+        "--model", type=Path, default=root / "models" / VERIFIER_MODEL_DIR,
+    )
+    verify_adult.add_argument("--ffmpeg", type=Path, default=root / "tools" / "ffmpeg" / "bin" / "ffmpeg.exe")
+    verify_adult.add_argument("--device", choices=["cuda", "cpu"], default="cuda")
+    verify_adult.add_argument("--batch-size", type=int, default=VERIFIER_BATCH_SIZE)
 
     decide = sub.add_parser("review-decide", help="Record one human review decision")
     decide.add_argument("--queue", type=Path, required=True)
@@ -474,6 +517,7 @@ def main() -> int:
             review_merge_gap_seconds=args.review_merge_gap_seconds,
             sequence_context_threshold=args.sequence_context_threshold,
             sequence_context_seconds=args.sequence_context_seconds,
+            shot_completion=args.shot_completion,
         )
         print(json.dumps(payload, indent=2, ensure_ascii=False))
         return 0
@@ -578,6 +622,7 @@ def main() -> int:
                 args.gore_context_temporal_minimum_hits
             ),
             device_name=args.device,
+            precision=args.precision,
         )
         print(json.dumps(payload, indent=2, ensure_ascii=False))
         return 0
@@ -604,6 +649,7 @@ def main() -> int:
             violence_merge_gap_seconds=args.merge_gap_seconds,
             padding_seconds=args.padding_seconds,
             device_name=args.device,
+            violence_precision=args.violence_precision,
         )
         print(json.dumps({
             "gore_report": str((args.report_dir / "gore" / "scan.json").resolve()),
@@ -824,8 +870,27 @@ def main() -> int:
             project_root=root, report_paths=args.report, queue_path=args.queue,
             merge_gap_seconds=args.merge_gap_seconds,
             selected_detectors=args.selected_detector or None,
+            content_style=args.content_style,
+            adult_triage_level=args.adult_triage_level,
         )
         print(json.dumps(payload, indent=2, ensure_ascii=False))
+        return 0
+    if args.command == "verify-adult":
+        ensure_model_allowed(root, args.model)
+        payload = verify_adult_report(
+            project_root=root,
+            report_path=args.report,
+            output_path=args.output,
+            model_path=args.model,
+            ffmpeg_path=args.ffmpeg,
+            device_name=args.device,
+            batch_size=args.batch_size,
+        )
+        print(json.dumps({
+            "report": str(args.output.resolve()),
+            "adult_verification": payload["adult_verification"],
+            "elapsed_seconds": payload["metrics"]["verification_elapsed_seconds"],
+        }, indent=2, ensure_ascii=False))
         return 0
     if args.command == "review-decide":
         payload = record_review_decision(

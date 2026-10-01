@@ -1,7 +1,14 @@
+import hashlib
+import http.client
 import json
+import re
+import threading
+import time
 import unittest
+from http.server import ThreadingHTTPServer
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from unittest.mock import patch
 
 from biliflow.review_workflow import (
     _guard_in_film_text,
@@ -21,12 +28,47 @@ from biliflow.review_workflow import (
     record_review_decision,
     review_export_paths,
     review_resource_status,
+    serve_review_ui,
     pixel_region_iou,
     promote_strong_adult_priorities,
+    reconcile_persistent_overlay_items,
     refine_persistent_logo_regions,
     tighten_text_region,
+    triage_adult_items,
     union_pixel_regions,
 )
+
+
+def _box(x, y, width, height):
+    return {"x": x, "y": y, "width": width, "height": height}
+
+
+def _persistent_track(category, region, sources=None, end=6738, **extra):
+    item = {
+        "category": category, "candidate_type": "persistent_overlay",
+        "review_kind": "logo_overlay", "start_seconds": 0, "end_seconds": end,
+        "suggested_region_source_pixels": region,
+        "labels": [], "reasons": [], "evidence": [f"{category}-track"],
+        "preview_images": [], "source_candidate_refs": [f"{category}-track-ref"],
+    }
+    if sources is not None:
+        item["model_evidence"] = {"region_sources": list(sources)}
+    item.update(extra)
+    return item
+
+
+def _logo_read(start, region, sources=("grounding", "ocr"), **extra):
+    item = {
+        "category": "visual_logo", "candidate_type": None,
+        "review_kind": "logo_overlay", "start_seconds": start,
+        "end_seconds": start + 5, "suggested_region_source_pixels": region,
+        "model_evidence": {"region_sources": list(sources)},
+        "labels": [], "reasons": [], "evidence": [f"read-{start}-{region['x']}"],
+        "preview_images": [], "source_candidate_refs": [f"read-ref-{start}-{region['x']}"],
+        "decision": None,
+    }
+    item.update(extra)
+    return item
 
 
 class VisualAuditQueueTests(unittest.TestCase):
@@ -268,6 +310,367 @@ class ReviewWorkflowTests(unittest.TestCase):
             "repeated_visual_ocr_consensus",
         )
         self.assertEqual(refined[0]["region_refinement"]["support_count"], 3)
+
+    def test_persistent_text_uses_full_mark_reads_when_ocr_consensus_is_a_word_fragment(self):
+        # Modelled on the Conan 21 "PhimOnline.net" watermark: two repeated
+        # reads of only "Online.net" must not shrink the box and cut off
+        # "Phim" while repeated reads of the whole mark contain them. The box
+        # becomes the extent of those whole-mark reads.
+        original = {"x": 1544, "y": 38, "width": 376, "height": 67}
+        items = [{
+            "category": "text", "candidate_type": "persistent_overlay",
+            "review_kind": "logo_overlay", "start_seconds": 0, "end_seconds": 6738,
+            "suggested_region_source_pixels": dict(original),
+        }]
+        for start, region in (
+            (870, {"x": 1653, "y": 46, "width": 208, "height": 66}),
+            (4000, {"x": 1655, "y": 46, "width": 204, "height": 64}),
+            (410, {"x": 1553, "y": 45, "width": 308, "height": 67}),
+            (455, {"x": 1553, "y": 44, "width": 308, "height": 69}),
+            (595, {"x": 1555, "y": 44, "width": 306, "height": 69}),
+        ):
+            items.append({
+                "category": "visual_logo", "candidate_type": None,
+                "review_kind": "logo_overlay", "start_seconds": start,
+                "end_seconds": start + 5,
+                "suggested_region_source_pixels": region,
+                "model_evidence": {"region_sources": ["grounding", "ocr"]},
+            })
+        refined = refine_persistent_logo_regions(items)
+        self.assertEqual(
+            refined[0]["suggested_region_source_pixels"], _box(1553, 44, 308, 69),
+        )
+        refinement = refined[0]["region_refinement"]
+        self.assertEqual(refinement["method"], "repeated_full_mark_ocr_support")
+        self.assertEqual(refinement["support_count"], 3)
+        self.assertEqual(refinement["original_region"], original)
+        self.assertEqual(refinement["ocr_fragment_region"], _box(1653, 46, 208, 66))
+
+    def test_word_fragment_guard_counts_full_reads_larger_than_the_track_box(self):
+        # Troy geometry: the OCR track box (164x49) is slightly smaller than
+        # every whole-mark read (172x52). Two first-word reads must not cut
+        # the watermark down to 90 px because the fuller reads are larger.
+        items = [_persistent_track("text", _box(110, 160, 164, 49))]
+        items += [_logo_read(start, _box(107, 161, 90, 51)) for start in (1000, 5000)]
+        items += [
+            _logo_read(start, _box(107, 160, 172, 52))
+            for start in (135, 525, 680, 2845, 3300, 5210)
+        ]
+        refined = refine_persistent_logo_regions(items)
+        self.assertEqual(
+            refined[0]["suggested_region_source_pixels"], _box(107, 160, 172, 52),
+        )
+        self.assertEqual(
+            refined[0]["region_refinement"]["method"], "repeated_full_mark_ocr_support",
+        )
+
+    def test_full_mark_box_still_contains_the_fragment_it_replaces(self):
+        # Fuller reads may each cover only part of the line ("PhimOnline"),
+        # leaving ".net" of the fragment outside their extent; the refined
+        # box must keep the fragment so no glyph that was blurred is exposed.
+        items = [_persistent_track("text", _box(1560, 45, 296, 60))]
+        items += [
+            _logo_read(870, _box(1665, 48, 185, 55)),
+            _logo_read(4000, _box(1667, 48, 183, 55)),
+            _logo_read(410, _box(1565, 48, 235, 56)),
+            _logo_read(455, _box(1566, 48, 234, 56)),
+        ]
+        refined = refine_persistent_logo_regions(items)
+        self.assertEqual(
+            refined[0]["suggested_region_source_pixels"], _box(1565, 48, 285, 56),
+        )
+
+    def test_padded_full_reads_do_not_block_grounding_tightening(self):
+        # Two reads that only add OCR padding around the same mark (similar
+        # width) are not evidence of a fragment; the oversized grounding box
+        # is still tightened to the repeated tight reads.
+        items = [_persistent_track(
+            "visual_logo", _box(1530, 24, 350, 100), ["grounding"], end=100,
+        )]
+        items += [
+            _logo_read(5, _box(1553, 44, 308, 69), ("ocr",)),
+            _logo_read(60, _box(1555, 44, 306, 68), ("ocr",)),
+            _logo_read(30, _box(1545, 36, 325, 84), ("ocr",)),
+            _logo_read(80, _box(1546, 37, 324, 83), ("ocr",)),
+        ]
+        refined = refine_persistent_logo_regions(items)
+        self.assertEqual(
+            refined[0]["suggested_region_source_pixels"], _box(1553, 44, 308, 69),
+        )
+        self.assertEqual(
+            refined[0]["region_refinement"]["method"], "repeated_tight_ocr_support",
+        )
+
+    def test_whole_emblem_reads_do_not_block_emblem_padding_trim(self):
+        # The OCR word inside an emblem is not a fragment of a text line when
+        # the fuller reads are the (much taller) emblem: keep the 5% trim.
+        items = [_persistent_track(
+            "visual_logo", _box(90, 10, 250, 210), ["grounding"], end=100,
+        )]
+        items += [
+            _logo_read(5, _box(128, 104, 160, 67), ("ocr",)),
+            _logo_read(80, _box(130, 104, 159, 67), ("ocr",)),
+            _logo_read(20, _box(95, 15, 240, 200)),
+            _logo_read(50, _box(96, 15, 239, 200)),
+        ]
+        refined = refine_persistent_logo_regions(items)
+        self.assertEqual(
+            refined[0]["suggested_region_source_pixels"], _box(100, 20, 230, 190),
+        )
+        self.assertEqual(
+            refined[0]["region_refinement"]["method"], "grounding_box_padding_trim",
+        )
+
+    def test_region_refinement_does_not_depend_on_item_order(self):
+        # A persistent visual card that is itself refined must not become a
+        # fragment-sized read for the OCR track only when it comes first.
+        def scenario():
+            text = _persistent_track("text", _box(1544, 38, 376, 67), id="T")
+            visual = _persistent_track(
+                "visual_logo", _box(1553, 44, 316, 69), ["grounding", "ocr"], id="P",
+            )
+            reads = [
+                _logo_read(870, _box(1653, 46, 208, 66)),
+                _logo_read(4000, _box(1655, 46, 204, 64)),
+                _logo_read(1200, _box(1553, 45, 306, 67)),
+            ]
+            return text, visual, reads
+
+        results = []
+        for text_first in (True, False):
+            text, visual, reads = scenario()
+            order = [text, visual] if text_first else [visual, text]
+            refine_persistent_logo_regions(order + reads)
+            results.append((
+                text["suggested_region_source_pixels"],
+                visual["suggested_region_source_pixels"],
+            ))
+        self.assertEqual(results[0], results[1])
+        self.assertEqual(results[0][0], _box(1553, 44, 316, 69))
+
+    def test_region_refinement_tolerates_missing_model_evidence(self):
+        items = [_persistent_track("text", _box(1544, 38, 376, 67))]
+        items += [
+            _logo_read(870, _box(1653, 46, 208, 66)),
+            _logo_read(4000, _box(1655, 46, 204, 64)),
+            _logo_read(1300, _box(1600, 50, 100, 40), model_evidence=None),
+        ]
+        refined = refine_persistent_logo_regions(items)
+        self.assertEqual(
+            refined[0]["suggested_region_source_pixels"], _box(1653, 46, 208, 66),
+        )
+
+    def test_approved_brand_memory_box_is_not_refined_by_ocr_reads(self):
+        brand = _persistent_track(
+            "visual_logo", _box(1565, 52, 282, 46), ["brand_memory"],
+            region_classification="external_brand",
+        )
+        items = [brand] + [
+            _logo_read(start, _box(1655, 55, 180, 40), ("ocr",))
+            for start in (100, 900)
+        ]
+        refine_persistent_logo_regions(items)
+        self.assertEqual(brand["suggested_region_source_pixels"], _box(1565, 52, 282, 46))
+        self.assertNotIn("region_refinement", brand)
+
+    def test_approved_brand_box_keeps_ownership_of_matching_ocr_fragment_track(self):
+        # A persistent OCR track read only as "Online.net" overlaps the
+        # approved "PhimOnline.net" box by 0.69: they are one mark, and the
+        # user-approved box must stay the blur region, in either input order.
+        for brand_first in (True, False):
+            brand = _persistent_track(
+                "visual_logo", _box(1565, 52, 282, 46), ["brand_memory"],
+                region_classification="external_brand", suggested_decision="BLUR",
+            )
+            text = _persistent_track("text", _box(1653, 46, 208, 66))
+            items = [brand, text] if brand_first else [text, brand]
+            final = reconcile_persistent_overlay_items(items, source_duration=6738)
+            self.assertEqual(len(final), 1)
+            self.assertIs(final[0], brand)
+            self.assertEqual(
+                final[0]["suggested_region_source_pixels"], _box(1565, 52, 282, 46),
+            )
+            self.assertEqual(
+                final[0]["linked_detector_categories"], ["text", "visual_logo"],
+            )
+            self.assertEqual(
+                [record["category"] for record in final[0]["supporting_detections"]],
+                ["text"],
+            )
+
+    def test_ocr_track_never_absorbs_an_approved_brand_card(self):
+        # An OCR fragment track overlapping an approved brand box by 0.69 used
+        # to absorb it (external_brand needs only 0.60) and the approved box
+        # was lost. A brand-memory card is only ever joined by a brand owner.
+        text = _persistent_track("text", _box(1653, 46, 208, 66))
+        brand_read = _logo_read(
+            400, _box(1565, 52, 282, 46), ("brand_memory",),
+            region_classification="external_brand", suggested_decision="BLUR",
+        )
+        final = reconcile_persistent_overlay_items(
+            [text, brand_read], source_duration=6738,
+        )
+        self.assertEqual(final, [text, brand_read])
+        self.assertNotIn("supporting_detections", text)
+
+        # The brand owner joins one OCR track (the first matching one, here the
+        # full read). A second, fragment track must not then swallow the brand
+        # owner together with everything it absorbed.
+        brand = _persistent_track(
+            "visual_logo", _box(1565, 52, 282, 46), ["brand_memory"],
+            region_classification="external_brand", suggested_decision="BLUR",
+        )
+        full_track = _persistent_track("text", _box(1547, 43, 314, 70))
+        fragment_track = _persistent_track("text", _box(1653, 46, 208, 66))
+        brand_read = _logo_read(
+            400, _box(1565, 52, 282, 46), ("brand_memory",),
+            region_classification="external_brand", suggested_decision="BLUR",
+        )
+        final = reconcile_persistent_overlay_items(
+            [full_track, fragment_track, brand, brand_read], source_duration=6738,
+        )
+        self.assertEqual(final, [fragment_track, brand])
+        self.assertEqual(brand["suggested_region_source_pixels"], _box(1565, 52, 282, 46))
+        self.assertEqual(
+            [record["region_source_pixels"] for record in brand["supporting_detections"]],
+            [_box(1547, 43, 314, 70), _box(1565, 52, 282, 46)],
+        )
+        self.assertNotIn("supporting_detections", fragment_track)
+
+    def test_blur_card_inside_joined_ocr_track_folds_into_brand_owner(self):
+        # Conan 21, 3745 s: a padded "Online.net" card overlaps the approved
+        # box by only 0.72, but lies inside the joined OCR track of the same
+        # watermark and proposes the same BLUR, so it is not a second card.
+        brand = _persistent_track(
+            "visual_logo", _box(1565, 52, 282, 46), ["brand_memory"],
+            region_classification="external_brand", suggested_decision="BLUR",
+        )
+        text = _persistent_track("text", _box(1547, 43, 314, 70))
+        same_mark = _logo_read(
+            3745, _box(1644, 34, 223, 83), ("grounding_dino",),
+            suggested_decision="BLUR", region_classification="unknown",
+        )
+        # A card inside the track without a proposed action keeps its advisory
+        # path, and a BLUR card mostly outside the track box is unrelated.
+        unexplained = _logo_read(
+            2020, _box(1660, 45, 203, 69), ("ocr",), suggested_decision=None,
+            region_classification="unknown",
+        )
+        unrelated = _logo_read(
+            1170, _box(1760, 40, 150, 70), ("ocr",), suggested_decision="BLUR",
+            region_classification="unknown",
+        )
+        final = reconcile_persistent_overlay_items(
+            [brand, text, same_mark, unexplained, unrelated], source_duration=6738,
+        )
+        self.assertEqual([item is brand for item in final], [True, False, False])
+        self.assertIn(unexplained, final)
+        self.assertIn(unrelated, final)
+        supports = [record["start_seconds"] for record in brand["supporting_detections"]]
+        self.assertEqual(supports, [0, 3745])
+        self.assertEqual(brand["suggested_region_source_pixels"], _box(1565, 52, 282, 46))
+
+    def test_blur_card_inside_joined_track_but_off_the_owner_box_stays_a_decision(self):
+        # Only the owner's box is blurred after one approval. A BLUR card that
+        # lies inside a long joined OCR track but does not overlap that box
+        # would be hidden as a support count and never blurred.
+        brand = _persistent_track(
+            "visual_logo", _box(1565, 52, 282, 46), ["brand_memory"],
+            region_classification="external_brand", suggested_decision="BLUR",
+        )
+        line_track = _persistent_track(
+            "text", _box(1180, 40, 700, 75), suggested_decision="BLUR",
+        )
+        other_mark = _logo_read(
+            2000, _box(1200, 48, 330, 58), suggested_decision="BLUR",
+            region_classification="unknown",
+        )
+        final = reconcile_persistent_overlay_items(
+            [brand, line_track, other_mark], source_duration=6738,
+        )
+        self.assertEqual(final, [brand, other_mark])
+        self.assertEqual(
+            [record["category"] for record in brand["supporting_detections"]],
+            ["text"],
+        )
+
+        # A moving watermark: the OCR track spans the travel path, the
+        # persistent visual box sits at one position, and reads of the mark at
+        # other positions must stay separate decisions.
+        visual = _persistent_track(
+            "visual_logo", _box(1600, 45, 280, 55), ["grounding", "ocr"],
+            region_classification="external_brand_candidate", suggested_decision="BLUR",
+        )
+        path_track = _persistent_track(
+            "text", _box(900, 40, 990, 65), suggested_decision="BLUR",
+        )
+        moved = [
+            _logo_read(
+                start, _box(x, 45, 280, 55), suggested_decision="BLUR",
+                region_classification="unknown",
+            )
+            for start, x in ((300, 920), (1800, 1150), (4200, 1320))
+        ]
+        final = reconcile_persistent_overlay_items(
+            [visual, path_track] + moved, source_duration=6738,
+        )
+        self.assertEqual(final, [visual] + moved)
+        self.assertEqual(visual["supporting_candidate_count"], 1)
+
+    def test_owner_covering_an_approved_brand_box_absorbs_its_intervals(self):
+        # Without a persistent brand owner, a text track whose box covers the
+        # approved brand box still collects the intermittent brand intervals
+        # as one decision; its blur covers every approved box.
+        text = _persistent_track(
+            "text", _box(1547, 43, 314, 70), suggested_decision="BLUR",
+        )
+        brand_reads = [
+            _logo_read(
+                start, _box(1565, 52, 282, 46), ("brand_memory",),
+                region_classification="external_brand", suggested_decision="BLUR",
+            )
+            for start in (100, 900, 2500, 4000, 6000)
+        ]
+        final = reconcile_persistent_overlay_items(
+            [text] + brand_reads, source_duration=6738,
+        )
+        self.assertEqual(final, [text])
+        self.assertEqual(text["supporting_candidate_count"], 5)
+        self.assertEqual(text["suggested_region_source_pixels"], _box(1547, 43, 314, 70))
+
+    def test_oversized_grounding_box_is_still_tightened_beside_single_wider_read(self):
+        items = [{
+            "category": "visual_logo", "candidate_type": "persistent_overlay",
+            "review_kind": "logo_overlay", "start_seconds": 0, "end_seconds": 100,
+            "suggested_region_source_pixels": {
+                "x": 1530, "y": 24, "width": 350, "height": 100,
+            },
+            "model_evidence": {"region_sources": ["grounding"]},
+        }]
+        for start, region in (
+            (5, {"x": 1553, "y": 44, "width": 308, "height": 69}),
+            (60, {"x": 1555, "y": 44, "width": 306, "height": 68}),
+            # One wider OCR read (mark plus neighbouring artwork) is not a
+            # repeated observation and must not block the correction.
+            (30, {"x": 1540, "y": 30, "width": 330, "height": 90}),
+        ):
+            items.append({
+                "category": "visual_logo", "candidate_type": None,
+                "review_kind": "logo_overlay", "start_seconds": start,
+                "end_seconds": start + 5,
+                "suggested_region_source_pixels": region,
+                "model_evidence": {"region_sources": ["ocr"]},
+            })
+        refined = refine_persistent_logo_regions(items)
+        self.assertEqual(
+            refined[0]["suggested_region_source_pixels"],
+            {"x": 1553, "y": 44, "width": 308, "height": 69},
+        )
+        self.assertEqual(
+            refined[0]["region_refinement"]["method"],
+            "repeated_tight_ocr_support",
+        )
+        self.assertEqual(refined[0]["region_refinement"]["support_count"], 2)
 
     def test_detector_upgrade_preserves_unresolved_previous_candidate(self):
         previous = [{
@@ -1543,6 +1946,646 @@ class ReviewWorkflowTests(unittest.TestCase):
             queue_path=self.root / "reports" / "review-echo" / "queue.json",
         )
         self.assertEqual(queue["items"][0]["labels"], [])
+
+
+def _js_function(page, name):
+    """Source of one named JS function in the review page (brace matched)."""
+    match = re.search(rf"(?:async )?function {re.escape(name)}\(", page)
+    if match is None:
+        raise AssertionError(f"function {name} is missing from the review page")
+    start = page.index("{", match.end())
+    depth = 0
+    for index in range(start, len(page)):
+        if page[index] == "{":
+            depth += 1
+        elif page[index] == "}":
+            depth -= 1
+            if depth == 0:
+                return page[match.start():index + 1]
+    raise AssertionError(f"function {name} is not closed")
+
+
+class FocusReviewPageTests(unittest.TestCase):
+    def setUp(self):
+        self.page = _interactive_html("token")
+
+    def test_api_paths_come_from_one_rewritable_constant_and_nothing_external(self):
+        page = self.page
+        self.assertIn("const API='/api/';", page)
+        self.assertEqual(page.count("'/api/"), 1)
+        self.assertNotRegex(page, r"https?://")
+        self.assertNotRegex(page, r'<link[^>]+href="(?!data:)')
+        self.assertNotRegex(page, r"<script[^>]+src=")
+        hostile = _interactive_html('a"</script><b>')
+        self.assertIn('let token="a\\"\\u003c/script>\\u003cb>";', hostile)
+        self.assertEqual(hostile.count("</script>"), 1)
+        self.assertNotIn("__BILIFLOW_REVIEW_TOKEN__", page)
+
+    def test_focus_layout_keeps_one_item_list_navigation_and_four_decisions(self):
+        page = self.page
+        for label in (
+            'data-filter="pending"', 'data-filter="adult"', 'data-filter="gore"',
+            'data-filter="violence"', 'data-filter="ads"', 'data-filter="all"',
+            "Chưa duyệt (${c.pending})", "← Trước", "Sau →", "↶ Hoàn tác",
+            "Tự sang mục chưa duyệt kế tiếp", "Danh sách để chọn lại ▾",
+            "Giữ nguyên", "Làm mờ cả cảnh", "Cắt cảnh", "Cần xem thêm", "phím ${key}",
+            "Rõ nhất lúc", "▶ Phát đoạn này", "Chi tiết kỹ thuật", "Xuất video",
+            "máy nghi ngờ ở ${seeds.count} khung",
+            "bản quét cũ: chưa lưu thời điểm từng khung nghi ngờ",
+            "Duyệt tất cả đề xuất đang lọc", "Giữ nguyên tất cả đang lọc",
+            "Hoàn tất duyệt và xuất video", "Bỏ chọn",
+        ):
+            with self.subTest(label=label):
+                self.assertIn(label, page)
+        self.assertEqual(page.count("<video"), 1)
+        self.assertIn('<video id="video" preload="none"', page)
+        self.assertIn("@media (max-width:820px)", page)
+        self.assertIn("grid-template-columns:280px minmax(0,1fr)", page)
+        self.assertIn("content-visibility:auto", page)
+
+    def test_keyboard_shortcuts_ignore_typing_and_key_repeat(self):
+        handler = _js_function(self.page, "onKeyDown")
+        self.assertIn("document.addEventListener('keydown',onKeyDown)", self.page)
+        for fragment in ("isTyping(e.target)", "e.repeat", "keyDecision(Number(k))",
+                         "'ArrowLeft'", "'ArrowRight'", "k===' '", "togglePlay()", "undo()"):
+            with self.subTest(fragment=fragment):
+                self.assertIn(fragment, handler)
+        typing = _js_function(self.page, "isTyping")
+        self.assertIn("TEXTAREA", typing)
+        self.assertIn("SELECT", typing)
+        self.assertIn("checkbox", typing)
+        choice = _js_function(self.page, "keyDecision")
+        self.assertIn("2:['BLUR',true]", choice)
+
+    def test_polling_patches_in_place_and_never_rebuilds_the_focus_card(self):
+        poll = _js_function(self.page, "refreshQueue")
+        self.assertIn("if(queueVersion(latest)!==queueVersion(queue))", poll)
+        self.assertIn("pendingWrites", poll)
+        self.assertIn("epoch!==localEpoch", poll)
+        for call in ("render()", "renderFocus(", "renderList(", "setupSafetyMedia("):
+            with self.subTest(call=call):
+                self.assertNotIn(call, poll)
+        update = _js_function(self.page, "applyQueueUpdate")
+        same_revision = update.split("render();return;}", 1)[1]
+        self.assertIn("updateListStatuses()", same_revision)
+        self.assertIn("refreshFocusIfChanged()", same_revision)
+        self.assertNotIn("renderFocus(", same_revision)
+        self.assertNotIn("render()", same_revision)
+        refresh = _js_function(self.page, "refreshFocusIfChanged")
+        self.assertIn("renderSide(x)", refresh)
+        self.assertNotIn("setupSafetyMedia(", refresh)
+        self.assertIn("side.__html===html", _js_function(self.page, "renderSide"))
+        statuses = _js_function(self.page, "updateListStatuses")
+        self.assertIn("pill.textContent=label", statuses)
+
+    def test_evidence_is_lazy_one_item_ahead_and_media_is_released(self):
+        page = self.page
+        self.assertIn("const evidenceCache=new Map()", page)
+        self.assertIn("evidence?item=", _js_function(page, "loadEvidence"))
+        prefetch = _js_function(page, "prefetchNext")
+        self.assertIn("nextUndecided(from)", prefetch)
+        self.assertIn("pickStrip(ev.frames,8)", prefetch)
+        self.assertIn("URL.revokeObjectURL", _js_function(page, "pruneFrames"))
+        self.assertIn("frame?item=", _js_function(page, "frameUrl"))
+        self.assertIn('loading="lazy"', _js_function(page, "renderStrip"))
+        ensure = _js_function(page, "ensureVideo")
+        self.assertIn("video.preload='metadata'", ensure)
+        self.assertIn("video?k=", ensure)
+        release = _js_function(page, "releaseVideo")
+        self.assertIn("video.removeAttribute('src')", release)
+        self.assertIn("video.load()", release)
+        self.assertIn("window.addEventListener('pagehide',releaseVideo)", page)
+        # Video is requested only from user actions (play, frame or timeline click).
+        self.assertEqual(page.count("ensureVideo()"), 2)
+
+    def test_writes_use_only_the_existing_review_endpoints(self):
+        page = self.page
+        kinds = set(re.findall(r"(?:postJson|enqueueWrite)\('([a-z-]+)'", page))
+        self.assertEqual(kinds, {"decision", "clear", "bulk-keep", "bulk-accept"})
+        self.assertIn("fetch(API+'finalize'", page)
+        undo = _js_function(page, "undo")
+        self.assertIn("enqueueWrite('clear'", undo)
+        self.assertIn("enqueueWrite('decision'", undo)
+        decide = _js_function(page, "decide")
+        self.assertIn("confirm('Bạn có xác nhận làm mờ toàn bộ khung hình trong đoạn này?')", decide)
+        self.assertIn("confidence>=.9", decide)
+        self.assertIn("afterLocalChange(id,autoNext&&id===focusId)", decide)
+
+    def test_failed_writes_are_retried_then_name_the_item_and_reopen_it(self):
+        # Regression (review fix 1): a 500 while saving lost the decision behind
+        # an alert with a raw OS path, after auto-advance had already moved on.
+        page = self.page
+        self.assertIn("error.status=response.status", _js_function(page, "readJson"))
+        enqueue = _js_function(page, "enqueueWrite")
+        self.assertIn("postWrite(kind,body)", enqueue)
+        self.assertNotIn("postJson(", enqueue)
+        self.assertIn("writeFailureMessage(kind,body,error)", enqueue)
+        self.assertIn("reopenAfterResync=body.id", enqueue)
+        self.assertIn("const WRITE_RETRY_MS=[300,900];", page)
+        retry = _js_function(page, "postWrite")
+        self.assertIn("!error.status||error.status>=500", retry)
+        self.assertIn("attempt>WRITE_RETRY_MS.length", retry)
+        message = _js_function(page, "writeFailureMessage")
+        for fragment in ("catName(x)", "span(x)", "actionName(x,", "đã thử", "được mở lại",
+                         "WinError", "máy chủ chưa ghi được file hàng đợi"):
+            with self.subTest(fragment=fragment):
+                self.assertIn(fragment, message)
+        resync = _js_function(page, "resync")
+        self.assertIn("selectItem(id)", resync)
+        self.assertIn("setFilter('all')", resync)
+
+    def test_a_new_media_key_reloads_frames_and_video_instead_of_disabling_them(self):
+        # Regression (review fix 2): after a Control Center restart the strip
+        # stayed blank and the player was disabled for the whole session.
+        page = self.page
+        session = _js_function(page, "refreshSession")
+        self.assertIn("mediaKey=s.media_key", session)
+        self.assertIn("mediaKeyChanged()", session)
+        self.assertIn("await refreshSession()", _js_function(page, "postJson"))
+        self.assertIn("frameKey(id,t)", _js_function(page, "queueFrames"))
+        frame = _js_function(page, "fetchFrame")
+        self.assertIn("frameUrl(entry.item,entry.t,used)", frame)
+        self.assertIn("r.status===403", frame)
+        self.assertIn("await refreshSession()", frame)
+        self.assertIn("'retry'", frame)
+        self.assertIn("result==='retry'", _js_function(page, "pumpFrames"))
+        changed = _js_function(page, "mediaKeyChanged")
+        self.assertIn("video.removeAttribute('src')", changed)
+        self.assertIn("renderStrip(x,", changed)
+        self.assertIn("pstate.srcKey=mediaKey", _js_function(page, "ensureVideo"))
+        listener = page.split("video.addEventListener('error',", 1)[1].split("});", 1)[0]
+        self.assertIn("videoFailed(used,want,code)", listener)
+        self.assertNotIn("available=false", listener)
+        failed = _js_function(page, "videoFailed")
+        self.assertIn("probeVideo(used)", failed)
+        self.assertIn("seekTo(want.t,want.play)", failed)
+        for status in ("404:'source_missing'", "409:'source_changed'", "415:'unsupported_container'",
+                       "'decode_error'"):
+            with self.subTest(status=status):
+                self.assertIn(status, failed)
+        self.assertEqual(failed.count("pstate.available=false"), 1)
+        # A network error with a healthy stream is transient, not a decode failure.
+        self.assertIn("(code===3||code===4)?'decode_error'", failed)
+        self.assertIn("decode_error:", _js_function(page, "videoReason"))
+        # The probe runs only after a user-started load failed.
+        self.assertEqual(page.count("probeVideo("), 2)
+
+    def test_undo_does_not_clear_a_promoted_advisory_candidate(self):
+        # Regression (review fix 3): /clear left a decided candidate in the
+        # required list, so undo made a non-blocking candidate block export.
+        page = self.page
+        self.assertIn("pushUndo(item,!item.decision&&isAdvisoryItem(item))", _js_function(page, "decide"))
+        undo = _js_function(page, "undo")
+        barrier = undo.split("if(entry.advisory){", 1)[1].split("const prev=entry.prev;", 1)[0]
+        self.assertIn("alert(advisoryUndoMessage(item))", barrier)
+        self.assertIn("return;", barrier)
+        self.assertNotIn("enqueueWrite", barrier)
+        self.assertIn("ứng viên phụ", _js_function(page, "advisoryUndoMessage"))
+        self.assertIn("last.advisory", _js_function(page, "updateNavState"))
+
+    def test_space_is_left_to_a_focused_control(self):
+        # Regression (review fix 4): Space toggled the player even on a focused
+        # summary or button.
+        handler = _js_function(self.page, "onKeyDown")
+        space = handler.split("k===' '", 1)[1]
+        self.assertLess(space.index("spaceActivates(e.target)"), space.index("togglePlay()"))
+        activates = _js_function(self.page, "spaceActivates")
+        for selector in ("button", "summary", "a[href]", "input", "label"):
+            with self.subTest(selector=selector):
+                self.assertIn(selector, activates)
+        # Mouse clicks (detail > 0) drop button focus so Space keeps playing the video.
+        self.assertIn("document.addEventListener('click',e=>{if(!e.detail||!e.target.closest)return;", self.page)
+
+
+class StandaloneReviewServerTests(unittest.TestCase):
+    def setUp(self):
+        self.temporary = TemporaryDirectory()
+        self.root = Path(self.temporary.name).resolve()
+        job = self.root / "reports" / "job"
+        (job / "thumbs").mkdir(parents=True)
+        (job / "thumbs" / "a.jpg").write_bytes(b"\xff\xd8secret-thumb\xff\xd9")
+        self.queue_path = job / "review-queue.json"
+        self.queue_path.write_text(json.dumps({
+            "status": "REVIEW_REQUIRED", "source": {"path": "missing.mp4"},
+            "reports": [], "items": [{"id": "a", "category": "adult", "decision": None,
+                                      "start_seconds": 1, "end_seconds": 2}],
+            "advisory_items": [],
+        }), encoding="utf-8")
+        created = threading.Event()
+        holder = {}
+
+        class CapturingServer(ThreadingHTTPServer):
+            daemon_threads = True
+
+            def __init__(self, *args, **kwargs):
+                super().__init__(*args, **kwargs)
+                holder["server"] = self
+                created.set()
+
+        self.patches = [
+            patch("biliflow.review_workflow.ThreadingHTTPServer", CapturingServer),
+            patch("builtins.print"),
+        ]
+        for value in self.patches:
+            value.start()
+        self.thread = threading.Thread(target=serve_review_ui, kwargs={
+            "project_root": self.root, "queue_path": self.queue_path, "port": 0,
+        }, daemon=True)
+        self.thread.start()
+        self.assertTrue(created.wait(10))
+        self.server = holder["server"]
+        self.port = self.server.server_address[1]
+
+    def tearDown(self):
+        self.server.shutdown()
+        self.thread.join(10)
+        for value in reversed(self.patches):
+            value.stop()
+        self.temporary.cleanup()
+
+    def request(self, path, *, host, method="GET", headers=None, body=None):
+        connection = http.client.HTTPConnection("127.0.0.1", self.port, timeout=10)
+        try:
+            connection.request(method, path, body=body, headers={"Host": host, **(headers or {})})
+            response = connection.getresponse()
+            return response.status, response.read()
+        finally:
+            connection.close()
+
+    def test_foreign_host_is_refused_like_the_control_center(self):
+        local = f"127.0.0.1:{self.port}"
+        status, page = self.request("/", host=local)
+        self.assertEqual(status, 200)
+        self.assertIn(b"const API='/api/';", page)
+        token = re.search(rb'let token="([^"]+)";', page).group(1).decode()
+        for path in ("/", "/api/session", "/api/queue", "/media/reports/job/thumbs/a.jpg"):
+            for host in ("evil.example", f"evil.example:{self.port}", "127.0.0.1.evil.example", " "):
+                with self.subTest(path=path, host=host):
+                    status, body = self.request(path, host=host)
+                    self.assertEqual(status, 403)
+                    self.assertNotIn(token.encode(), body)
+                    self.assertNotIn(b"secret-thumb", body)
+        self.assertEqual(self.request("/media/reports/job/thumbs/a.jpg", host=f"localhost:{self.port}")[0], 200)
+        before = self.queue_path.read_bytes()
+        status, _ = self.request(
+            "/api/decision", host="evil.example", method="POST",
+            headers={"X-BiliFlow-Token": token, "Content-Type": "application/json"},
+            body=json.dumps({"id": "a", "decision": "KEEP"}).encode(),
+        )
+        self.assertEqual(status, 403)
+        self.assertEqual(self.queue_path.read_bytes(), before)
+
+    def test_queue_reads_wait_for_an_in_flight_write(self):
+        # Same Windows race as the Control Center: a read holding the queue
+        # open made the decision's Path.replace fail with WinError 5.
+        queue = json.loads(self.queue_path.read_text(encoding="utf-8"))
+        queue["items"][0].update({"priority": "high", "labels": [], "preview_images": []})
+        self.queue_path.write_text(json.dumps(queue), encoding="utf-8")
+        local = f"127.0.0.1:{self.port}"
+        token = re.search(rb'let token="([^"]+)";', self.request("/", host=local)[1]).group(1).decode()
+        entered, release = threading.Event(), threading.Event()
+        order = []
+
+        def slow_record(**kwargs):
+            entered.set()
+            release.wait(5)
+            order.append("write")
+            return record_review_decision(**kwargs)
+
+        def post():
+            order.append(("decision", self.request(
+                "/api/decision", host=local, method="POST",
+                headers={"X-BiliFlow-Token": token, "Content-Type": "application/json"},
+                body=json.dumps({"id": "a", "decision": "KEEP"}).encode(),
+            )[0]))
+
+        with patch("biliflow.review_workflow.record_review_decision", side_effect=slow_record):
+            poster = threading.Thread(target=post)
+            poster.start()
+            self.assertTrue(entered.wait(5))
+            readers = [
+                threading.Thread(target=lambda path=path: order.append((path, self.request(path, host=local)[0])))
+                for path in ("/api/queue", "/api/export")
+            ]
+            for thread in readers:
+                thread.start()
+            time.sleep(0.3)
+            self.assertEqual(order, [], "queue reads must wait for the in-flight write")
+            release.set()
+            for thread in [poster, *readers]:
+                thread.join(10)
+        self.assertEqual(order[0], "write")
+        self.assertEqual(dict(order[1:]), {"decision": 200, "/api/queue": 200, "/api/export": 200})
+        self.assertEqual(json.loads(self.queue_path.read_text(encoding="utf-8"))["items"][0]["decision"], "KEEP")
+
+
+REVISION = "a5ce9eec1ac11773ca9ff44f45b1bb6591631562"
+
+
+def _verification(nsfw, state="SCORED", revision=REVISION):
+    if state != "SCORED":
+        return {"state": state, "error": "decode failed", "nsfw_max": None, "nsfw_frames": 0,
+                "sample_fps": 2.0, "frame_size": 448, "model": "image_safety_classifier_m",
+                "target_label": "NSFW", "revision": revision}
+    return {"state": "SCORED", "nsfw_max": nsfw, "nsfw_frames": 4, "nsfw_scores": [nsfw] * 4,
+            "sample_fps": 2.0, "frame_size": 448, "model": "image_safety_classifier_m",
+            "target_label": "NSFW", "revision": revision}
+
+
+class AdultTriageTests(unittest.TestCase):
+    """docs/ADULT_FALSE_ALARM_PLAN.md steps 1-3: move weak 18+ candidates, never delete."""
+
+    def setUp(self):
+        self.temporary = TemporaryDirectory()
+        self.root = Path(self.temporary.name)
+        (self.root / "input").mkdir()
+        self.source = self.root / "input" / "source.mp4"
+        self.source.write_bytes(b"source")
+        self.job = self.root / "reports" / "jobs" / "job"
+        self.adult = self.job / "adult"
+        self.adult.mkdir(parents=True)
+        self.scan = self.adult / "scan.json"
+        self.verified = self.adult / "scan-verified.json"
+        gore = self.job / "gore" / "scan.json"
+        gore.parent.mkdir(parents=True)
+        gore.write_text(json.dumps(self._payload("gore", [
+            {"start_seconds": 100, "end_seconds": 102, "max_score": 0.8, "sample_count": 1,
+             "predicted_label": "NSFL"},
+        ])), encoding="utf-8")
+        self.gore = gore
+        self.queue = self.job / "review-queue.json"
+
+    def tearDown(self):
+        self.temporary.cleanup()
+
+    def _payload(self, scan_type, intervals, **extra):
+        payload = {
+            "status": "COMPLETED", "scan_type": scan_type, "input": str(self.source),
+            "input_sha256": "abc", "duration_seconds": 2000, "sample_fps": 2.0,
+            "threshold": 0.95 if scan_type == "nsfw" else 0.5, "content_style": "live_action",
+            "intervals": intervals,
+        }
+        payload.update(extra)
+        return payload
+
+    @staticmethod
+    def _interval(start, seeds, label="porn", verification=None, *, length=2.0, score=0.97):
+        interval = {"start_seconds": start, "end_seconds": start + length, "max_score": score,
+                    "sample_count": seeds, "predicted_label": label}
+        if verification is not None:
+            interval["adult_verification"] = verification
+        return interval
+
+    def _intervals(self, revision=REVISION):
+        def scored(value):
+            return _verification(value, revision=revision)
+
+        return [
+            self._interval(100, 6, "hentai", scored(0.05)),          # 0 credits
+            self._interval(200, 1, "porn", scored(0.30)),            # 1 weak twice
+            self._interval(300, 1, "porn", scored(0.92)),            # 2 few seeds, verifier sure
+            self._interval(400, 17, "sexy", scored(0.334)),          # 3 implied nudity (blanket)
+            self._interval(500, 1, "porn", _verification(None, state="FAILED", revision=revision)),
+            self._interval(600, 1, "porn"),                          # 5 never verified
+            self._interval(700, 3, "porn", scored(0.40)),            # 6 balanced-only move
+            self._interval(800, 1, "porn", scored(0.20), length=6.0, score=0.999),  # 7 would be promoted
+            self._interval(900, 1, "porn", scored(0.20)),            # 8 grouped with 9
+            self._interval(905, 9, "porn", scored(0.95)),            # 9
+        ]
+
+    def _write(self, intervals, **scan_extra):
+        plain = [{key: value for key, value in interval.items() if key != "adult_verification"}
+                 for interval in intervals]
+        self.scan.write_text(json.dumps(self._payload("nsfw", plain, **scan_extra)), encoding="utf-8")
+        verified = self._payload("nsfw", intervals, **scan_extra)
+        verified["adult_verification"] = {
+            "state": "COMPLETED",
+            "source_report": "reports/jobs/job/adult/scan.json",
+            "source_report_sha256": hashlib.sha256(self.scan.read_bytes()).hexdigest(),
+        }
+        self.verified.write_text(json.dumps(verified), encoding="utf-8")
+
+    def _build(self, style="live_action", level=None, reports=None):
+        return build_review_queue(
+            project_root=self.root, report_paths=reports or [self.verified, self.gore],
+            queue_path=self.queue, content_style=style, adult_triage_level=level,
+        )
+
+    @staticmethod
+    def _starts(items, category="adult"):
+        return sorted(item["start_seconds"] for item in items if item["category"] == category)
+
+    def test_live_action_moves_only_weak_undecided_candidates_and_keeps_coverage(self):
+        self._write(self._intervals())
+        queue = self._build()
+        self.assertEqual(self._starts(queue["items"]), [300, 400, 500, 600, 700, 900])
+        self.assertEqual(self._starts(queue["advisory_items"]), [100, 200, 800])
+        moved = {item["start_seconds"]: item for item in queue["advisory_items"] if item["category"] == "adult"}
+        for item in moved.values():
+            self.assertTrue(item["advisory"])
+            self.assertEqual(item["priority"], "context")
+            self.assertIsNone(item["suggested_decision"])
+            self.assertIsNone(item["decision"])
+            self.assertEqual(item["adult_triage"]["outcome"], "advisory")
+            self.assertIn("Ứng viên phụ", item["reasons"][-1])
+            self.assertIn("không xóa", item["reasons"][-1])
+        self.assertEqual(moved[100]["adult_triage"]["rule"], "credits")
+        self.assertEqual(moved[100]["adult_triage"]["labels"], ["hentai"])
+        weak = moved[200]["adult_triage"]
+        self.assertEqual((weak["rule"], weak["n_seeds"], weak["verifier_max"], weak["k"], weak["t"]),
+                         ("two_signal", 1, 0.3, 2, 0.7))
+        self.assertEqual((weak["model"], weak["revision"], weak["level"]),
+                         ("image_safety_classifier_m", REVISION, "conservative"))
+        self.assertEqual(moved[800]["priority"], "context")  # moved before strong-scene promotion
+        kept = {item["start_seconds"]: item["adult_triage"] for item in queue["items"]
+                if item["category"] == "adult"}
+        self.assertEqual({start: info["reason"] for start, info in kept.items()}, {
+            300: "strong_evidence", 400: "strong_evidence", 500: "verification_failed",
+            600: "verification_missing", 700: "strong_evidence", 900: "strong_evidence",
+        })
+        self.assertTrue(all(info["outcome"] == "kept" for info in kept.values()))
+        self.assertEqual(kept[400]["n_seeds"], 17)  # implied nudity under a blanket stays
+        self.assertEqual((kept[900]["n_seeds"], kept[900]["verifier_max"]), (10, 0.95))
+        audit = queue["adult_triage"]
+        self.assertTrue(audit["applied"])
+        self.assertEqual((audit["level"], audit["content_style"]), ("conservative", "live_action"))
+        self.assertEqual(audit["two_signal"], {"k": 2, "t": 0.7})
+        self.assertEqual((audit["evaluated_items"], audit["moved_items"]), (9, 3))
+        self.assertEqual(audit["moved_by_rule"], {"credits": 1, "two_signal": 2})
+        self.assertEqual(audit["moved_seconds"], 10.0)
+        self.assertEqual(audit["kept_by_reason"], {
+            "strong_evidence": 4, "verification_failed": 1, "verification_missing": 1,
+        })
+        self.assertEqual(audit["verification_reports"],
+                         {"reports/jobs/job/adult/scan-verified.json": "COMPLETED"})
+        coverage = queue["candidate_coverage"]
+        self.assertTrue(coverage["complete"])
+        self.assertEqual(coverage["missing_refs"], [])
+        self.assertEqual(coverage["represented_source_candidate_count"], 11)
+        ids = [item["id"] for item in [*queue["items"], *queue["advisory_items"]]]
+        self.assertEqual(len(ids), len(set(ids)))
+        self.assertEqual(queue["counts"]["total"], len(queue["items"]))
+        self.assertEqual(queue["content_style"], "live_action")
+
+    def test_other_groups_and_the_moved_items_keep_their_identity(self):
+        self._write(self._intervals())
+        triaged = self._build()
+        plain = self._build(style=None)
+        self.assertEqual(
+            [item for item in triaged["items"] if item["category"] != "adult"],
+            [item for item in plain["items"] if item["category"] != "adult"],
+        )
+        before = {item["id"]: item for item in plain["items"]}
+        for item in triaged["advisory_items"]:
+            original = before[item["id"]]  # same id in the main list without triage
+            for key in ("start_seconds", "end_seconds", "source_candidate_refs", "detected_intervals",
+                        "evidence", "preview_images", "labels", "max_score"):
+                self.assertEqual(item[key], original[key])
+
+    def test_mixed_animation_and_unknown_jobs_move_nothing(self):
+        self._write(self._intervals())
+        reference = self._build(style=None)
+        self.assertEqual(reference["adult_triage"]["reason"], "content_style_missing")
+        for style in ("mixed", "animation", "unknown"):
+            with self.subTest(style=style):
+                queue = self._build(style=style)
+                self.assertEqual(self._starts(queue["advisory_items"]), [])
+                self.assertFalse(any("adult_triage" in item for item in queue["items"]))
+                self.assertFalse(queue["adult_triage"]["applied"])
+                self.assertEqual(queue["adult_triage"]["reason"], "content_style_not_live_action")
+                self.assertEqual([item["id"] for item in queue["items"]],
+                                 [item["id"] for item in reference["items"]])
+        with self.assertRaises(ValueError):
+            self._build(style="cartoon")
+
+    def test_levels(self):
+        self._write(self._intervals())
+        self.assertEqual(self._starts(self._build(level="off")["advisory_items"]), [])
+        self.assertEqual(self._build(level="off")["adult_triage"]["reason"], "level_off")
+        self.assertEqual(self._starts(self._build(level="credits")["advisory_items"]), [100])
+        self.assertEqual(self._starts(self._build(level="balanced")["advisory_items"]), [100, 200, 700, 800])
+        self.assertEqual(self._starts(self._build()["advisory_items"]), [100, 200, 800])
+
+    def test_credits_rule_yields_to_a_confident_verifier(self):
+        intervals = self._intervals()
+        intervals[0] = self._interval(100, 6, "hentai", _verification(0.85))  # "hentai" label, real nudity
+        self._write(intervals)
+        queue = self._build()
+        self.assertNotIn(100, self._starts(queue["advisory_items"]))
+        kept = {item["start_seconds"]: item["adult_triage"] for item in queue["items"] if item["category"] == "adult"}
+        self.assertEqual((kept[100]["outcome"], kept[100]["reason"]), ("kept", "strong_evidence"))
+
+    def test_unverified_scan_report_moves_only_credits(self):
+        self._write(self._intervals())
+        queue = self._build(reports=[self.scan, self.gore])
+        self.assertEqual(self._starts(queue["advisory_items"]), [100])
+        self.assertEqual(queue["adult_triage"]["verification_reports"],
+                         {"reports/jobs/job/adult/scan.json": "MISSING"})
+        self.assertEqual(queue["adult_triage"]["kept_by_reason"], {"verification_missing": 8})
+
+    def test_uncalibrated_scan_settings_move_nothing(self):
+        self._write(self._intervals(), sample_fps=1.0)
+        queue = self._build()
+        self.assertEqual(self._starts(queue["advisory_items"]), [])
+        self.assertEqual(queue["adult_triage"]["kept_by_reason"], {"uncalibrated_scan": 9})
+
+    def test_uncalibrated_verifier_revision_moves_only_credits(self):
+        self._write(self._intervals(revision="0" * 40))
+        queue = self._build()
+        self.assertEqual(self._starts(queue["advisory_items"]), [100])
+        reasons = {item["start_seconds"]: item["adult_triage"]["reason"]
+                   for item in queue["items"] if item["category"] == "adult"}
+        self.assertEqual(reasons[200], "verification_uncalibrated")
+
+    def test_verified_copy_of_a_changed_scan_is_refused(self):
+        self._write(self._intervals())
+        payload = json.loads(self.scan.read_text(encoding="utf-8"))
+        payload["intervals"].pop()
+        self.scan.write_text(json.dumps(payload), encoding="utf-8")
+        with self.assertRaisesRegex(ValueError, "stale"):
+            self._build()
+        self.assertFalse(self.queue.exists())
+
+    def test_decided_items_never_move(self):
+        self._write(self._intervals())
+        payloads = {"reports/jobs/job/adult/scan-verified.json":
+                    json.loads(self.verified.read_text(encoding="utf-8"))}
+        weak = {"category": "adult", "start_seconds": 200, "end_seconds": 202,
+                "source_candidate_refs": ["reports/jobs/job/adult/scan-verified.json#interval:1"],
+                "priority": "context", "reasons": []}
+        items = [dict(weak, decision="KEEP"), dict(weak, decision="NEEDS_MORE_CONTEXT"),
+                 dict(weak, decision=None)]
+        required, advisory, audit = triage_adult_items(items, payloads, "live_action")
+        self.assertEqual(required[:2], items[:2])  # untouched, no triage annotation
+        self.assertEqual(len(advisory), 1)
+        self.assertEqual(audit["kept_by_reason"], {"decided": 2})
+        self.assertEqual(audit["evaluated_items"], 1)
+
+    def test_duplicate_references_to_one_interval_count_its_seeds_once(self):
+        self._write(self._intervals())
+        payload = json.loads(self.verified.read_text(encoding="utf-8"))
+        payloads = {"reports/jobs/job/adult/scan-verified.json": payload,
+                    "reports/jobs/job/adult/scan.json": payload}
+        item = {"category": "adult", "start_seconds": 200, "end_seconds": 202, "decision": None,
+                "source_candidate_refs": ["reports/jobs/job/adult/scan-verified.json#interval:1",
+                                          "reports/jobs/job/adult/scan.json#interval:1"]}
+        _required, advisory, audit = triage_adult_items([item], payloads, "live_action")
+        self.assertEqual(advisory[0]["adult_triage"]["n_seeds"], 1)
+        self.assertEqual(list(audit["verification_reports"]),
+                         ["reports/jobs/job/adult/scan-verified.json"])
+
+    def test_references_that_do_not_resolve_keep_the_item(self):
+        self._write(self._intervals())
+        payloads = {
+            "reports/jobs/job/adult/scan-verified.json": json.loads(self.verified.read_text(encoding="utf-8")),
+            "reports/jobs/job/gore/scan.json": json.loads(self.gore.read_text(encoding="utf-8")),
+        }
+        base = {"category": "adult", "start_seconds": 200, "end_seconds": 202, "decision": None}
+        cases = {
+            "no_source_refs": [],
+            "unresolved_source_refs": ["reports/jobs/old/adult/scan.json#interval:1"],
+            "not_live_action_nsfw_scan": ["reports/jobs/job/gore/scan.json#interval:0"],
+            "stale_source_refs": ["reports/jobs/job/adult/scan-verified.json#interval:5"],
+        }
+        for reason, refs in cases.items():
+            with self.subTest(reason=reason):
+                required, advisory, _audit = triage_adult_items(
+                    [dict(base, source_candidate_refs=refs)], payloads, "live_action")
+                self.assertEqual(advisory, [])
+                self.assertEqual(required[0]["adult_triage"]["reason"], reason)
+
+    def test_preserved_unresolved_items_are_triaged_again(self):
+        self._write(self._intervals())
+        self.queue.write_text(json.dumps({
+            "source": {"path": str(self.source.resolve()), "sha256": "abc"},
+            "items": [
+                {   # from an older revision whose report is gone: stays required
+                    "id": "review-old-unresolvable", "category": "adult", "candidate_type": None,
+                    "start_seconds": 1500, "end_seconds": 1502, "priority": "context", "decision": None,
+                    "labels": ["porn"], "reasons": [], "evidence": ["reports/jobs/old/adult/scan.json"],
+                    "preview_images": [], "detected_intervals": [{"start_seconds": 1500, "end_seconds": 1502}],
+                    "source_candidate_refs": ["reports/jobs/old/adult/scan.json#interval:0"],
+                },
+                {   # cites the unverified scan.json of this revision: resolved through the verified copy
+                    "id": "review-old-weak", "category": "adult", "candidate_type": None,
+                    "start_seconds": 202.5, "end_seconds": 203.0, "priority": "context", "decision": None,
+                    "labels": ["porn"], "reasons": [], "evidence": ["reports/jobs/job/adult/scan.json"],
+                    "preview_images": [], "detected_intervals": [{"start_seconds": 202.5, "end_seconds": 203.0}],
+                    "source_candidate_refs": ["reports/jobs/job/adult/scan.json#interval:1"],
+                },
+            ],
+        }), encoding="utf-8")
+        queue = self._build()
+        kept = next(item for item in queue["items"] if item["start_seconds"] == 1500)
+        self.assertEqual(kept["migration_status"], "preserved_unresolved_from_previous_queue")
+        self.assertEqual(kept["adult_triage"]["reason"], "unresolved_source_refs")
+        weak = next(item for item in queue["advisory_items"] if item["start_seconds"] == 200)
+        self.assertEqual(sorted(weak["source_candidate_refs"]), [
+            "reports/jobs/job/adult/scan-verified.json#interval:1",
+            "reports/jobs/job/adult/scan.json#interval:1",
+        ])
+        self.assertEqual((weak["adult_triage"]["rule"], weak["adult_triage"]["n_seeds"]), ("two_signal", 1))
+        self.assertTrue(queue["candidate_coverage"]["reference_complete"])
 
 
 class DetectionScopeTests(unittest.TestCase):

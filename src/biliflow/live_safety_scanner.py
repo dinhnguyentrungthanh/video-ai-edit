@@ -18,12 +18,16 @@ from PIL import Image
 from safetensors.torch import load_file
 
 from biliflow.content_scanner import _load_classifier
+from biliflow.frame_prefetch import IteratorPrefetch
 from biliflow.intervals import compact_interval_thumbnails, group_hits, merge_intervals
 from biliflow.probe import duration_seconds, probe_video
 from biliflow.report import write_report
 from biliflow.scanner import _read_exact, _score_summary, sha256_file
 from biliflow.storage import require_capacity
 from biliflow.violence_scanner import aggregate_top_k_mean
+
+VIOLENCE_PRECISIONS = ("fp32", "fp16")
+EVENT_PREFETCH_DEPTH = 16
 
 
 def scan_live_safety(
@@ -47,6 +51,7 @@ def scan_live_safety(
     violence_merge_gap_seconds: float = 2.0,
     padding_seconds: float = 1.0,
     device_name: str = "cuda",
+    violence_precision: str = "fp32",
 ) -> dict:
     """Scan live-action gore and violence from one exact FFmpeg decode.
 
@@ -54,6 +59,9 @@ def scan_live_safety(
     side. The gore branch runs its original fps filter and is repeated only for
     transport; every Nth left frame is byte-identical to the old 2 fps stream.
     The violence branch remains byte-identical to the old 8 fps stream.
+    Reading, unpacking and the violence transform run on a producer thread, one
+    window ahead, in exactly the serial order. ``violence_precision="fp16"``
+    (opt-in, not bit-identical) autocasts only the violence ViT forward.
     """
     performance = ScanPerformance()
     project_root = project_root.resolve(strict=True)
@@ -76,6 +84,10 @@ def scan_live_safety(
         raise ValueError("Batch and temporal window settings must be positive")
     if not 0 <= gore_threshold <= 1 or not 0 <= violence_threshold <= 1:
         raise ValueError("Thresholds must be between zero and one")
+    if violence_precision not in VIOLENCE_PRECISIONS:
+        raise ValueError("violence precision must be 'fp32' or 'fp16'")
+    if violence_precision == "fp16" and device_name != "cuda":
+        raise ValueError("fp16 violence inference requires CUDA")
 
     input_stat = input_path.stat()
     require_capacity(
@@ -165,8 +177,8 @@ def scan_live_safety(
     violence_scores: list[float] = []
     violence_hits: list[dict] = []
     violence_heap: list[tuple[float, int, Image.Image]] = []
-    violence_window: deque[Image.Image] = deque(maxlen=clip_frames)
     violence_frame_scores: deque[float] = deque(maxlen=clip_frames)
+    produced = {"violence_frames": 0}
 
     def process_gore_batch() -> None:
         nonlocal peak_rss
@@ -205,21 +217,20 @@ def scan_live_safety(
         gore_batch.clear()
         gore_batch_indices.clear()
 
-    def process_violence_window() -> None:
-        nonlocal violence_windows_scored, peak_rss
-        new_frame_count = (
-            clip_frames if violence_windows_scored == 0
-            else min(stride_frames, clip_frames)
-        )
-        new_frames = list(violence_window)[-new_frame_count:]
+    def process_violence_window(pixels: torch.Tensor, frames_read: int, center: Image.Image) -> None:
+        nonlocal violence_windows_scored, violence_frames_scanned, peak_rss
+        violence_frames_scanned = frames_read
         with performance.measure('violence_model_step'):
-            pixels = torch.stack([
-                violence_transform(frame) for frame in new_frames
-            ]).to(device)
+            pixels = pixels.to(device)
             with torch.inference_mode():
-                probabilities = torch.softmax(
-                    violence_model(pixels), dim=-1
-                )[:, violence_positive_index]
+                if violence_precision == "fp16":
+                    with torch.autocast(device_type="cuda", dtype=torch.float16):
+                        logits = violence_model(pixels)
+                    probabilities = torch.softmax(logits.float(), dim=-1)[:, violence_positive_index]
+                else:
+                    probabilities = torch.softmax(
+                        violence_model(pixels), dim=-1
+                    )[:, violence_positive_index]
             violence_frame_scores.extend(probabilities.cpu().tolist())
 
         if len(violence_frame_scores) != clip_frames:
@@ -233,7 +244,7 @@ def scan_live_safety(
             violence_frames_scanned - 1 - clip_frames // 2
         )
         timestamp = center_frame_index / violence_sample_fps
-        preview = violence_window[clip_frames // 2].copy()
+        preview = center.copy()
         candidate = (score, violence_windows_scored, preview)
         if len(violence_heap) < top_k_candidates:
             heapq.heappush(violence_heap, candidate)
@@ -246,7 +257,7 @@ def scan_live_safety(
             name = (
                 f"clip-{violence_windows_scored:06d}-{timestamp:.3f}s.jpg"
             )
-            performance.call('preview_write', violence_window[clip_frames // 2].save,
+            performance.call('preview_write', center.save,
                 violence_dir / "thumbnails" / name,
                 "JPEG", quality=82, optimize=True,
             )
@@ -260,15 +271,16 @@ def scan_live_safety(
         peak_rss = max(peak_rss, process.memory_info().rss)
 
     ffmpeg = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-    status = "COMPLETED"
-    error_message = None
-    packed_frame_index = 0
-    try:
-        assert ffmpeg.stdout is not None
+
+    def events():
+        """Serial read order: per packed frame, the violence window (if due) then the gore frame."""
+        window: deque[Image.Image] = deque(maxlen=clip_frames)
+        windows = 0
+        packed_frame_index = 0
         while True:
-            data = performance.call('frame_pipe_wait', _read_exact, ffmpeg.stdout, packed_frame_bytes)
+            data = _read_exact(ffmpeg.stdout, packed_frame_bytes)
             if not data:
-                break
+                return
             if len(data) != packed_frame_bytes:
                 raise RuntimeError(
                     f"Incomplete packed frame: {len(data)} of {packed_frame_bytes} bytes"
@@ -276,29 +288,47 @@ def scan_live_safety(
             packed = np.frombuffer(data, dtype=np.uint8).reshape(
                 height, packed_width, 3
             )
-            violence_image = Image.frombytes(
+            window.append(Image.frombytes(
                 "RGB", (width, height), packed[:, width:, :].tobytes()
-            )
-            violence_window.append(violence_image)
-            violence_frames_scanned += 1
+            ))
+            produced["violence_frames"] += 1
             if (
-                len(violence_window) >= clip_frames
-                and (violence_frames_scanned - clip_frames) % stride_frames == 0
+                len(window) >= clip_frames
+                and (produced["violence_frames"] - clip_frames) % stride_frames == 0
             ):
-                process_violence_window()
-
+                new_frame_count = clip_frames if windows == 0 else min(stride_frames, clip_frames)
+                pixels = torch.stack([
+                    violence_transform(frame) for frame in list(window)[-new_frame_count:]
+                ])
+                windows += 1
+                yield ("violence", pixels, produced["violence_frames"], window[clip_frames // 2])
             if packed_frame_index % rounded_ratio == 0:
-                gore_image = Image.frombytes(
+                yield ("gore", Image.frombytes(
                     "RGB", (width, height), packed[:, :width, :].tobytes()
-                )
-                gore_batch.append(gore_image)
-                gore_batch_indices.append(gore_frames_scanned)
-                gore_frames_scanned += 1
-                if len(gore_batch) >= gore_batch_size:
-                    process_gore_batch()
+                ))
             packed_frame_index += 1
-        process_gore_batch()
-        return_code = ffmpeg.wait()
+
+    status = "COMPLETED"
+    error_message = None
+    try:
+        assert ffmpeg.stdout is not None
+        prefetch = IteratorPrefetch(ffmpeg, events(), depth=EVENT_PREFETCH_DEPTH)
+        try:
+            with prefetch:
+                for event in performance.iterate('event_wait', prefetch):
+                    if event[0] == "violence":
+                        process_violence_window(*event[1:])
+                        continue
+                    gore_batch.append(event[1])
+                    gore_batch_indices.append(gore_frames_scanned)
+                    gore_frames_scanned += 1
+                    if len(gore_batch) >= gore_batch_size:
+                        process_gore_batch()
+                process_gore_batch()
+                return_code = ffmpeg.wait()
+        finally:
+            if prefetch.finished:  # the producer read exactly the frames the serial loop would have
+                violence_frames_scanned = produced["violence_frames"]
         if return_code != 0:
             stderr = (
                 ffmpeg.stderr.read().decode("utf-8", errors="replace")
@@ -334,6 +364,7 @@ def scan_live_safety(
         "torch": torch.__version__,
         "cuda": torch.version.cuda,
         "gpu": torch.cuda.get_device_name(device) if device.type == "cuda" else None,
+        "violence_precision": violence_precision,
     }
     shared_metrics = {
         "performance": performance.snapshot(),

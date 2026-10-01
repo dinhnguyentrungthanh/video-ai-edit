@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import hashlib
+import hmac
 import json
 import mimetypes
 import os
@@ -44,6 +46,15 @@ from biliflow.review_workflow import (
     record_review_decision,
     review_resource_status,
     review_export_paths,
+)
+from biliflow.review_evidence import (
+    VIDEO_MIME_TYPES,
+    ReviewFrameCache,
+    ReviewMediaError,
+    item_evidence,
+    read_json_cached,
+    stream_file,
+    strip_time,
 )
 from biliflow.scheduler import InputWatcher, JobScheduler
 from biliflow.storage import storage_status
@@ -158,6 +169,13 @@ class SingleInstanceLock:
             self.handle.close()
 
 
+# Serializes review-queue reads (page polling, evidence, strip frames, video)
+# with review-queue writes. On Windows, Path.replace onto a file that another
+# thread has open fails with WinError 5, which lost decisions while the focus
+# page loaded frames for the next item.
+_REVIEW_QUEUE_IO = threading.RLock()
+
+
 def _write_json(path: Path, payload: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_suffix(path.suffix + ".tmp")
@@ -175,6 +193,37 @@ def _inside(root: Path, target: Path) -> Path:
     if target != root and root not in target.parents:
         raise ValueError("Path is outside the allowed BiliFlow directory")
     return target
+
+
+_LOCAL_HOSTS = frozenset({"127.0.0.1", "localhost", "[::1]"})
+
+
+def _host_allowed(header: str | None, configured_host: str | None) -> bool:
+    """Accept only loopback names (or the bound host), with or without a port.
+
+    Rejecting other Host headers blocks DNS rebinding: a foreign page whose
+    name resolves to 127.0.0.1 still sends its own name and cannot read the
+    session token, the review page or 18+ thumbnails.
+    """
+    value = (header or "").strip().casefold()
+    if not value:
+        return False
+    if value.startswith("["):
+        closing = value.find("]")
+        if closing < 0:
+            return False
+        host, rest = value[:closing + 1], value[closing + 1:]
+    else:
+        host, separator, port = value.partition(":")
+        rest = f":{port}" if separator else ""
+    if rest and not re.fullmatch(r":\d{1,5}", rest):
+        return False
+    allowed = set(_LOCAL_HOSTS)
+    configured = (configured_host or "").strip().casefold()
+    if configured:
+        bare = configured.strip("[]")
+        allowed.add(f"[{bare}]" if ":" in bare else bare)
+    return host in allowed
 
 
 def _resources(root: Path) -> dict[str, Any]:
@@ -226,7 +275,7 @@ function captureRerunPanelDrafts(){document.querySelectorAll('.rerun-panel[data-
 const ocrDrafts={};const speedDrafts={};
 function selectedOcrBatch(id){return Number(document.getElementById(`ocr-${id}`)?.value||1)}
 function selectedFastScan(id){return document.getElementById(`fast-${id}`)?.checked===true}
-function speedPicker(j){const value=speedDrafts[j.id]??j.fast_scan??true;return `<label title="Ghép OCR xuyên nhiều frame, detect chữ FP16, tính routing logo song song trong lúc OCR. Không giảm mật độ quét; mục review đã kiểm chứng giống chế độ thường trên cả phim (vài track chữ credits có thể khác nhẹ). Khác profile Nhanh (giảm mật độ quét)."><input type="checkbox" id="fast-${j.id}" ${value?'checked':''} onchange="speedDrafts[${j.id}]=this.checked"> Tăng tốc xử lý</label>`}
+function speedPicker(j){const value=speedDrafts[j.id]??j.fast_scan??true;return `<label title="Ghép OCR xuyên nhiều frame, detect chữ FP16, tính routing logo song song trong lúc OCR, model an toàn hoạt hình và model bạo lực phim người đóng FP16. Không giảm mật độ quét; mục review đã kiểm chứng giống chế độ thường trên cả phim (vài track chữ credits hoặc ảnh xem trước có thể lệch nhẹ). Khác profile Nhanh (giảm mật độ quét)."><input type="checkbox" id="fast-${j.id}" ${value?'checked':''} onchange="speedDrafts[${j.id}]=this.checked"> Tăng tốc xử lý</label>`}
 function ocrPicker(j){const value=ocrDrafts[j.id]??j.ocr_recognition_batch_size??1;return `<label title="Chỉ áp dụng OCR trong nhóm Quảng cáo/logo; không đổi mật độ quét.">OCR <select id="ocr-${j.id}" onchange="ocrDrafts[${j.id}]=Number(this.value)"><option value="1" ${value===1?'selected':''}>Chuẩn</option><option value="8" ${value===8?'selected':''}>Tăng tốc (thử nghiệm)</option></select></label>`}
 function controls(j){const id=j.id;let a=[];if(j.state==='NEEDS_METADATA'||j.state==='DISCOVERED'){const metadata=metadataSelection(j);a.push(`${detectorPicker(j)}${ocrPicker(j)}${speedPicker(j)}<select id="style-${id}" onchange="captureMetadataDraft(${id})"><option value="animation" ${metadata.content_style==='animation'?'selected':''}>Hoạt hình</option><option value="live_action" ${metadata.content_style==='live_action'?'selected':''}>Phim thực tế</option><option value="mixed" ${metadata.content_style==='mixed'?'selected':''}>Hỗn hợp</option></select><select id="profile-${id}" onchange="captureMetadataDraft(${id})"><option value="careful" ${metadata.profile==='careful'?'selected':''}>Tỉ mỉ</option><option value="fast" ${metadata.profile==='fast'?'selected':''}>Nhanh</option></select><button class="green" onclick="start(${id})">Bắt đầu</button>`)}if(['PAUSED','FAILED','INTERRUPTED_RECOVERABLE'].includes(j.state))a.push(`<button class="green" onclick="act(${id},'resume')">Tiếp tục</button>`);if(['QUEUED','PREFLIGHT','SCANNING_SAFETY','SCANNING_TEXT','SCANNING_LOGO','LOCALIZING_REGIONS','BUILDING_REVIEW','RENDERING'].includes(j.state)){a.push(`<button class="warn" onclick="act(${id},'stop-after-stage')">Dừng sau bước</button><button class="warn" onclick="act(${id},'pause')">Dừng ngay</button>`)}if(j.active_queue_path){a.push(`<button onclick="location.href='/review/${id}'">Duyệt cảnh</button>${j.ai_audit?.state==='RUNNING'?'<button disabled>Visual AI đang kiểm tra…</button>':aiState.ready?`<button class="green" onclick="audit(${id},true)">Visual AI Audit</button>`:`<button disabled title="${esc(aiState.message||'AI Supervisor chưa sẵn sàng')}">AI chưa sẵn sàng</button>`}`)}else{a.push('<button disabled title="Video cần quét xong và có review queue trước">AI: chờ queue</button>')}if(j.state==='FAILED')a.push(`<button onclick="act(${id},'retry')">Thử lại bước lỗi</button>`);if(['WAITING_REVIEW','READY_TO_EXPORT','COMPLETED','CANCELLED','FAILED','PAUSED','INTERRUPTED_RECOVERABLE'].includes(j.state))a.push(`<details class="rerun-panel" data-job-id="${id}" ${rerunPanelDrafts[id]?'open':''}><summary>Chạy lại kiểm tra</summary><div class="rerun-body">${detectorPicker(j)}${ocrPicker(j)}${speedPicker(j)}<button class="warn" onclick="rerun(${id})">Chạy lại với phạm vi đã chọn</button></div></details>`);if(!['COMPLETED','CANCELLED'].includes(j.state))a.push(`<button class="danger" onclick="act(${id},'cancel')">Hủy</button>`);return a.join('')}
 function auditText(j){const a=j.ai_audit;if(!a)return 'Visual AI: chưa chạy';if(a.state==='COMPLETED')return `Visual AI: ${a.result||'DONE'} — ${a.summary||''}`;return `Visual AI: ${a.message||a.state}`}
@@ -290,6 +339,10 @@ class ControlCenter:
         self._audit_threads: set[threading.Thread] = set()
         self._login_process = None
         self._login_log_handle = None
+        # Review evidence frames: CPU FFmpeg, read-only source, bounded cache.
+        self.frame_cache = ReviewFrameCache(
+            self.root, self.root / "tools" / "ffmpeg" / "bin" / "ffmpeg.exe",
+        )
 
     def status(self) -> dict[str, Any]:
         jobs = self.store.list_jobs()
@@ -434,6 +487,109 @@ class ControlCenter:
             raise ValueError("Job has no review queue")
         return _inside(self.root / "reports", self.root / value)
 
+    def media_key(self, job_id: int) -> str:
+        """Per-job key for review media URLs (<img>/<video> cannot send headers)."""
+        return hmac.new(
+            self.token.encode("utf-8"), f"review-media:{int(job_id)}".encode("utf-8"),
+            hashlib.sha256,
+        ).hexdigest()
+
+    def media_key_valid(self, job_id: int, key: str | None) -> bool:
+        if not key:
+            return False
+        return hmac.compare_digest(
+            str(key).encode("utf-8"), self.media_key(job_id).encode("utf-8"),
+        )
+
+    def review_queue(self, job_id: int) -> dict[str, Any]:
+        """Active queue of a job, read-only (callers must not mutate it)."""
+        try:
+            with _REVIEW_QUEUE_IO:
+                return read_json_cached(self.queue_path(job_id))
+        except KeyError as error:
+            raise ReviewMediaError(404, f"Unknown job: {job_id}") from error
+        except (OSError, ValueError) as error:
+            raise ReviewMediaError(404, "Job has no readable review queue") from error
+
+    def review_source(
+        self, job_id: int, queue: dict[str, Any],
+    ) -> tuple[dict[str, Any], Path]:
+        """The job's own source video, verified against the queue and its recorded stat.
+
+        The path never comes from the request: it is the job row's path, and it
+        must match the queue source and the size/mtime recorded at import.
+        """
+        job = self.store.get_job(job_id)
+        recorded = Path(str(job["source_path"]))
+        source = queue.get("source") or {}
+
+        def normal(value: str) -> str:
+            return os.path.normcase(os.path.abspath(value))
+
+        if (
+            not source.get("path")
+            or normal(str(source["path"])) != normal(str(recorded))
+            or str(source.get("sha256") or "").casefold()
+            != str(job["source_sha256"]).casefold()
+        ):
+            raise ReviewMediaError(409, "Review queue does not match this job's source video")
+        try:
+            stat = recorded.stat()
+        except OSError as error:
+            raise ReviewMediaError(404, "Source video is missing") from error
+        if not recorded.is_file():
+            raise ReviewMediaError(404, "Source video is missing")
+        if (
+            stat.st_size != int(job["source_size_bytes"])
+            or stat.st_mtime_ns != int(job["source_mtime_ns"])
+        ):
+            raise ReviewMediaError(409, "Source video changed since it was scanned")
+        return job, recorded
+
+    def review_evidence(self, job_id: int, item_id: str) -> dict[str, Any]:
+        queue = self.review_queue(job_id)
+        try:
+            evidence = item_evidence(self.root, queue, item_id)
+        except KeyError as error:
+            raise ReviewMediaError(404, f"Unknown review item: {item_id}") from error
+        try:
+            _job, source = self.review_source(job_id, queue)
+            mime = VIDEO_MIME_TYPES.get(source.suffix.casefold())
+            evidence["video"] = (
+                {"available": True, "mime": mime, "reason": None} if mime
+                else {"available": False, "mime": None, "reason": "unsupported_container"}
+            )
+        except (KeyError, ReviewMediaError) as error:
+            status = getattr(error, "status", 404)
+            evidence["video"] = {
+                "available": False, "mime": None,
+                "reason": "source_changed" if status == 409 else "source_missing",
+            }
+        return evidence
+
+    def review_frame(self, job_id: int, item_id: str, seconds: Any) -> Path:
+        queue = self.review_queue(job_id)
+        try:
+            evidence = item_evidence(self.root, queue, item_id)
+        except KeyError as error:
+            raise ReviewMediaError(404, f"Unknown review item: {item_id}") from error
+        try:
+            timestamp = strip_time(evidence, seconds)
+        except ValueError as error:
+            raise ReviewMediaError(400, str(error)) from error
+        job, source = self.review_source(job_id, queue)
+        return self.frame_cache.frame(source, str(job["source_sha256"]), timestamp)
+
+    def review_video(self, job_id: int) -> tuple[Path, str]:
+        queue = self.review_queue(job_id)
+        _job, source = self.review_source(job_id, queue)
+        mime = VIDEO_MIME_TYPES.get(source.suffix.casefold())
+        if mime is None:
+            raise ReviewMediaError(
+                415, "The browser cannot play this container; use the frame strip",
+            )
+        return source, mime
+
     def sync_queue_state(self, job_id: int, queue: dict[str, Any]) -> None:
         state = "READY_TO_EXPORT" if queue.get("status") == "READY_FOR_EDIT_PLAN" else "WAITING_REVIEW"
         self.store.update_job(job_id, state=state, error=None)
@@ -500,7 +656,8 @@ class ControlCenter:
                             "ai_supervisor_thread_id"
                         )
                         config = load_ai_config(self.root)
-                        queue_payload = _read_json(queue_path)
+                        with _REVIEW_QUEUE_IO:
+                            queue_payload = _read_json(queue_path)
                         evidence = collect_visual_evidence(
                             self.root, queue_payload,
                             max_images=int(config["max_visual_images"]),
@@ -549,11 +706,12 @@ class ControlCenter:
                 payload["created_at"] = now_iso()
                 _write_json(path, payload)
                 if visual_opt_in:
-                    apply_visual_ai_assessments(
-                        project_root=self.root,
-                        queue_path=queue_path,
-                        audit_payload=payload,
-                    )
+                    with _REVIEW_QUEUE_IO:
+                        apply_visual_ai_assessments(
+                            project_root=self.root,
+                            queue_path=queue_path,
+                            audit_payload=payload,
+                        )
                 self.store.add_artifact(
                     job_id,
                     stage_name="ai_audit" if visual_opt_in else "build_review",
@@ -656,195 +814,8 @@ class ControlCenter:
                 thread.join(12)
 
     def serve(self) -> None:
-        center = self
-
-        class Handler(BaseHTTPRequestHandler):
-            def log_message(self, format: str, *args) -> None:
-                return
-
-            def send_bytes(self, status: int, body: bytes, content_type: str) -> None:
-                self.send_response(status)
-                self.send_header("Content-Type", content_type)
-                self.send_header("Content-Length", str(len(body)))
-                self.send_header("Cache-Control", "no-store")
-                self.send_header("X-Content-Type-Options", "nosniff")
-                self.end_headers()
-                self.wfile.write(body)
-
-            def send_json(self, status: int, payload: Any) -> None:
-                self.send_bytes(status, json.dumps(payload, ensure_ascii=False).encode("utf-8"),
-                                "application/json; charset=utf-8")
-
-            def body(self) -> dict[str, Any]:
-                length = int(self.headers.get("Content-Length", "0"))
-                if length > 65536:
-                    raise ValueError("Request is too large")
-                value = json.loads(self.rfile.read(length) or b"{}")
-                if not isinstance(value, dict):
-                    raise ValueError("JSON object required")
-                return value
-
-            def authorized(self) -> bool:
-                return self.headers.get("X-BiliFlow-Token") == center.token
-
-            def do_GET(self) -> None:
-                path = urllib.parse.urlparse(self.path).path
-                try:
-                    if path == "/":
-                        self.send_bytes(200, _dashboard_html().encode(), "text/html; charset=utf-8")
-                    elif path == "/healthz":
-                        self.send_json(200, {"status": "ok", "version": __version__})
-                    elif path == "/api/session":
-                        self.send_json(200, {"token": center.token})
-                    elif path == "/api/status":
-                        self.send_json(200, center.status())
-                    elif path == "/api/ai":
-                        self.send_json(200, center.ai_status())
-                    elif path == "/api/jobs":
-                        self.send_json(200, center.store.list_jobs())
-                    elif match := re.fullmatch(r"/api/jobs/(\d+)", path):
-                        job_id = int(match.group(1))
-                        self.send_json(200, {"job": center.store.get_job(job_id),
-                                             "stages": center.store.stages(job_id),
-                                             "revisions": center.store.revisions(job_id),
-                                             "artifacts": center.store.artifacts(job_id),
-                                             "events": center.store.events(job_id)})
-                    elif match := re.fullmatch(r"/review/(\d+)", path):
-                        job_id = int(match.group(1))
-                        prefix = f"/api/jobs/{job_id}/review"
-                        html = _interactive_html(center.token).replace("'/api/", f"'{prefix}/")
-                        self.send_bytes(200, html.encode(), "text/html; charset=utf-8")
-                    elif match := re.fullmatch(r"/api/jobs/(\d+)/review/(queue|session|resources|export)", path):
-                        job_id, kind = int(match.group(1)), match.group(2)
-                        if kind == "queue": value = _read_json(center.queue_path(job_id))
-                        elif kind == "session": value = {"token": center.token}
-                        elif kind == "resources":
-                            value = review_resource_status(
-                                project_root=center.root, queue_path=center.queue_path(job_id)
-                            )
-                        else:
-                            job = center.store.get_job(job_id)
-                            outputs = [x for x in center.store.artifacts(job_id) if x["kind"] == "final_output"]
-                            value = {"status": job["state"], "output": outputs[-1]["path"] if outputs else None}
-                        self.send_json(200, value)
-                    elif path.startswith("/media/"):
-                        relative = urllib.parse.unquote(path.removeprefix("/media/"))
-                        target = _inside(center.root / "reports", center.root / relative)
-                        content_type = mimetypes.guess_type(target.name)[0] or "application/octet-stream"
-                        self.send_bytes(200, target.read_bytes(), content_type)
-                    else:
-                        self.send_json(404, {"error": "Không tìm thấy"})
-                except (KeyError, ValueError, FileNotFoundError) as error:
-                    self.send_json(404, {"error": str(error)})
-                except Exception as error:
-                    self.send_json(500, {"error": str(error)})
-
-            def do_POST(self) -> None:
-                path = urllib.parse.urlparse(self.path).path
-                if not self.authorized():
-                    self.send_json(403, {"error": "Phiên Control Center không hợp lệ"})
-                    return
-                try:
-                    body = self.body()
-                    if path == "/api/scheduler":
-                        center.store.set_setting("scheduler_paused", bool(body.get("paused")))
-                        center.scheduler._wake.set()
-                        result: Any = {"paused": bool(body.get("paused"))}
-                    elif path == "/api/ai/config":
-                        result = center.update_ai_config(body)
-                    elif path == "/api/ai/login":
-                        result = center.start_ai_login()
-                    elif path == "/api/ai/check":
-                        result = center.ai_status()
-                    elif path == "/api/shutdown":
-                        mode = body.get("mode", "after_stage")
-                        result = {"status": "STOPPING", "mode": mode}
-                        self.send_json(202, result)
-                        threading.Thread(target=center.stop,
-                                         kwargs={"immediate": mode == "immediate"}, daemon=True).start()
-                        return
-                    elif match := re.fullmatch(r"/api/jobs/(\d+)/(start|resume|pause|stop-after-stage|cancel|retry|rerun|ai-audit)", path):
-                        job_id, action = int(match.group(1)), match.group(2)
-                        if action == "start":
-                            detectors = body.get("detectors")
-                            if not isinstance(detectors, list):
-                                raise ValueError("Hãy chọn ít nhất một nhóm cần kiểm tra")
-                            result = center.scheduler.configure_and_queue(
-                                job_id, content_style=str(body["content_style"]),
-                                profile=str(body.get("profile", "careful")),
-                                detector_groups=[str(value) for value in detectors],
-                                ocr_recognition_batch_size=body.get("ocr_recognition_batch_size"),
-                                fast_scan=body.get("fast_scan"),
-                            )
-                        elif action == "resume": result = center.scheduler.resume(job_id)
-                        elif action == "pause": result = center.scheduler.pause_now(job_id)
-                        elif action == "stop-after-stage": result = center.scheduler.stop_after_stage(job_id)
-                        elif action == "cancel": result = center.scheduler.cancel(job_id)
-                        elif action == "retry": result = center.scheduler.retry(job_id)
-                        elif action == "rerun":
-                            detectors = body.get("detectors")
-                            result = center.scheduler.rerun(
-                                job_id,
-                                ocr_recognition_batch_size=body.get("ocr_recognition_batch_size"),
-                                fast_scan=body.get("fast_scan"),
-                                detector_groups=(
-                                    [str(value) for value in detectors]
-                                    if isinstance(detectors, list) else None
-                                ),
-                            )
-                        else:
-                            visual_opt_in = bool(body.get("visual", False))
-                            center.start_ai_audit(
-                                job_id, visual_opt_in=visual_opt_in
-                            )
-                            result = {
-                                "status": "QUEUED",
-                                "visual_opt_in": visual_opt_in,
-                            }
-                    elif match := re.fullmatch(r"/api/jobs/(\d+)/review/(decision|clear|bulk-keep|bulk-accept|finalize)", path):
-                        job_id, action = int(match.group(1)), match.group(2)
-                        queue_path = center.queue_path(job_id)
-                        if action == "decision":
-                            result = record_review_decision(
-                                project_root=center.root, queue_path=queue_path,
-                                item_id=str(body["id"]), decision=str(body["decision"]),
-                                note=body.get("note"), full_frame=bool(body.get("full_frame", False)),
-                                actor="control_center_user", transport="control_center")
-                            center.sync_queue_state(job_id, result)
-                        elif action == "clear":
-                            result = clear_review_decision(
-                                project_root=center.root, queue_path=queue_path,
-                                item_id=str(body["id"]), actor="control_center_user",
-                                transport="control_center")
-                            center.sync_queue_state(job_id, result)
-                        elif action == "bulk-keep":
-                            result = bulk_keep_review_items(
-                                project_root=center.root, queue_path=queue_path,
-                                review_filter=str(body["filter"]), actor="control_center_user",
-                                transport="control_center")
-                            center.sync_queue_state(job_id, result)
-                        elif action == "bulk-accept":
-                            result = bulk_accept_suggested_decisions(
-                                project_root=center.root, queue_path=queue_path,
-                                review_filter=str(body["filter"]), actor="control_center_user",
-                                transport="control_center")
-                            center.sync_queue_state(job_id, result)
-                        else:
-                            result = center.finalize(
-                                job_id,
-                                size_mode=str(body.get("size_mode") or "default"),
-                                max_output_gb=body.get("max_output_gb"),
-                            )
-                    else:
-                        self.send_json(404, {"error": "Không tìm thấy"}); return
-                    self.send_json(200, result)
-                except (KeyError, TypeError, ValueError) as error:
-                    self.send_json(400, {"error": str(error)})
-                except Exception as error:
-                    self.send_json(500, {"error": str(error)})
-
         try:
-            self.server = ThreadingHTTPServer((self.host, self.port), Handler)
+            self.server = ThreadingHTTPServer((self.host, self.port), _handler_class(self))
             actual_port = self.server.server_port
             state = {"schema_version": 1, "pid": os.getpid(), "host": self.host,
                      "port": actual_port, "url": f"http://{self.host}:{actual_port}/",
@@ -896,6 +867,246 @@ class ControlCenter:
                     pass
             self.store.close()
             self.lock.close()
+
+
+def _handler_class(center: ControlCenter) -> type[BaseHTTPRequestHandler]:
+    """HTTP handler bound to one Control Center; module level so tests can bind port 0."""
+
+    class Handler(BaseHTTPRequestHandler):
+        def log_message(self, format: str, *args) -> None:
+            return
+
+        def send_bytes(self, status: int, body: bytes, content_type: str) -> None:
+            self.send_response(status)
+            self.send_header("Content-Type", content_type)
+            self.send_header("Content-Length", str(len(body)))
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("X-Content-Type-Options", "nosniff")
+            self.end_headers()
+            self.wfile.write(body)
+
+        def send_json(self, status: int, payload: Any) -> None:
+            self.send_bytes(status, json.dumps(payload, ensure_ascii=False).encode("utf-8"),
+                            "application/json; charset=utf-8")
+
+        def body(self) -> dict[str, Any]:
+            length = int(self.headers.get("Content-Length", "0"))
+            if length > 65536:
+                raise ValueError("Request is too large")
+            value = json.loads(self.rfile.read(length) or b"{}")
+            if not isinstance(value, dict):
+                raise ValueError("JSON object required")
+            return value
+
+        def authorized(self) -> bool:
+            return self.headers.get("X-BiliFlow-Token") == center.token
+
+        def host_allowed(self) -> bool:
+            if _host_allowed(self.headers.get("Host"), getattr(center, "host", None)):
+                return True
+            self.send_json(403, {"error": "Địa chỉ truy cập không hợp lệ"})
+            return False
+
+        def review_media(self, job_id: int, kind: str, query: str) -> None:
+            params = urllib.parse.parse_qs(query, keep_blank_values=True)
+
+            def param(name: str) -> str:
+                return (params.get(name) or [""])[0]
+
+            try:
+                if kind == "evidence":
+                    if not param("item"):
+                        raise ReviewMediaError(400, "item is required")
+                    self.send_json(200, center.review_evidence(job_id, param("item")))
+                    return
+                if not center.media_key_valid(job_id, param("k")):
+                    raise ReviewMediaError(403, "Khóa xem media không hợp lệ")
+                if kind == "frame":
+                    if not param("item") or not param("t"):
+                        raise ReviewMediaError(400, "item and t are required")
+                    target = center.review_frame(job_id, param("item"), param("t"))
+                    self.send_bytes(200, target.read_bytes(), "image/jpeg")
+                else:
+                    source, mime = center.review_video(job_id)
+                    stream_file(self, source, mime, getattr(center, "_stopping", None))
+            except ReviewMediaError as error:
+                self.send_json(error.status, {"error": str(error)})
+            except KeyError as error:
+                self.send_json(404, {"error": str(error)})
+            except ValueError as error:
+                self.send_json(400, {"error": str(error)})
+            except Exception as error:
+                self.send_json(500, {"error": str(error)})
+
+        def do_GET(self) -> None:
+            if not self.host_allowed():
+                return
+            parsed = urllib.parse.urlparse(self.path)
+            path = parsed.path
+            try:
+                if match := re.fullmatch(r"/api/jobs/(\d+)/review/(evidence|frame|video)", path):
+                    self.review_media(int(match.group(1)), match.group(2), parsed.query)
+                elif path == "/":
+                    self.send_bytes(200, _dashboard_html().encode(), "text/html; charset=utf-8")
+                elif path == "/healthz":
+                    self.send_json(200, {"status": "ok", "version": __version__})
+                elif path == "/api/session":
+                    self.send_json(200, {"token": center.token})
+                elif path == "/api/status":
+                    self.send_json(200, center.status())
+                elif path == "/api/ai":
+                    self.send_json(200, center.ai_status())
+                elif path == "/api/jobs":
+                    self.send_json(200, center.store.list_jobs())
+                elif match := re.fullmatch(r"/api/jobs/(\d+)", path):
+                    job_id = int(match.group(1))
+                    self.send_json(200, {"job": center.store.get_job(job_id),
+                                         "stages": center.store.stages(job_id),
+                                         "revisions": center.store.revisions(job_id),
+                                         "artifacts": center.store.artifacts(job_id),
+                                         "events": center.store.events(job_id)})
+                elif match := re.fullmatch(r"/review/(\d+)", path):
+                    job_id = int(match.group(1))
+                    prefix = f"/api/jobs/{job_id}/review"
+                    html = _interactive_html(center.token).replace("'/api/", f"'{prefix}/")
+                    self.send_bytes(200, html.encode(), "text/html; charset=utf-8")
+                elif match := re.fullmatch(r"/api/jobs/(\d+)/review/(queue|session|resources|export)", path):
+                    job_id, kind = int(match.group(1)), match.group(2)
+                    if kind == "queue":
+                        with _REVIEW_QUEUE_IO:
+                            value = _read_json(center.queue_path(job_id))
+                    elif kind == "session":
+                        value = {"token": center.token, "media_key": center.media_key(job_id)}
+                    elif kind == "resources":
+                        with _REVIEW_QUEUE_IO:
+                            value = review_resource_status(
+                                project_root=center.root, queue_path=center.queue_path(job_id)
+                            )
+                    else:
+                        job = center.store.get_job(job_id)
+                        outputs = [x for x in center.store.artifacts(job_id) if x["kind"] == "final_output"]
+                        value = {"status": job["state"], "output": outputs[-1]["path"] if outputs else None}
+                    self.send_json(200, value)
+                elif path.startswith("/media/"):
+                    relative = urllib.parse.unquote(path.removeprefix("/media/"))
+                    target = _inside(center.root / "reports", center.root / relative)
+                    content_type = mimetypes.guess_type(target.name)[0] or "application/octet-stream"
+                    self.send_bytes(200, target.read_bytes(), content_type)
+                else:
+                    self.send_json(404, {"error": "Không tìm thấy"})
+            except (KeyError, ValueError, FileNotFoundError) as error:
+                self.send_json(404, {"error": str(error)})
+            except Exception as error:
+                self.send_json(500, {"error": str(error)})
+
+        def do_POST(self) -> None:
+            if not self.host_allowed():
+                return
+            path = urllib.parse.urlparse(self.path).path
+            if not self.authorized():
+                self.send_json(403, {"error": "Phiên Control Center không hợp lệ"})
+                return
+            try:
+                body = self.body()
+                if path == "/api/scheduler":
+                    center.store.set_setting("scheduler_paused", bool(body.get("paused")))
+                    center.scheduler._wake.set()
+                    result: Any = {"paused": bool(body.get("paused"))}
+                elif path == "/api/ai/config":
+                    result = center.update_ai_config(body)
+                elif path == "/api/ai/login":
+                    result = center.start_ai_login()
+                elif path == "/api/ai/check":
+                    result = center.ai_status()
+                elif path == "/api/shutdown":
+                    mode = body.get("mode", "after_stage")
+                    result = {"status": "STOPPING", "mode": mode}
+                    self.send_json(202, result)
+                    threading.Thread(target=center.stop,
+                                     kwargs={"immediate": mode == "immediate"}, daemon=True).start()
+                    return
+                elif match := re.fullmatch(r"/api/jobs/(\d+)/(start|resume|pause|stop-after-stage|cancel|retry|rerun|ai-audit)", path):
+                    job_id, action = int(match.group(1)), match.group(2)
+                    if action == "start":
+                        detectors = body.get("detectors")
+                        if not isinstance(detectors, list):
+                            raise ValueError("Hãy chọn ít nhất một nhóm cần kiểm tra")
+                        result = center.scheduler.configure_and_queue(
+                            job_id, content_style=str(body["content_style"]),
+                            profile=str(body.get("profile", "careful")),
+                            detector_groups=[str(value) for value in detectors],
+                            ocr_recognition_batch_size=body.get("ocr_recognition_batch_size"),
+                            fast_scan=body.get("fast_scan"),
+                        )
+                    elif action == "resume": result = center.scheduler.resume(job_id)
+                    elif action == "pause": result = center.scheduler.pause_now(job_id)
+                    elif action == "stop-after-stage": result = center.scheduler.stop_after_stage(job_id)
+                    elif action == "cancel": result = center.scheduler.cancel(job_id)
+                    elif action == "retry": result = center.scheduler.retry(job_id)
+                    elif action == "rerun":
+                        detectors = body.get("detectors")
+                        result = center.scheduler.rerun(
+                            job_id,
+                            ocr_recognition_batch_size=body.get("ocr_recognition_batch_size"),
+                            fast_scan=body.get("fast_scan"),
+                            detector_groups=(
+                                [str(value) for value in detectors]
+                                if isinstance(detectors, list) else None
+                            ),
+                        )
+                    else:
+                        visual_opt_in = bool(body.get("visual", False))
+                        center.start_ai_audit(
+                            job_id, visual_opt_in=visual_opt_in
+                        )
+                        result = {
+                            "status": "QUEUED",
+                            "visual_opt_in": visual_opt_in,
+                        }
+                elif match := re.fullmatch(r"/api/jobs/(\d+)/review/(decision|clear|bulk-keep|bulk-accept|finalize)", path):
+                    job_id, action = int(match.group(1)), match.group(2)
+                    queue_path = center.queue_path(job_id)
+                    with _REVIEW_QUEUE_IO:
+                        if action == "decision":
+                            result = record_review_decision(
+                                project_root=center.root, queue_path=queue_path,
+                                item_id=str(body["id"]), decision=str(body["decision"]),
+                                note=body.get("note"), full_frame=bool(body.get("full_frame", False)),
+                                actor="control_center_user", transport="control_center")
+                            center.sync_queue_state(job_id, result)
+                        elif action == "clear":
+                            result = clear_review_decision(
+                                project_root=center.root, queue_path=queue_path,
+                                item_id=str(body["id"]), actor="control_center_user",
+                                transport="control_center")
+                            center.sync_queue_state(job_id, result)
+                        elif action == "bulk-keep":
+                            result = bulk_keep_review_items(
+                                project_root=center.root, queue_path=queue_path,
+                                review_filter=str(body["filter"]), actor="control_center_user",
+                                transport="control_center")
+                            center.sync_queue_state(job_id, result)
+                        elif action == "bulk-accept":
+                            result = bulk_accept_suggested_decisions(
+                                project_root=center.root, queue_path=queue_path,
+                                review_filter=str(body["filter"]), actor="control_center_user",
+                                transport="control_center")
+                            center.sync_queue_state(job_id, result)
+                        else:
+                            result = center.finalize(
+                                job_id,
+                                size_mode=str(body.get("size_mode") or "default"),
+                                max_output_gb=body.get("max_output_gb"),
+                            )
+                else:
+                    self.send_json(404, {"error": "Không tìm thấy"}); return
+                self.send_json(200, result)
+            except (KeyError, TypeError, ValueError) as error:
+                self.send_json(400, {"error": str(error)})
+            except Exception as error:
+                self.send_json(500, {"error": str(error)})
+
+    return Handler
 
 
 def serve_control_center(*, project_root: Path, host: str = "127.0.0.1", port: int = 8765,

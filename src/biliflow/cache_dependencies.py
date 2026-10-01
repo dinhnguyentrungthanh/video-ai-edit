@@ -8,6 +8,7 @@ from pathlib import Path
 
 STAGE_MODULES = {
     "adult": ("scanner",),
+    "verify_adult": ("adult_verification",),
     "text": ("textscan",),
     "visual_logo": ("visual_logo_scanner",),
     "localize_logo": ("ad_candidate_pipeline", "brand_memory", "florence_regions"),

@@ -33,6 +33,8 @@ Scanner gọi cùng bộ kiểm tra trước khi nạp model. Model lạ, manife
 
 `APPROVED` xác nhận quyền sử dụng trọng số theo giấy phép công bố và cấu hình local miễn phí. Một số tác giả không công bố đầy đủ toàn bộ nguồn dữ liệu huấn luyện; trường `training_data_review_status` giữ phần này hiển thị thay vì che giấu sự không chắc chắn.
 
+`image_safety_classifier_m` có hai cách dùng với cùng trọng số, revision và manifest (MIT, `APPROVED`, `target_labels: ["NSFL", "NSFW"]`): đầu NSFL tạo ứng viên máu me cho phim người đóng; từ 01/10/2026 đầu NSFW còn là bộ kiểm thứ hai cho 18+ phim người đóng (lệnh `verify-adult`, `src/biliflow/adult_verification.py`, kế hoạch `docs/ADULT_FALSE_ALARM_PLAN.md`). Bộ kiểm này chỉ chấm lại các khoảng 18+ mà nsfw-nano đã tìm, chạy local, không tạo và không xóa khoảng nào; `build-review` chỉ dùng điểm của nó để chuyển ứng viên yếu sang "Ứng viên phụ", và người dùng vẫn quyết định mọi mục. Không tải thêm model, manifest và giấy phép không đổi.
+
 Model bạo lực VideoMAE XD cũ chỉ cho sử dụng phi thương mại nên đã bị khóa rồi xóa khỏi ổ E sau khi giữ báo cáo audit. Nhánh phim người thật hiện dùng ViT Apache-2.0 để tạo candidate và Qwen2-VL-2B Apache-2.0 để xác nhận; cả hai có revision/checksum cố định và chạy local.
 
 Phi-3.5 Vision ONNX INT4 có giấy phép MIT nhưng bị khóa theo quality gate sau benchmark logo đạt specificity 0%. Trọng số và runtime thử nghiệm đã được xóa; chỉ còn báo cáo nhỏ để tránh lặp lại hướng không đạt. Qwen2.5-VL-3B không được tải vì file LICENSE chính thức giới hạn sử dụng phi thương mại.

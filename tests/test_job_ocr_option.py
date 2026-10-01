@@ -115,7 +115,7 @@ class JobFastScanTests(unittest.TestCase):
         return dict(root=ROOT, job_key="fast-scan-test", source=source,
                     content_style="live_action", profile="careful", **extra)
 
-    def test_fast_scan_changes_only_text_and_logo_commands(self):
+    def test_fast_scan_changes_only_text_logo_and_live_safety_commands(self):
         standard = pipeline_stages(**self.options())
         fast = pipeline_stages(**self.options(fast_scan=True))
         self.assertEqual([s.name for s in standard], [s.name for s in fast])
@@ -129,6 +129,8 @@ class JobFastScanTests(unittest.TestCase):
                                                         "--prewarm-logo-routing"))
             elif a.name == "visual_logo":
                 self.assertEqual(b.commands[0].argv[-2:], ("--routing-workers", "3"))
+            elif a.name == "live_safety":
+                self.assertEqual(b.commands[0].argv[-2:], ("--violence-precision", "fp16"))
             else:
                 self.assertEqual(a, b)
                 continue
@@ -172,6 +174,44 @@ class JobFastScanTests(unittest.TestCase):
         self.assertNotIn("--routing-workers", legacy["visual_logo"].commands[0].argv)
         both = {s.name: s for s in pipeline_stages(**self.options(ocr_recognition_batch_size=8, fast_scan=True))}
         self.assertEqual(both["text"].commands[0].argv.count("--recognition-batch-size"), 1)
+
+    def test_fast_scan_runs_the_anime_tagger_in_fp16_only(self):
+        options = self.options() | {"content_style": "animation"}
+        standard = {s.name: s for s in pipeline_stages(**options)}
+        fast = {s.name: s for s in pipeline_stages(**options, fast_scan=True)}
+        self.assertNotIn("--precision", standard["animation_safety"].commands[0].argv)
+        argv = fast["animation_safety"].commands[0].argv
+        self.assertEqual(argv[-2:], ("--precision", "fp16"))
+        self.assertEqual(argv[:-2], standard["animation_safety"].commands[0].argv)  # nothing else changes
+        cache = StageArtifactCache(ROOT)
+        keys = [cache.key(stage_name="animation_safety", source_sha256="a" * 64, source_path=options["source"],
+                          report_root=ROOT / "reports/jobs/fast-scan-test", commands=[s.commands[0].argv],
+                          artifact_paths=s.commands[0].expected_artifacts)
+                for s in (standard["animation_safety"], fast["animation_safety"])]
+        self.assertNotEqual(*keys)  # an fp32 result is never reused for an fp16 job or vice versa
+
+    def test_fast_scan_runs_the_live_violence_model_in_fp16_only(self):
+        standard = {s.name: s for s in pipeline_stages(**self.options())}
+        fast = {s.name: s for s in pipeline_stages(**self.options(fast_scan=True))}
+        self.assertNotIn("--violence-precision", standard["live_safety"].commands[0].argv)
+        argv = fast["live_safety"].commands[0].argv
+        self.assertEqual(argv[-2:], ("--violence-precision", "fp16"))
+        self.assertEqual(argv[:-2], standard["live_safety"].commands[0].argv)
+        for name in ("adult", "confirm_violence"):  # adult stays fp32; VLM unchanged
+            self.assertEqual(standard[name], fast[name])
+        cache = StageArtifactCache(ROOT)
+        keys = [cache.key(stage_name="live_safety", source_sha256="a" * 64, source_path=self.options()["source"],
+                          report_root=ROOT / "reports/jobs/fast-scan-test", commands=[s.commands[0].argv],
+                          artifact_paths=s.commands[0].expected_artifacts)
+                for s in (standard["live_safety"], fast["live_safety"])]
+        self.assertNotEqual(*keys)
+
+    def test_violence_only_scan_keeps_its_standard_scanner(self):
+        options = self.options(detector_groups=["violence"])
+        standard = {s.name: s for s in pipeline_stages(**options)}
+        fast = {s.name: s for s in pipeline_stages(**options, fast_scan=True)}
+        self.assertNotIn("live_safety", fast)
+        self.assertEqual(standard["violence"], fast["violence"])
 
     def test_fast_scan_without_advertising_adds_nothing(self):
         options = self.options(detector_groups=["adult"])

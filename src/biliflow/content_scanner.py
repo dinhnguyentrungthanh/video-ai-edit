@@ -47,7 +47,9 @@ def _load_classifier(
             ]
         else:
             labels = list(config["pretrained_cfg"]["label_names"])
-            target_indices = [labels.index("NSFL")]
+            # Gore scans keep NSFL; the 18+ verifier (adult_verification) asks for NSFW
+            # from the same loader so both use identical weights and preprocessing.
+            target_indices = [labels.index(label) for label in (target_labels or ("NSFL",))]
         model = timm.create_model(
             config["architecture"],
             pretrained=False,

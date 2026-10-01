@@ -24,11 +24,15 @@ from biliflow.animation_policy import (
     GORE_CONTEXT_LABELS,
     GORE_LABELS,
 )
+from biliflow.frame_prefetch import BatchPrefetch
 from biliflow.intervals import compact_interval_thumbnails, group_hits
 from biliflow.probe import duration_seconds, probe_video
 from biliflow.report import write_report
 from biliflow.scanner import _read_exact, _score_summary, sha256_file, temporal_confirm_hits
 from biliflow.storage import require_capacity
+
+ANIMATION_PRECISIONS = ("fp32", "fp16")
+BATCH_PREFETCH_DEPTH = 2
 
 
 def _union(probabilities: torch.Tensor, indices: list[int]) -> torch.Tensor:
@@ -116,7 +120,13 @@ def scan_animation_safety(
     temporal_minimum_hits: int = 3,
     gore_context_temporal_minimum_hits: int = 4,
     device_name: str = "cuda",
+    precision: str = "fp32",
 ) -> dict:
+    """Scan anime safety labels; ``precision="fp16"`` (opt-in) autocasts only the forward.
+
+    fp16 is not bit-identical to fp32 (docs/CLAUDE_SCAN_OPTIMIZATION_HANDOFF.md §17);
+    logits return to float32 before the sigmoid and every threshold is unchanged.
+    """
     performance = ScanPerformance()
     project_root = project_root.resolve(strict=True)
     input_path = input_path.resolve(strict=True)
@@ -146,6 +156,10 @@ def scan_animation_safety(
         raise ValueError("Adult cooccurrence requirement must be positive")
     if not 1 <= gore_context_temporal_minimum_hits <= temporal_window_frames:
         raise ValueError("Invalid gore context temporal settings")
+    if precision not in ANIMATION_PRECISIONS:
+        raise ValueError("precision must be 'fp32' or 'fp16'")
+    if precision == "fp16" and device_name != "cuda":
+        raise ValueError("fp16 animation safety inference requires CUDA")
 
     input_stat = input_path.stat()
     require_capacity(
@@ -221,18 +235,33 @@ def scan_animation_safety(
     adult_heap: list[tuple[float, int, Image.Image, str]] = []
     gore_heap: list[tuple[float, int, Image.Image, str]] = []
     violence_heap: list[tuple[float, int, Image.Image, str]] = []
-    batch: list[Image.Image] = []
-    batch_indices: list[int] = []
+    prefetch_stats: dict = {}
     ffmpeg = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
 
-    def process_batch() -> None:
+    def read_frame() -> Image.Image | None:
+        data = _read_exact(ffmpeg.stdout, frame_bytes)
+        if not data:
+            return None
+        if len(data) != frame_bytes:
+            raise RuntimeError(
+                f"Incomplete raw frame: {len(data)} of {frame_bytes} bytes"
+            )
+        return Image.frombytes("RGB", (width, height), data)
+
+    def prepare_batch(images: list[Image.Image]) -> torch.Tensor:
+        return torch.stack([transform(image) for image in images])
+
+    def process_batch(batch: list[Image.Image], batch_indices: list[int], pixels: torch.Tensor) -> None:
         nonlocal peak_rss
-        if not batch:
-            return
         with performance.measure('model_step'):
-            pixels = torch.stack([transform(image) for image in batch]).to(device)
+            pixels = pixels.to(device)
             with torch.inference_mode():
-                probabilities = torch.sigmoid(model(pixels)).cpu()
+                if precision == "fp16":
+                    with torch.autocast(device_type="cuda", dtype=torch.float16):
+                        logits = model(pixels)
+                    probabilities = torch.sigmoid(logits.float()).cpu()
+                else:
+                    probabilities = torch.sigmoid(model(pixels)).cpu()
 
         adult_batch = _union(probabilities, adult_indices)
         gore_batch = _union(probabilities, gore_indices)
@@ -342,28 +371,28 @@ def scan_animation_safety(
                     }
                 )
         peak_rss = max(peak_rss, process.memory_info().rss)
-        batch.clear()
-        batch_indices.clear()
 
     status = "COMPLETED"
     error_message = None
     try:
         assert ffmpeg.stdout is not None
-        while True:
-            data = performance.call('frame_pipe_wait', _read_exact, ffmpeg.stdout, frame_bytes)
-            if not data:
-                break
-            if len(data) != frame_bytes:
-                raise RuntimeError(
-                    f"Incomplete raw frame: {len(data)} of {frame_bytes} bytes"
-                )
-            batch.append(Image.frombytes("RGB", (width, height), data))
-            batch_indices.append(frames_scanned)
-            frames_scanned += 1
-            if len(batch) >= batch_size:
-                process_batch()
-        process_batch()
-        return_code = ffmpeg.wait()
+        # Frame reads and the CPU transform of batch n+1 overlap the forward of
+        # batch n; batches and their order are exactly those of the serial loop.
+        prefetch = BatchPrefetch(ffmpeg, read_frame, prepare_batch, batch_size,
+                                 depth=BATCH_PREFETCH_DEPTH)
+        handed_over = 0
+        try:
+            with prefetch:
+                for batch, batch_indices, pixels in performance.iterate('batch_wait', prefetch):
+                    handed_over = batch_indices[-1] + 1  # the in-flight batch counts, as in the serial loop
+                    process_batch(batch, batch_indices, pixels)
+                return_code = ffmpeg.wait()
+        finally:
+            # A producer that stopped on its own read exactly the frames the serial loop would have;
+            # after an interruption, read-ahead batches that were never handed over are not counted.
+            frames_scanned = prefetch.frames_read if prefetch.finished else handed_over
+            prefetch_stats.update(depth=prefetch.depth, read_seconds=round(prefetch.read_seconds, 6),
+                                  prepare_seconds=round(prefetch.prepare_seconds, 6))
         if return_code != 0:
             stderr = (
                 ffmpeg.stderr.read().decode("utf-8", errors="replace")
@@ -437,6 +466,7 @@ def scan_animation_safety(
             torch.cuda.max_memory_allocated(device) if device.type == "cuda" else 0
         ),
         "shared_inference": True,
+        "batch_prefetch": prefetch_stats,
     }
     input_hash = performance.call('source_hash', sha256_file, input_path)
     common = {
@@ -456,6 +486,7 @@ def scan_animation_safety(
             "torch": torch.__version__,
             "cuda": torch.version.cuda,
             "gpu": torch.cuda.get_device_name(device) if device.type == "cuda" else None,
+            "precision": precision,
         },
         "model": manifest,
         "metrics": shared_metrics,

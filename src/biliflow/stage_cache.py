@@ -18,6 +18,7 @@ CACHEABLE_STAGES = frozenset({
     "animation_safety",
     "live_safety",
     "adult",
+    "verify_adult",
     "gore",
     "violence",
     "confirm_violence",

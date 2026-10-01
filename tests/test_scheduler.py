@@ -158,6 +158,36 @@ class SchedulerTests(unittest.TestCase):
             finally:
                 store.close()
 
+    def test_jobs_queued_before_verify_adult_keep_their_stage_list(self):
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            for name in ("input", "reports/jobs", "logs", "config", "scripts"):
+                (root / name).mkdir(parents=True, exist_ok=True)
+            source = root / "input" / "video.mp4"
+            source.write_bytes(b"video")
+            store = JobStore(root / "jobs.sqlite3")
+            job = store.upsert_job(
+                job_key="video-22222222", source_path=source, source_sha256="2" * 64,
+                source_size_bytes=5, source_mtime_ns=source.stat().st_mtime_ns,
+                content_style="live_action", state="QUEUED",
+            )
+            scheduler = JobScheduler(root, store)
+            calls = []
+
+            def fake(**kwargs):
+                calls.append(kwargs.get("adult_verification"))
+                return []
+            try:
+                store.replace_stages(job["id"], ["preflight", "adult", "build_review"])  # old stored list
+                with patch("biliflow.scheduler.pipeline_stages", side_effect=fake):
+                    scheduler._definitions(store.get_job(job["id"]))
+                store.replace_stages(job["id"], ["preflight", "adult", "verify_adult", "build_review"])
+                with patch("biliflow.scheduler.pipeline_stages", side_effect=fake):
+                    scheduler._definitions(store.get_job(job["id"]))
+                self.assertEqual(calls, [False, None])
+            finally:
+                store.close()
+
     def test_detector_groups_are_persisted_and_passed_to_pipeline(self):
         with TemporaryDirectory() as directory:
             root = Path(directory)

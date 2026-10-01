@@ -694,3 +694,152 @@ Người dùng yêu cầu xác nhận FP16 không ảnh hưởng model khác. V�
 ### 16.6. Áp dụng (29/09/2026)
 
 Người dùng duyệt. `FAST_SCAN_DETECT_PRECISION = "fp16"`: "Tăng tốc xử lý" thêm `--detect-precision fp16` vào stage OCR; lệnh sinh ra trùng khớp từng tham số với lệnh đã benchmark (`troy-full-fp16-20260929-173943`). Chế độ thường và chế độ OCR batch 8 cũ vẫn FP32. 335/335 test.
+
+## 17. Giai đoạn H — tăng tốc stage an toàn hoạt hình (kế hoạch 29/09/2026, ghi trước khi đo)
+
+Người dùng yêu cầu tiếp tục nâng cấp trong lúc chờ gán nhãn Golden Set (việc đó cần người dùng ngồi máy tính). Giai đoạn H không cần nhãn.
+
+### 17.1. Hiện trạng đo được
+
+- Conan Movie 20 đủ nhóm, chế độ Tăng tốc xử lý (`conan20-allgroups-full-fp16-20260929-193703`): tổng 1.641,7 s; **`animation_safety` 915,3 s (56%)**, OCR 353 s, logo 153 s, localization 205 s, review 10 s. Chỉ quảng cáo: 632 s. Stage an toàn là stage lớn nhất còn lại và chưa từng được tối ưu.
+- Bên trong stage (metrics của report): `model_step` 886,0 s / 900,6 s (98,4%); `frame_pipe_wait` 2,9 s (FFmpeg 256×256 @ 2 fps theo kịp); 13.379 frame, 1.673 batch × 8; ≈ 66 ms/frame.
+- Profile H0 (`reports/benchmarks/anime-safety-profile/`, Conan 20 3300–3450 s, 300 frame, RTX 2060 6 GB): biến đổi PIL 256→448 bicubic 4,3 ms/frame; chép sang GPU 0,4; **forward FP32 47,4**; forward FP16 autocast 14,4 (3,3×). Xác suất FP16 lệch tối đa 0,0078, p99 4·10⁻⁵. Model `wd-vit-tagger-v3` (`vit_base_patch16_224` chạy 448×448, fused attention đã bật).
+- Dữ liệu duyệt thật (các revision đang dùng): 111/111 mục an toàn hoạt hình được người dùng chọn KEEP. Đây là vấn đề chất lượng/gánh nặng duyệt, thuộc track chất lượng (cần Golden Set); **giai đoạn H không đổi ngưỡng, sampling, nhóm hay model**.
+
+### 17.2. Các bước
+
+- **H1 — giống hệt từng bit:** chuẩn bị tensor của batch kế tiếp (biến đổi PIL + stack) trên một luồng nền trong khi GPU chạy batch hiện tại; thứ tự, nội dung batch và mọi xử lý kết quả (hit, heap, thumbnail, report) giữ nguyên trên luồng chính; lỗi/hủy dọn cả luồng lẫn FFmpeg.
+  - Cổng H1: mọi `animation-safety/*/scan.json` (trừ `metrics`, `runtime`, `created_at`) và mọi JPEG giống hệt byte trên 2 đoạn trích (Conan 20 3300–3450 s, Conan 21 0–150 s) và trên cả phim; stage cả phim nhanh hơn ≥ 30 s, nếu không thì bỏ H1.
+- **H2 — FP16 cho forward (không giống hệt từng bit, opt-in):** `scan-animation-safety --precision fp32|fp16`, mặc định fp32. FP16 chỉ bọc forward trong `torch.autocast(float16)`, logits về float32 trước sigmoid; ngưỡng, sampling, độ phân giải, temporal, co-occurrence giữ nguyên. Chưa đưa vào pipeline/Dashboard.
+  - Đo cả phim theo cách rẻ hơn: chỉ chạy lại stage an toàn (FP32 và FP16, cùng phiên) vào thư mục riêng dưới `reports/benchmarks`, rồi `build-review` với **cùng** report chữ/logo cho cả hai bên. Stage an toàn không đọc/ghi gì của chữ/logo, nên khác biệt review chỉ đến từ FP16. Nguồn: Conan 20 và Conan 21 (đủ nhóm).
+  - Cổng H2 (như G1): không mục review chính nào mất/thêm/đổi đề xuất KEEP/BLUR/CUT trên cả hai phim; mọi khác biệt còn lại (advisory, khoảng thời gian, số frame vượt ngưỡng từng nhóm) được liệt kê trong `review-diff.html`; ca hồi quy Conan 20 giữ nguyên; stage nhanh hơn ≥ 5 phút mỗi phim. **Chỉ đưa vào "Tăng tốc xử lý" khi người dùng duyệt.**
+- **H3 (sau khi được duyệt):** `FAST_SCAN_ANIMATION_PRECISION = "fp16"` như §16.6; lệnh sinh ra phải trùng lệnh đã đo; test; tài liệu.
+- Ngoài phạm vi: đổi ngưỡng/sampling/nhóm; tăng batch (đổi kernel, không giống hệt, GPU đã bão hòa); stage an toàn live action (`scan-live-safety`, đo sau); TensorRT.
+
+### 17.3. Ước tính, rủi ro, điều kiện dừng
+
+- Ước tính: H1 ≈ −1 phút; H2 ≈ −7 đến −9 phút mỗi phim hoạt hình đủ nhóm (Conan 20: ~27 → ~17–19 phút).
+- Rủi ro: FP16 lệch xác suất gần các ngưỡng 0,02–0,20 → frame hit đổi → khoảng review đổi (vì vậy cổng ở mức review trên 2 phim). Bộ nhớ GPU giảm chứ không tăng. Các lượt cả phim (~15 phút GPU mỗi lượt FP32, ~5 phút FP16) làm máy nặng: chỉ chạy khi người dùng cho phép vì máy đang được dùng; đoạn trích ngắn (1–2 phút) chạy được ngay.
+- Dừng: H1 lệch bất kỳ byte nào hoặc không nhanh hơn → bỏ H1. H2 làm mất/đổi đề xuất mục chính trên một trong hai phim → giữ FP32, ghi bằng chứng; xem lại khi có Golden Set (cổng recall).
+
+### 17.4. Kết quả trên đoạn trích (29/09/2026)
+
+Mã: `BatchPrefetch` trong `src/biliflow/frame_prefetch.py` (đọc + biến đổi batch kế tiếp trên luồng nền, độ sâu 2; phần dọn dẹp dùng chung với `FramePrefetch`), `scan-animation-safety --precision fp32|fp16` (mặc định fp32, chưa vào pipeline), `runtime.precision` và `metrics.batch_prefetch` trong report. Harness `scripts/benchmark_animation_safety.py` (+ `.ps1`, giữ mutex GPU) chạy scanner của `HEAD` (qua `git show`, không đụng working tree) và scanner hiện tại trên đoạn trích stream-copy. 370/370 test.
+
+`reports/benchmarks/anime-safety-h/equivalence-20260929-230252` (máy đang có người dùng, GPU ~22% nền):
+
+| Đoạn trích (150 s) | HEAD fp32 | H1 fp32 | H2 fp16 |
+| --- | ---: | ---: | ---: |
+| Conan 20 3300 s | 21,3 s | 17,5 s | 7,4 s |
+| Conan 21 0 s | 20,2 s | 17,1 s | 6,7 s |
+
+- H1: mọi report (trừ metrics/runtime/created_at) và 62 + 63 JPEG giống hệt từng byte.
+- H2: số hit thô, hit đã xác nhận và mọi khoảng thời gian của adult/gore/violence trùng FP32 trên cả hai đoạn trích (thời gian gồm cả nạp model ~2 s và hash nguồn).
+- Còn lại: xác minh cả phim Conan 20 và Conan 21 (§17.2, ~40 phút GPU) — chờ người dùng chọn lúc máy rảnh vì máy đang được dùng và số đo thời gian sẽ nhiễu.
+
+### 17.5. Kết quả cả phim — H1 và H2 ĐẠT (29–30/09/2026)
+
+`reports/benchmarks/anime-safety-h/full-20260929-231545` (một phiên, tuần tự, stage an toàn riêng; máy có người dùng nền):
+
+| Lượt | Conan 21 | Conan 20 |
+| --- | ---: | ---: |
+| HEAD fp32 | 800,7 s | (tham chiếu byte: `conan20-allgroups-full-fp16-20260929-193703`, 915,3 s ở phiên trước) |
+| H1 fp32 | 670,9 s (−129,8 s, −16,2%) | 667,4 s |
+| H2 fp16 | **208,4 s** (−462,5 s so với H1; −74% so với HEAD) | **207,5 s** (−459,9 s so với H1) |
+
+- **H1:** report (trừ metrics/runtime/created_at) và 126 + 132 JPEG giống hệt từng byte trên cả hai phim; nhanh hơn 129,8 s ≥ 30 s. `model_step` 782 → 659 s vì biến đổi CPU đã ra khỏi luồng GPU; `batch_wait` 0,3 s.
+- **H2:** review dựng lại với cùng report chữ/logo: Conan 21 67/67 mục chính + 61/61 advisory, Conan 20 69/69 + 393/393 **giống hệt** (loại, thời gian, vùng, đề xuất, nhãn, ưu tiên). Mọi khoảng adult/gore/violence giống hệt. Ở mức frame: gore thô 804 → 803 (C21), 1028 → 1027 và gore xác nhận 581 → 577 (C20) — không đổi khoảng nào; hệ quả duy nhất nhìn thấy: 2 ảnh đại diện khoảng máu me của Conan 20 lùi 1 frame (471,0 → 471,5 s; 5549,0 → 5549,5 s). Hàng đợi FP32 dựng lại từ report của lượt benchmark Conan 20 trùng hàng đợi gốc của lượt đó (kiểm tra độc lập cách so).
+- Ước tính quét hoạt hình đủ nhóm ở chế độ Tăng tốc xử lý: Conan 20 ~1.642 s → ~934 s (~27 → ~16 phút, −43%), nếu áp dụng H2.
+- Sau lượt đo, rà soát nhiều agent (§ QUALITY_PLAN 14) sửa: `frames_scanned` khi quét bị ngắt (chỉ đường lỗi; báo cáo COMPLETED không đổi), docstring độ sâu hàng đợi, và harness (thư mục `--run-dir` tuyệt đối, lượt dở dang chuyển sang `.attempt-N`, từ chối chạy tiếp khi mã đổi, chỉ so thời gian cùng một lần chạy). 386/386 test.
+- **H3 chờ người dùng duyệt:** đưa `--precision fp16` vào "Tăng tốc xử lý" cho stage an toàn hoạt hình (như §16.6). H1 đã là mặc định vì giống hệt từng bit.
+
+### 17.6. Áp dụng H3 (30/09/2026)
+
+Người dùng duyệt ("Tiếp tục đi bạn" sau câu hỏi duyệt H3). `FAST_SCAN_ANIMATION_PRECISION = "fp16"`: "Tăng tốc xử lý" thêm `--precision fp16` vào stage `animation_safety` (hoạt hình/mixed khi chọn nhóm an toàn); mọi tham số khác của lệnh giữ nguyên, khóa stage cache khác chế độ thường nên kết quả fp32 và fp16 không bao giờ dùng lẫn. Chế độ thường vẫn fp32. Profile `careful` (2 fps) là cấu hình đã đo; profile `fast` (1 fps) dùng cùng model và cùng phép tính, chưa đo riêng. Tooltip Dashboard cập nhật. Có hiệu lực ở lần khởi động Dashboard tiếp theo. 387/387 test.
+
+### 17.7. Xác nhận cả pipeline sau H3 (30/09/2026)
+
+`conan20-allgroups-full-fast-20260930-073627` (Conan Movie 20, đủ nhóm, "Tăng tốc xử lý" hiện tại qua harness; lệnh thật có `--precision fp16`) so với `conan20-allgroups-full-fp16-20260929-193703`:
+
+| Stage | 29/09 (s) | 30/09 (s) |
+| --- | ---: | ---: |
+| An toàn hoạt hình | 915,3 | **249,0** |
+| OCR | 353,0 | 354,1 |
+| Logo | 153,4 | 162,0 |
+| Localization | 204,9 | 170,2 |
+| Review | 10,0 | 8,7 |
+| **Tổng** | **1.641,7 (27m22s)** | **950,1 (15m50s), −691,6 s (−42%)** |
+
+- Review: 69/69 mục chính và 393/393 advisory giống hệt; chữ giống hệt (2.230 frame, 468 track, cùng routing); JPEG logo giống hệt.
+- Report logo chỉ khác `brand_memory.record_count` 74 → 75 và `revision` (người dùng duyệt watermark Troy lúc 22:44 ngày 29/09 nên brand memory có thêm một bản ghi) cùng số đo thời gian localizer; không có phát hiện nào đổi.
+- Report an toàn khác như dự kiến của FP16 (vài hit mức frame, 2 ảnh đại diện lùi 1 frame; §17.5). Dữ liệu production được giữ nguyên (`preserved_original_data: true`).
+
+## 18. Giai đoạn H-live — stage an toàn phim người đóng (kế hoạch 30/09/2026, ghi trước khi đo)
+
+### 18.1. Hiện trạng đo được
+
+- Troy đủ nhóm, "Tăng tốc xử lý" (`troy-allgroups-full-fast-20260930-075806`; lượt bị ngắt ở `confirm_violence` khi phiên làm việc đóng — không phải lỗi pipeline): **adult 630,8 s**, **live_safety 1.848,2 s**. Lần chạy production cũ: confirm_violence 620–714 s. Cộng quảng cáo (~870 s): Troy đủ nhóm ≈ **67 phút**, trong đó ba stage an toàn ≈ 52 phút.
+- adult (`scan`, `nsfw_detection_2_nano`, 448 px @ 2 fps, 23.525 frame): `model_step` 529 s (22,5 ms/frame; gồm image processor của transformers trên CPU), `frame_pipe_wait` 49 s. GPU ~5%, CPU 99,7% (ffmpeg giải mã 1080p + tiền xử lý tranh CPU).
+- live_safety (`scan-live-safety`, một lần giải mã tách hai nhánh): `violence_model_step` **1.603 s** (94.102 frame @ 8 fps, 17 ms/frame, biến đổi PIL + ViT-B/16 224 FP32 theo cửa sổ 8 frame mới), gore `model_step` 141 s, `frame_pipe_wait` 39 s.
+- Profile đoạn trích không tranh CPU (`reports/benchmarks/live-safety-profile/`, Troy 400–550 s): adult processor 1,6 ms + forward 3,1 ms/frame, **fp16 chậm hơn (22 ms)**; violence biến đổi 1,5 ms + forward **9,8 ms fp32 / 3,6 ms fp16** (xác suất lệch tối đa 0,003); gore 3,6 ms/frame tổng. Giải mã đồ thị live-safety bằng CPU: 150 s video trong 4,3 s (~35× thời gian thực → ~340 s cho Troy khi chạy riêng).
+- Kết luận: cả phim chậm hơn đo đơn lẻ 2–4,5 lần vì CPU bị ffmpeg chiếm; GPU còn dư.
+
+### 18.2. Các bước (mỗi bước đo trước, giữ nếu qua cổng)
+
+- **L1 — giống hệt từng bit:** live_safety chuẩn bị tensor của cửa sổ bạo lực kế tiếp và batch gore kế tiếp trên luồng nền (cùng frame, cùng transform, cùng ranh giới cửa sổ/batch như vòng lặp tuần tự); adult chuẩn bị đầu vào image processor của batch kế tiếp trên luồng nền. Cổng: mọi report (trừ metrics/runtime/created_at) và JPEG giống hệt byte trên đoạn trích và cả phim Troy; mỗi stage nhanh hơn ≥ 30 s trên cả phim, nếu không bỏ phần đó.
+- **L2 — FP16 cho ViT bạo lực (không giống hệt, opt-in `--violence-precision fp16`):** chỉ forward trong autocast, logits về float32 trước softmax, ngưỡng/cửa sổ/top-k giữ nguyên. Gore fp16 chỉ thêm nếu đo thấy lợi; adult không dùng fp16 (đo chậm hơn). Cổng như H2: review dựng lại với cùng report chữ/logo/adult có mọi mục chính và advisory giống hệt trên cả phim Troy; mọi khác biệt liệt kê; stage nhanh hơn ≥ 5 phút. Chỉ đưa vào "Tăng tốc xử lý" khi người dùng duyệt.
+- **L3 — thử NVDEC** (đã kiểm chứng khung giống hệt cho H.264 8-bit yuv420p ở OCR/logo) cho adult và/hoặc live_safety để giải phóng CPU; chỉ giữ nếu framemd5 giống hệt với đúng chuỗi filter của stage và nhanh hơn trên cả phim.
+- **L4 — cân nhắc sau L1–L3:** gộp nhánh adult vào lần giải mã chung của live_safety (bỏ một lần giải mã cả phim, ~5–10 phút trên Troy). Thay đổi cấu trúc stage (cache, tiến trình Dashboard) nên sẽ lập kế hoạch riêng nếu còn đáng làm.
+- **confirm_violence:** đo riêng từ report bạo lực đã có (không cần chạy lại cả pipeline) rồi mới quyết định.
+- Ngoài phạm vi: đổi ngưỡng, sampling, model; bỏ nhóm.
+
+### 18.3. Rủi ro và điều kiện dừng
+
+- FP16 lệch xác suất gần ngưỡng bạo lực (0,28, trung bình top-k của 16 frame) → cổng ở mức review trên cả phim.
+- Lượt dài chạy tách khỏi phiên làm việc (tiến trình độc lập, log ra file) để không bị ngắt như lượt 30/09.
+- Dừng từng bước nếu lệch byte (L1/L3) hoặc làm mất/đổi mục chính (L2).
+
+### 18.4. L1/L2 — mã và kết quả đoạn trích (30/09/2026)
+
+- Mã: `IteratorPrefetch` (`frame_prefetch.py`) chạy bộ sinh đọc/tách khung + biến đổi cửa sổ bạo lực của `scan-live-safety` trên luồng nền, đúng thứ tự tuần tự (mỗi khung: cửa sổ bạo lực nếu đến lượt, rồi khung gore); adult (`scan`) dùng `BatchPrefetch` cho image processor. `scan-live-safety --violence-precision fp32|fp16` (mặc định fp32; chỉ forward ViT bạo lực trong autocast, logits về float32 trước softmax); `runtime.violence_precision` trong report. Harness `scripts/benchmark_live_safety.py` (+ `.ps1`, mutex GPU).
+- `reports/benchmarks/live-safety-h/equivalence-20260930-143850` (Troy 400–550 s và 5400–5550 s, đúng tham số pipeline careful): adult và live_safety **giống hệt HEAD từng byte** (report trừ metrics/runtime/created_at; 22 + 20 và 50 + 43 JPEG). live_safety 19,8 → 16,6 / 16,3 s (−16…−18%); adult trên đoạn trích ngắn gần như không đổi (6,2 → 4,9 và 5,2 → 5,3 s — lợi ích kỳ vọng nằm ở cả phim khi CPU bị ffmpeg chiếm).
+- L2 fp16: live_safety 16,6 → 9,2 s (−45%); mọi khoảng bạo lực trùng fp32, report gore giống hệt, điểm lớn nhất lệch ≤ 0,0007.
+- Lượt cả phim (stage riêng, tiến trình độc lập tạo qua WMI để không bị ngắt theo phiên): adult và live_safety mã mới so byte với report HEAD của lượt 30/09 sáng; live fp16; VLM xác nhận chạy riêng cho bản fp32 và fp16 (khung "mạnh nhất" có thể đổi); review dựng lại với cùng adult/chữ/logo. Thời gian L1 so với HEAD là khác phiên (ghi rõ); L2 so cùng phiên.
+
+### 18.5. Kết quả cả phim Troy — L1 và L2 ĐẠT (30/09/2026)
+
+`reports/benchmarks/live-safety-h/full-20260930-144244` (tiến trình độc lập, một phiên; thời gian là `elapsed_seconds` bên trong scanner):
+
+| Stage | HEAD (sáng 30/09) | L1 | L1 + L2 fp16 |
+| --- | ---: | ---: | ---: |
+| adult | 596,1 s | **360,5 s (−235,6 s, −40%)** | (không dùng fp16) |
+| live_safety | 1.812,8 s | **1.136,0 s (−676,9 s, −37%)** | **581,4 s (−554,6 s so với L1; −68% so với HEAD)** |
+| confirm_violence (VLM) | 620–714 s (lượt cũ) | 594,6 s | 596,8 s |
+
+- **L1:** report adult/gore/violence (trừ metrics/runtime/created_at) và 139 + 22 + 578 JPEG **giống hệt HEAD từng byte** trên cả phim. Lợi ích lớn hơn đoạn trích vì cả phim CPU bị ffmpeg chiếm: tiền xử lý không còn chặn luồng GPU (`batch_wait` adult 242,6 s đã chồng lên giải mã; `event_wait` live 0,7 s). So với HEAD là khác phiên.
+- **L2:** 558 khoảng bạo lực ứng viên: 552 chỉ khác `max_score` (≤ 5·10⁻⁵), 1 khoảng đổi khung mạnh nhất 5897,875 → 5896,875 s, 1 khoảng đổi điểm đầu 10.187,875 → 10.189,875 s. VLM xác nhận cho kết quả giống hệt ở cả hai bản (88 giữ, 470 loại, cùng tập khoảng giữ lại). Review dựng lại với cùng adult/chữ/logo: **159/159 mục chính và 294/294 advisory giống hệt**. Report gore giống hệt; ảnh bạo lực: 1 ảnh đại diện đổi tên theo khung mạnh nhất.
+- Ước tính Troy đủ nhóm ở "Tăng tốc xử lý": ba stage an toàn ~3.010 s → ~1.540 s (nếu áp dụng L2); cả pipeline ~67 → ~42 phút. Stage an toàn lớn nhất còn lại là `confirm_violence` (~595 s cho 558 khoảng, VLM).
+- 393/393 test. **L3 (NVDEC) chưa thử**; L1 đã là mặc định vì giống hệt từng bit. **L2 chờ người dùng duyệt** trước khi đưa `--violence-precision fp16` vào "Tăng tốc xử lý".
+
+### 18.6. Áp dụng L2 (30/09/2026)
+
+Người dùng hỏi đánh giá và đồng ý "nếu chất lượng giữ nguyên thì đáng update"; bằng chứng §18.5 cho thấy mục review giữ nguyên. `FAST_SCAN_VIOLENCE_PRECISION = "fp16"`: "Tăng tốc xử lý" thêm `--violence-precision fp16` vào stage `live_safety` (khi chọn cả máu me và bạo lực); adult, `confirm_violence` và đường chỉ-bạo-lực (`scan-content --kind violence`) giữ nguyên; khóa stage cache khác chế độ thường. Chế độ thường vẫn fp32. Tooltip Dashboard cập nhật. Giới hạn: mới kiểm chứng cả phim trên Troy (nguồn Tiếng Yêu không còn). Xác nhận cả pipeline: §18.7.
+
+### 18.7. Xác nhận cả pipeline Troy sau L1 + L2 (30/09/2026)
+
+`troy-allgroups-full-fast-20260930-162534` (Troy, đủ nhóm, "Tăng tốc xử lý" hiện tại, qua harness, tiến trình độc lập):
+
+| Stage | Trước (s) | Sau (s) |
+| --- | ---: | ---: |
+| Preflight | 20,8 | 17,1 |
+| adult | 630,8 | **393,2** |
+| live_safety (máu me + bạo lực) | 1.848,2 | **603,3** |
+| confirm_violence (VLM) | 620–714 (lượt cũ) | 651,1 |
+| OCR | 540,0 | 528,6 |
+| Logo | 117,1 | 117,3 |
+| Localization | 183,9 | 189,0 |
+| Review | 7,3 | 7,2 |
+| **Tổng** | **~4.020 (~67 phút; ghép từ lượt 30/09 sáng + lượt quảng cáo 29/09)** | **2.507,0 (41m47s), ~−38%** |
+
+- Hàng đợi review của pipeline **giống hệt** hàng đợi đã kiểm chứng ở §18.5 (cả bản fp16 lẫn fp32): 159/159 mục chính, 294/294 advisory. Report adult/gore/violence và 88 khoảng bạo lực đã xác nhận giống hệt lượt benchmark; dữ liệu production giữ nguyên.
+- Stage lớn nhất còn lại của Troy: `confirm_violence` 651 s (558 lần hỏi VLM), OCR 529 s, live_safety 603 s.
