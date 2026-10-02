@@ -10,7 +10,9 @@ import secrets
 import shutil
 import subprocess
 import threading
+import unicodedata
 import urllib.parse
+from collections import Counter
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -1852,6 +1854,357 @@ def _quarantine_uncorroborated_visual_regions(
     return required, advisory
 
 
+# Fixed on-screen text (job 40 "Nhất Âu Xuân - Tập 10", 2026-10-02). A site
+# watermark that OCR read in 865 of 869 frames ("Motchillv.ph") was routed as
+# scene text because it is short and scored low as an advertisement, and a faint
+# "PHIM ĐƯỢC CẬP NHẬT NHANH NHẤT TẠI MOTCHILLV.PH" line was only read in pieces,
+# so the export blurred neither. Text that stays at one place for most of the
+# film is a watermark candidate whatever its semantic score: it becomes one
+# persistent-overlay card for its own box. The reviewer still decides; BLUR is
+# only suggested with ad evidence (ad routing, a web address, a visual-logo
+# confirmation of the same box, or the site name of another such watermark).
+FIXED_TEXT_MINIMUM_COVERAGE = 0.50  # share of the scanned time one track was read
+FIXED_TEXT_MINIMUM_SPAN_SECONDS = 60.0
+FIXED_TEXT_WHOLE_FILM_SPAN = 0.50  # observed span share from which a card covers the whole scan
+RECURRING_TEXT_MINIMUM_TRACKS = 8
+RECURRING_TEXT_MINIMUM_LONG_READINGS = 3
+RECURRING_TEXT_LONG_READING_CHARS = 12
+RECURRING_TEXT_FRAGMENT_CHARS = 6
+RECURRING_TEXT_FRAGMENT_SIMILARITY = 0.75
+RECURRING_TEXT_MINIMUM_SPAN_SHARE = 0.30
+FIXED_TEXT_VISUAL_OVERLAP = 0.60
+_FIXED_TEXT_SKIPPED_ROUTINGS = {
+    "REVIEW_PERSISTENT_OVERLAY", "REVIEW_POLICY_OVERRIDE", "LIKELY_TITLE_OVERLAY",
+}
+_FIXED_TEXT_AD_ROUTINGS = {"REVIEW_AD_LIKELY", "REVIEW_POLICY_OVERRIDE"}
+_FIXED_TEXT_DOMAIN = re.compile(r"\b[a-z0-9][a-z0-9-]{2,}\.[a-z]{2,6}\b", re.IGNORECASE)
+_FIXED_TEXT_SITE_TOKEN_CHARS = 6
+
+
+def _fold_text(value: str) -> str:
+    value = str(value).casefold().replace("đ", "d")
+    return "".join(
+        character for character in unicodedata.normalize("NFD", value)
+        if unicodedata.category(character) != "Mn"
+    )
+
+
+def _fold_alnum(value: str) -> str:
+    return re.sub(r"[^0-9a-z]+", "", _fold_text(value))
+
+
+def _fragment_similarity(fragment: str, text: str) -> float:
+    """How well ``fragment`` matches some same-length window of ``text``."""
+    if not fragment or not text:
+        return 0.0
+    if fragment in text:
+        return 1.0
+    size = len(fragment)
+    matcher = difflib.SequenceMatcher(None, autojunk=False)
+    matcher.set_seq1(fragment)
+    if size >= len(text):
+        matcher.set_seq2(text)
+        return matcher.ratio()
+    best = 0.0
+    for start in range(len(text) - size + 1):
+        matcher.set_seq2(text[start:start + size])
+        best = max(best, matcher.ratio())
+    return best
+
+
+def _fixed_text_ad_evidence(tracks: list[dict]) -> list[str]:
+    evidence = []
+    for track in tracks:
+        routing = str(track.get("routing") or "")
+        if routing in _FIXED_TEXT_AD_ROUTINGS:
+            evidence.append(f"OCR định tuyến quảng cáo ({routing})")
+        if float(track.get("ad_probability") or 0.0) >= 0.45:
+            evidence.append(f"điểm quảng cáo {float(track['ad_probability']):.2f}")
+        for text in track.get("sample_text") or []:
+            if _FIXED_TEXT_DOMAIN.search(str(text)) or any(
+                pattern.search(str(text)) for pattern in _AD_TEXT_PATTERNS
+            ):
+                evidence.append(f"địa chỉ web/liên hệ: {text}")
+    return list(dict.fromkeys(evidence))[:5]
+
+
+def _site_tokens(tracks: list[dict]) -> set[str]:
+    """Folded words of a watermark's web address ("motchillv" in "Motchillv.ph")."""
+    tokens = set()
+    for track in tracks:
+        for text in track.get("sample_text") or []:
+            for match in _FIXED_TEXT_DOMAIN.finditer(str(text)):
+                for word in re.split(r"[^0-9a-z]+", _fold_text(match.group(0))):
+                    if len(word) >= _FIXED_TEXT_SITE_TOKEN_CHARS:
+                        tokens.add(word)
+    return tokens
+
+
+def _vertical_band_overlap(first: list[float], second: list[float]) -> bool:
+    shared = min(first[3], second[3]) - max(first[1], second[1])
+    return shared >= 0.5 * min(first[3] - first[1], second[3] - second[1])
+
+
+def _recurring_text_groups(tracks: list[dict]) -> list[list[dict]]:
+    """Tracks reading pieces of one line of text at one place (union-find)."""
+    entries = []
+    for track in tracks:
+        box = track.get("union_box")
+        if (
+            str(track.get("routing") or "") in _FIXED_TEXT_SKIPPED_ROUTINGS
+            or track.get("candidate_type") == "persistent_overlay"
+            or not isinstance(box, list) or len(box) != 4
+        ):
+            continue
+        texts = [_fold_alnum(text) for text in track.get("sample_text") or []]
+        texts = [
+            (text, Counter(text)) for text in texts
+            if len(text) >= RECURRING_TEXT_FRAGMENT_CHARS
+        ]
+        if texts:
+            entries.append((track, [float(value) for value in box], texts))
+    parent = list(range(len(entries)))
+
+    def related(first_texts: list, second_texts: list) -> bool:
+        for one, one_counts in first_texts:
+            for other, other_counts in second_texts:
+                (short, short_counts), (long, long_counts) = sorted(
+                    ((one, one_counts), (other, other_counts)), key=lambda value: len(value[0]),
+                )
+                # Shared letters bound any window's ratio; skip hopeless pairs cheaply.
+                shared = sum((short_counts & long_counts).values())
+                if (
+                    shared >= RECURRING_TEXT_FRAGMENT_SIMILARITY * len(short)
+                    and _fragment_similarity(short, long) >= RECURRING_TEXT_FRAGMENT_SIMILARITY
+                ):
+                    return True
+        return False
+
+    def find(index: int) -> int:
+        while parent[index] != index:
+            parent[index] = parent[parent[index]]
+            index = parent[index]
+        return index
+
+    for first in range(len(entries)):
+        _, first_box, first_texts = entries[first]
+        for second in range(first + 1, len(entries)):
+            _, second_box, second_texts = entries[second]
+            if (
+                find(first) == find(second)
+                or not _vertical_band_overlap(first_box, second_box)
+                or min(first_box[2], second_box[2]) <= max(first_box[0], second_box[0])
+            ):
+                continue
+            if related(first_texts, second_texts):
+                parent[find(first)] = find(second)
+    components: dict[int, list] = {}
+    for index, entry in enumerate(entries):
+        components.setdefault(find(index), []).append(entry)
+    return [
+        [track for track, _, _ in members]
+        for members in components.values()
+        if len(members) >= RECURRING_TEXT_MINIMUM_TRACKS
+        and sum(
+            1 for _, _, texts in members
+            if max(len(text) for text, _ in texts) >= RECURRING_TEXT_LONG_READING_CHARS
+        ) >= RECURRING_TEXT_MINIMUM_LONG_READINGS
+    ]
+
+
+def promote_fixed_text_overlays(payload: dict) -> dict:
+    """Turn text that stays at one place for most of the film into one track card.
+
+    Rule ``whole_film_text``: one persistent OCR track read in at least half of
+    the scanned time. Rule ``recurring_fixed_text``: at least eight tracks that
+    read pieces of the same line at the same place over 30% of the scan (a faint
+    line OCR only reads now and then). Their tracks are replaced by one
+    ``persistent_overlay`` track; nothing else changes. The payload is returned
+    unchanged (the same object) when no rule applies.
+    """
+    tracks = [track for track in payload.get("tracks") or [] if isinstance(track, dict)]
+    duration = float(payload.get("duration_seconds") or 0.0)
+    scan_start = float(payload.get("scan_start_seconds") or 0.0)
+    scan_duration = float(payload.get("scan_duration_seconds") or duration)
+    sample_every = float(payload.get("sample_every_seconds") or 0.0)
+    if not tracks or scan_duration <= 0:
+        return payload
+    scan_end = min(duration, scan_start + scan_duration) if duration > 0 else scan_start + scan_duration
+    promoted: list[dict] = []
+    absorbed: set[int] = set()
+
+    def build(base: dict, members: list[dict], rule: str, coverage: float | None) -> dict:
+        start = min(float(track["start_seconds"]) for track in members)
+        end = max(
+            float(track.get("recommended_blur_end_seconds", track["end_seconds"]))
+            for track in members
+        )
+        whole_film = end - start >= FIXED_TEXT_WHOLE_FILM_SPAN * scan_duration
+        boxes = [[float(value) for value in track["union_box"]] for track in members]
+        texts = list(dict.fromkeys(
+            str(text) for track in sorted(members, key=lambda value: -len(
+                max((str(text) for text in value.get("sample_text") or []), key=len, default="")
+            ))
+            for text in track.get("sample_text") or []
+        ))
+        merged = dict(base)
+        merged.update({
+            "start_seconds": round(scan_start if whole_film else start, 3),
+            "end_seconds": round(scan_end if whole_film else end, 3),
+            "recommended_blur_end_seconds": round(scan_end if whole_film else end, 3),
+            "union_box": [
+                round(min(box[0] for box in boxes)), round(min(box[1] for box in boxes)),
+                round(max(box[2] for box in boxes)), round(max(box[3] for box in boxes)),
+            ],
+            "sample_text": texts[:8],
+            "observations": sum(int(track.get("observations") or 0) for track in members),
+            "persistent": True,
+            "review_candidate": True,
+            "review_priority": "high",
+            "routing": "REVIEW_PERSISTENT_OVERLAY",
+            "candidate_type": "persistent_overlay",
+            "grouped_track_ids": [int(track["track_id"]) for track in members if "track_id" in track],
+            "automatic_edit": False,
+            "fixed_text_overlay": {
+                "rule": rule,
+                "observed_start_seconds": round(start, 3),
+                "observed_end_seconds": round(end, 3),
+                "whole_film": whole_film,
+                "track_count": len(members),
+                "coverage": round(coverage, 4) if coverage is not None else None,
+                "ad_evidence": _fixed_text_ad_evidence(members),
+            },
+        })
+        return merged
+
+    for track in tracks:
+        if (
+            not track.get("persistent")
+            or str(track.get("routing") or "") in _FIXED_TEXT_SKIPPED_ROUTINGS
+            or track.get("candidate_type") == "persistent_overlay"
+            or not isinstance(track.get("union_box"), list) or len(track["union_box"]) != 4
+        ):
+            continue
+        span = float(track["end_seconds"]) - float(track["start_seconds"])
+        coverage = int(track.get("observations") or 0) * sample_every / scan_duration
+        if (
+            coverage >= FIXED_TEXT_MINIMUM_COVERAGE
+            and span >= max(FIXED_TEXT_MINIMUM_SPAN_SECONDS, FIXED_TEXT_WHOLE_FILM_SPAN * scan_duration)
+        ):
+            promoted.append(build(track, [track], "whole_film_text", min(1.0, coverage)))
+            absorbed.add(id(track))
+    remaining = [track for track in tracks if id(track) not in absorbed]
+    for members in _recurring_text_groups(remaining):
+        start = min(float(track["start_seconds"]) for track in members)
+        end = max(float(track["end_seconds"]) for track in members)
+        if end - start < max(
+            FIXED_TEXT_MINIMUM_SPAN_SECONDS, RECURRING_TEXT_MINIMUM_SPAN_SHARE * scan_duration,
+        ):
+            continue
+        anchor = max(members, key=lambda value: (
+            len(max((_fold_alnum(text) for text in value.get("sample_text") or []), key=len, default="")),
+            -float(value["start_seconds"]),
+        ))
+        promoted.append(build(anchor, members, "recurring_fixed_text", None))
+        absorbed.update(id(track) for track in members)
+    if not promoted:
+        return payload
+    # A faint line naming the site of a watermark found above carries that
+    # watermark's ad evidence ("TẠI MOTCHILLV PH" next to "Motchillv.ph").
+    for overlay in promoted:
+        details = overlay["fixed_text_overlay"]
+        if details["ad_evidence"]:
+            continue
+        folded = [_fold_alnum(text) for text in overlay.get("sample_text") or []]
+        for other in promoted:
+            if other is overlay or not other["fixed_text_overlay"]["ad_evidence"]:
+                continue
+            shared = sorted(
+                token for token in _site_tokens([other])
+                if any(token in text for text in folded)
+            )
+            if shared:
+                details["ad_evidence"] = [f"cùng tên trang với watermark {shared[0]}"]
+                break
+    for overlay in promoted:
+        details = overlay["fixed_text_overlay"]
+        overlay["suggested_decision"] = "BLUR" if details["ad_evidence"] else None
+        place = (
+            "suốt video" if details["whole_film"]
+            else f"{_clock_text(details['observed_start_seconds'])}–"
+                 f"{_clock_text(details['observed_end_seconds'])}"
+        )
+        overlay["reason"] = (
+            ("Chữ cố định một chỗ, OCR đọc được ở "
+             f"{details['coverage']:.0%} thời gian quét" if details["rule"] == "whole_film_text"
+             else f"Cùng một dòng chữ mờ ở một chỗ, OCR đọc được {details['track_count']} lần")
+            + f" ({place}); giống watermark/logo trang web. "
+            + (
+                "Bằng chứng quảng cáo: " + "; ".join(details["ad_evidence"])
+                + " — đề xuất làm mờ vùng này, chờ bạn duyệt"
+                if details["ad_evidence"] else
+                "Chưa có bằng chứng quảng cáo — bạn tự quyết làm mờ hay giữ"
+            )
+        )
+    output = dict(payload)
+    output["tracks"] = [
+        track for track in payload.get("tracks") or []
+        if not isinstance(track, dict) or id(track) not in absorbed
+    ] + promoted
+    output["fixed_text_overlays"] = [
+        {
+            "track_id": overlay.get("track_id"),
+            "grouped_track_ids": overlay["grouped_track_ids"],
+            **overlay["fixed_text_overlay"],
+        }
+        for overlay in promoted
+    ]
+    return output
+
+
+def _clock_text(seconds: float) -> str:
+    total = max(0, int(round(float(seconds))))
+    hours, remainder = divmod(total, 3600)
+    minutes, secs = divmod(remainder, 60)
+    return f"{hours}:{minutes:02d}:{secs:02d}" if hours else f"{minutes:02d}:{secs:02d}"
+
+
+def corroborate_fixed_text_overlays(items: list[dict]) -> list[dict]:
+    """A visual-logo confirmation of the same box is ad evidence for a fixed text card."""
+    for item in items:
+        details = item.get("fixed_text_overlay")
+        region = item.get("suggested_region_source_pixels")
+        if (
+            not isinstance(details, dict)
+            or item.get("category") != "text"
+            or item.get("decision") is not None
+            or item.get("suggested_decision") is not None
+            or not isinstance(region, dict)
+        ):
+            continue
+        confirmations = [
+            other for other in items
+            if other.get("category") == "visual_logo"
+            and (other.get("model_evidence") or {}).get("vlm_confirmation") == "CONFIRMED"
+            and isinstance(other.get("suggested_region_source_pixels"), dict)
+            and _intersection_over_smaller(region, other["suggested_region_source_pixels"])
+            >= FIXED_TEXT_VISUAL_OVERLAP
+            and float(other["start_seconds"]) < float(item["end_seconds"])
+            and float(other["end_seconds"]) > float(item["start_seconds"])
+        ]
+        if not confirmations:
+            continue
+        details["ad_evidence"] = [
+            f"visual-logo xác nhận logo tại cùng vùng ở {len(confirmations)} đoạn"
+        ]
+        item["suggested_decision"] = "BLUR"
+        item["reasons"] = list(dict.fromkeys(list(item.get("reasons") or []) + [
+            f"Visual-logo xác nhận logo tại đúng vùng này ở {len(confirmations)} đoạn — "
+            "đề xuất làm mờ toàn bộ thời gian của thẻ, chờ bạn duyệt"
+        ]))
+    return items
+
+
 def _text_items(root: Path, report_path: Path, payload: dict) -> list[dict]:
     evidence = _relative(root, report_path)
     source_size = payload.get("source_size") or []
@@ -1937,6 +2290,10 @@ def _text_items(root: Path, report_path: Path, payload: dict) -> list[dict]:
                 "source_candidate_refs": [
                     f"{evidence}#track:{track.get('track_id', track_index)}"
                 ],
+                **({"fixed_text_overlay": {
+                    key: list(value) if isinstance(value, list) else value
+                    for key, value in track["fixed_text_overlay"].items()
+                }} if isinstance(track.get("fixed_text_overlay"), dict) else {}),
                 "detected_intervals": [{
                     "start_seconds": round(start, 3),
                     "end_seconds": round(end, 3),
@@ -1950,6 +2307,20 @@ def _text_items(root: Path, report_path: Path, payload: dict) -> list[dict]:
             }
         )
     return items
+
+
+# Lines of one text block sit at most about two line heights apart (Troy's
+# opening narration); a corner watermark and a bottom line sit five or more.
+TEXT_MERGE_MAXIMUM_LINE_GAP = 3.0
+
+
+def _text_regions_adjacent(first: dict | None, second: dict | None) -> bool:
+    if not isinstance(first, dict) or not isinstance(second, dict):
+        return True
+    gap = max(int(first["y"]), int(second["y"])) - min(
+        int(first["y"]) + int(first["height"]), int(second["y"]) + int(second["height"]),
+    )
+    return gap <= TEXT_MERGE_MAXIMUM_LINE_GAP * min(int(first["height"]), int(second["height"]))
 
 
 def _merge_items(items: Iterable[dict], maximum_gap_seconds: float) -> list[dict]:
@@ -1982,6 +2353,14 @@ def _merge_items(items: Iterable[dict], maximum_gap_seconds: float) -> list[dict
             # mark to donate its BLUR action to a different DINO box.  Require
             # the boxes to describe substantially the same pixels.
             visual_regions_compatible = overlap is None or overlap >= 0.50
+        if previous is not None and previous["category"] == item["category"] == "text":
+            # Texts far apart on the frame are separate decisions: their union box
+            # would blur everything between them (a corner watermark and a bottom
+            # line became one 839x483 box on 2026-10-02).
+            visual_regions_compatible = _text_regions_adjacent(
+                previous.get("suggested_region_source_pixels"),
+                item.get("suggested_region_source_pixels"),
+            )
         if (
             previous
             and previous["category"] == item["category"]
@@ -2471,10 +2850,11 @@ def build_review_queue(
                 },
             }
         if "tracks" in payload:
-            title_references.extend(_title_overlay_references(payload))
-            in_film_text_references.extend(_in_film_text_references(payload))
-            items.extend(_text_items(root, report_path, payload))
-            advisory_items.extend(_advisory_text_items(root, report_path, payload))
+            text_payload = promote_fixed_text_overlays(payload)
+            title_references.extend(_title_overlay_references(text_payload))
+            in_film_text_references.extend(_in_film_text_references(text_payload))
+            items.extend(_text_items(root, report_path, text_payload))
+            advisory_items.extend(_advisory_text_items(root, report_path, text_payload))
         else:
             items.extend(_scan_items(root, report_path, payload))
             advisory_items.extend(_advisory_scan_items(root, report_path, payload))
@@ -2504,6 +2884,7 @@ def build_review_queue(
     items = _guard_title_overlays(items, title_references)
     items = _guard_in_film_text(items, in_film_text_references)
     items = refine_persistent_logo_regions(items)
+    items = corroborate_fixed_text_overlays(items)
     items = reconcile_persistent_overlay_items(
         items, source_duration=source_duration,
     )
