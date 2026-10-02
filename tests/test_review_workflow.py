@@ -2,6 +2,8 @@ import hashlib
 import http.client
 import json
 import re
+import shutil
+import subprocess
 import threading
 import time
 import unittest
@@ -2624,7 +2626,138 @@ class DetectionScopeTests(unittest.TestCase):
             self.assertFalse(queue["detection_scope"]["all_selected"])
 
 
+
+# Fake DOM for finalizeExport: only the elements it and the notice touch.
+EXPORT_PANEL_HARNESS = r"""
+const els={
+  '#export-section':{open:true,querySelector(){return {focus(){}}}},
+  '#export-notice':{hidden:true,className:'export-notice',textContent:''},
+  '#finalize':{disabled:false,focus(){}},
+  '#export-status':{textContent:'',error:false,classList:{toggle(name,on){els['#export-status'].error=!!on}}},
+};
+const $=s=>els[s];
+const API='/api/';let token='t';let writeChain=Promise.resolve();
+let queue={status:'READY_FOR_EDIT_PLAN'};let exportJob={status:'READY_TO_EXPORT'};
+let exportRequestInFlight=false;let exportNoticeActive=false;let exportError='';
+let selectionError=null;let confirmAnswer=true;const log={fetches:[],confirms:[],alerts:[],openAtFetch:[]};
+let reply=()=>({ok:true,status:200,json:async()=>({status:'QUEUED',export_size_policy:{mode:'default'}})});
+function outputSizeSelection(){if(selectionError)throw new Error(selectionError);return{size_mode:'default',description:'tối đa 3,5 GB'};}
+function renderExport(){$('#finalize').disabled=exportRequestInFlight;setText($('#export-status'),exportError||'ready');$('#export-status').classList.toggle('error',!!exportError);}
+const confirm=m=>{log.confirms.push(m);return confirmAnswer;};const alert=m=>log.alerts.push(m);
+async function fetch(url,opt){log.fetches.push([url,JSON.parse(opt.body)]);log.openAtFetch.push(els['#export-section'].open);await new Promise(r=>setTimeout(r,20));return reply();}
+function reset(){els['#export-section'].open=true;Object.assign(els['#export-notice'],{hidden:true,className:'export-notice',textContent:''});els['#export-status'].textContent='';els['#export-status'].error=false;
+  exportJob={status:'READY_TO_EXPORT'};exportNoticeActive=false;exportError='';selectionError=null;confirmAnswer=true;log.fetches=[];log.confirms=[];log.alerts=[];log.openAtFetch=[];
+  reply=()=>({ok:true,status:200,json:async()=>({status:'QUEUED',export_size_policy:{mode:'default'}})});}
+function snap(){return{open:els['#export-section'].open,notice:els['#export-notice'].hidden?null:els['#export-notice'].textContent,tone:els['#export-notice'].className,
+  status:els['#export-status'].textContent,statusError:els['#export-status'].error,fetches:log.fetches.length,confirms:log.confirms.length,alerts:log.alerts.length,
+  openAtFetch:log.openAtFetch,disabled:els['#finalize'].disabled,inFlight:exportRequestInFlight};}
+(async()=>{const out={};
+  reset();await finalizeExport();out.ok=snap();out.ok_body=log.fetches[0];out.ok_confirm=log.confirms[0];
+  reset();confirmAnswer=false;await finalizeExport();out.cancel=snap();
+  reset();reply=()=>({ok:false,status:400,json:async()=>({error:'X'})});await finalizeExport();out.refused=snap();
+  reset();reply=()=>{throw new TypeError('Failed to fetch')};await finalizeExport();out.offline=snap();
+  reset();const first=finalizeExport(),second=finalizeExport();out.busy=snap();await Promise.all([first,second]);out.double=snap();
+  reset();selectionError='Giới hạn tùy chỉnh phải từ 0,05 đến 1.000 GB.';await finalizeExport();out.invalid=snap();
+  reset();queue.status='REVIEW_REQUIRED';await finalizeExport();out.unresolved=snap();queue.status='READY_FOR_EDIT_PLAN';
+  // A render that fails later only changes the header notice; the panel stays closed.
+  reset();await finalizeExport();exportJob={status:'FAILED',error:'boom'};updateExportNotice();out.later_failure=snap();
+  out.progress=[exportNoticeText({status:'RENDERING',render_progress:{percent:42.34,eta_seconds:150}}),
+    exportNoticeText({status:'RENDERING',render_progress:{state:'VERIFYING',percent:100}}),
+    exportNoticeText({status:'RENDERING'}),exportNoticeText({status:'COMPLETED',output:'output/a.mp4'}),exportNoticeText({status:'IDLE'})];
+  // Opening a page while an export is queued shows its progress without a click.
+  reset();exportJob={status:'QUEUED'};updateExportNotice();out.on_load=snap();
+  console.log(JSON.stringify(out));
+})().catch(e=>{console.error(e&&e.stack||e);process.exit(1);});
+"""
+
+
+class ExportPanelTests(unittest.TestCase):
+    def setUp(self):
+        self.page = _interactive_html("token")
+
+    def test_export_notice_markup_and_finalize_order(self):
+        page = self.page
+        self.assertIn(
+            '</details><span class="export-notice" id="export-notice" role="status" aria-live="polite" hidden></span>',
+            page,
+        )
+        finalize = _js_function(page, "finalizeExport")
+        self.assertTrue(finalize.startswith(
+            "async function finalizeExport(){if(exportRequestInFlight)return;exportRequestInFlight=true;"
+        ))
+        # The panel closes right after OK and before the request is sent.
+        self.assertLess(finalize.index("confirm("), finalize.index("panel.open=false"))
+        self.assertLess(finalize.index("panel.open=false"), finalize.index("fetch(API+'finalize'"))
+        catch = finalize[finalize.index("catch(e){exportNoticeActive=false;"):]
+        self.assertIn("exportError=`Không gửi được lệnh xuất: ${e.message}`", catch)
+        self.assertIn("panel.open=true", catch)
+        self.assertNotIn("alert(e.message)", finalize)
+        self.assertIn("finally{exportRequestInFlight=false;renderExport();}", finalize)
+        render = _js_function(page, "renderExport")
+        self.assertIn("$('#finalize').disabled=!ready||exportRequestInFlight;", render)
+        self.assertIn("setText($('#export-status'),exportError||exportText[exportJob.status]||pendingDescription())", render)
+        # Polling updates only the notice; nothing in it reopens the panel.
+        self.assertNotIn("open", _js_function(page, "updateExportNotice"))
+        self.assertIn("renderExport();updateExportNotice();}catch(_error){}}},3000);", page)
+        # On desktop the notice stays on the header line (ellipsis, full text in title);
+        # the mobile header is static and lets it wrap below.
+        self.assertIn("max-width:34ch;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}", page)
+        self.assertIn(".export-notice{order:4;flex-basis:100%;max-width:none;white-space:normal;", page)
+        self.assertIn("if(el.title!==full)el.title=full;", _js_function(page, "showExportNotice"))
+
+    @unittest.skipUnless(shutil.which("node"), "node is not installed")
+    def test_finalize_export_closes_reports_and_reopens_in_node(self):
+        source = "\n".join(_js_function(self.page, name) for name in (
+            "setText", "readJson", "offlineError", "showExportNotice", "exportNoticeText",
+            "updateExportNotice", "finalizeExport"))
+        result = subprocess.run(
+            [shutil.which("node"), "-e", EXPORT_PANEL_HARNESS.replace("const $=s=>els[s];", "const $=s=>els[s];" + source)],
+            capture_output=True, text=True, encoding="utf-8", timeout=60,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        out = json.loads(result.stdout.strip().splitlines()[-1])
+        ok = out["ok"]
+        self.assertEqual(out["ok_confirm"],
+                         "Khóa các lựa chọn hiện tại và bắt đầu xuất video hoàn chỉnh (tối đa 3,5 GB)?")
+        self.assertEqual(out["ok_body"], ["/api/finalize", {"size_mode": "default", "description": "tối đa 3,5 GB"}])
+        self.assertEqual(ok["openAtFetch"], [False])
+        self.assertFalse(ok["open"])
+        self.assertEqual((ok["notice"], ok["tone"]), ("Đã xếp hàng xuất video.", "export-notice running"))
+        self.assertEqual((ok["fetches"], ok["alerts"], ok["inFlight"], ok["disabled"]), (1, 0, False, False))
+        cancel = out["cancel"]
+        self.assertEqual((cancel["open"], cancel["fetches"], cancel["notice"]), (True, 0, None))
+        for key, message in (("refused", "Không gửi được lệnh xuất: X"),
+                             ("offline", "Không gửi được lệnh xuất: Mất kết nối với Review.")):
+            value = out[key]
+            self.assertTrue(value["open"], key)
+            self.assertEqual(value["openAtFetch"], [False], key)
+            self.assertTrue(value["status"].startswith(message), key)
+            self.assertTrue(value["statusError"], key)
+            self.assertEqual((value["notice"], value["tone"]), (value["status"], "export-notice error"))
+            self.assertEqual(value["alerts"], 0, key)
+        # A double click sends one request and asks once; the button is disabled meanwhile.
+        self.assertTrue(out["busy"]["inFlight"])
+        self.assertEqual((out["double"]["fetches"], out["double"]["confirms"]), (1, 1))
+        self.assertFalse(out["double"]["inFlight"])
+        invalid = out["invalid"]
+        self.assertEqual((invalid["open"], invalid["confirms"], invalid["fetches"]), (True, 0, 0))
+        self.assertEqual(invalid["status"], "Giới hạn tùy chỉnh phải từ 0,05 đến 1.000 GB.")
+        self.assertTrue(invalid["statusError"])
+        unresolved = out["unresolved"]
+        self.assertEqual((unresolved["alerts"], unresolved["confirms"], unresolved["open"]), (1, 0, True))
+        later = out["later_failure"]
+        self.assertFalse(later["open"])
+        self.assertEqual((later["notice"], later["tone"]), ("Xuất video thất bại: boom", "export-notice error"))
+        self.assertEqual(out["progress"], [
+            ["Đang xuất video: 42,3% · còn khoảng 3 phút", "running"],
+            ["Đang kiểm tra video đã xuất…", "running"],
+            ["Đang xuất video…", "running"],
+            # The one-line header shows the file name; the full path is in the tooltip.
+            ["Đã xuất xong: a.mp4", "ok", "Đã xuất xong: output/a.mp4"],
+            None,
+        ])
+        self.assertEqual(out["on_load"]["notice"], "Đã xếp hàng xuất video.")
+
+
 if __name__ == "__main__":
     unittest.main()
-
-

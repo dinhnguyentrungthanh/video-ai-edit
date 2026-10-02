@@ -76,8 +76,10 @@ class JobOcrOptionTests(unittest.TestCase):
                 scheduler.resume(job_id)
                 self.assertEqual(scheduler.ocr_batch_size(job_id), 8)
                 self.assertEqual(scheduler._definitions(store.get_job(job_id))["text"].commands[0].argv[-1], "8")
+                store.update_job(job_id, state="WAITING_REVIEW")  # that scan finished; reruns refuse a queued job
                 scheduler.rerun(job_id)
                 self.assertEqual(scheduler.ocr_batch_size(job_id), 8)
+                store.update_job(job_id, state="WAITING_REVIEW")  # that scan finished; reruns refuse a queued job
                 scheduler.rerun(job_id, ocr_recognition_batch_size=1)
                 self.assertNotIn("--recognition-batch-size", scheduler._definitions(store.get_job(job_id))["text"].commands[0].argv)
                 self.assertEqual(old_review.read_text(encoding="utf-8"), '{"decision":"BLUR"}')
@@ -247,6 +249,7 @@ class JobFastScanTests(unittest.TestCase):
             self.assertIsNone(store.setting(f"pipeline_key:{job_id}"))
             scheduler.rerun(job_id, detector_groups=["advertising"], fast_scan=False)
             self.assertFalse(scheduler.fast_scan(job_id))
+            store.update_job(job_id, state="WAITING_REVIEW")  # that scan finished; reruns refuse a queued job
             scheduler.rerun(job_id, fast_scan=True)
             store.close()
             store = JobStore(db)
@@ -257,8 +260,10 @@ class JobFastScanTests(unittest.TestCase):
                 definitions = scheduler._definitions(store.get_job(job_id))
                 self.assertIn("--recognition-frame-window", definitions["text"].commands[0].argv)
                 self.assertIn("--routing-workers", definitions["visual_logo"].commands[0].argv)
+                store.update_job(job_id, state="WAITING_REVIEW")  # that scan finished; reruns refuse a queued job
                 scheduler.rerun(job_id)
                 self.assertTrue(scheduler.fast_scan(job_id))
+                store.update_job(job_id, state="WAITING_REVIEW")  # that scan finished; reruns refuse a queued job
                 scheduler.rerun(job_id, fast_scan=False)
                 definitions = scheduler._definitions(store.get_job(job_id))
                 self.assertNotIn("--recognition-frame-window", definitions["text"].commands[0].argv)

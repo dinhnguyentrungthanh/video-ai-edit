@@ -10,6 +10,20 @@ from typing import Any, Iterable
 
 
 SCHEMA_VERSION = 1
+# States a worker sets while a stage subprocess (or the review build) runs.
+# A restart finds them stale and turns them into resumable states.
+IN_PROCESS_STATES = frozenset({
+    "PREFLIGHT", "SCANNING_SAFETY", "SCANNING_TEXT", "SCANNING_LOGO",
+    "LOCALIZING_REGIONS", "BUILDING_REVIEW", "AI_AUDITING", "RENDERING", "VERIFYING",
+})
+# Additive jobs columns for the click-order queue. SCHEMA_VERSION stays 1 so an
+# older checkout can still open the database (SELECT * just returns extra keys).
+QUEUE_COLUMNS = (("queue_seq", "INTEGER"), ("queued_at", "TEXT"))
+# Settled states a later click always re-queues with a new place, so the job
+# gives its place back. PAUSED, FAILED and INTERRUPTED_RECOVERABLE keep theirs
+# for Tiếp tục / Thử lại. A job an older checkout queues again then has no
+# stale place and is backfilled at the back of the queue.
+QUEUE_RELEASE_STATES = frozenset({"WAITING_REVIEW", "READY_TO_EXPORT", "COMPLETED", "CANCELLED"})
 
 
 def now_iso() -> str:
@@ -70,7 +84,9 @@ class JobStore:
                 stop_mode TEXT,
                 error TEXT,
                 created_at TEXT NOT NULL,
-                updated_at TEXT NOT NULL
+                updated_at TEXT NOT NULL,
+                queue_seq INTEGER,
+                queued_at TEXT
             );
             CREATE TABLE IF NOT EXISTS job_revisions (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -152,6 +168,66 @@ class JobStore:
             raise RuntimeError(
                 f"Unsupported Control Center database schema: {row['version']}"
             )
+        self._connection.commit()
+        self._ensure_queue_columns()
+
+    def _backup(self, label: str) -> Path:
+        """Copy the live database before a structural change (never overwrites)."""
+        directory = self.path.parent / "backups"
+        directory.mkdir(parents=True, exist_ok=True)
+        stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+        target = directory / f"{self.path.stem}-before-{label}-{stamp}{self.path.suffix}"
+        counter = 1
+        while target.exists():
+            counter += 1
+            target = directory / f"{self.path.stem}-before-{label}-{stamp}-{counter}{self.path.suffix}"
+        copy = sqlite3.connect(target)
+        try:
+            self._connection.backup(copy)
+            # A self-contained file: no -wal/-shm companions when it is opened later.
+            copy.execute("PRAGMA journal_mode=DELETE")
+        finally:
+            copy.close()
+        return target
+
+    def _ensure_queue_columns(self) -> None:
+        """Add queue_seq/queued_at to databases created before the FIFO queue.
+
+        The index is created only after the columns exist: an old database
+        would otherwise fail on the CREATE INDEX before the ALTER TABLE ran.
+        """
+        columns = {
+            row["name"] for row in self._connection.execute("PRAGMA table_info(jobs)")
+        }
+        missing = [(name, kind) for name, kind in QUEUE_COLUMNS if name not in columns]
+        if missing:
+            self._backup("queue-order")
+            for name, kind in missing:
+                try:
+                    self._connection.execute(
+                        f"ALTER TABLE jobs ADD COLUMN {name} {kind}"  # noqa: S608
+                    )
+                except sqlite3.OperationalError as error:
+                    if "duplicate column" not in str(error).casefold():
+                        raise
+        # Jobs queued by older code have no place yet: keep their old order.
+        waiting = self._connection.execute(
+            """SELECT id FROM jobs WHERE state='QUEUED' AND queue_seq IS NULL
+            ORDER BY updated_at ASC, id ASC"""
+        ).fetchall()
+        if waiting:
+            start = int(self._connection.execute(
+                "SELECT COALESCE(MAX(queue_seq),0) AS value FROM jobs"
+            ).fetchone()["value"])
+            for offset, row in enumerate(waiting, start=1):
+                self._connection.execute(
+                    """UPDATE jobs SET queue_seq=?,queued_at=COALESCE(queued_at,updated_at)
+                    WHERE id=?""",
+                    (start + offset, row["id"]),
+                )
+        self._connection.execute(
+            "CREATE INDEX IF NOT EXISTS idx_jobs_queue ON jobs(state, priority, queue_seq, id)"
+        )
         self._connection.commit()
 
     @staticmethod
@@ -242,6 +318,82 @@ class JobStore:
             ).fetchall()
         return [dict(row) for row in rows]
 
+    def queued_jobs(self) -> list[dict[str, Any]]:
+        """Waiting jobs in click order: priority first, then queue_seq."""
+        with self._lock:
+            rows = self._connection.execute(
+                """SELECT * FROM jobs WHERE state='QUEUED' AND stop_mode IS NULL
+                ORDER BY priority ASC, queue_seq IS NULL, queue_seq ASC, id ASC"""
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    def mark_queued(self, job_id: int, *, reseq: bool, **reset_fields: Any) -> dict[str, Any]:
+        """Put a job in the queue; the only writer that assigns queue_seq/queued_at.
+
+        update_job() only clears them when a job settles (QUEUE_RELEASE_STATES).
+
+        reseq=True (Bắt đầu, Chạy lại kiểm tra, Xuất video) moves the job to the
+        back of the queue. reseq=False (Tiếp tục, Thử lại bước lỗi) keeps its
+        place and assigns one only when it has none. reset_fields change in the
+        same UPDATE, so the worker never sees a half-reset job.
+        """
+        allowed = {
+            "content_style", "profile", "current_stage", "progress",
+            "active_queue_path", "active_revision",
+        }
+        unknown = set(reset_fields) - allowed
+        if unknown:
+            raise ValueError(f"Unsupported job fields: {sorted(unknown)}")
+        stamp = now_iso()
+        values: dict[str, Any] = {
+            "state": "QUEUED", "stop_mode": None, "error": None,
+            **reset_fields, "updated_at": stamp,
+        }
+        with self._lock:
+            row = self._connection.execute(
+                "SELECT queue_seq FROM jobs WHERE id=?", (job_id,)
+            ).fetchone()
+            if row is None:
+                raise KeyError(f"Unknown job: {job_id}")
+            if reseq or row["queue_seq"] is None:
+                values["queue_seq"] = int(self._connection.execute(
+                    "SELECT COALESCE(MAX(queue_seq),0)+1 AS value FROM jobs"
+                ).fetchone()["value"])
+                values["queued_at"] = stamp
+            assignments = ",".join(f"{key}=?" for key in values)
+            self._connection.execute(
+                f"UPDATE jobs SET {assignments} WHERE id=?",  # noqa: S608
+                (*values.values(), job_id),
+            )
+            self._connection.commit()
+        return self.get_job(job_id)
+
+    def claim_queued(self, job_id: int, state: str, stage: str) -> bool:
+        """Atomically move a waiting job into its stage state.
+
+        Fails when a pause, cancel or stop request landed after the scheduler
+        selected the job, so that request wins over the worker.
+        """
+        with self._lock:
+            cursor = self._connection.execute(
+                """UPDATE jobs SET state=?,current_stage=?,error=NULL,updated_at=?
+                WHERE id=? AND state='QUEUED' AND stop_mode IS NULL""",
+                (state, stage, now_iso(), job_id),
+            )
+            self._connection.commit()
+        return cursor.rowcount == 1
+
+    def pause_if_queued(self, job_id: int) -> bool:
+        """Take a waiting job out of the queue; False when it already started."""
+        with self._lock:
+            cursor = self._connection.execute(
+                """UPDATE jobs SET state='PAUSED',stop_mode='PAUSED',updated_at=?
+                WHERE id=? AND state='QUEUED'""",
+                (now_iso(), job_id),
+            )
+            self._connection.commit()
+        return cursor.rowcount == 1
+
     def get_job(self, job_id: int) -> dict[str, Any]:
         with self._lock:
             row = self._connection.execute(
@@ -269,6 +421,9 @@ class JobStore:
             raise ValueError(f"Unsupported job fields: {sorted(unknown)}")
         if not values:
             return self.get_job(job_id)
+        if values.get("state") in QUEUE_RELEASE_STATES:
+            values["queue_seq"] = None
+            values["queued_at"] = None
         values["updated_at"] = now_iso()
         assignments = ",".join(f"{key}=?" for key in values)
         with self._lock:
@@ -507,12 +662,11 @@ class JobStore:
     def recover_interrupted(self) -> int:
         """Convert stale in-process states into resumable stage-level states."""
         stamp = now_iso()
+        states = sorted(IN_PROCESS_STATES)
         with self._lock:
             rows = self._connection.execute(
-                """SELECT id,current_stage FROM jobs WHERE state IN (
-                    'PREFLIGHT','SCANNING_SAFETY','SCANNING_TEXT','SCANNING_LOGO',
-                    'LOCALIZING_REGIONS','AI_AUDITING','RENDERING','VERIFYING'
-                )"""
+                f"SELECT id,current_stage FROM jobs WHERE state IN ({','.join('?' * len(states))})",  # noqa: S608
+                states,
             ).fetchall()
             for row in rows:
                 if row["current_stage"]:

@@ -25,7 +25,7 @@ from biliflow.job_pipeline import (
     safe_job_key,
     validate_json_artifact,
 )
-from biliflow.job_store import JobStore, now_iso, sha256_file
+from biliflow.job_store import IN_PROCESS_STATES, JobStore, now_iso, sha256_file
 from biliflow.final_renderer import (
     DEFAULT_MAX_OUTPUT_BYTES,
     DEFAULT_TARGET_OUTPUT_BYTES,
@@ -37,12 +37,12 @@ from biliflow.stage_cache import StageArtifactCache
 from biliflow.cleanup import prune_file_caches
 
 
-ACTIVE_STATES = {
-    "PREFLIGHT", "SCANNING_SAFETY", "SCANNING_TEXT", "SCANNING_LOGO",
-    "LOCALIZING_REGIONS", "BUILDING_REVIEW", "RENDERING", "VERIFYING",
-}
+ACTIVE_STATES = IN_PROCESS_STATES
 # The dashboard "Bắt đầu" button may only configure a video still waiting for setup.
 STARTABLE_STATES = {"NEEDS_METADATA", "DISCOVERED"}
+# Stages whose _after_success sets the job's final state. The worker marks the
+# stage COMPLETED first, so a crash in between leaves no pending stage to run.
+FINISHING_STAGES = ("build_review", "render")
 
 
 def terminate_process_tree(process: subprocess.Popen) -> None:
@@ -85,6 +85,9 @@ class JobScheduler:
         self._thread: threading.Thread | None = None
         self._process: subprocess.Popen | None = None
         self._active: tuple[int, str] | None = None
+        # The job the worker is inside _execute for, including the stage
+        # bookkeeping after its subprocess ended (_active is already None then).
+        self._executing_job_id: int | None = None
         self._log_handle = None
         self._stage_cache = StageArtifactCache(self.root)
 
@@ -143,7 +146,14 @@ class JobScheduler:
         detector_groups: list[str] | tuple[str, ...] | None = None,
         ocr_recognition_batch_size: int | None = None,
         fast_scan: bool | None = None,
+        reseq: bool = True,
+        reset_fields: dict[str, Any] | None = None,
     ) -> dict:
+        """Store the scan settings, rebuild the stage list, then queue the job.
+
+        The stage list is replaced before the job becomes QUEUED, so the worker
+        can never pick it with the previous stage list.
+        """
         batch_size = (self.ocr_batch_size(job_id) if ocr_recognition_batch_size is None
                       else normalize_ocr_batch_size(ocr_recognition_batch_size))
         fast = self.fast_scan(job_id) if fast_scan is None else normalize_fast_scan(fast_scan)
@@ -158,10 +168,7 @@ class JobScheduler:
         )
         self.store.set_setting(f"ocr_batch_size:{job_id}", batch_size)
         self.store.set_setting(f"fast_scan:{job_id}", fast)
-        job = self.store.update_job(
-            job_id, content_style=content_style, profile=profile, state="QUEUED",
-            current_stage=None, stop_mode=None, error=None, progress=0.0,
-        )
+        job = self.store.get_job(job_id)
         definitions = pipeline_stages(
             root=self.root, job_key=self._pipeline_key(job), source=Path(job["source_path"]),
             content_style=content_style, profile=profile,
@@ -171,13 +178,17 @@ class JobScheduler:
             fast_scan=fast,
         )
         self.store.replace_stages(job_id, [item.name for item in definitions])
+        job = self.store.mark_queued(
+            job_id, reseq=reseq, content_style=content_style, profile=profile,
+            current_stage=None, progress=0.0, **(reset_fields or {}),
+        )
         self.store.add_event(
             job_id, "JOB_QUEUED", f"Queued with {profile} profile",
             payload={"detector_groups": list(selected_detectors), "ocr_recognition_batch_size": batch_size,
                      "fast_scan": fast},
         )
         self._wake.set()
-        return self.store.get_job(job_id)
+        return job
 
     def start_job(
         self, job_id: int, *, content_style: str, profile: str,
@@ -210,50 +221,91 @@ class JobScheduler:
         ocr_recognition_batch_size: int | None = None,
         fast_scan: bool | None = None,
     ) -> dict:
-        job = self.store.get_job(job_id)
-        if self.active and self.active["job_id"] == job_id:
-            raise ValueError("Dừng job hiện tại trước khi chạy lại từ đầu")
-        if job["content_style"] == "unknown":
-            raise ValueError("Hãy chọn loại nội dung trước khi chạy lại")
-        stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-        pipeline_key = f"{job['job_key']}-run-{stamp}"
-        value = self.configure_and_queue(
-            job_id, content_style=job["content_style"], profile=job["profile"],
-            pipeline_key=pipeline_key,
-            detector_groups=detector_groups,
-            ocr_recognition_batch_size=ocr_recognition_batch_size,
-            fast_scan=fast_scan,
-        )
-        value = self.store.update_job(
-            job_id, active_queue_path=None, active_revision=None,
-            state="QUEUED", current_stage=None, stop_mode=None, error=None,
-            progress=0.0,
-        )
-        self.store.set_setting(f"render:{job_id}", None)
-        self.store.add_event(
-            job_id, "JOB_RERUN_QUEUED",
-            "Queued a clean scan in a new report revision",
-            payload={"pipeline_key": pipeline_key},
-        )
-        self._wake.set()
-        return value
+        """Queue a clean scan in a new revision, at the back of the queue.
+
+        Runs under the start lock and refuses a job that is already waiting or
+        running, so a double click cannot queue two revisions.
+        """
+        with self._start_lock:
+            job = self.store.get_job(job_id)
+            active = self.active
+            if (active and active["job_id"] == job_id) or job["state"] in IN_PROCESS_STATES:
+                raise ValueError("Dừng job hiện tại trước khi chạy lại từ đầu")
+            if job["state"] == "QUEUED":
+                raise ValueError(
+                    f"Video #{job_id} đang nằm trong hàng đợi; không xếp chạy lại thêm lần nữa."
+                )
+            if job["content_style"] == "unknown":
+                raise ValueError("Hãy chọn loại nội dung trước khi chạy lại")
+            # Validate first: a refused rerun must leave every setting untouched.
+            if detector_groups is not None:
+                normalize_detector_groups(list(detector_groups))
+            if ocr_recognition_batch_size is not None:
+                normalize_ocr_batch_size(ocr_recognition_batch_size)
+            if fast_scan is not None:
+                normalize_fast_scan(fast_scan)
+            stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+            pipeline_key = f"{job['job_key']}-run-{stamp}"
+            self.store.set_setting(f"render:{job_id}", None)
+            # The old revision is cleared in the same UPDATE that queues the job.
+            value = self.configure_and_queue(
+                job_id, content_style=job["content_style"], profile=job["profile"],
+                pipeline_key=pipeline_key,
+                detector_groups=detector_groups,
+                ocr_recognition_batch_size=ocr_recognition_batch_size,
+                fast_scan=fast_scan,
+                reset_fields={"active_queue_path": None, "active_revision": None},
+            )
+            self.store.add_event(
+                job_id, "JOB_RERUN_QUEUED",
+                "Queued a clean scan in a new report revision",
+                payload={"pipeline_key": pipeline_key},
+            )
+            self._wake.set()
+            return value
 
     def resume(self, job_id: int) -> dict:
         job = self.store.get_job(job_id)
         if job["content_style"] == "unknown":
             raise ValueError("Choose animation, live_action, or mixed before starting")
+        # Tiếp tục / Thử lại keep the job's place in the queue (user decision
+        # 2026-10-02), including after a graceful shutdown or a restart.
         if not self.store.stages(job_id):
             return self.configure_and_queue(
-                job_id, content_style=job["content_style"], profile=job["profile"]
+                job_id, content_style=job["content_style"], profile=job["profile"],
+                reseq=False,
             )
-        value = self.store.update_job(
-            job_id, state="QUEUED", stop_mode=None, error=None,
-        )
+        if self.store.next_pending_stage(job_id) is None:
+            # Interrupted after its last stage completed: finish that step
+            # instead of queueing a job the worker can never pick. Never while
+            # the worker is still finishing that same job (double _after_success).
+            with self._start_lock:
+                current = self.store.get_job(job_id)
+                with self._lock:
+                    busy = self._executing_job_id == job_id
+                if busy or current["state"] in IN_PROCESS_STATES:
+                    raise ValueError(
+                        f"Video #{job_id} đang được xử lý; chờ bước hiện tại xong rồi hãy bấm Tiếp tục."
+                    )
+                if current["state"] in {"INTERRUPTED_RECOVERABLE", "PAUSED", "FAILED"} and (
+                    self._finish_interrupted(current)
+                ):
+                    return self.store.get_job(job_id)
+            if self._runnable(self.store.get_job(job_id)) is None:
+                raise ValueError(
+                    f"Video #{job_id} không còn bước nào để tiếp tục; hãy dùng Chạy lại kiểm tra."
+                )
+        value = self.store.mark_queued(job_id, reseq=False)
         self.store.add_event(job_id, "JOB_RESUMED", "Job returned to the scheduler")
         self._wake.set()
         return value
 
     def stop_after_stage(self, job_id: int) -> dict:
+        # A job still waiting in the queue has no stage to finish: take it out
+        # (PAUSED keeps its place for Tiếp tục) instead of leaving it stuck.
+        if self.store.pause_if_queued(job_id):
+            self.store.add_event(job_id, "JOB_PAUSED", "Đã rút khỏi hàng đợi trước khi chạy")
+            return self.store.get_job(job_id)
         value = self.store.update_job(job_id, stop_mode="AFTER_STAGE")
         self.store.add_event(job_id, "STOP_REQUESTED", "Will pause after the current stage")
         return value
@@ -299,6 +351,8 @@ class JobScheduler:
     ) -> dict:
         if (max_output_bytes is None) != (target_output_bytes is None):
             raise ValueError("Output maximum and target must both be set or both be unlimited")
+        # Finalizing an export that is already waiting keeps its place.
+        reseq = self.store.get_job(job_id)["state"] != "QUEUED"
         stage = self.store.ensure_stage(job_id, "render")
         self.store.update_stage(job_id, "render", state="PENDING", error=None, pid=None)
         self.store.set_setting(f"render:{job_id}", {
@@ -307,7 +361,8 @@ class JobScheduler:
             "max_output_bytes": max_output_bytes,
             "target_output_bytes": target_output_bytes,
         })
-        value = self.store.update_job(job_id, state="QUEUED", stop_mode=None, error=None)
+        # current_stage marks the waiting job as an export for the dashboard.
+        value = self.store.mark_queued(job_id, reseq=reseq, current_stage="render")
         self.store.add_event(job_id, "EXPORT_QUEUED", "Approved final export queued")
         self._wake.set()
         return value
@@ -354,18 +409,97 @@ class JobScheduler:
             )
         return result
 
+    def recover_finished_stages(self) -> list[int]:
+        """Finish jobs a restart caught between their last stage and its result.
+
+        Runs once at startup, after recover_interrupted() and the import: a
+        build_review or render stage that already COMPLETED gets its revision,
+        structure audit or final output recorded, as the worker would have done.
+        """
+        recovered = []
+        for job in self.store.list_jobs():
+            if job["state"] != "INTERRUPTED_RECOVERABLE":
+                continue
+            if self.store.next_pending_stage(int(job["id"])) is not None:
+                continue
+            with self._start_lock:
+                if self._finish_interrupted(job):
+                    recovered.append(int(job["id"]))
+        return recovered
+
+    def _finish_interrupted(self, job: dict[str, Any]) -> bool:
+        """Redo _after_success for a completed final stage; False when not applicable.
+
+        When the result cannot be recorded (missing review queue, output or
+        manifest) the stage goes back to PENDING so Tiếp tục runs it again:
+        build_review is deterministic and a render without output starts clean.
+        """
+        job_id = int(job["id"])
+        name = job.get("current_stage")
+        if name not in FINISHING_STAGES:
+            return False
+        stage = next((item for item in self.store.stages(job_id) if item["name"] == name), None)
+        if stage is None or stage["state"] != "COMPLETED":
+            return False
+        try:
+            definition = self._definitions(job).get(name)
+            if definition is None:
+                raise RuntimeError(f"No {name} settings are stored for this job")
+            if name == "render":
+                output = self.root / self.store.setting(f"render:{job_id}")["output"]
+                manifest = json.loads(
+                    output.with_suffix(output.suffix + ".manifest.json").read_text(encoding="utf-8")
+                )
+                if not output.is_file() or manifest.get("status") != "COMPLETED":
+                    raise RuntimeError(f"Final output is not complete: {output}")
+            self._after_success(job_id, name, definition)
+        except Exception as error:  # noqa: BLE001 - any failure falls back to a clean rerun
+            self.store.update_stage(job_id, name, state="PENDING", pid=None,
+                                    error=f"Interrupted before its result was recorded: {error}")
+            self.store.add_event(
+                job_id, "STAGE_RECOVERY_RESET",
+                f"Stage {name} will run again: its result was not recorded before the restart",
+                level="WARNING", payload={"stage": name, "error": str(error)},
+            )
+            return False
+        self.store.update_job(job_id, error=None)
+        self.store.add_event(
+            job_id, "JOB_RECOVERED",
+            f"Recorded the {name} result that finished before the restart",
+            payload={"stage": name},
+        )
+        return True
+
+    def _runnable(self, job: dict[str, Any]) -> tuple[dict[str, Any], PipelineStage] | None:
+        stage = self.store.next_pending_stage(job["id"])
+        if stage is None:
+            return None
+        definition = self._definitions(job).get(stage["name"])
+        return (stage, definition) if definition else None
+
+    def queue_order(self) -> list[dict[str, Any]]:
+        """Runnable waiting jobs in the exact order the worker will take them.
+
+        Scans and exports share this one queue and the single worker.
+        """
+        order = []
+        for job in self.store.queued_jobs():
+            runnable = self._runnable(job)
+            if runnable is None:
+                continue
+            order.append({
+                "job_id": int(job["id"]), "position": len(order) + 1,
+                "kind": "export" if runnable[0]["name"] == "render" else "scan",
+            })
+        return order
+
     def _select(self) -> tuple[dict[str, Any], dict[str, Any], PipelineStage] | None:
         if self.store.setting("scheduler_paused", False):
             return None
-        for job in self.store.list_jobs():
-            if job["state"] != "QUEUED" or job.get("stop_mode"):
-                continue
-            stage = self.store.next_pending_stage(job["id"])
-            if stage is None:
-                continue
-            definition = self._definitions(job).get(stage["name"])
-            if definition:
-                return job, stage, definition
+        for job in self.store.queued_jobs():
+            runnable = self._runnable(job)
+            if runnable:
+                return job, *runnable
         return None
 
     def _run(self) -> None:
@@ -375,16 +509,24 @@ class JobScheduler:
                 self._wake.wait(self.poll_seconds)
                 self._wake.clear()
                 continue
-            self._execute(*selection)
+            with self._lock:
+                self._executing_job_id = int(selection[0]["id"])
+            try:
+                self._execute(*selection)
+            finally:
+                with self._lock:
+                    self._executing_job_id = None
 
     def _execute(self, job: dict[str, Any], stage_row: dict[str, Any], definition: PipelineStage) -> None:
         job_id = int(job["id"])
         name = definition.name
+        # A pause, cancel or stop that landed after _select wins: run nothing.
+        if not self.store.claim_queued(job_id, definition.job_state, name):
+            return
         attempt = int(stage_row["attempt"]) + 1
         log_dir = self.root / "logs" / "control-center"
         log_dir.mkdir(parents=True, exist_ok=True)
         log_path = log_dir / f"job-{job_id}-{name}-attempt-{attempt}.log"
-        self.store.update_job(job_id, state=definition.job_state, current_stage=name, error=None)
         self.store.update_stage(job_id, name, state="RUNNING", attempt=attempt,
                                 progress=0.0, started_at=now_iso(), completed_at=None,
                                 heartbeat_at=now_iso(), error=None)

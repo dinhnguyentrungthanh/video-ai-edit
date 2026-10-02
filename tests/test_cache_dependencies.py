@@ -3,7 +3,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 
 from biliflow.cache_dependencies import stage_source_paths
-from biliflow.stage_cache import StageArtifactCache
+from biliflow.stage_cache import CACHEABLE_STAGES, StageArtifactCache
 
 
 class CacheDependencyTests(unittest.TestCase):
@@ -148,6 +148,27 @@ class CacheDependencyTests(unittest.TestCase):
         self.assertIn(package / "work.py", paths)
         self.assertIn(self.code / "shared.py", paths)
         self.assertNotIn(self.code / "control_center.py", paths)
+
+
+class RepositoryCacheScopeTests(unittest.TestCase):
+    """Dashboard, queue and review-page edits must never invalidate scan caches."""
+
+    # Control-plane modules edited by the dashboard/queue work (2026-10-02, batch 1).
+    CONTROL_PLANE = (
+        "control_center.py", "scheduler.py", "job_store.py", "job_import.py",
+        "review_workflow.py",
+    )
+
+    def test_control_plane_modules_are_in_no_scan_stage_key(self):
+        root = Path(__file__).resolve().parents[1]
+        source = root / "src" / "biliflow"
+        everything = set(source.rglob("*.py"))
+        for stage in sorted(CACHEABLE_STAGES):
+            with self.subTest(stage=stage):
+                paths = set(stage_source_paths(root, stage))
+                # A fallback to every source file would make any edit invalidate the stage.
+                self.assertFalse(everything <= paths)
+                self.assertEqual({path.name for path in paths} & set(self.CONTROL_PLANE), set())
 
 
 if __name__ == "__main__":

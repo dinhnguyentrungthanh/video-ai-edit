@@ -70,7 +70,7 @@ class ControlCenterVisualAuditTests(unittest.TestCase):
         self.assertIn("function renderJobs(force=false){if(!force&&jobsInteracting()){deferJobsRender();return}", page)
         self.assertIn("box.addEventListener('pointerdown'", page)
         self.assertIn("active.tagName==='SELECT'", page)
-        self.assertIn("(async()=>{watchJobsInteraction();await refreshToken();", page)
+        self.assertIn("(async()=>{watchJobsInteraction();watchHeaderHeight();await refreshToken();", page)
         # Setup cards keep a stable id-ascending order below the other waiting cards.
         self.assertIn("visible.filter(needsSetup).sort((a,b)=>a.id-b.id)", page)
 
@@ -102,8 +102,28 @@ class ControlCenterVisualAuditTests(unittest.TestCase):
         backslash = chr(92)
         self.assertIn("split(/[" + backslash * 2 + "/]/)", page)
 
-    @unittest.skipUnless(shutil.which("node"), "node is not installed")
-    def test_dashboard_behaviour_in_node_stale_poll_drafts_and_confirm(self):
+    def test_dashboard_tab_bar_is_sticky(self):
+        page = _dashboard_html()
+        style = page[page.index("<style>"):page.index("</style>")]
+        tabs = style[style.index(".job-tabs{"):]
+        tabs = tabs[:tabs.index("}")]
+        self.assertIn("position:sticky;top:var(--header-h,64px);z-index:3;background:rgba(20,25,35,.98)", tabs)
+        # overflow:hidden on the workspace would make it the sticky container.
+        self.assertIn(".workspace{overflow:clip}", style)
+        self.assertNotIn(".workspace{overflow:hidden", style)
+        self.assertIn("header{", style)
+        self.assertIn("position:sticky;top:0;z-index:4", style)
+        self.assertIn(
+            "function syncHeaderHeight(){try{const h=document.querySelector('header'),"
+            "r=document.documentElement;if(h&&r&&r.style)r.style.setProperty('--header-h',", page,
+        )
+        self.assertIn("window.addEventListener('resize',syncHeaderHeight)", page)
+        self.assertIn("if(h&&window.ResizeObserver)new ResizeObserver(syncHeaderHeight).observe(h)", page)
+        self.assertIn("function selectJobTab(tab){activeJobTab=tab;renderJobs(true);keepTabsInView()}", page)
+        # The tab bar keeps its accessible name.
+        self.assertIn('<nav id="job-tabs" class="job-tabs" aria-label="Trạng thái video">', page)
+
+    def run_dashboard_harness(self, *arguments):
         page = _dashboard_html()
         script = page[page.index("<script>") + len("<script>"):page.rindex("</script>")]
         harness = Path(__file__).with_name("fixtures") / "dashboard_harness.js"
@@ -111,19 +131,63 @@ class ControlCenterVisualAuditTests(unittest.TestCase):
             script_path = Path(directory) / "page.js"
             script_path.write_text(script, encoding="utf-8")
             completed = subprocess.run(
-                [shutil.which("node"), str(harness), str(script_path)],
+                [shutil.which("node"), str(harness), str(script_path), *arguments],
                 capture_output=True, text=True, encoding="utf-8", timeout=60,
             )
         self.assertEqual(completed.returncode, 0, completed.stderr)
-        out = json.loads(completed.stdout.strip().splitlines()[-1])
-        self.assertEqual(out["initial_order"], [45, 44, 46, 47, 48])
+        return json.loads(completed.stdout.strip().splitlines()[-1])
+
+    @unittest.skipUnless(shutil.which("node"), "node is not installed")
+    def test_dashboard_queue_positions_and_header_height_in_node(self):
+        out = self.run_dashboard_harness("queue")
+        # The header height feeds the sticky tab offset (the main scenario boots
+        # without documentElement and must not throw).
+        self.assertEqual(out["header_h"], "72px")
+        self.assertEqual(out["resize_listener"], 1)
+        # Waiting cards follow the shared queue, not the last update time.
+        self.assertEqual([card["id"] for card in out["waiting"]], [60, 62, 61, 64, 63])
+        cards = {card["id"]: card for card in out["waiting"]}
+        self.assertEqual(
+            [(cards[i]["badge"], cards[i]["queue"]) for i in (60, 62, 61)],
+            [("Chờ xuất video", "Thứ tự chờ: #1"), ("Chờ chạy cảnh", "Thứ tự chờ: #2"),
+             ("Chờ chạy cảnh", "Thứ tự chờ: #3")],
+        )
+        self.assertEqual(cards[60]["exportValue"], "Chờ xuất video")
+        self.assertEqual(
+            cards[60]["exportDetail"],
+            "Thứ tự chờ: #1 trong 3 việc; xuất video và quét cảnh chạy lần lượt theo thứ tự bấm.",
+        )
+        self.assertEqual(
+            cards[62]["scanDetail"],
+            "Thứ tự chờ: #2 trong 3 việc; quét cảnh và xuất video chạy lần lượt theo thứ tự bấm.",
+        )
+        # A paused job and a reviewed job are not in the queue.
+        self.assertIsNone(cards[64]["queue"])
+        self.assertIsNone(cards[63]["queue"])
+        self.assertEqual(out["worker"], "Đang chờ · 3 việc trong hàng đợi")
+        self.assertIn("Không có video trong mục này.", out["running_tab"])
+        # Pausing the scheduler keeps every position and says so.
+        paused = {card["id"]: card for card in out["paused"]}
+        self.assertEqual(paused[61]["queue"], "Thứ tự chờ: #3")
+        self.assertEqual(
+            paused[62]["scanDetail"],
+            "Hàng đợi đang tạm dừng — bấm “Chạy hàng đợi” để tiếp tục (vẫn giữ thứ tự).",
+        )
+        self.assertEqual(out["paused_worker"], "Scheduler tạm dừng · 3 việc giữ nguyên thứ tự")
+
+    @unittest.skipUnless(shutil.which("node"), "node is not installed")
+    def test_dashboard_behaviour_in_node_stale_poll_drafts_and_confirm(self):
+        out = self.run_dashboard_harness()
+        # Queued cards come first in click order (#44 before #45), then setup cards by id.
+        self.assertEqual(out["initial_order"], [44, 45, 46, 47, 48])
         self.assertEqual(out["posts"], [{"id": 46, "detectors": ["advertising"]}])
         self.assertEqual(out["confirms_for_46"], [])
         # The slow poll issued before Start(46) is discarded: no ghost setup card.
         self.assertFalse(out["stale_applied"])
         for snapshot in (out["after_start"], out["after_stale_poll"]):
             card = next(card for card in snapshot if card["id"] == 46)
-            self.assertEqual(card["badge"], "Đang xếp hàng")
+            self.assertEqual(card["badge"], "Chờ chạy cảnh")
+            self.assertEqual(card["queue"], "Thứ tự chờ: #3")
             self.assertFalse(card["hasStart"])
         self.assertEqual(
             [card["id"] for card in out["after_stale_poll"] if card["hasStart"]], [47, 48],
@@ -145,7 +209,7 @@ class ControlCenterVisualAuditTests(unittest.TestCase):
         # The refusal for a job that already left setup is neutral and drops its ghost draft.
         self.assertEqual(
             out["refused_notice"],
-            "Video #48 không còn chờ thiết lập (Đang xếp hàng); không cần bắt đầu lại.",
+            "Video #48 không còn chờ thiết lập (Chờ chạy cảnh); không cần bắt đầu lại.",
         )
         self.assertFalse(out["refused_notice_is_error"])
         self.assertFalse(out["draft_48_kept_after_refusal"])
@@ -163,7 +227,8 @@ class ControlCenterVisualAuditTests(unittest.TestCase):
         self.assertEqual(out["double_confirms"], 1)
         self.assertFalse(out["double_notice_is_error"])
         self.assertEqual(out["starting_after_double"], 0)
-        self.assertEqual(out["card_47_after_double"]["badge"], "Đang xếp hàng")
+        self.assertEqual(out["card_47_after_double"]["badge"], "Chờ chạy cảnh")
+        self.assertEqual(out["card_47_after_double"]["queue"], "Thứ tự chờ: #4")
         self.assertTrue(out["render_deferred_while_pressed"])
         self.assertTrue(out["rendered_after_release"])
 
@@ -259,6 +324,61 @@ class ControlCenterVisualAuditTests(unittest.TestCase):
         self.assertIn("100% · Đã xuất video", page)
         self.assertIn("Hoàn thành lúc", page)
         self.assertIn('class="mini-progress"', page)
+
+    def test_status_exposes_the_workers_queue_order(self):
+        from biliflow.scheduler import JobScheduler
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "input").mkdir()
+            store = JobStore(root / "state" / "control-center.sqlite3")
+            center = ControlCenter.__new__(ControlCenter)
+            center.root = root
+            center.store = store
+            center.recovered = 0
+            center._audit_lock = threading.Lock()
+            center._audit_jobs = {}
+            center.scheduler = JobScheduler(root, store)
+            ids = {}
+            for name, sha in (("a", "1"), ("b", "2"), ("c", "3"), ("d", "4")):
+                source = root / "input" / f"{name}.mp4"
+                source.write_bytes(b"video")
+                ids[name] = int(store.upsert_job(
+                    job_key=name, source_path=source, source_sha256=sha * 64,
+                    source_size_bytes=5, source_mtime_ns=source.stat().st_mtime_ns,
+                    content_style="animation", state="NEEDS_METADATA",
+                )["id"])
+            try:
+                definitions = [PipelineStage("preflight", "PREFLIGHT", tuple())]
+                with (
+                    patch("biliflow.scheduler.pipeline_stages", return_value=definitions),
+                    patch("biliflow.control_center._resources", return_value={}),
+                    patch("biliflow.control_center.storage_status"),
+                ):
+                    for name in ("c", "a"):
+                        center.scheduler.start_job(
+                            ids[name], content_style="animation", profile="careful",
+                            detector_groups=["advertising"],
+                        )
+                    store.update_job(ids["b"], state="READY_TO_EXPORT", progress=1.0)
+                    center.scheduler.queue_render(
+                        ids["b"], plan_path=root / "work" / "plan.json",
+                        output_path=root / "output" / "b.mp4",
+                    )
+                    # Touching an earlier job does not move it behind later clicks.
+                    store.update_job(ids["c"], progress=0.1)
+                    value = center.status()
+                    selected = center.scheduler._select()
+                jobs = {job["id"]: job for job in value["jobs"]}
+                self.assertEqual(
+                    [(jobs[ids[n]]["queue_position"], jobs[ids[n]]["queue_kind"]) for n in "cab"],
+                    [(1, "scan"), (2, "scan"), (3, "export")],
+                )
+                self.assertIsNone(jobs[ids["d"]]["queue_position"])
+                self.assertEqual(jobs[ids["b"]]["current_stage"], "render")
+                self.assertEqual(value["queue"], {"length": 3, "paused": False})
+                self.assertEqual(selected[0]["id"], ids["c"])
+            finally:
+                store.close()
 
     def test_render_progress_uses_cut_adjusted_output_duration(self):
         with TemporaryDirectory() as directory:
@@ -603,6 +723,21 @@ class ControlCenterHttpTests(unittest.TestCase):
         for route in ("queue", "session", "resources", "export", f"evidence?item={MEDIA_ITEM}"):
             with self.subTest(route=route):
                 self.assertEqual(self.request(f"{base}/{route}")[0], 200)
+
+    def test_export_route_reports_errors_and_render_progress(self):
+        route = f"/api/jobs/{self.job_id}/review/export"
+        self.assertEqual(
+            json.loads(self.request(route)[2]),
+            {"status": "WAITING_REVIEW", "output": None, "error": None, "render_progress": None},
+        )
+        self.store.update_job(self.job_id, state="FAILED", error="boom", current_stage="render")
+        value = json.loads(self.request(route)[2])
+        self.assertEqual((value["status"], value["error"]), ("FAILED", "boom"))
+        self.store.update_job(self.job_id, state="RENDERING", error=None)
+        value = json.loads(self.request(route)[2])
+        self.assertEqual(value["status"], "RENDERING")
+        self.assertIsNone(value["error"])
+        self.assertEqual(value["render_progress"], {"state": "STARTING", "percent": 0.0})
 
     def test_session_contains_a_per_job_media_key(self):
         status, _, body = self.request(f"/api/jobs/{self.job_id}/review/session")

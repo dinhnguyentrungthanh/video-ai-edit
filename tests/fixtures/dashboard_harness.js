@@ -10,10 +10,17 @@ const options = [
   {id: 'gore', label: 'Máu me', description: ''},
   {id: 'violence', label: 'Bạo lực', description: ''},
 ];
-const server = {jobs: [], posts: [], delays: [], clock: 0, postDelay: 0, refuseNext: false};
-for (const id of [44, 45]) server.jobs.push({id, job_key: `ep-${id}`, source_path: `input/Tập ${id}.mp4`, state: 'QUEUED', updated_at: `2026-10-02T13:0${id - 40}:00`, priority: 100, detector_groups: ['advertising'], content_style: 'live_action', profile: 'careful', progress: 0, ocr_recognition_batch_size: 1, fast_scan: true, active_queue_path: null});
+const server = {jobs: [], posts: [], delays: [], clock: 0, postDelay: 0, refuseNext: false, seq: 2, paused: false};
+// #44 was clicked before #45 (queue_seq), although #45 was touched later.
+for (const id of [44, 45]) server.jobs.push({id, job_key: `ep-${id}`, source_path: `input/Tập ${id}.mp4`, state: 'QUEUED', updated_at: `2026-10-02T13:0${id - 40}:00`, priority: 100, queue_seq: id - 43, pending_stage: 'preflight', detector_groups: ['advertising'], content_style: 'live_action', profile: 'careful', progress: 0, ocr_recognition_batch_size: 1, fast_scan: true, active_queue_path: null});
 // #48 uses a Windows path: the card and the confirm must show only the file name.
 for (const id of [46, 47, 48]) server.jobs.push({id, job_key: `ep-${id}`, source_path: id === 48 ? ['E:', 'DungChung', 'BiliFlow', 'input', `Tập ${id}.mp4`].join(String.fromCharCode(92)) : `input/Tập ${id}.mp4`, state: 'NEEDS_METADATA', updated_at: `2026-10-02T12:${id}:00`, priority: 100, detector_groups: null, content_style: 'unknown', profile: 'careful', progress: 0, ocr_recognition_batch_size: 1, fast_scan: true, active_queue_path: null});
+// Mirrors JobScheduler.queue_order(): waiting jobs by priority, queue_seq (NULL last), id.
+function withQueue(jobs) {
+  const waiting = jobs.filter(j => j.state === 'QUEUED' && !j.stop_mode).sort((a, b) => (a.priority - b.priority) || ((a.queue_seq == null) - (b.queue_seq == null)) || ((a.queue_seq || 0) - (b.queue_seq || 0)) || (a.id - b.id));
+  jobs.forEach(j => { const index = waiting.indexOf(j); j.queue_position = index < 0 ? null : index + 1; j.queue_kind = index < 0 ? null : (j.pending_stage === 'render' ? 'export' : 'scan'); });
+  return {length: waiting.length, paused: server.paused};
+}
 const response = (status, value) => ({ok: status < 400, status, statusText: String(status), json: async () => JSON.parse(JSON.stringify(value))});
 async function fakeFetch(url, opt = {}) {
   if (url === '/api/session') return response(200, {token: 't'});
@@ -23,7 +30,8 @@ async function fakeFetch(url, opt = {}) {
     const delay = server.delays.shift() || 0;
     if (delay) await sleep(delay);
     snapshot.sort((a, b) => (a.updated_at < b.updated_at ? 1 : a.updated_at > b.updated_at ? -1 : 0));
-    return response(200, {jobs: snapshot, detector_options: options, resources: {}, active: null});
+    const queue = withQueue(snapshot);
+    return response(200, {jobs: snapshot, queue, scheduler_paused: server.paused, detector_options: options, resources: {}, active: null});
   }
   const match = /^\/api\/jobs\/(\d+)\/start$/.exec(url);
   if (match && opt.method === 'POST') {
@@ -33,7 +41,8 @@ async function fakeFetch(url, opt = {}) {
     if (server.refuseNext) { server.refuseNext = false; return response(400, {error: 'Lỗi thử nghiệm'}); }
     if (!['NEEDS_METADATA', 'DISCOVERED'].includes(job.state)) return response(400, {error: `Video #${id} đang ở trạng thái ${job.state}`});
     server.clock += 1;
-    Object.assign(job, {state: 'QUEUED', detector_groups: body.detectors, content_style: body.content_style, updated_at: `2026-10-02T14:${String(server.clock).padStart(2, '0')}:00`});
+    server.seq += 1;
+    Object.assign(job, {state: 'QUEUED', queue_seq: server.seq, pending_stage: 'preflight', detector_groups: body.detectors, content_style: body.content_style, updated_at: `2026-10-02T14:${String(server.clock).padStart(2, '0')}:00`});
     return response(200, job);
   }
   return response(200, {});
@@ -60,7 +69,7 @@ function parseControls(html) {
 function makeStorage(map) {
   return {getItem: k => (map.has(k) ? map.get(k) : null), setItem: (k, v) => map.set(k, String(v)), removeItem: k => map.delete(k), key: i => [...map.keys()][i] ?? null, get length() { return map.size; }};
 }
-function boot(storageMap, log) {
+function boot(storageMap, log, extra = {}) {
   const statics = {};
   const controlId = /^(det-all|style|profile|ocr|fast)-\d+$/;
   const document = {
@@ -77,10 +86,11 @@ function boot(storageMap, log) {
       if (m) return (statics.jobs.controls || []).filter(x => x.detectorJob === m[1]);
       return [];
     },
-    querySelector() { return null; },
+    querySelector(selector) { return selector === 'header' && extra.header ? extra.header : null; },
     addEventListener(name, fn) { (this.listeners[name] = this.listeners[name] || []).push(fn); },
     dispatch(name) { (this.listeners[name] || []).forEach(fn => fn({type: name})); },
   };
+  if (extra.documentElement) document.documentElement = extra.documentElement;
   statics.jobs = new FakeElement('DIV', {id: 'jobs'});
   const sandbox = {
     document, fetch: fakeFetch, localStorage: makeStorage(storageMap), console,
@@ -101,14 +111,46 @@ function cards(page) {
     const badge = /class="state-badge[^"]*">([^<]*)</.exec(chunk)[1];
     const detectors = [...chunk.matchAll(/<input\b([^>]*)>/g)].map(m => m[1]).filter(a => /data-detector-job=/.test(a) && /\schecked(\s|$)/.test(a)).map(a => attr(a, 'value'));
     const ocr = (/<select id="ocr-\d+"[\s\S]*?<\/select>/.exec(chunk) || [''])[0].match(/<option value="(\d+)" selected>/);
-    return {id, badge, hasStart: chunk.includes(`start(${id},`), startDisabled: chunk.includes(`start(${id},this)" disabled>Đang bắt đầu…`), title: /class="job-title">([^<]*)</.exec(chunk)[1], detectors, ocr: ocr ? Number(ocr[1]) : null};
+    const queue = (/class="queue-badge"[^>]*>([^<]*)</.exec(chunk) || [null, null])[1];
+    const values = [...chunk.matchAll(/class="status-value">([^<]*)</g)].map(m => m[1]);
+    const details = [...chunk.matchAll(/class="status-detail">([^<]*)</g)].map(m => m[1]);
+    return {id, badge, queue, scan: values[0], scanDetail: details[0], exportValue: values[3], exportDetail: details[3], hasStart: chunk.includes(`start(${id},`), startDisabled: chunk.includes(`start(${id},this)" disabled>Đang bắt đầu…`), title: /class="job-title">([^<]*)</.exec(chunk)[1], detectors, ocr: ocr ? Number(ocr[1]) : null};
   });
 }
 function setDetectors(page, id, values) {
   page.jobs.controls.filter(x => x.detectorJob === String(id)).forEach(x => { x.checked = values.includes(x.value); });
   page.run(`captureDetectorDraft(${id})`);
 }
+async function queueScenario() {
+  // Shared FIFO: an export and two scans wait; #64 was paused out of the queue.
+  server.jobs.length = 0;
+  const base = {priority: 100, detector_groups: ['advertising'], content_style: 'animation', profile: 'careful', ocr_recognition_batch_size: 1, fast_scan: true, active_queue_path: null};
+  server.jobs.push({...base, id: 60, job_key: 'ep-60', source_path: 'input/Tập 60.mp4', state: 'QUEUED', current_stage: 'render', pending_stage: 'render', queue_seq: 1, progress: 1, updated_at: '2026-10-02T10:00:00', active_queue_path: 'reports/jobs/ep-60/review-queue.json'});
+  server.jobs.push({...base, id: 61, job_key: 'ep-61', source_path: 'input/Tập 61.mp4', state: 'QUEUED', pending_stage: 'preflight', queue_seq: 3, progress: 0, updated_at: '2026-10-02T09:00:00'});
+  server.jobs.push({...base, id: 62, job_key: 'ep-62', source_path: 'input/Tập 62.mp4', state: 'QUEUED', pending_stage: 'text', queue_seq: 2, progress: 0.4, updated_at: '2026-10-02T11:00:00'});
+  server.jobs.push({...base, id: 63, job_key: 'ep-63', source_path: 'input/Tập 63.mp4', state: 'READY_TO_EXPORT', progress: 1, updated_at: '2026-10-02T12:00:00', active_queue_path: 'reports/jobs/ep-63/review-queue.json'});
+  server.jobs.push({...base, id: 64, job_key: 'ep-64', source_path: 'input/Tập 64.mp4', state: 'PAUSED', stop_mode: 'PAUSED', queue_seq: 4, progress: 0.2, updated_at: '2026-10-02T12:30:00'});
+  const out = {};
+  const style = {props: {}, setProperty(name, value) { this.props[name] = value; }};
+  const log = {confirms: [], alerts: [], confirmAnswer: true};
+  const page = boot(new Map(), log, {documentElement: {style}, header: {offsetHeight: 72}});
+  await sleep(30);
+  out.header_h = style.props['--header-h'] || null;
+  out.resize_listener = (page.run('window.listeners.resize') || []).length;
+  page.run("selectJobTab('waiting')");
+  out.waiting = cards(page);
+  out.worker = page.document.getElementById('worker').textContent;
+  page.run("selectJobTab('running')");
+  out.running_tab = page.jobs.innerHTML;
+  server.paused = true;
+  await page.run('load()');
+  page.run("selectJobTab('waiting')");
+  out.paused = cards(page);
+  out.paused_worker = page.document.getElementById('worker').textContent;
+  console.log(JSON.stringify(out));
+}
 (async () => {
+  if (process.argv[3] === 'queue') return queueScenario();
   const out = {};
   const storage = new Map();
   const log = {confirms: [], alerts: [], confirmAnswer: true};

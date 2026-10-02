@@ -1,15 +1,28 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 from typing import Any
 
 from biliflow.job_pipeline import safe_job_key
 from biliflow.job_store import JobStore, sha256_file
 from biliflow.probe import duration_seconds, probe_video
+from biliflow.review_workflow import review_export_paths
 
 
 VIDEO_EXTENSIONS = {".mp4", ".mkv", ".mov", ".avi", ".m4v", ".webm"}
+# States the startup import may still derive from historical queues. Every other
+# state (QUEUED, PAUSED, INTERRUPTED_RECOVERABLE, FAILED, CANCELLED, COMPLETED,
+# in-process states) records a user action or a finished export and survives a
+# Control Center restart unchanged: no state change and no revision switch.
+SETTLED_STATES = frozenset({"NEEDS_METADATA", "DISCOVERED", "WAITING_REVIEW", "READY_TO_EXPORT"})
+# Before review there is no reviewed queue to compare a manifest with.
+UNREVIEWED_STATES = frozenset({"NEEDS_METADATA", "DISCOVERED"})
+
+
+def _same_path(left: Path, right: Path) -> bool:
+    return os.path.normcase(os.path.abspath(left)) == os.path.normcase(os.path.abspath(right))
 
 
 def _read_json(path: Path) -> dict[str, Any] | None:
@@ -90,13 +103,16 @@ def import_existing_project(root: Path, store: JobStore) -> dict[str, int]:
         matching.sort(key=lambda item: _queue_sort_value(item[1], item[0]))
         style = _infer_style(root, [item[1] for item in matching]) if matching else "unknown"
         state = "NEEDS_METADATA" if style == "unknown" else "DISCOVERED"
+        existing = store.find_by_sha(source_hash)
+        previous_state = None if existing is None else str(existing["state"])
+        settled = previous_state is None or previous_state in SETTLED_STATES
         job = store.upsert_job(
             job_key=safe_job_key(source, source_hash), source_path=source,
             source_sha256=source_hash, source_size_bytes=stat.st_size,
             source_mtime_ns=stat.st_mtime_ns, duration_seconds=duration,
             content_style=style, state=state,
         )
-        if style != "unknown" and job["content_style"] != style:
+        if settled and style != "unknown" and job["content_style"] != style:
             job = store.update_job(job["id"], content_style=style)
         # Historical queues already identify these paths. Avoid hashing every
         # old video again after 60 seconds; preflight/final render still verify
@@ -116,6 +132,9 @@ def import_existing_project(root: Path, store: JobStore) -> dict[str, int]:
             )
             active_revision = revision
             revisions += 1
+        if not settled:
+            continue
+        active_queue = None
         if active_revision is not None:
             store.activate_revision(job["id"], active_revision)
             active_queue = matching[-1][1]
@@ -126,7 +145,17 @@ def import_existing_project(root: Path, store: JobStore) -> dict[str, int]:
             )
             store.update_job(job["id"], state=next_state, error=None)
 
-        # A verified final manifest wins over queue state.
+        # A verified final manifest wins over queue state. A reviewed job is
+        # complete only when the manifest is the export of its active review:
+        # an older export of the same source must not undo a rerun.
+        expected_output = None
+        if previous_state is not None and previous_state not in UNREVIEWED_STATES:
+            if active_queue is None:
+                continue
+            try:
+                expected_output = review_export_paths(root, active_queue)[1]
+            except (KeyError, TypeError, ValueError):
+                continue
         for manifest_path in (root / "output").glob("*.manifest.json"):
             manifest = _read_json(manifest_path)
             if not manifest or manifest.get("status") != "COMPLETED":
@@ -135,6 +164,8 @@ def import_existing_project(root: Path, store: JobStore) -> dict[str, int]:
                 continue
             output_value = manifest.get("output", {}).get("path")
             output_path = root / str(output_value) if output_value else manifest_path.with_suffix("")
+            if expected_output is not None and not _same_path(output_path, expected_output):
+                continue
             if output_path.exists():
                 store.add_artifact(
                     job["id"], stage_name="render", kind="final_output",
