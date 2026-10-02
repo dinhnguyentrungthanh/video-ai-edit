@@ -11,6 +11,7 @@ from biliflow.codex_supervisor import (
     load_ai_config,
     resolve_codex_command,
     resolve_codex_home,
+    queue_coverage_findings,
     queue_quality_findings,
     queue_integrity_blockers,
     run_ai_audit,
@@ -427,6 +428,151 @@ class CodexSupervisorTests(unittest.TestCase):
                 ],
             })
             self.assertTrue(any("duplicate item IDs" in value for value in blockers))
+
+    # Nhất Âu Xuân tập 10 (2026-10-02): every candidate the logo scanner
+    # reported is in the queue, but its semantic budget (175 windows) left
+    # 135 regional leads and 18 full-frame representatives unchecked.
+    TRUNCATED_LOGO_REPORT = {
+        "report": "reports/x/visual-logo/scan-localized.json",
+        "source_candidates": 27, "represented_candidates": 27,
+        "reference_complete": True, "detector_complete": False, "complete": False,
+        "detector_details": {
+            "complete": False,
+            "novel_candidate_windows": 520, "novel_candidate_windows_selected": 175,
+            "novel_candidate_windows_omitted": 153,
+            "regional_candidate_windows": 310, "regional_candidate_windows_selected": 175,
+            "regional_candidate_windows_omitted": 135,
+            "full_frame_representatives_required": 18,
+            "full_frame_representatives_missing": 18,
+            "approved_brand_time_groups_missing": 0,
+        },
+    }
+
+    def write_queue(self, root, coverage):
+        queue_path = root / "reports" / "job" / "review-queue.json"
+        queue_path.parent.mkdir(parents=True, exist_ok=True)
+        queue_path.write_text(json.dumps({
+            "source": {"duration_seconds": 100, "sha256": "abc"},
+            "reports": [], "items": [], "candidate_coverage": coverage,
+        }), encoding="utf-8")
+        return queue_path
+
+    def truncated_coverage(self, **changes):
+        coverage = {
+            "complete": False, "reference_complete": True, "detectors_complete": False,
+            "missing_refs": [], "reports": [dict(self.TRUNCATED_LOGO_REPORT)],
+        }
+        coverage.update(changes)
+        return coverage
+
+    def test_detector_budget_truncation_is_warn_not_block(self):
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            queue_path = self.write_queue(root, self.truncated_coverage())
+            queue = json.loads(queue_path.read_text(encoding="utf-8"))
+            self.assertEqual(queue_integrity_blockers(root, queue), [])
+            result = run_local_queue_audit(
+                root=root, job={"job_key": "job"}, queue_path=queue_path,
+            )
+            self.assertEqual(result["result"], "WARN")
+            self.assertEqual(result["findings"][0], (
+                "Kiểm tra logo bằng AI đã xét 175/520 đoạn ứng viên: 135 đoạn vùng góc "
+                "và 18 đoạn toàn khung chưa được AI xem (giới hạn 175)."
+            ))
+            self.assertIn("không chặn duyệt", result["summary"])
+            self.assertTrue(any("--exhaustive" in value for value in result["recommended_actions"]))
+
+    def test_approved_brand_shortfall_has_its_own_ratio(self):
+        # Troy run-20260927-205904: every novel window was covered; only the
+        # approved-brand time groups were budget limited.
+        troy = dict(self.TRUNCATED_LOGO_REPORT, detector_details={
+            "complete": False,
+            "novel_candidate_windows": 672, "novel_candidate_windows_selected": 193,
+            "novel_candidate_windows_omitted": 0,
+            "regional_candidate_windows_omitted": 0,
+            "full_frame_representatives_missing": 0,
+            "approved_brand_time_groups": 510,
+            "approved_brand_time_groups_selected": 223,
+            "approved_brand_time_groups_missing": 287,
+        })
+        findings, _ = queue_coverage_findings({"candidate_coverage": self.truncated_coverage(reports=[troy])})
+        self.assertEqual(findings, [
+            "Kiểm tra logo bằng AI đã xét đủ các đoạn ứng viên mới; logo đã duyệt: "
+            "AI đã xem 223/510 nhóm thời gian, 287 nhóm chưa xem (giới hạn đoạn ứng viên mới: 193)."
+        ])
+        self.assertNotIn("193/672", findings[0])
+        # Conan 20: novel and approved shortfalls are reported as separate clauses.
+        conan = dict(self.TRUNCATED_LOGO_REPORT, detector_details={
+            "complete": False,
+            "novel_candidate_windows": 907, "novel_candidate_windows_selected": 412,
+            "novel_candidate_windows_omitted": 409,
+            "regional_candidate_windows_omitted": 366,
+            "full_frame_representatives_missing": 43,
+            "approved_brand_time_groups": 23,
+            "approved_brand_time_groups_selected": 2,
+            "approved_brand_time_groups_missing": 21,
+        })
+        findings, _ = queue_coverage_findings({"candidate_coverage": self.truncated_coverage(reports=[conan])})
+        self.assertEqual(findings, [
+            "Kiểm tra logo bằng AI đã xét 412/907 đoạn ứng viên: 366 đoạn vùng góc và "
+            "43 đoạn toàn khung chưa được AI xem (giới hạn 412); logo đã duyệt: "
+            "AI đã xem 2/23 nhóm thời gian, 21 nhóm chưa xem."
+        ])
+
+    def test_missing_refs_still_blocks(self):
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            queue_path = self.write_queue(root, self.truncated_coverage(missing_refs=["r#1"]))
+            result = run_local_queue_audit(
+                root=root, job={"job_key": "job"}, queue_path=queue_path,
+            )
+            self.assertEqual(result["result"], "BLOCK")
+            self.assertIn("Candidate coverage manifest is incomplete.", result["findings"])
+
+    def test_reference_incomplete_report_still_blocks(self):
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            report = dict(self.TRUNCATED_LOGO_REPORT, reference_complete=False)
+            for coverage in (
+                self.truncated_coverage(reports=[report]),
+                self.truncated_coverage(reference_complete=False),
+            ):
+                queue_path = self.write_queue(root, coverage)
+                result = run_local_queue_audit(
+                    root=root, job={"job_key": "job"}, queue_path=queue_path,
+                )
+                self.assertEqual(result["result"], "BLOCK")
+
+    def test_legacy_coverage_without_reference_flag_still_blocks(self):
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            for coverage in (
+                {"complete": False, "missing_refs": [], "reports": []},
+                {"complete": True, "missing_refs": [], "reports": [{"complete": False}]},
+            ):
+                queue_path = self.write_queue(root, coverage)
+                result = run_local_queue_audit(
+                    root=root, job={"job_key": "job"}, queue_path=queue_path,
+                )
+                self.assertEqual(result["result"], "BLOCK")
+
+    def test_ai_audit_detector_truncation_not_forced_block(self):
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            queue_path = self.write_queue(root, self.truncated_coverage())
+            for factory in (FakeClient, FakeBlockClient):
+                result = run_ai_audit(
+                    root=root, job={"job_key": "job"}, queue_path=queue_path,
+                    connection_checker=lambda _root: {"ready": True},
+                    client_factory=factory,
+                )
+                self.assertEqual(result["deterministic_gate"]["status"], "PASS")
+                self.assertEqual(result["deterministic_gate"]["blockers"], [])
+                self.assertEqual(result["result"], "WARN")
+                self.assertTrue(any(
+                    "175/520" in value and "135" in value and "18 đoạn toàn khung" in value
+                    for value in result["findings"]
+                ))
 
 
     def test_config_never_allows_media_or_api_authentication(self):

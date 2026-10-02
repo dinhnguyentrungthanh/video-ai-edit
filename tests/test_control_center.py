@@ -3,6 +3,7 @@ import hmac
 import http.client
 import json
 import os
+import shutil
 import subprocess
 import threading
 import time
@@ -18,6 +19,7 @@ from biliflow.control_center import (
     _handler_class,
     _merge_visual_audit_batches,
 )
+from biliflow.job_pipeline import PipelineStage
 from biliflow.job_store import JobStore
 from biliflow.final_renderer import render_progress_path
 from biliflow.review_evidence import ReviewFrameCache
@@ -28,7 +30,8 @@ class ControlCenterVisualAuditTests(unittest.TestCase):
     def test_dashboard_preserves_metadata_drafts_across_refreshes(self):
         page = _dashboard_html()
         self.assertIn(
-            "const detectorDrafts={};const metadataDrafts={};const rerunPanelDrafts={};",
+            "const detectorDrafts={};const metadataDrafts={};const ocrDrafts={};"
+            "const speedDrafts={};const draftJobKeys={};const rerunPanelDrafts={};",
             page,
         )
         self.assertIn("function metadataSelection(j)", page)
@@ -36,6 +39,200 @@ class ControlCenterVisualAuditTests(unittest.TestCase):
         self.assertIn('onchange="captureMetadataDraft(${id})"', page)
         self.assertIn("content_style:metadata.content_style", page)
         self.assertIn("delete metadataDrafts[id]", page)
+
+    def test_dashboard_drafts_persist_in_local_storage_until_own_start(self):
+        page = _dashboard_html()
+        self.assertIn("const DRAFT_PREFIX='biliflow.jobDraft.'", page)
+        # Every storage access tolerates a blocked or private-mode localStorage.
+        self.assertIn("function storageGet(key){try{const raw=window.localStorage.getItem(key)", page)
+        self.assertIn("function storageSet(key,value){try{", page)
+        self.assertIn("loadStoredDrafts();try{window.addEventListener('storage'", page)
+        self.assertIn("saveDraft(id);const all=document.getElementById(`det-all-${id}`)", page)
+        self.assertIn('onchange="ocrDrafts[${j.id}]=Number(this.value);saveDraft(${j.id})"', page)
+        self.assertIn('onchange="speedDrafts[${j.id}]=this.checked;saveDraft(${j.id})"', page)
+        # Drafts are cleared only after the job's own successful start or rerun.
+        start = page[page.index("async function start(id,button)"):]
+        start = start[:start.index("\n")]
+        self.assertLess(start.index("await post(`/api/jobs/${id}/start`"), start.index("clearDraft(id)"))
+        # A refusal clears the draft only when the job has already left setup.
+        self.assertIn("if(job&&!needsSetup(job)){clearDraft(id);", start)
+        self.assertIn("else notify(`Không thể bắt đầu #${id}: ${e.message}`,true)", start)
+        self.assertIn("discardPendingLoads();clearDraft(id);delete rerunPanelDrafts[id]", page)
+
+    def test_dashboard_ignores_stale_status_and_defers_rebuild_during_clicks(self):
+        page = _dashboard_html()
+        self.assertIn(
+            "async function load(){const seq=++loadSeq;const next=await json('/api/status');"
+            "if(seq<=appliedSeq)return false;appliedSeq=seq;status=next;render();return true}",
+            page,
+        )
+        self.assertIn("function discardPendingLoads(){appliedSeq=Math.max(appliedSeq,loadSeq)}", page)
+        self.assertIn("function renderJobs(force=false){if(!force&&jobsInteracting()){deferJobsRender();return}", page)
+        self.assertIn("box.addEventListener('pointerdown'", page)
+        self.assertIn("active.tagName==='SELECT'", page)
+        self.assertIn("(async()=>{watchJobsInteraction();await refreshToken();", page)
+        # Setup cards keep a stable id-ascending order below the other waiting cards.
+        self.assertIn("visible.filter(needsSetup).sort((a,b)=>a.id-b.id)", page)
+
+    def test_dashboard_confirms_a_changed_or_sensitive_start_scope(self):
+        page = _dashboard_html()
+        self.assertIn("const LAST_SCOPE_KEY='biliflow.lastDetectorScope'", page)
+        self.assertIn("const SENSITIVE_DETECTORS=['adult','gore','violence']", page)
+        self.assertIn("Bắt đầu #${id} ${job?videoName(job):''} với các nhóm: ", page)
+        self.assertIn("if(!detectors||!metadata||!confirmStartScope(id,detectors)){release();return}", page)
+        self.assertIn("storageSet(LAST_SCOPE_KEY,detectors)", page)
+        # The untouched picker still defaults to every detector group.
+        self.assertIn("new Set(detectorDrafts[j.id]||j.detector_groups||opts.map(x=>x.id))", page)
+
+    def test_dashboard_start_ignores_a_second_click_while_starting(self):
+        page = _dashboard_html()
+        self.assertIn("const startingJobs=new Set();", page)
+        self.assertIn(
+            "async function start(id,button){if(startingJobs.has(id))return;startingJobs.add(id);", page,
+        )
+        self.assertIn(
+            "onclick=\"start(${id},this)\" ${startingJobs.has(id)?'disabled':''}>"
+            "${startingJobs.has(id)?'Đang bắt đầu…':'Bắt đầu'}</button>",
+            page,
+        )
+        self.assertIn("if(!j||!needsSetup(j))startingJobs.delete(id)", page)
+
+    def test_dashboard_video_name_splits_windows_and_posix_paths(self):
+        page = _dashboard_html()
+        backslash = chr(92)
+        self.assertIn("split(/[" + backslash * 2 + "/]/)", page)
+
+    @unittest.skipUnless(shutil.which("node"), "node is not installed")
+    def test_dashboard_behaviour_in_node_stale_poll_drafts_and_confirm(self):
+        page = _dashboard_html()
+        script = page[page.index("<script>") + len("<script>"):page.rindex("</script>")]
+        harness = Path(__file__).with_name("fixtures") / "dashboard_harness.js"
+        with TemporaryDirectory() as directory:
+            script_path = Path(directory) / "page.js"
+            script_path.write_text(script, encoding="utf-8")
+            completed = subprocess.run(
+                [shutil.which("node"), str(harness), str(script_path)],
+                capture_output=True, text=True, encoding="utf-8", timeout=60,
+            )
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        out = json.loads(completed.stdout.strip().splitlines()[-1])
+        self.assertEqual(out["initial_order"], [45, 44, 46, 47, 48])
+        self.assertEqual(out["posts"], [{"id": 46, "detectors": ["advertising"]}])
+        self.assertEqual(out["confirms_for_46"], [])
+        # The slow poll issued before Start(46) is discarded: no ghost setup card.
+        self.assertFalse(out["stale_applied"])
+        for snapshot in (out["after_start"], out["after_stale_poll"]):
+            card = next(card for card in snapshot if card["id"] == 46)
+            self.assertEqual(card["badge"], "Đang xếp hàng")
+            self.assertFalse(card["hasStart"])
+        self.assertEqual(
+            [card["id"] for card in out["after_stale_poll"] if card["hasStart"]], [47, 48],
+        )
+        # Drafts survive a re-render and a reload; #46's draft went with its own start.
+        for key in ("rerender_47", "reload_47"):
+            self.assertEqual(out[key]["detectors"], ["advertising", "adult"])
+            self.assertEqual(out[key]["ocr"], 8)
+        self.assertEqual(out["storage_keys"], ["biliflow.jobDraft.47", "biliflow.lastDetectorScope"])
+        self.assertEqual(out["last_scope"], ["advertising"])
+        self.assertFalse(out["reload_46"]["hasStart"])
+        # A scope different from the previous start asks first; cancel posts nothing.
+        self.assertEqual(
+            out["confirm_48"],
+            ["Bắt đầu #48 Tập 48.mp4 với các nhóm: Quảng cáo / logo, 18+, Máu me, Bạo lực?"],
+        )
+        self.assertEqual(out["posts_after_cancel"], 0)
+        self.assertTrue(out["draft_48_kept_after_cancel"])
+        # The refusal for a job that already left setup is neutral and drops its ghost draft.
+        self.assertEqual(
+            out["refused_notice"],
+            "Video #48 không còn chờ thiết lập (Đang xếp hàng); không cần bắt đầu lại.",
+        )
+        self.assertFalse(out["refused_notice_is_error"])
+        self.assertFalse(out["draft_48_kept_after_refusal"])
+        # #48 has a Windows source path; the card title shows only the file name.
+        self.assertEqual(out["title_48"], "#48 · Tập 48.mp4")
+        # A refusal while the job still waits for setup is an error and keeps the draft.
+        self.assertEqual(out["error_notice_47"], "Không thể bắt đầu #47: Lỗi thử nghiệm")
+        self.assertTrue(out["error_notice_47_is_error"])
+        self.assertTrue(out["draft_47_kept_after_error"])
+        self.assertTrue(out["button_47_restored"])
+        # A double click posts once, confirms once and shows no error.
+        self.assertTrue(out["button_47_busy"])
+        self.assertTrue(out["card_47_while_pending"]["startDisabled"])
+        self.assertEqual(out["double_posts"], 1)
+        self.assertEqual(out["double_confirms"], 1)
+        self.assertFalse(out["double_notice_is_error"])
+        self.assertEqual(out["starting_after_double"], 0)
+        self.assertEqual(out["card_47_after_double"]["badge"], "Đang xếp hàng")
+        self.assertTrue(out["render_deferred_while_pressed"])
+        self.assertTrue(out["rendered_after_release"])
+
+    def test_structure_status_shows_first_finding(self):
+        page = _dashboard_html()
+        self.assertIn("detail:(result!=='PASS'&&a.first_finding)||a.summary||", page)
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "reports" / "rev-1").mkdir(parents=True)
+            store = JobStore(root / "state" / "control-center.sqlite3")
+            try:
+                job = store.upsert_job(
+                    job_key="movie", source_path=root / "movie.mp4",
+                    source_sha256="abc", source_size_bytes=1,
+                    source_mtime_ns=1, state="WAITING_REVIEW",
+                )
+                job_id = int(job["id"])
+                revision = store.add_revision(
+                    job_id, "reports/rev-1/review-queue.json", "REVIEW_REQUIRED", None,
+                )
+                store.activate_revision(job_id, revision)
+                (root / "reports" / "rev-1" / "structure-audit.json").write_text(json.dumps({
+                    "result": "WARN", "summary": "generic", "created_at": "now",
+                    "findings": ["Kiểm tra logo bằng AI đã xét 175/520 đoạn ứng viên", "second"],
+                }), encoding="utf-8")
+                store.add_artifact(
+                    job_id, stage_name="structure_audit", kind="structure_audit",
+                    path="reports/rev-1/structure-audit.json",
+                )
+                center = ControlCenter.__new__(ControlCenter)
+                center.root = root
+                center.store = store
+                summary = center.structure_audit_summary(job_id)
+                self.assertEqual(summary["summary"], "generic")
+                self.assertEqual(
+                    summary["first_finding"], "Kiểm tra logo bằng AI đã xét 175/520 đoạn ứng viên",
+                )
+                self.assertFalse(summary["outdated_rule"])
+                # A BLOCK stored by the old rule for a detector-only shortfall is
+                # flagged as outdated (the artifact itself is not rewritten).
+                audit_path = root / "reports" / "rev-1" / "structure-audit.json"
+                detector_only = {
+                    "complete": False, "reference_complete": True, "missing_refs": [],
+                    "reports": [{"reference_complete": True, "detector_complete": False}],
+                }
+                stored = {
+                    "result": "BLOCK", "summary": "old", "created_at": "now",
+                    "findings": ["Candidate coverage manifest is incomplete."],
+                    "candidate_coverage": detector_only,
+                }
+                audit_path.write_text(json.dumps(stored), encoding="utf-8")
+                before = audit_path.read_bytes()
+                summary = center.structure_audit_summary(job_id)
+                self.assertEqual(summary["result"], "BLOCK")
+                self.assertTrue(summary["outdated_rule"])
+                self.assertIn("quy tắc cũ", summary["first_finding"])
+                self.assertEqual(audit_path.read_bytes(), before)
+                # A real reference gap keeps the stored BLOCK text unchanged.
+                for coverage in (
+                    dict(detector_only, missing_refs=["r#1"]),
+                    {"complete": False, "missing_refs": [], "reports": []},
+                ):
+                    audit_path.write_text(json.dumps(dict(stored, candidate_coverage=coverage)), encoding="utf-8")
+                    summary = center.structure_audit_summary(job_id)
+                    self.assertFalse(summary["outdated_rule"])
+                    self.assertEqual(summary["first_finding"], "Candidate coverage manifest is incomplete.")
+            finally:
+                store.close()
+        self.assertIn("a.outdated_rule?`${result} (quy tắc cũ)`:result", page)
 
     def test_dashboard_preserves_open_rerun_panel_across_refreshes(self):
         page = _dashboard_html()
@@ -642,6 +839,50 @@ class ControlCenterHttpTests(unittest.TestCase):
         self.assertEqual(
             sum(1 for entry in queue["audit_log"] if entry["action"] == "DECIDE"), 40,
         )
+
+    def test_start_only_configures_a_job_waiting_for_setup(self):
+        from biliflow.scheduler import JobScheduler
+        self.center.scheduler = JobScheduler(self.root, self.store)
+        headers = {"X-BiliFlow-Token": "test-token", "Content-Type": "application/json"}
+        body = json.dumps({
+            "content_style": "live_action", "profile": "careful",
+            "detectors": ["advertising"], "ocr_recognition_batch_size": 1, "fast_scan": True,
+        }).encode()
+
+        def queued_events(job_id):
+            return [event for event in self.store.events(job_id) if event["event_type"] == "JOB_QUEUED"]
+
+        # A stale browser card cannot re-queue a job that already left setup.
+        status, _, raw = self.request(
+            f"/api/jobs/{self.job_id}/start", method="POST", headers=headers, body=body,
+        )
+        self.assertEqual(status, 400)
+        self.assertIn("không xếp hàng lại", json.loads(raw)["error"])
+        self.assertEqual(self.store.get_job(self.job_id)["state"], "WAITING_REVIEW")
+        self.assertEqual(queued_events(self.job_id), [])
+        source = self.root / "input" / "new.mp4"
+        source.write_bytes(b"video")
+        job = self.store.upsert_job(
+            job_key="new", source_path=source, source_sha256="2" * 64,
+            source_size_bytes=5, source_mtime_ns=source.stat().st_mtime_ns,
+            state="NEEDS_METADATA",
+        )
+        with patch(
+            "biliflow.scheduler.pipeline_stages",
+            return_value=[PipelineStage("preflight", "PREFLIGHT", tuple())],
+        ):
+            status, _, raw = self.request(
+                f"/api/jobs/{job['id']}/start", method="POST", headers=headers, body=body,
+            )
+            self.assertEqual(status, 200, raw)
+            self.assertEqual(self.store.get_job(job["id"])["state"], "QUEUED")
+            self.assertEqual(self.store.setting(f"detector_groups:{job['id']}"), ["advertising"])
+            # A second Start from the same stale card is refused, not re-queued.
+            status, _, _ = self.request(
+                f"/api/jobs/{job['id']}/start", method="POST", headers=headers, body=body,
+            )
+        self.assertEqual(status, 400)
+        self.assertEqual(len(queued_events(job["id"])), 1)
 
 
 if __name__ == "__main__":

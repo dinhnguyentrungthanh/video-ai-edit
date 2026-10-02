@@ -188,6 +188,52 @@ class SchedulerTests(unittest.TestCase):
             finally:
                 store.close()
 
+    def test_start_job_queues_only_a_video_waiting_for_setup(self):
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            for name in ("input", "reports/jobs", "logs", "config", "scripts"):
+                (root / name).mkdir(parents=True, exist_ok=True)
+            source = root / "input" / "video.mp4"
+            source.write_bytes(b"video")
+            store = JobStore(root / "jobs.sqlite3")
+            job = store.upsert_job(
+                job_key="video-11111111", source_path=source,
+                source_sha256="1" * 64, source_size_bytes=5,
+                source_mtime_ns=source.stat().st_mtime_ns,
+                state="NEEDS_METADATA",
+            )
+            scheduler = JobScheduler(root, store)
+            definitions = [PipelineStage("preflight", "PREFLIGHT", tuple())]
+
+            def queued():
+                return sum(
+                    1 for event in store.events(job["id"])
+                    if event["event_type"] == "JOB_QUEUED"
+                )
+
+            try:
+                with patch("biliflow.scheduler.pipeline_stages", return_value=definitions):
+                    scheduler.start_job(
+                        job["id"], content_style="live_action", profile="careful",
+                        detector_groups=["advertising"],
+                    )
+                    self.assertEqual(store.get_job(job["id"])["state"], "QUEUED")
+                    for state in ("QUEUED", "SCANNING_LOGO", "WAITING_REVIEW", "COMPLETED"):
+                        store.update_job(job["id"], state=state)
+                        with self.assertRaisesRegex(ValueError, "không xếp hàng lại"):
+                            scheduler.start_job(
+                                job["id"], content_style="animation", profile="fast",
+                                detector_groups=["advertising", "adult", "gore", "violence"],
+                            )
+                        self.assertEqual(store.get_job(job["id"])["state"], state)
+                self.assertEqual(queued(), 1)
+                self.assertEqual(
+                    store.setting(f"detector_groups:{job['id']}"), ["advertising"],
+                )
+                self.assertEqual(store.get_job(job["id"])["content_style"], "live_action")
+            finally:
+                store.close()
+
     def test_detector_groups_are_persisted_and_passed_to_pipeline(self):
         with TemporaryDirectory() as directory:
             root = Path(directory)

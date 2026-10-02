@@ -501,6 +501,133 @@ def queue_quality_findings(queue_payload: dict[str, Any]) -> tuple[list[str], li
     return list(dict.fromkeys(findings)), list(dict.fromkeys(actions))
 
 
+def _coverage_references_incomplete(coverage: dict[str, Any]) -> bool:
+    """True when a detector candidate is missing from the queue itself.
+
+    A detector that declares it did not examine every candidate (for example
+    the visual-logo semantic budget) is a coverage warning, not queue
+    corruption: every candidate it did report is still represented. Legacy
+    manifests without ``reference_complete`` flags keep the old rule.
+    """
+    if coverage.get("missing_refs"):
+        return True
+    reports = [item for item in coverage.get("reports") or [] if isinstance(item, dict)]
+    if "reference_complete" not in coverage:
+        return not coverage.get("complete") or any(
+            not item.get("complete") for item in reports
+        )
+    if coverage.get("reference_complete") is False:
+        return True
+    return any(
+        item.get("reference_complete") is False
+        or ("reference_complete" not in item and not item.get("complete"))
+        for item in reports
+    )
+
+
+COVERAGE_BLOCKER = "Candidate coverage manifest is incomplete."
+
+
+def stored_coverage_block_is_outdated(audit_payload: dict[str, Any]) -> bool:
+    """True for a stored BLOCK whose coverage blocker the current rule no longer raises.
+
+    Structure audits written before the reference/detector split blocked on any
+    ``detector_complete`` shortfall. The stored ``candidate_coverage`` tells us
+    whether the queue itself was missing candidates; if it was not, the stored
+    coverage blocker is outdated and a fresh local audit would downgrade it.
+    """
+    if str(audit_payload.get("result") or "").upper() != "BLOCK":
+        return False
+    if COVERAGE_BLOCKER not in (audit_payload.get("findings") or []):
+        return False
+    coverage = audit_payload.get("candidate_coverage")
+    if not isinstance(coverage, dict) or "reference_complete" not in coverage:
+        return False
+    return not _coverage_references_incomplete(coverage)
+
+
+def _coverage_count(details: dict[str, Any], key: str) -> int:
+    try:
+        return max(0, int(details.get(key) or 0))
+    except (TypeError, ValueError):
+        return 0
+
+
+def queue_coverage_findings(
+    queue_payload: dict[str, Any],
+) -> tuple[list[str], list[str]]:
+    """Describe detector shortfalls the scanners declared themselves (WARN only)."""
+    coverage = queue_payload.get("candidate_coverage")
+    if not isinstance(coverage, dict) or "reference_complete" not in coverage:
+        return [], []
+    findings: list[str] = []
+    actions: list[str] = []
+    for report in coverage.get("reports") or []:
+        if not isinstance(report, dict) or report.get("detector_complete") is not False:
+            continue
+        name = str(report.get("report") or "report")
+        details = report.get("detector_details")
+        details = details if isinstance(details, dict) else {}
+        if details.get("legacy_report"):
+            omitted = _coverage_count(details, "candidate_windows_omitted")
+            findings.append(
+                f"Kiểm tra logo bằng AI (report cũ {name}) bỏ qua {omitted} đoạn ứng viên "
+                "vì giới hạn số đoạn được xét."
+            )
+        elif "novel_candidate_windows" in details:
+            total = _coverage_count(details, "novel_candidate_windows")
+            selected = _coverage_count(details, "novel_candidate_windows_selected")
+            limit = _coverage_count(details, "effective_candidate_windows_limit") or selected
+            parts = []
+            regional = _coverage_count(details, "regional_candidate_windows_omitted")
+            full_frame = _coverage_count(details, "full_frame_representatives_missing")
+            novel_omitted = _coverage_count(details, "novel_candidate_windows_omitted")
+            if regional:
+                parts.append(f"{regional} đoạn vùng góc")
+            if full_frame:
+                parts.append(f"{full_frame} đoạn toàn khung")
+            if not parts and novel_omitted:
+                parts.append(f"{novel_omitted} đoạn")
+            # Approved-brand time groups are a separate population from the
+            # novel candidate windows, so they get their own ratio instead of
+            # being counted against the novel X/Y denominator.
+            approved = _coverage_count(details, "approved_brand_time_groups_missing")
+            approved_total = _coverage_count(details, "approved_brand_time_groups")
+            approved_selected = _coverage_count(details, "approved_brand_time_groups_selected")
+            approved_clause = (
+                f"logo đã duyệt: AI đã xem {approved_selected}/{approved_total} nhóm thời gian, "
+                f"{approved} nhóm chưa xem"
+                if approved else ""
+            )
+            if parts:
+                missing = " và ".join([", ".join(parts[:-1]), parts[-1]] if len(parts) > 1 else parts)
+                text = (
+                    f"Kiểm tra logo bằng AI đã xét {selected}/{total} đoạn ứng viên: "
+                    f"{missing} chưa được AI xem (giới hạn {limit})"
+                )
+                text += f"; {approved_clause}." if approved_clause else "."
+            elif approved_clause:
+                text = (
+                    "Kiểm tra logo bằng AI đã xét đủ các đoạn ứng viên mới; "
+                    f"{approved_clause} (giới hạn đoạn ứng viên mới: {limit})."
+                )
+            else:
+                text = (
+                    f"Kiểm tra logo bằng AI đã xét {selected}/{total} đoạn ứng viên: "
+                    f"{max(0, total - selected)} đoạn chưa được AI xem (giới hạn {limit})."
+                )
+            findings.append(text)
+        else:
+            findings.append(
+                f"Detector trong {name} báo chưa xét hết ứng viên (detector_complete=false)."
+            )
+        actions.append(
+            "Hàng duyệt vẫn đầy đủ với mọi ứng viên detector đã báo; nếu nghi có logo ở "
+            "các đoạn chưa xét, chạy lại quét logo riêng với scan-visual-logo --exhaustive."
+        )
+    return list(dict.fromkeys(findings)), list(dict.fromkeys(actions))
+
+
 def queue_integrity_blockers(
     root: Path, queue_payload: dict[str, Any],
 ) -> list[str]:
@@ -510,13 +637,8 @@ def queue_integrity_blockers(
     source_sha = str(source.get("sha256") or "")
     source_duration = float(source.get("duration_seconds") or 0.0)
     coverage = queue_payload.get("candidate_coverage")
-    if isinstance(coverage, dict):
-        if (
-            not coverage.get("complete")
-            or coverage.get("missing_refs")
-            or any(not item.get("complete") for item in coverage.get("reports") or [])
-        ):
-            blockers.append("Candidate coverage manifest is incomplete.")
+    if isinstance(coverage, dict) and _coverage_references_incomplete(coverage):
+        blockers.append(COVERAGE_BLOCKER)
     item_ids = [str(item.get("id") or "") for item in queue_payload.get("items") or []]
     duplicate_ids = sorted({value for value in item_ids if value and item_ids.count(value) > 1})
     if duplicate_ids:
@@ -658,10 +780,19 @@ def run_local_queue_audit(
     queue_path = queue_path.resolve(strict=True)
     queue_payload = json.loads(queue_path.read_text(encoding="utf-8"))
     blockers = queue_integrity_blockers(root, queue_payload)
+    coverage_findings, coverage_actions = queue_coverage_findings(queue_payload)
     findings, actions = queue_quality_findings(queue_payload)
+    findings = [*coverage_findings, *findings]
+    actions = [*coverage_actions, *actions]
     if blockers:
         result = "BLOCK"
         summary = "Kiểm tra cấu trúc cục bộ phát hiện lỗi toàn vẹn cần sửa."
+    elif findings and len(findings) == len(coverage_findings):
+        result = "WARN"
+        summary = (
+            "Queue hợp lệ, nhưng detector chưa xét hết ứng viên; "
+            "đây là cảnh báo, không chặn duyệt."
+        )
     elif findings:
         result = "WARN"
         summary = "Kiểm tra cấu trúc cục bộ phát hiện điểm chất lượng cần xem lại."
@@ -729,7 +860,10 @@ def run_ai_audit(*, root: Path, job: dict[str, Any], queue_path: Path,
         ]
         if not visual_evidence:
             raise RuntimeError("No safe review thumbnails are available for Visual AI Audit")
+    coverage_findings, coverage_actions = queue_coverage_findings(queue_payload)
     local_findings, local_actions = queue_quality_findings(queue_payload)
+    local_findings = [*coverage_findings, *local_findings]
+    local_actions = [*coverage_actions, *local_actions]
     integrity_blockers = queue_integrity_blockers(root, queue_payload)
     attached_ids = {item["item_id"] for item in visual_evidence}
     context_items = [

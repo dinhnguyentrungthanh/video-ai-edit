@@ -41,6 +41,8 @@ ACTIVE_STATES = {
     "PREFLIGHT", "SCANNING_SAFETY", "SCANNING_TEXT", "SCANNING_LOGO",
     "LOCALIZING_REGIONS", "BUILDING_REVIEW", "RENDERING", "VERIFYING",
 }
+# The dashboard "Bắt đầu" button may only configure a video still waiting for setup.
+STARTABLE_STATES = {"NEEDS_METADATA", "DISCOVERED"}
 
 
 def terminate_process_tree(process: subprocess.Popen) -> None:
@@ -79,6 +81,7 @@ class JobScheduler:
         self._stop = threading.Event()
         self._wake = threading.Event()
         self._lock = threading.RLock()
+        self._start_lock = threading.Lock()
         self._thread: threading.Thread | None = None
         self._process: subprocess.Popen | None = None
         self._active: tuple[int, str] | None = None
@@ -175,6 +178,31 @@ class JobScheduler:
         )
         self._wake.set()
         return self.store.get_job(job_id)
+
+    def start_job(
+        self, job_id: int, *, content_style: str, profile: str,
+        detector_groups: list[str] | tuple[str, ...] | None = None,
+        ocr_recognition_batch_size: int | None = None,
+        fast_scan: bool | None = None,
+    ) -> dict:
+        """First start from the dashboard: only a video still waiting for setup.
+
+        A stale browser card must not re-queue a job that is already queued,
+        running or finished; reruns keep their own revisioned path.
+        """
+        with self._start_lock:
+            job = self.store.get_job(job_id)
+            if job["state"] not in STARTABLE_STATES:
+                raise ValueError(
+                    f"Video #{job_id} đang ở trạng thái {job['state']}, không còn chờ thiết lập; "
+                    "không xếp hàng lại. Dùng “Chạy lại kiểm tra” nếu muốn quét lại."
+                )
+            return self.configure_and_queue(
+                job_id, content_style=content_style, profile=profile,
+                detector_groups=detector_groups,
+                ocr_recognition_batch_size=ocr_recognition_batch_size,
+                fast_scan=fast_scan,
+            )
 
     def rerun(
         self, job_id: int,
