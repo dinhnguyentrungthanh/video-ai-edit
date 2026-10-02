@@ -584,6 +584,28 @@ class ControlCenterHttpTests(unittest.TestCase):
         # t=1 is not a strip timestamp: the frame route answered after the lock, with 400.
         self.assertEqual(statuses[f"frame?item={MEDIA_ITEM}&t=1&k={self.key(self.job_id)}"], 400)
 
+    def test_studio_logo_flag_is_passed_only_when_explicitly_true(self):
+        # R3b "Đây là logo hãng phim — giữ & nhớ" posts remember_studio_logo: true.
+        self.make_decidable()
+        seen = []
+
+        def capture(**kwargs):
+            seen.append(kwargs.get("remember_studio_logo"))
+            return json.loads((self.root / "reports/jobs/troy/review-queue.json").read_text(encoding="utf-8"))
+
+        with patch("biliflow.control_center.record_review_decision", side_effect=capture):
+            for flag in (True, "yes", None):
+                body = {"id": MEDIA_ITEM, "decision": "KEEP"}
+                if flag is not None:
+                    body["remember_studio_logo"] = flag
+                status = self.request(
+                    f"/api/jobs/{self.job_id}/review/decision", method="POST",
+                    headers={"X-BiliFlow-Token": "test-token", "Content-Type": "application/json"},
+                    body=json.dumps(body).encode(),
+                )[0]
+                self.assertEqual(status, 200)
+        self.assertEqual(seen, [True, False, False])
+
     def test_rapid_decisions_survive_concurrent_media_and_queue_reads(self):
         # Same race at full speed with the real writer: every decision is saved.
         self.make_decidable()

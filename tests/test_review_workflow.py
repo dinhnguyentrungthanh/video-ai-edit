@@ -862,7 +862,8 @@ class ReviewWorkflowTests(unittest.TestCase):
         self.assertIn("QUYẾT ĐỊNH TOÀN VIDEO", page)
         self.assertIn("QUYẾT ĐỊNH TOÀN KHOẢNG XUẤT HIỆN", page)
         self.assertIn("CHỈ ĐOẠN HIỆN TẠI", page)
-        self.assertIn("NHÓM SỰ KIỆN", page)
+        self.assertIn("'Nhóm sự kiện').toUpperCase()", page)
+        self.assertIn("KHOẢNH KHẮC`", page)
         self.assertIn("các khoảng trống giữa chúng không bị cắt hoặc làm mờ", page)
         self.assertIn("Ứng viên kiểm tra thêm — chưa thuộc quyết định chính", page)
         self.assertIn("Logo ở vị trí hoặc track khác vẫn cần quyết định riêng", page)
@@ -1497,7 +1498,8 @@ class ReviewWorkflowTests(unittest.TestCase):
             "mixed", "gore",
             [
                 {"start_seconds": 5, "end_seconds": 6, "max_score": 0.9, "priority": "high"},
-                {"start_seconds": 15, "end_seconds": 16, "max_score": 0.4, "priority": "context"},
+                # 39 s apart: two blood scenes, not one scene card (the gap is not under 20 s).
+                {"start_seconds": 45, "end_seconds": 46, "max_score": 0.4, "priority": "context"},
             ],
         )
         queue_path = self.root / "reports" / "review" / "queue.json"
@@ -2044,7 +2046,9 @@ class FocusReviewPageTests(unittest.TestCase):
         self.assertIn("evidence?item=", _js_function(page, "loadEvidence"))
         prefetch = _js_function(page, "prefetchNext")
         self.assertIn("nextUndecided(from)", prefetch)
-        self.assertIn("pickStrip(ev.frames,8)", prefetch)
+        # The same picker as the visible strip, so a scene card prefetches frames of its moments.
+        self.assertIn("pickFor(x,ev.frames)", prefetch)
+        self.assertIn("pickSceneStrip(frames,momentsOf(x),8):pickStrip(frames,8)", _js_function(page, "pickFor"))
         self.assertIn("URL.revokeObjectURL", _js_function(page, "pruneFrames"))
         self.assertIn("frame?item=", _js_function(page, "frameUrl"))
         self.assertIn('loading="lazy"', _js_function(page, "renderStrip"))

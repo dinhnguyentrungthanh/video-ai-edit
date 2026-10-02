@@ -36,11 +36,32 @@ RULES = {"caught_coverage": CAUGHT_COVERAGE, "region_coverage": REGION_COVERAGE,
          "region_compatible_min_shared": 0.30, "frame_box_share": FRAME_BOX_SHARE,
          "item_kinds": "box -> region; safety without box -> frame; advertising without box -> frame if CUT or "
                        "opening_promotion/branded_end_card, else unknown (never matches)"}
+# Added to a card's rules only when it scored a scene card, so cards of queues without
+# scene cards stay byte-identical to the ones scored before the rule existed.
+SCENE_CARD_EXTENT_RULE = ("a scene card (scene_card, discrete detected moments) spans only its moments: "
+                          "the gaps a decision on it leaves untouched neither catch labels nor count against it")
 
 
 def queue_scope(queue: dict[str, Any]) -> set[str]:
     scope = queue.get("detection_scope")
     return set(scope.get("selected") or ()) & set(GROUPS) if isinstance(scope, dict) else set(GROUPS)
+
+
+def scene_moments(item: dict[str, Any]) -> list[tuple[float, float]] | None:
+    """The detected moments of a scene card (R1, 2026-10-01); ``None`` for every other item.
+
+    A decision on a scene card edits only these moments (build_edit_plan), so a
+    label in a gap between them is not caught by the card and the gap is not
+    counted against its precision.
+    """
+    if not item.get("scene_card") or item.get("temporal_policy") != "discrete_detected_intervals":
+        return None
+    moments = []
+    for value in item.get("detected_intervals") or []:
+        if isinstance(value, dict):
+            start = float(value["start_seconds"])
+            moments.append((start, max(float(value["end_seconds"]), start + 0.5)))
+    return sorted(moments) or None
 
 
 def queue_items(queue: dict[str, Any]) -> list[dict[str, Any]]:
@@ -52,6 +73,7 @@ def queue_items(queue: dict[str, Any]) -> list[dict[str, Any]]:
             continue
         start = float(item["start_seconds"])
         end = max(float(item["end_seconds"]), start + 0.5)  # instantaneous items keep a visible extent
+        moments = scene_moments(item)
         group = CATEGORY_GROUP[item["category"]]
         region = normalize_region(item.get("suggested_region_source_pixels"))
         if region is not None:
@@ -61,12 +83,40 @@ def queue_items(queue: dict[str, Any]) -> list[dict[str, Any]]:
             kind = "frame"
         else:
             kind = "unknown"
-        items.append({"id": item.get("id"), "category": item["category"], "group": group,
-                      "start": start, "end": end, "advisory": advisory, "region": region, "kind": kind,
-                      "suggested_decision": item.get("suggested_decision"), "priority": item.get("priority"),
-                      "candidate_type": item.get("candidate_type"),
-                      "labels": [str(x) for x in (item.get("labels") or [])[:3]]})
+        row = {"id": item.get("id"), "category": item["category"], "group": group,
+               "start": start, "end": end, "advisory": advisory, "region": region, "kind": kind,
+               "suggested_decision": item.get("suggested_decision"), "priority": item.get("priority"),
+               "candidate_type": item.get("candidate_type"),
+               "labels": [str(x) for x in (item.get("labels") or [])[:3]]}
+        if moments is not None:
+            row["moments"] = moments
+        items.append(row)
     return items
+
+
+def _overlaps(spans: list[tuple[float, float]], target: tuple[float, float]) -> bool:
+    return any(clip(*span, *target) for span in spans)
+
+
+def _overlap_length(spans: list[tuple[float, float]], target: tuple[float, float]) -> float:
+    return union_length([c for c in (clip(*span, *target) for span in spans) if c])
+
+
+def _spans_covered(spans: list[tuple[float, float]], intervals: list[tuple[float, float]]) -> float:
+    """Share of the total length of ``spans`` covered by ``intervals``."""
+    if len(spans) == 1:  # every item but a scene card: exactly the previous rule
+        return covered_fraction(spans[0], intervals)
+    total = sum(b - a for a, b in spans)
+    if total <= 0:
+        return 0.0
+    return sum(covered_fraction(span, intervals) * (span[1] - span[0]) for span in spans) / total
+
+
+def _extent(item: dict[str, Any]) -> float:
+    """Edited length of a review item: its span, or the sum of a scene card's moments."""
+    if "moments" in item:
+        return sum(b - a for a, b in item["moments"])
+    return item["end"] - item["start"]
 
 
 def item_matches_label(item: dict[str, Any], label_region: dict[str, int] | None, frame_area: int) -> bool:
@@ -175,9 +225,13 @@ def score(manifest: dict[str, Any], labels_doc: dict[str, Any], queues: dict[str
         low, high = segment["start_seconds"], segment["end_seconds"]
         items = []
         for item in queue_items(queue):
-            clipped = clip(item["start"], item["end"], low, high)
-            if clipped and item["group"] in scope:
-                items.append(dict(item, clip=clipped))
+            if item["group"] not in scope:
+                continue
+            # spans: the time a decision on the item edits, inside this segment
+            spans = [c for c in (clip(a, b, low, high) for a, b in item.get("moments") or [(item["start"], item["end"])])
+                     if c]
+            if spans:
+                items.append(dict(item, spans=spans, clip=(spans[0][0], max(b for _, b in spans))))
         labels = []
         for event in labels_doc["events"]:
             if event["segment_id"] != segment["id"]:
@@ -191,7 +245,7 @@ def score(manifest: dict[str, Any], labels_doc: dict[str, Any], queues: dict[str
                 labels.append(dict(event, group=group, clip=clipped))
         for label in labels:
             compatible = [i for i in items if i["group"] == label["group"]
-                          and clip(*i["clip"], *label["clip"])
+                          and _overlaps(i["spans"], label["clip"])
                           and item_matches_label(i, label["region_source_pixels"], frame_area)]
             out = {k: label[k] for k in ("id", "segment_id", "category", "group", "expected_action",
                                          "severity", "ambiguous", "start_seconds", "end_seconds",
@@ -205,8 +259,9 @@ def score(manifest: dict[str, Any], labels_doc: dict[str, Any], queues: dict[str
                 out.update(status="trap_hit" if hits else "trap_ok", trap_item_ids=hits)
                 labels_out.append(out)
                 continue
-            coverage = covered_fraction(label["clip"], [i["clip"] for i in compatible])
-            main_coverage = covered_fraction(label["clip"], [i["clip"] for i in compatible if not i["advisory"]])
+            coverage = covered_fraction(label["clip"], [s for i in compatible for s in i["spans"]])
+            main_coverage = covered_fraction(label["clip"], [s for i in compatible if not i["advisory"]
+                                                             for s in i["spans"]])
             if label["ambiguous"]:
                 status = "ambiguous"
             elif main_coverage >= CAUGHT_COVERAGE:
@@ -216,8 +271,8 @@ def score(manifest: dict[str, Any], labels_doc: dict[str, Any], queues: dict[str
             else:
                 status = "partial" if coverage > 0 else "missed"
             best = max(compatible, key=lambda i: (not i["advisory"],
-                                                  union_length([c for c in [clip(*i["clip"], *label["clip"])] if c]),
-                                                  -abs((i["end"] - i["start"]) - (label["clip"][1] - label["clip"][0]))),
+                                                  _overlap_length(i["spans"], label["clip"]),
+                                                  -abs(_extent(i) - (label["clip"][1] - label["clip"][0]))),
                        default=None)
             region = None
             approximate = label.get("from_suggestion") in approximate_suggestions
@@ -232,7 +287,7 @@ def score(manifest: dict[str, Any], labels_doc: dict[str, Any], queues: dict[str
                        best_item_id=best["id"] if best else None, region=region, suggestion_agrees=agrees)
             labels_out.append(out)
         for item in items:
-            length = item["clip"][1] - item["clip"][0]
+            length = sum(b - a for a, b in item["spans"])
 
             def compatible_labels(kind: str) -> list[tuple[float, float]]:
                 chosen = []
@@ -245,27 +300,31 @@ def score(manifest: dict[str, Any], labels_doc: dict[str, Any], queues: dict[str
                         chosen.append(label["clip"])
                 return chosen
 
-            positive_share = covered_fraction(item["clip"], compatible_labels("positive"))
+            positive_share = _spans_covered(item["spans"], compatible_labels("positive"))
             if positive_share * length >= USEFUL_ITEM_FRACTION * length:
                 verdict = "useful"
-            elif positive_share == 0 and covered_fraction(item["clip"], compatible_labels("ambiguous")) > 0:
+            elif positive_share == 0 and _spans_covered(item["spans"], compatible_labels("ambiguous")) > 0:
                 verdict = "ambiguous_only"  # touches only ambiguous labels: excluded from precision
             else:
                 verdict = "false_positive"
             traps = [label["id"] for label in labels if is_trap(label)
                      and label["group"] == item["group"] and item["suggested_decision"] in ("BLUR", "CUT")
-                     and clip(*item["clip"], *label["clip"])
+                     and _overlaps(item["spans"], label["clip"])
                      and item_matches_label(item, label["region_source_pixels"], frame_area)]
-            items_out.append({"item_id": item["id"], "segment_id": segment["id"], "split": segment["split"],
-                              "source": segment["source"], "group": item["group"], "category": item["category"],
-                              "advisory": item["advisory"], "clip": [round(item["clip"][0], 3), round(item["clip"][1], 3)],
-                              "region": item["region"], "kind": item["kind"],
-                              "suggested_decision": item["suggested_decision"],
-                              "priority": item["priority"], "candidate_type": item["candidate_type"],
-                              "labels": item["labels"], "verdict": verdict, "trap_hits": traps})
+            row = {"item_id": item["id"], "segment_id": segment["id"], "split": segment["split"],
+                   "source": segment["source"], "group": item["group"], "category": item["category"],
+                   "advisory": item["advisory"], "clip": [round(item["clip"][0], 3), round(item["clip"][1], 3)],
+                   "region": item["region"], "kind": item["kind"],
+                   "suggested_decision": item["suggested_decision"],
+                   "priority": item["priority"], "candidate_type": item["candidate_type"],
+                   "labels": item["labels"], "verdict": verdict, "trap_hits": traps}
+            if "moments" in item:
+                row["moments"] = [[round(a, 3), round(b, 3)] for a, b in item["spans"]]
+            items_out.append(row)
     metrics = {group: {split: _metrics(group, split, segments_out, labels_out, items_out)
                        for split in (*SPLITS, "all")} for group in GROUPS}
-    return {"schema_version": 1, "created_at": now_iso(), "rules": RULES,
+    rules = dict(RULES, scene_card_extent=SCENE_CARD_EXTENT_RULE) if any("moments" in i for i in items_out) else RULES
+    return {"schema_version": 1, "created_at": now_iso(), "rules": rules,
             "manifest_sha256": canonical_sha256(manifest), "labels_fingerprint": labels_fingerprint(labels_doc),
             "labels_revision": labels_doc.get("revision"), "segments": segments_out, "labels": labels_out,
             "items": items_out, "metrics": metrics, "unscored_labels": unscored, "timing": timing or {}}

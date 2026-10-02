@@ -192,6 +192,52 @@ class FrameRuleTest(unittest.TestCase):
         self.assertEqual(card["metrics"]["gore"]["all"]["main_items"], 1)
 
 
+class SceneCardScoringTest(unittest.TestCase):
+    """R1 scene cards (2026-10-01): a decision edits only the detected moments, so they are scored that way."""
+
+    @staticmethod
+    def scene(moments, scene_card=True):
+        value = item("F", "violence", moments[0][0], moments[-1][1], suggested="BLUR")
+        value.update(temporal_policy="discrete_detected_intervals",
+                     detected_intervals=[{"start_seconds": a, "end_seconds": b} for a, b in moments])
+        if scene_card:
+            value["scene_card"] = {"kind": "fight", "applies_to": "detected_intervals_only"}
+        return value
+
+    def test_a_label_in_a_gap_is_not_caught_by_the_scene_card(self):
+        events = [label("IN", "S1", "violence", 10, 20), label("GAP", "S1", "violence", 25, 35)]
+        card = score(manifest(), labels_doc(events, complete=("S1",)),
+                     {"src": queue([self.scene([(10, 20), (40, 50)])])})
+        self.assertEqual({row["id"]: row["status"] for row in card["labels"]}, {"IN": "caught", "GAP": "missed"})
+        self.assertEqual(card["items"][0]["moments"], [[10, 20], [40, 50]])
+        self.assertIn("scene_card_extent", card["rules"])
+        span = score(manifest(), labels_doc(events, complete=("S1",)),
+                     {"src": queue([self.scene([(10, 20), (40, 50)], scene_card=False)])})
+        self.assertEqual(span["labels"][1]["status"], "caught", "other items keep the start-end span rule")
+        self.assertNotIn("moments", span["items"][0])
+        self.assertNotIn("scene_card_extent", span["rules"])
+
+    def test_scene_card_precision_counts_its_moments_not_its_gaps(self):
+        # Conan 21 2161.5-2214.5 (reviewer finding): useful by its moments, a false positive by its span.
+        events = [label("IN", "S1", "gore", 10, 20, action="CUT")]
+        moments = [(10, 20), (40, 50)]
+        card = score(manifest(), labels_doc(events, complete=("S1",)),
+                     {"src": queue([dict(self.scene(moments), category="gore")])})
+        self.assertEqual(card["items"][0]["verdict"], "useful")
+        self.assertEqual(card["metrics"]["gore"]["all"]["precision_main"], 1.0)
+        self.assertEqual(card["metrics"]["gore"]["all"]["main_items"], 1, "one card is one review item")
+        span = score(manifest(), labels_doc(events, complete=("S1",)),
+                     {"src": queue([dict(self.scene(moments, scene_card=False), category="gore")])})
+        self.assertEqual(span["items"][0]["verdict"], "false_positive")
+
+    def test_moments_are_clipped_to_the_segment(self):
+        events = [label("L", "S1", "violence", 90, 100)]
+        card = score(manifest(), labels_doc(events, complete=("S1",)),
+                     {"src": queue([self.scene([(80, 85), (95, 110)])])})
+        self.assertEqual(card["items"][0]["moments"], [[80, 85], [95, 100]])
+        self.assertEqual(card["labels"][0]["status"], "partial")
+
+
 class GateTest(unittest.TestCase):
     def cards(self, candidate_items, candidate_time=100.0):
         events = [label("L1", "S2", "adult", 210, 220, action="CUT"),

@@ -185,6 +185,19 @@ class CodexSupervisorTests(unittest.TestCase):
         self.assertTrue(any("untrimmed grounding box" in value for value in findings))
         self.assertGreaterEqual(len(actions), 2)
 
+    def test_preflight_accepts_a_kept_opening_studio_ident(self):
+        # R3a/R3b (2026-10-01): a studio ident has no pre-selected CUT; KEEP is a valid human decision.
+        ident = {"category": "visual_logo", "candidate_type": "opening_promotion", "start_seconds": 5,
+                 "end_seconds": 10, "decision": "KEEP", "labels": [], "reasons": []}
+        for extra in ({"opening_ident": True, "suggestion_withheld": {"reason": "opening_studio_ident_without_ad_text"}},
+                      {"studio_logo_memory": {"remembered": True}}):
+            findings, _ = queue_quality_findings({"items": [dict(ident, **extra)]})
+            self.assertFalse(any("instead of CUT" in value for value in findings), extra)
+        findings, _ = queue_quality_findings({"items": [ident]})
+        self.assertTrue(any("instead of CUT" in value for value in findings))
+        findings, _ = queue_quality_findings({"items": [dict(ident, decision="BLUR", opening_ident=True)]})
+        self.assertTrue(any("instead of CUT" in value for value in findings))
+
     def test_preflight_catches_ocr_only_blur_that_leaves_graphical_logo_visible(self):
         queue = {"items": [
             {

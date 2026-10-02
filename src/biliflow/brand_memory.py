@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import hashlib
 import json
 from datetime import datetime, timezone
@@ -445,6 +446,273 @@ def forget_review_item(root: Path, queue: dict[str, Any], item_id: str) -> bool:
     payload["updated_at"] = _now()
     _write_json(root / MEMORY_PATH, payload)
     return True
+
+
+# ---------------------------------------------------------------------------
+# Studio-logo memory (user decision 2026-10-01, R3b).
+#
+# A separate file from the brand memory above: brand records drive logo BLUR
+# routing, studio records only remember an opening/closing studio ident the user
+# explicitly confirmed with "Đây là logo hãng phim — giữ & nhớ". A later card may
+# go to the optional list only when EVERY preview frame repeats a record twice:
+#   * 64-bit full-frame pHash >= 0.95 (static idents repeat at 1.000, the best
+#     non-ident frame of three films reached 0.781,
+#     temp/next/review-load/studio-ident-phash.json), and
+#   * a 32x18 colour grid whose largest cell difference is <= 20. The pHash alone
+#     barely notices a small overlay (a corner URL on the Toho ident still scores
+#     1.000, a banner over the bottom 10-15 % of the WB ident 0.969); the grid
+#     does. Measured on the 320x180 previews: the same ident across Conan 20/21
+#     and every Troy run differs by at most 6, a JPEG q40 re-encode by 14, a
+#     5-px corner text by 23-26, every URL, banner or box tried by >= 36.
+# Text inside the ident is checked separately (review_workflow: any OCR line in
+# the window that the confirmed ident did not show keeps the card required).
+# Nothing is ever edited automatically.
+
+STUDIO_LOGO_MEMORY_PATH = Path("state/studio-logo-memory.json")
+STUDIO_LOGO_MEMORY_SCHEMA_VERSION = 1
+STUDIO_LOGO_MINIMUM_SIMILARITY = 0.95
+STUDIO_LOGO_GRID_SIZE = (32, 18)  # width, height of the colour grid
+STUDIO_LOGO_MAXIMUM_CELL_DIFFERENCE = 20
+_STUDIO_LOGO_MAX_SIGNATURES = 8  # frames stored per confirmed logo (matching checks every frame)
+
+
+def _empty_studio_logo_memory() -> dict[str, Any]:
+    return {
+        "schema_version": STUDIO_LOGO_MEMORY_SCHEMA_VERSION,
+        "updated_at": _now(),
+        "records": [],
+        "safety": {
+            "automatic_edit": False,
+            "purpose": "User-confirmed studio logos; a match only moves a card to the optional list",
+            "minimum_similarity": STUDIO_LOGO_MINIMUM_SIMILARITY,
+            "maximum_cell_difference": STUDIO_LOGO_MAXIMUM_CELL_DIFFERENCE,
+        },
+    }
+
+
+def load_studio_logo_memory(root: Path) -> dict[str, Any]:
+    root = root.resolve(strict=True)
+    path = root / STUDIO_LOGO_MEMORY_PATH
+    if not path.exists():
+        return _empty_studio_logo_memory()
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    if (
+        not isinstance(payload, dict)
+        or payload.get("schema_version") != STUDIO_LOGO_MEMORY_SCHEMA_VERSION
+        or not isinstance(payload.get("records"), list)
+    ):
+        raise ValueError("Unsupported studio-logo memory schema")
+    return payload
+
+
+def _load_image(root: Path, relative: object) -> np.ndarray | None:
+    try:
+        path = (root / str(relative)).resolve(strict=True)
+        if root != path and root not in path.parents:
+            return None
+        encoded = np.fromfile(path, dtype=np.uint8)  # Unicode-safe on Windows
+        bgr = cv2.imdecode(encoded, cv2.IMREAD_COLOR)
+    except (OSError, ValueError):
+        return None
+    if bgr is None or not bgr.size:
+        return None
+    return cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
+
+
+def studio_logo_grid(image_rgb: np.ndarray) -> str:
+    """The frame as a 32x18 RGB grid (area average), base64; a local overlay changes its cells."""
+    if image_rgb.ndim == 2:
+        image_rgb = cv2.cvtColor(image_rgb, cv2.COLOR_GRAY2RGB)
+    if image_rgb.ndim != 3 or image_rgb.shape[2] != 3 or not image_rgb.size:
+        raise ValueError("A non-empty RGB image is required")
+    small = cv2.resize(image_rgb, STUDIO_LOGO_GRID_SIZE, interpolation=cv2.INTER_AREA)
+    return base64.b64encode(np.ascontiguousarray(small, dtype=np.uint8).tobytes()).decode("ascii")
+
+
+def grid_difference(first: object, second: object) -> int | None:
+    """Largest per-cell colour difference of two ``studio_logo_grid`` values; ``None`` if one is invalid."""
+    width, height = STUDIO_LOGO_GRID_SIZE
+    try:
+        values = [
+            np.frombuffer(base64.b64decode(str(value), validate=True), dtype=np.uint8)
+            for value in (first, second)
+        ]
+    except (TypeError, ValueError):  # binascii.Error is a ValueError
+        return None
+    if any(value.size != width * height * 3 for value in values):
+        return None
+    return int(np.abs(values[0].astype(np.int16) - values[1].astype(np.int16)).max())
+
+
+def studio_logo_signatures(
+    root: Path, item: dict[str, Any], *, strict: bool = False,
+) -> list[dict[str, str]] | None:
+    """Full-frame pHash and colour grid of the preview frames of one review card.
+
+    For remembering (default): the readable frames among the first eight.
+    ``strict`` (matching): every preview frame, or ``None`` when the card has no
+    preview or any one of them cannot be read, so no frame is ever skipped.
+    """
+    root = root.resolve(strict=True)
+    previews = list(item.get("preview_images") or [])
+    if not strict:
+        previews = previews[:_STUDIO_LOGO_MAX_SIGNATURES]
+    signatures = []
+    for relative in previews:
+        image = _load_image(root, relative)
+        if image is None:
+            if strict:
+                return None
+            continue
+        signatures.append({
+            "preview": str(relative), "phash": perceptual_hash(image), "grid": studio_logo_grid(image),
+        })
+    if strict and not signatures:
+        return None
+    return signatures
+
+
+def studio_logo_eligible(item: dict[str, Any]) -> bool:
+    """A full-frame logo card (no localized region); watermark tracks never qualify."""
+    return (
+        item.get("category") == "visual_logo"
+        and not isinstance(item.get("suggested_region_source_pixels"), dict)
+        and item.get("candidate_type") != "persistent_overlay"
+    )
+
+
+def remember_studio_logo(
+    root: Path, queue: dict[str, Any], item: dict[str, Any],
+    signatures: list[dict[str, str]] | None = None,
+    window_text: dict[str, Any] | None = None,
+) -> dict[str, Any] | None:
+    """Store a studio-logo signature for an explicit user KEEP of a full-frame logo card.
+
+    ``window_text`` holds the OCR lines seen while the confirmed ident was on
+    screen (``{"covered": bool, "texts": [...]}``). A later matching card may
+    only show those lines; anything else keeps it in the main list.
+    """
+    root = root.resolve(strict=True)
+    if item.get("decision") != "KEEP" or not studio_logo_eligible(item):
+        return None
+    signatures = studio_logo_signatures(root, item) if signatures is None else signatures
+    if not signatures:
+        return None
+    texts = [str(value) for value in (window_text or {}).get("texts") or []]
+    source_sha256 = str(queue.get("source", {}).get("sha256", ""))
+    key = f"{source_sha256}:{item.get('id', '')}"
+    payload = load_studio_logo_memory(root)
+    payload["records"] = [record for record in payload["records"] if record.get("key") != key]
+    record = {
+        "key": key,
+        "source_sha256": source_sha256,
+        "review_item_id": item.get("id"),
+        "decision": "KEEP",
+        "memory_class": "studio_logo",
+        "labels": list(item.get("labels") or []),
+        "candidate_type": item.get("candidate_type"),
+        "review_kind": item.get("review_kind"),
+        "start_seconds": item.get("start_seconds"),
+        "end_seconds": item.get("end_seconds"),
+        "signatures": signatures,
+        "window_text": {"covered": bool((window_text or {}).get("covered")), "texts": texts},
+        "created_at": _now(),
+        "confirmed_by": "user",
+        "automatic_edit": False,
+    }
+    payload["records"].append(record)
+    payload["updated_at"] = _now()
+    _write_json(root / STUDIO_LOGO_MEMORY_PATH, payload)
+    return record
+
+
+def forget_studio_logo(root: Path, queue: dict[str, Any], item_id: str) -> bool:
+    root = root.resolve(strict=True)
+    if not (root / STUDIO_LOGO_MEMORY_PATH).exists():
+        return False
+    source_sha256 = str(queue.get("source", {}).get("sha256", ""))
+    key = f"{source_sha256}:{item_id}"
+    payload = load_studio_logo_memory(root)
+    before = len(payload["records"])
+    payload["records"] = [record for record in payload["records"] if record.get("key") != key]
+    if len(payload["records"]) == before:
+        return False
+    payload["updated_at"] = _now()
+    _write_json(root / STUDIO_LOGO_MEMORY_PATH, payload)
+    return True
+
+
+def match_studio_logo(
+    root: Path, item: dict[str, Any], records: Iterable[dict[str, Any]],
+    *, minimum_similarity: float = STUDIO_LOGO_MINIMUM_SIMILARITY,
+    maximum_cell_difference: int = STUDIO_LOGO_MAXIMUM_CELL_DIFFERENCE,
+) -> dict[str, Any] | None:
+    """Match when EVERY preview frame of ``item`` repeats a confirmed studio logo.
+
+    A frame repeats a stored frame when the pHash similarity is at least
+    ``minimum_similarity`` AND no cell of the colour grid differs by more than
+    ``maximum_cell_difference``. A card with an unreadable preview, a card
+    without previews and a stored frame without a grid never match.
+    ``known_texts`` in the result are the OCR lines of the matched records.
+    """
+    if not 0 < minimum_similarity <= 1:
+        raise ValueError("minimum_similarity must be in (0, 1]")
+    if not 0 <= maximum_cell_difference <= 255:
+        raise ValueError("maximum_cell_difference must be in [0, 255]")
+    records = [
+        record for record in records
+        if isinstance(record, dict) and record.get("decision") == "KEEP"
+        and record.get("memory_class") == "studio_logo"
+    ]
+    if not records or not studio_logo_eligible(item):
+        return None
+    signatures = studio_logo_signatures(root, item, strict=True)
+    if not signatures:
+        return None
+    weakest: float | None = None
+    worst_cells = 0
+    matched: dict[str, dict[str, Any]] = {}
+    for signature in signatures:
+        best: tuple[tuple[float, int], dict[str, Any], float, int] | None = None
+        for record in records:
+            for stored in record.get("signatures") or []:
+                if not isinstance(stored, dict):
+                    continue
+                similarity = hash_similarity(signature["phash"], str(stored.get("phash", "")))
+                if similarity < minimum_similarity:
+                    continue
+                cells = grid_difference(signature["grid"], stored.get("grid"))
+                if cells is None or cells > maximum_cell_difference:
+                    continue
+                if best is None or (similarity, -cells) > best[0]:
+                    best = ((similarity, -cells), record, similarity, cells)
+        if best is None:
+            return None
+        _, record, similarity, cells = best
+        matched.setdefault(str(record.get("key")), record)
+        if weakest is None or similarity < weakest:
+            weakest = similarity
+        worst_cells = max(worst_cells, cells)
+    assert weakest is not None and matched
+    primary = next(iter(matched.values()))
+    known_texts = list(dict.fromkeys(
+        str(text) for record in matched.values()
+        for text in ((record.get("window_text") or {}).get("texts") or [])
+    ))
+    return {
+        "similarity": round(weakest, 6),
+        "minimum_similarity": minimum_similarity,
+        "cell_difference": worst_cells,
+        "maximum_cell_difference": maximum_cell_difference,
+        "memory_key": primary.get("key"),
+        "memory_keys": list(matched),
+        "labels": list(primary.get("labels") or []),
+        "source_sha256": primary.get("source_sha256"),
+        "review_item_id": primary.get("review_item_id"),
+        "matched_frames": len(signatures),
+        "known_texts": known_texts,
+        "automatic_edit": False,
+    }
 
 
 def rebuild_brand_memory(root: Path) -> dict[str, Any]:

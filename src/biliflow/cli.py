@@ -29,6 +29,7 @@ from biliflow.review_workflow import (
     record_review_decision,
     render_edit_previews,
     serve_review_ui,
+    studio_logo_memory_allowed,
 )
 from biliflow.storage import storage_status
 from biliflow.textscan import scan_text
@@ -399,6 +400,10 @@ def build_parser() -> argparse.ArgumentParser:
     review.add_argument(
         "--adult-triage-level", choices=list(ADULT_TRIAGE_LEVELS),
         help=f"Measurement override of the 18+ triage level (default {ADULT_TRIAGE_LEVEL})",
+    )
+    review.add_argument(
+        "--no-studio-logo-memory", action="store_true",
+        help="Ignore user-confirmed studio logos (always ignored inside benchmark trials)",
     )
 
     verify_adult = sub.add_parser(
@@ -872,6 +877,9 @@ def main() -> int:
             selected_detectors=args.selected_detector or None,
             content_style=args.content_style,
             adult_triage_level=args.adult_triage_level,
+            use_studio_logo_memory=(
+                not args.no_studio_logo_memory and studio_logo_memory_allowed(args.queue)
+            ),
         )
         print(json.dumps(payload, indent=2, ensure_ascii=False))
         return 0

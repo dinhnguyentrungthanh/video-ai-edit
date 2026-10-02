@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import difflib
 import hashlib
 import html
 import json
@@ -30,7 +31,20 @@ from biliflow.adult_verification import (
     normalize_adult_triage_level,
     verification_is_calibrated,
 )
-from biliflow.brand_memory import forget_review_item, remember_review_item
+from biliflow.brand_memory import (
+    STUDIO_LOGO_MAXIMUM_CELL_DIFFERENCE,
+    STUDIO_LOGO_MEMORY_PATH,
+    STUDIO_LOGO_MINIMUM_SIMILARITY,
+    forget_review_item,
+    forget_studio_logo,
+    load_studio_logo_memory,
+    match_studio_logo,
+    relative_box_to_region,
+    remember_review_item,
+    remember_studio_logo as remember_studio_logo_record,
+    studio_logo_eligible,
+    studio_logo_signatures,
+)
 from biliflow.job_pipeline import DEFAULT_DETECTOR_GROUPS
 from biliflow.blur_filter import (
     blur_feather_mode,
@@ -646,17 +660,62 @@ def reconcile_persistent_overlay_items(
     return [item for item in items if id(item) not in removed]
 
 
+# One card per fight / blood scene (user decision 2026-10-01, R1). Violence and
+# gore moments of the same category whose gap is shorter than 20 s share one
+# card, at most 300 s from its first to its last second. 18+ never forms scene
+# cards: a scene there can mix BLUR and KEEP moments, so it keeps the short
+# 6 s / 30 s event groups below.
+SCENE_CARD_KINDS = {"violence": "fight", "gore": "blood"}
+SCENE_CARD_MAXIMUM_GAP_SECONDS = 20.0  # strict: a gap of exactly 20 s starts a new card
+SCENE_CARD_MAXIMUM_SPAN_SECONDS = 300.0
+
+
+def application_intervals(item: dict) -> list[dict]:
+    """The time an approved action on ``item`` edits, as ``build_edit_plan`` applies it."""
+    if item.get("temporal_policy") == "discrete_detected_intervals":
+        intervals = [
+            {"start_seconds": float(value["start_seconds"]), "end_seconds": float(value["end_seconds"])}
+            for value in item.get("detected_intervals") or []
+            if isinstance(value, dict)
+        ]
+        if intervals:
+            return intervals
+    return [{"start_seconds": float(item["start_seconds"]), "end_seconds": float(item["end_seconds"])}]
+
+
+def _union_moments(intervals: Iterable[dict]) -> list[dict]:
+    moments: list[dict] = []
+    for value in sorted(intervals, key=lambda v: (float(v["start_seconds"]), float(v["end_seconds"]))):
+        start, end = float(value["start_seconds"]), float(value["end_seconds"])
+        if moments and start <= moments[-1]["end_seconds"]:
+            moments[-1]["end_seconds"] = round(max(moments[-1]["end_seconds"], end), 3)
+        else:
+            moments.append({"start_seconds": round(start, 3), "end_seconds": round(end, 3)})
+    return moments
+
+
 def group_safety_review_events(
     items: list[dict], *, maximum_gap_seconds: float = 6.0,
     maximum_span_seconds: float = 30.0,
+    scene_gap_seconds: float = SCENE_CARD_MAXIMUM_GAP_SECONDS,
+    scene_span_seconds: float = SCENE_CARD_MAXIMUM_SPAN_SECONDS,
 ) -> list[dict]:
     """Group nearby safety detections into one review decision.
 
     The original intervals remain discrete.  ``build_edit_plan`` expands an
     approved action back to those intervals, so a gap used only for review
     context is never cut or blurred.
+
+    Violence and gore form scene cards (``scene_card``): every member card
+    becomes one detected moment holding exactly the time an action on that
+    member alone would have edited, so a decision on the scene card edits the
+    union of its moments and never a gap between them. 18+ keeps the short
+    ``maximum_gap_seconds`` / ``maximum_span_seconds`` event groups.
     """
-    if maximum_gap_seconds < 0 or maximum_span_seconds <= 0:
+    if (
+        maximum_gap_seconds < 0 or maximum_span_seconds <= 0
+        or scene_gap_seconds < 0 or scene_span_seconds <= 0
+    ):
         raise ValueError("Invalid safety event grouping limits")
     safety_categories = {"adult", "gore", "violence"}
     ordered = sorted(items, key=lambda item: (item["category"], item["start_seconds"]))
@@ -664,29 +723,49 @@ def group_safety_review_events(
     for original in ordered:
         item = dict(original)
         previous = grouped[-1] if grouped else None
-        suggestions_compatible = (
-            previous is not None
-            and (
-                previous.get("suggested_decision") is None
-                or item.get("suggested_decision") is None
-                or previous.get("suggested_decision") == item.get("suggested_decision")
-            )
+        # A scene card may show no suggestion while its members carry one, so
+        # compare against every explicit suggestion already inside the card.
+        explicit = {
+            value for value in (
+                previous["scene_card"]["member_suggestions"]
+                if previous is not None and previous.get("scene_card")
+                else [previous.get("suggested_decision") if previous is not None else None]
+            ) if value is not None
+        }
+        suggestions_compatible = previous is not None and (
+            item.get("suggested_decision") is None
+            or explicit <= {item.get("suggested_decision")}
         )
+        scene = item.get("category") in SCENE_CARD_KINDS
+        if scene and previous is not None:
+            close_enough = float(item["start_seconds"]) - float(previous["end_seconds"]) < scene_gap_seconds
+            short_enough = (
+                max(float(previous["end_seconds"]), float(item["end_seconds"]))
+                - float(previous["start_seconds"]) <= scene_span_seconds
+            )
+        elif previous is not None:
+            close_enough = float(item["start_seconds"]) <= (
+                float(previous["end_seconds"]) + maximum_gap_seconds
+            )
+            short_enough = (
+                float(item["end_seconds"]) - float(previous["start_seconds"])
+                <= maximum_span_seconds
+            )
         can_group = (
             previous is not None
             and previous.get("category") == item.get("category")
             and item.get("category") in safety_categories
             and previous.get("decision") is None
             and item.get("decision") is None
-            and float(item["start_seconds"]) <= (
-                float(previous["end_seconds"]) + maximum_gap_seconds
-            )
-            and float(item["end_seconds"]) - float(previous["start_seconds"])
-            <= maximum_span_seconds
+            and close_enough
+            and short_enough
             and suggestions_compatible
         )
         if not can_group:
             grouped.append(item)
+            continue
+        if scene:
+            _merge_scene_moment(previous, item, scene_gap_seconds, scene_span_seconds)
             continue
         previous["end_seconds"] = max(
             float(previous["end_seconds"]), float(item["end_seconds"])
@@ -734,6 +813,49 @@ def group_safety_review_events(
             previous["end_seconds"], "|".join(previous["evidence"]),
         )
     return grouped
+
+
+def _merge_scene_moment(
+    card: dict, member: dict, gap_seconds: float, span_seconds: float,
+) -> None:
+    """Add ``member`` to the scene card ``card`` (same category, both undecided)."""
+    moments = list(card["detected_intervals"]) if card.get("scene_card") else application_intervals(card)
+    moments = _union_moments([*moments, *application_intervals(member)])
+    card["start_seconds"] = round(min(float(card["start_seconds"]), float(member["start_seconds"])), 3)
+    card["end_seconds"] = round(max(float(card["end_seconds"]), float(member["end_seconds"])), 3)
+    scores = [value for value in (card.get("max_score"), member.get("max_score")) if value is not None]
+    card["max_score"] = max(scores) if scores else None
+    card["priority"] = min(
+        (card["priority"], member["priority"]),
+        key=lambda value: _PRIORITY_RANK.get(value, 2),
+    )
+    # A scene card keeps a suggestion only when every member had that same one,
+    # so accepting suggestions in bulk never cuts a moment that had none.
+    member_suggestions = list(dict.fromkeys([
+        *(card["scene_card"]["member_suggestions"] if card.get("scene_card")
+          else [card.get("suggested_decision")]),
+        member.get("suggested_decision"),
+    ]))
+    card["suggested_decision"] = member_suggestions[0] if len(member_suggestions) == 1 else None
+    for key in ("labels", "reasons", "evidence", "preview_images", "source_candidate_refs"):
+        card[key] = list(dict.fromkeys(list(card.get(key) or []) + list(member.get(key) or [])))
+    card["detected_intervals"] = moments
+    card["candidate_type"] = "review_event_group"
+    card["temporal_policy"] = "discrete_detected_intervals"
+    card["event_detection_count"] = len(moments)
+    card["scene_card"] = {
+        "kind": SCENE_CARD_KINDS[card["category"]],
+        "moment_count": len(moments),
+        "detected_seconds": round(sum(m["end_seconds"] - m["start_seconds"] for m in moments), 3),
+        "span_seconds": round(card["end_seconds"] - card["start_seconds"], 3),
+        "maximum_gap_seconds": gap_seconds,
+        "maximum_span_seconds": span_seconds,
+        "applies_to": "detected_intervals_only",
+        "member_suggestions": member_suggestions,
+    }
+    card["id"] = _item_id(
+        card["category"], card["start_seconds"], card["end_seconds"], "|".join(card["evidence"]),
+    )
 
 
 def revalidate_preserved_review_items(
@@ -1324,6 +1446,340 @@ def _advisory_text_items(root: Path, report_path: Path, payload: dict) -> list[d
     return items
 
 
+# Opening studio idents (user decision 2026-10-01, R3a/R3b). Ad evidence is any
+# website / phone / @handle token, ad-routed text, or a brand region that is not
+# the film's persistent watermark (that watermark is its own card).
+_AD_TEXT_PATTERNS = (
+    re.compile(r"\b(?:https?|www)\b", re.IGNORECASE),
+    re.compile(
+        r"[a-z0-9][a-z0-9-]*\s?[.,·•]\s?(?:com|net|org|vn|tv|me|io|xyz|cc|co|info|top|club|"
+        r"link|live|online|site|biz|asia|pro|app|fun|vip|bet|win|us|to|ly|gg)\b",
+        re.IGNORECASE,
+    ),
+    re.compile(r"\b[a-z0-9][a-z0-9-]{2,}\s(?:com|net|org|vn|tv|xyz)\b", re.IGNORECASE),
+    re.compile(r"(?<!\d)(?:\+?\d[\s.\-]?){8,}(?!\d)"),
+    re.compile(r"(?<![\w.])@[a-z0-9_.]{3,}", re.IGNORECASE),
+)
+_AD_TEXT_ROUTINGS = {"REVIEW_AD_LIKELY"}
+_PERSISTENT_TEXT_ROUTINGS = {"REVIEW_PERSISTENT_OVERLAY"}
+_BRAND_REGION_CLASSES = {
+    "external_brand", "external_brand_candidate", "branded_end_card", "promotional_segment",
+}
+_STRONG_BRAND_MEMORY_SIMILARITY = 0.94
+# R3a only proves the absence of website / phone / handle tokens and ad routing.
+# A bare site or brand word ("PHIMMOI", "KUBET") reads like a studio name to
+# those checks, so the card never claims "no ad text" when OCR read any line:
+# it lists the lines and leaves the call to the reviewer (finding 2026-10-01).
+STUDIO_IDENT_REASON = (
+    "Đoạn mở đầu giống logo hãng phim: không đọc thấy chữ nào (không có website, số điện thoại "
+    "hay chữ quảng cáo) nên BiliFlow không đề xuất Cắt. Hãy xem rồi tự chọn."
+)
+_STUDIO_IDENT_SHOWN_TEXTS = 6
+_STUDIO_IDENT_STORED_TEXTS = 20
+
+
+def studio_ident_reason(texts: list[str]) -> str:
+    """Why an opening ident has no pre-selected Cut, naming every OCR line read in its window."""
+    if not texts:
+        return STUDIO_IDENT_REASON
+    shown = ", ".join(texts[:_STUDIO_IDENT_SHOWN_TEXTS]) + (", …" if len(texts) > _STUDIO_IDENT_SHOWN_TEXTS else "")
+    return (
+        "Đoạn mở đầu giống logo hãng phim: không thấy website hay số điện thoại nên BiliFlow không "
+        f"đề xuất Cắt. Chữ đọc được: {shown} — nếu là tên web/thương hiệu lạ hãy Cắt. Hãy xem rồi tự chọn."
+    )
+
+
+def ad_text_tokens(text: str) -> list[str]:
+    """Website, domain, phone or @handle tokens in one OCR reading."""
+    found = []
+    for pattern in _AD_TEXT_PATTERNS:
+        found += [match.group(0).strip() for match in pattern.finditer(str(text or ""))]
+    return list(dict.fromkeys(value for value in found if value))
+
+
+def _resolved_intervals(item: dict, scan_payloads: dict[str, dict]) -> list[dict]:
+    resolved = []
+    for value in item.get("source_candidate_refs") or []:
+        report, separator, index = str(value).replace("\\", "/").rpartition("#interval:")
+        payload = scan_payloads.get(report)
+        if not separator or payload is None or not index.isdigit():
+            continue
+        intervals = payload.get("intervals") or []
+        if int(index) < len(intervals) and isinstance(intervals[int(index)], dict):
+            resolved.append(intervals[int(index)])
+    return resolved
+
+
+def _text_scan_payloads(scan_payloads: dict[str, dict]) -> list[dict]:
+    """Every OCR text scan once (a verified report may be listed under two names)."""
+    unique: dict[int, dict] = {}
+    for payload in scan_payloads.values():
+        if isinstance(payload, dict) and "tracks" in payload:
+            unique.setdefault(id(payload), payload)
+    return list(unique.values())
+
+
+def _window_text_tracks(
+    scan_payloads: dict[str, dict], start: float, end: float,
+) -> tuple[bool, list[dict]]:
+    """(a text scan covers start..end, the non-persistent OCR tracks overlapping it).
+
+    The film's persistent watermark track is left out: it is reviewed as its own card.
+    """
+    covered = False
+    tracks: list[dict] = []
+    for payload in _text_scan_payloads(scan_payloads):
+        scan_start = float(payload.get("scan_start_seconds") or 0.0)
+        scan_duration = payload.get("scan_duration_seconds")
+        scan_end = (
+            scan_start + float(scan_duration) if scan_duration is not None
+            else float(payload.get("duration_seconds") or 0.0)
+        )
+        if scan_start <= start + 0.001 and scan_end >= end - 0.001:
+            covered = True
+        for track in payload.get("tracks") or []:
+            if not isinstance(track, dict):
+                continue
+            track_start = float(track.get("start_seconds") or 0.0)
+            track_end = float(track.get("end_seconds") or track_start)
+            if track_end < start or track_start > end:
+                continue
+            if (
+                track.get("persistent")
+                or track.get("candidate_type") == "persistent_overlay"
+                or track.get("routing") in _PERSISTENT_TEXT_ROUTINGS
+            ):
+                continue
+            tracks.append(track)
+    return covered, tracks
+
+
+# R3b text guard: a confirmed studio logo remembers the OCR lines seen while it
+# was on screen. A later card matching it by picture may only show those lines;
+# any other line (a site name such as "BZNET" has no URL token and is routed as
+# scene text) keeps the card in the main list. One-character reads are noise.
+_OCR_TEXT_MINIMUM_CHARACTERS = 2
+_OCR_TEXT_NEAR_RATIO = 0.80
+# The similarity ratio is symmetric, so on its own a long remembered line absorbs
+# a word joined onto it ("A TimeWarner Company PHIMMOI", "BROS88"). A near match
+# must also cover the reading itself: at most one of its characters (one misread)
+# may be missing from the remembered line.
+_OCR_TEXT_MAXIMUM_UNMATCHED_CHARACTERS = 1
+
+
+def normalize_ocr_text(text: object) -> str:
+    """Upper-case letters and digits only: "PICTU R E $" -> "PICTURE"."""
+    return "".join(character for character in str(text or "").upper() if character.isalnum())
+
+
+def ocr_text_known(text: object, known_texts: Iterable[object]) -> bool:
+    """Whether one OCR reading repeats a remembered line (OCR noise tolerated, nothing added)."""
+    value = normalize_ocr_text(text)
+    if len(value) < _OCR_TEXT_MINIMUM_CHARACTERS:
+        return True
+    for known in known_texts:
+        stored = normalize_ocr_text(known)
+        if not stored:
+            continue
+        if value == stored or (len(value) >= 3 and value in stored):
+            return True
+        matcher = difflib.SequenceMatcher(None, value, stored, autojunk=False)
+        unmatched = len(value) - sum(block.size for block in matcher.get_matching_blocks())
+        if unmatched <= _OCR_TEXT_MAXIMUM_UNMATCHED_CHARACTERS and matcher.ratio() >= _OCR_TEXT_NEAR_RATIO:
+            return True
+    return False
+
+
+def studio_ident_window_text(item: dict, scan_payloads: dict[str, dict]) -> dict:
+    """OCR lines on screen during a full-frame logo card (what a studio-logo record remembers)."""
+    covered, tracks = _window_text_tracks(
+        scan_payloads, float(item["start_seconds"]), float(item["end_seconds"]),
+    )
+    texts = [
+        str(value).strip() for track in tracks for value in track.get("sample_text") or []
+        if str(value).strip()
+    ]
+    return {"covered": covered, "texts": list(dict.fromkeys(texts))}
+
+
+def unconfirmed_window_texts(
+    item: dict, scan_payloads: dict[str, dict], known_texts: Iterable[object],
+) -> list[str] | None:
+    """OCR lines in the card's window that the confirmed studio logo did not show; ``None`` if unscanned."""
+    known = list(known_texts)
+    window = studio_ident_window_text(item, scan_payloads)
+    if not window["covered"]:
+        return None
+    return [text for text in window["texts"] if not ocr_text_known(text, known)]
+
+
+def _inside_persistent_region(region: dict | None, persistent: list[dict]) -> bool:
+    if not isinstance(region, dict):
+        return False
+    return any(_intersection_over_smaller(region, other) >= 0.50 for other in persistent)
+
+
+def full_frame_logo_ad_evidence(
+    item: dict, items: list[dict], scan_payloads: dict[str, dict],
+) -> list[str] | None:
+    """Ad evidence inside a full-frame logo card's window; ``None`` when it cannot be checked.
+
+    Checked: every non-persistent OCR text track overlapping the window (tokens,
+    ad routing, semantic label, user policy terms), the card's own region
+    proposals and strong brand-memory matches. The film's persistent watermark
+    is excluded because it is reviewed as its own card. Without a text scan that
+    covers the window the absence of ad text is unknown, so nothing is relaxed.
+    """
+    start, end = float(item["start_seconds"]), float(item["end_seconds"])
+    covered, tracks = _window_text_tracks(scan_payloads, start, end)
+    if not covered:
+        return None
+    evidence: list[str] = []
+    for track in tracks:
+        texts = [str(value) for value in track.get("sample_text") or []]
+        tokens = [token for text in texts for token in ad_text_tokens(text)]
+        if tokens:
+            evidence.append(f"text_token:{tokens[0]}")
+        if track.get("routing") in _AD_TEXT_ROUTINGS:
+            evidence.append(f"text_routing:{track.get('routing')}")
+        if track.get("semantic_top_label") == "advertisement":
+            evidence.append("text_semantic:advertisement")
+        if track.get("policy_hits"):
+            evidence.append("text_policy_term")
+    persistent = [
+        other["suggested_region_source_pixels"] for other in items
+        if other is not item
+        and other.get("category") == "visual_logo"
+        and other.get("candidate_type") == "persistent_overlay"
+        and isinstance(other.get("suggested_region_source_pixels"), dict)
+        and float(other["start_seconds"]) <= start + 0.001
+        and float(other["end_seconds"]) >= end - 0.001
+    ]
+    for interval in _resolved_intervals(item, scan_payloads):
+        localization = interval.get("region_localization") or {}
+        frame_size = localization.get("frame_size") or item.get("source_frame_size")
+        for proposal in localization.get("proposals") or []:
+            if not isinstance(proposal, dict):
+                continue
+            box = proposal.get("blur_region_px")
+            region = (
+                {"x": int(box[0]), "y": int(box[1]), "width": int(box[2]), "height": int(box[3])}
+                if isinstance(box, list) and len(box) == 4 else None
+            )
+            branded = (
+                proposal.get("region_classification") in _BRAND_REGION_CLASSES
+                or str(proposal.get("suggested_decision") or "").upper() in {"BLUR", "CUT"}
+                or any(ad_text_tokens(label) for label in proposal.get("labels") or [])
+            )
+            if branded and not _inside_persistent_region(region, persistent):
+                evidence.append(f"brand_region:{proposal.get('region_classification')}")
+        features = ((interval.get("visual_logo_confirmation") or {}).get("features") or {})
+        memory = features.get("brand_memory")
+        if (
+            isinstance(memory, dict)
+            and memory.get("memory_class") == "brand"
+            and float(memory.get("similarity") or 0.0) >= _STRONG_BRAND_MEMORY_SIMILARITY
+        ):
+            region = None
+            if isinstance(frame_size, list) and len(frame_size) == 2:
+                region = relative_box_to_region(memory.get("relative_box"), tuple(frame_size))
+            if not _inside_persistent_region(region, persistent):
+                evidence.append("brand_memory_match")
+    return list(dict.fromkeys(evidence))
+
+
+def withhold_studio_ident_suggestions(
+    items: list[dict], scan_payloads: dict[str, dict],
+) -> list[dict]:
+    """Drop the pre-selected CUT of an opening studio ident without ad text (R3a).
+
+    The card stays in the main list; only the suggestion is withheld, so a
+    reviewer who wants the opening removed still chooses Cut explicitly. Every
+    OCR line read in the window is kept in ``suggestion_withheld.window_texts``
+    and named in the reason: a site or brand word without a URL token is not
+    ad evidence here, so the card must not claim that no ad text was seen.
+    """
+    for item in items:
+        if (
+            item.get("category") != "visual_logo"
+            or item.get("candidate_type") != "opening_promotion"
+            or item.get("decision") is not None
+            or item.get("suggested_decision") != "CUT"
+            or isinstance(item.get("suggested_region_source_pixels"), dict)
+        ):
+            continue
+        evidence = full_frame_logo_ad_evidence(item, items, scan_payloads)
+        if evidence is None or evidence:
+            continue
+        texts = studio_ident_window_text(item, scan_payloads)["texts"]
+        item["suggestion_withheld"] = {
+            "previous_suggested_decision": item["suggested_decision"],
+            "reason": "opening_studio_ident_without_ad_text",
+            "checked": ["ocr_text_tracks", "region_proposals", "brand_memory"],
+            "window_texts": texts[:_STUDIO_IDENT_STORED_TEXTS],
+            "window_text_count": len(texts),
+        }
+        item["suggested_decision"] = None
+        item["opening_ident"] = True
+        item["reasons"] = list(dict.fromkeys(list(item.get("reasons") or []) + [studio_ident_reason(texts)]))
+    return items
+
+
+def route_confirmed_studio_logos(
+    root: Path, items: list[dict], scan_payloads: dict[str, dict],
+    memory: dict | None = None,
+) -> tuple[list[dict], list[dict]]:
+    """Move a logo card matching a user-confirmed studio logo to the optional list (R3b).
+
+    A full-frame, undecided logo card moves only when (1) every preview frame
+    repeats a confirmed studio logo by pHash (>= 0.95) AND by its colour grid
+    (no local overlay), (2) a text scan covers its window and shows no ad
+    evidence, and (3) every OCR line in the window is one the confirmed logo
+    showed. Everything else stays required; a picture match blocked by (2) or
+    (3) is marked ``studio_logo_match_blocked`` so the reviewer sees why.
+    Without a confirmed studio logo nothing changes.
+    """
+    for item in items:
+        item.pop("studio_logo_match_blocked", None)
+    memory = load_studio_logo_memory(root) if memory is None else memory
+    if not memory.get("records"):
+        return items, []
+    kept: list[dict] = []
+    moved: list[dict] = []
+    for item in items:
+        # match_studio_logo accepts full-frame logo cards only (studio_logo_eligible).
+        match = (
+            match_studio_logo(root, item, memory["records"])
+            if item.get("decision") is None else None
+        )
+        if match is None:
+            kept.append(item)
+            continue
+        evidence = full_frame_logo_ad_evidence(item, items, scan_payloads)
+        unknown = unconfirmed_window_texts(item, scan_payloads, match.get("known_texts") or [])
+        if evidence is None or unknown is None or evidence or unknown:
+            item["studio_logo_match_blocked"] = {
+                "similarity": match["similarity"],
+                "memory_key": match.get("memory_key"),
+                "text_scan_covered": evidence is not None and unknown is not None,
+                "ad_evidence": list(evidence or []),
+                "unconfirmed_texts": list(unknown or [])[:10],
+            }
+            kept.append(item)
+            continue
+        routed = dict(item)
+        routed["advisory"] = True
+        routed["suggested_decision"] = "KEEP"
+        routed["studio_logo_match"] = match
+        routed["reasons"] = list(dict.fromkeys(list(item.get("reasons") or []) + [
+            f"Khớp logo hãng phim bạn đã xác nhận giữ (giống {match['similarity']:.2f}, "
+            f"ngưỡng {STUDIO_LOGO_MINIMUM_SIMILARITY:.2f}; không có lớp phủ lạ); không thấy chữ lạ "
+            "hay quảng cáo — chuyển sang Ứng viên phụ, không chặn xuất",
+        ]))
+        moved.append(routed)
+    return kept, moved
+
+
 def _quarantine_uncorroborated_visual_regions(
     items: list[dict],
 ) -> tuple[list[dict], list[dict]]:
@@ -1899,12 +2355,36 @@ def _verified_report_alias(root: Path, reports_root: Path, payload: dict) -> str
     return _relative(root, source)
 
 
+BENCHMARK_MARKER_NAME = ".biliflow-benchmark"
+BENCHMARK_ENVIRONMENT_VARIABLE = "BILIFLOW_BENCHMARK_CACHE"
+
+
+def studio_logo_memory_allowed(queue_path: Path, environment: dict | None = None) -> bool:
+    """Whether a production queue build may use the user's studio-logo memory.
+
+    Benchmark trials (``scripts/benchmark_full_advertising.py``, Golden ``run``)
+    set ``BILIFLOW_BENCHMARK_CACHE`` for every stage and mark their report folder
+    with ``.biliflow-benchmark``; their queues must not depend on user state.
+    """
+    environment = os.environ if environment is None else environment
+    if str(environment.get(BENCHMARK_ENVIRONMENT_VARIABLE) or "").strip():
+        return False
+    folder = Path(queue_path).resolve().parent
+    for directory in (folder, *folder.parents):
+        if (directory / BENCHMARK_MARKER_NAME).exists():
+            return False
+        if directory.name == "reports":
+            break
+    return True
+
+
 def build_review_queue(
     *, project_root: Path, report_paths: list[Path], queue_path: Path,
     merge_gap_seconds: float = 1.0,
     selected_detectors: list[str] | None = None,
     content_style: str | None = None,
     adult_triage_level: str | None = None,
+    use_studio_logo_memory: bool = False,
 ) -> dict:
     """Build one review queue from scan reports.
 
@@ -1912,6 +2392,11 @@ def build_review_queue(
     ``triage_adult_items`` move weak 18+ candidates to the optional list. Callers
     that omit it (older scripts, benchmarks) get the queue without that triage.
     ``adult_triage_level`` overrides ``ADULT_TRIAGE_LEVEL`` for measurements.
+    ``use_studio_logo_memory`` routes cards repeating a user-confirmed studio
+    logo (``state/studio-logo-memory.json``) to the optional list. It is off by
+    default so benchmarks and Golden measurements never depend on user state;
+    the production ``build-review`` command turns it on outside benchmark trials
+    (``studio_logo_memory_allowed``).
     """
     if content_style is not None and content_style not in CONTENT_STYLES:
         raise ValueError(f"Unknown content style: {content_style}")
@@ -2050,6 +2535,20 @@ def build_review_queue(
                 items, source_duration=source_duration,
             )
             items = group_safety_review_events(items)
+    # Opening studio idents: no pre-selected CUT without ad evidence (R3a), and a
+    # card repeating a user-confirmed studio logo goes to the optional list (R3b).
+    items = withhold_studio_ident_suggestions(items, scan_payloads)
+    studio_memory: dict = {"records": []}
+    if use_studio_logo_memory:
+        try:
+            studio_memory = load_studio_logo_memory(root)
+        except (OSError, ValueError) as error:
+            # An unreadable memory only means nothing moves: every card stays required.
+            studio_memory = {"records": [], "error": str(error)}
+    items, studio_logo_items = route_confirmed_studio_logos(
+        root, items, scan_payloads, studio_memory,
+    )
+    advisory_items.extend(studio_logo_items)
     # After preserved items are restored and re-checked, before ordering: a
     # moved item must not be promoted, and a decided one is never moved.
     items, triaged_adult_items, adult_triage = triage_adult_items(
@@ -2119,6 +2618,24 @@ def build_review_queue(
         "merge_gap_seconds": merge_gap_seconds,
         "content_style": content_style,
         "adult_triage": adult_triage,
+        "scene_cards": {
+            "categories": dict(SCENE_CARD_KINDS),
+            "maximum_gap_seconds": SCENE_CARD_MAXIMUM_GAP_SECONDS,
+            "maximum_span_seconds": SCENE_CARD_MAXIMUM_SPAN_SECONDS,
+            "cards": sum(1 for item in items if item.get("scene_card")),
+            "applies_to": "detected_intervals_only",
+        },
+        "studio_logo_memory": {
+            "used": bool(use_studio_logo_memory),
+            "confirmed_logos": len(studio_memory.get("records") or []),
+            "minimum_similarity": STUDIO_LOGO_MINIMUM_SIMILARITY,
+            "maximum_cell_difference": STUDIO_LOGO_MAXIMUM_CELL_DIFFERENCE,
+            "moved_to_candidates": len(studio_logo_items),
+            "kept_required_after_picture_match": sum(
+                1 for item in items if item.get("studio_logo_match_blocked")
+            ),
+            "error": studio_memory.get("error"),
+        },
         "allowed_decisions": list(DECISIONS),
         "counts": _counts(items),
         "items": items,
@@ -2179,13 +2696,25 @@ def record_review_decision(
     end_seconds: float | None = None, blur_edge_mode: str | None = None,
     actor: str = "local_user",
     transport: str = "local_cli",
+    remember_studio_logo: bool = False,
 ) -> dict:
+    """Record one human decision.
+
+    ``remember_studio_logo`` is the explicit "Đây là logo hãng phim — giữ & nhớ"
+    action: it requires KEEP on a full-frame logo card and also stores the card's
+    preview signatures and the OCR lines of its window in the separate
+    studio-logo memory. An unreadable studio-logo memory refuses that action
+    before anything is written. Any other decision on that card removes its
+    studio-logo record again; that clean-up never fails the decision.
+    """
     root = project_root.resolve(strict=True)
     queue_path = _inside((root / "reports").resolve(strict=True), queue_path, "Queue path")
     payload = _read_json(queue_path.resolve(strict=True))
     decision = decision.upper()
     if decision not in DECISIONS:
         raise ValueError(f"Decision must be one of {', '.join(DECISIONS)}")
+    if remember_studio_logo and decision != "KEEP":
+        raise ValueError("Chỉ có thể ghi nhớ logo hãng phim khi chọn Giữ nguyên")
     matches = [item for item in payload["items"] if item["id"] == item_id]
     if not matches:
         advisory_matches = [
@@ -2200,6 +2729,24 @@ def record_review_decision(
     if len(matches) != 1:
         raise ValueError(f"Unknown or duplicate review item: {item_id}")
     item = matches[0]
+    studio_signatures = None
+    studio_window_text = None
+    if remember_studio_logo:
+        if not studio_logo_eligible(item):
+            raise ValueError("Chỉ ghi nhớ được logo hãng phim cho thẻ logo toàn khung hình")
+        studio_signatures = studio_logo_signatures(root, item)
+        if not studio_signatures:
+            raise ValueError("Không đọc được ảnh xem trước của thẻ này để ghi nhớ logo hãng phim")
+        try:
+            load_studio_logo_memory(root)  # fail before the decision is written
+        except (OSError, ValueError) as error:
+            raise ValueError(
+                f"Không đọc được bộ nhớ logo hãng phim ({STUDIO_LOGO_MEMORY_PATH.as_posix()}); "
+                f"chưa ghi quyết định: {error}"
+            ) from error
+        studio_window_text = _queue_window_text(root, payload, item)
+        if note is None:
+            note = "Người duyệt xác nhận đây là logo hãng phim — giữ nguyên và ghi nhớ"
     if (start_seconds is None) != (end_seconds is None):
         raise ValueError("Adjusted review interval requires both start and end")
     original_interval = None
@@ -2241,25 +2788,68 @@ def record_review_decision(
     item["decision_actor"] = actor
     item["decision_transport"] = transport
     item["decided_at"] = _now()
+    item.pop("studio_logo_memory", None)
+    if remember_studio_logo:
+        item["studio_logo_memory"] = {
+            "remembered": True, "at": item["decided_at"],
+            "frames": len(studio_signatures or []),
+            "text_scan_covered": bool((studio_window_text or {}).get("covered")),
+            "window_texts": list((studio_window_text or {}).get("texts") or [])[:20],
+        }
     payload["updated_at"] = _now()
     payload["status"] = _queue_status(payload["items"])
     payload["counts"] = _counts(payload["items"])
-    payload.setdefault("audit_log", []).append(
-        {
-            "at": item["decided_at"], "action": "DECIDE", "item_id": item_id,
-            "decision": decision, "actor": actor, "transport": transport,
-            "original_interval": original_interval,
-            "reviewed_interval": {
-                "start_seconds": item["start_seconds"],
-                "end_seconds": item["end_seconds"],
-            },
-        }
-    )
+    entry = {
+        "at": item["decided_at"], "action": "DECIDE", "item_id": item_id,
+        "decision": decision, "actor": actor, "transport": transport,
+        "original_interval": original_interval,
+        "reviewed_interval": {
+            "start_seconds": item["start_seconds"],
+            "end_seconds": item["end_seconds"],
+        },
+    }
+    if remember_studio_logo:
+        entry["remember_studio_logo"] = True
+    payload.setdefault("audit_log", []).append(entry)
     payload["audit_log"] = payload["audit_log"][-1000:]
     _write_json(queue_path, payload)
     remember_review_item(root, payload, item)
+    if remember_studio_logo:
+        remember_studio_logo_record(
+            root, payload, item, studio_signatures, window_text=studio_window_text,
+        )
+    else:
+        # Also when the flag is gone (rebuilt queue): any other decision forgets it.
+        _forget_studio_logo_quietly(root, payload, item_id)
     _render_queue_html(root, queue_path, payload)
     return payload
+
+
+def _forget_studio_logo_quietly(root: Path, queue: dict, item_id: str) -> None:
+    """Drop a studio-logo record after a saved decision; an unreadable memory never fails it.
+
+    ``build_review_queue`` ignores an unreadable memory too, so no card can move
+    because of the record that could not be removed here.
+    """
+    try:
+        forget_studio_logo(root, queue, item_id)
+    except (OSError, ValueError):
+        pass
+
+
+def _queue_window_text(root: Path, queue: dict, item: dict) -> dict:
+    """OCR lines in ``item``'s window, read from the queue's own text scans."""
+    reports_root = (root / "reports").resolve(strict=True)
+    payloads: dict[str, dict] = {}
+    for relative in queue.get("reports") or []:
+        try:
+            path = _inside(reports_root, root / str(relative), "Report path").resolve(strict=True)
+            payload = _read_json(path)
+        except (OSError, ValueError):
+            continue
+        if isinstance(payload, dict) and "tracks" in payload:
+            payloads[str(relative)] = payload
+    return studio_ident_window_text(item, payloads)
 
 
 
@@ -2383,6 +2973,7 @@ def clear_review_decision(
     item["decision_actor"] = None
     item["decision_transport"] = None
     item["decided_at"] = None
+    item.pop("studio_logo_memory", None)
     payload["updated_at"] = _now()
     payload["status"] = _queue_status(payload["items"])
     payload["counts"] = _counts(payload["items"])
@@ -2395,6 +2986,7 @@ def clear_review_decision(
     payload["audit_log"] = payload["audit_log"][-1000:]
     _write_json(queue_path, payload)
     forget_review_item(root, payload, item_id)
+    _forget_studio_logo_quietly(root, payload, item_id)
     _render_queue_html(root, queue_path, payload)
     return payload
 
@@ -2620,6 +3212,11 @@ details.export>summary .label{color:var(--text);font-weight:600}details.export>s
 .timeline .hit{position:absolute;top:9px;width:3px;height:12px;margin-left:-1px;border-radius:2px;background:var(--violence)}
 .timeline .peak{position:absolute;top:8px;width:14px;height:14px;margin-left:-7px;border-radius:50%;background:#fff;border:3px solid var(--cat)}
 .timeline .head{position:absolute;top:3px;bottom:3px;width:2px;margin-left:-1px;background:var(--accent);border-radius:1px;pointer-events:none}
+.timeline .gapline{position:absolute;top:14px;height:2px;background:repeating-linear-gradient(90deg,#3a4452 0 4px,transparent 4px 8px)}.timeline .mo{position:absolute;top:10px;height:10px;border-radius:4px;background:#5b3b2f;background:color-mix(in srgb,var(--cat) 45%,#1c232d)}.timeline .mo.on{background:var(--cat)}
+.thumb i{position:absolute;right:3px;top:3px;background:rgba(0,0,0,.72);font-size:10px;line-height:13px;font-style:normal;font-weight:700;padding:0 4px;border-radius:4px}
+.moments{display:flex;flex-wrap:wrap;gap:6px;margin-top:10px}.focus-box .mchip,.mchip{display:inline-flex;gap:6px;align-items:center;width:auto;margin:0;background:transparent;border:1px solid var(--line);color:var(--text);border-radius:999px;padding:3px 9px 3px 3px;font-size:13px;font-weight:500;font-variant-numeric:tabular-nums}.focus-box .mchip:hover{background:transparent}.mchip b{display:inline-grid;place-items:center;min-width:20px;height:20px;border-radius:999px;background:#2a323d;font-size:11px}.mchip span{color:var(--accent);font-size:11px}.focus-box .mchip:hover{border-color:var(--muted)}.focus-box .mchip.on{border-color:var(--cat)}.mchip.on b{background:var(--cat);color:#0d1117}
+.applies{font-size:13px;color:#c9d3df;background:var(--card2);border:1px dashed var(--line);border-radius:10px;padding:8px 10px}.side>.applies{margin-top:auto}.side>.applies+.decide{margin-top:0}
+.studio-wrap{display:grid;gap:6px}.studio{border:1px solid var(--line);background:#202833;color:var(--text);border-radius:10px;padding:10px 8px;font-size:14px;font-weight:600}.studio:hover{border-color:var(--muted)}.studio.sel{border-color:var(--keep);background:rgba(47,191,113,.14)}.studio-wrap small{color:var(--muted);font-size:12px;text-align:center}
 .strip{display:grid;grid-template-columns:repeat(8,minmax(0,1fr));gap:6px;padding:10px;background:var(--card2)}
 .thumb{position:relative;display:block;padding:0;border-radius:8px;overflow:hidden;border:2px solid transparent;background:#0b0e13;aspect-ratio:16/9;color:var(--text)}
 .thumb img{display:block;width:100%;height:100%;object-fit:cover}.thumb img:not([src]){visibility:hidden}
@@ -2667,7 +3264,7 @@ let token=__BILIFLOW_REVIEW_TOKEN__;let mediaKey=null;let queue=null;let resourc
 let writeChain=Promise.resolve();let pendingWrites=0;let localEpoch=0;let resyncNeeded=false;let reopenAfterResync=null;let sessionRefresh=null;let resourcesTimer=null;let prefetchTimer=null;let saveTimer=null;let techOpen=false;let sheetOpen=false;let mediaGen=0;let regionKey='';let sideItemId=null;
 let itemMap=new Map();let listIds=[];const rowById=new Map();const sticky=new Set();const undoStack=[];
 const evidenceCache=new Map();const evidenceLoading=new Map();const frameBlobs=new Map();const frameUrgent=[];const frameLater=[];let frameActive=0;
-const pstate={id:null,start:0,end:0,reveal:false,loaded:false,pending:null,seekFor:null,available:true,reason:null,srcKey:null,want:null,keyRetries:0};
+const pstate={id:null,start:0,end:0,reveal:false,loaded:false,pending:null,seekFor:null,available:true,reason:null,srcKey:null,want:null,keyRetries:0,moments:null,mi:-1,seq:false,stopAt:null};
 const reviewStats={fullRenders:0,focusRenders:0,sideRenders:0,listBuilds:0,rowUpdates:0,polls:0,pollChanges:0,evidenceFetches:0,frameFetches:0,writeRetries:0,writeFailures:0,sessionRefreshes:0,mediaKeyChanges:0,frameKeyRetries:0,videoErrors:0};window.reviewStats=reviewStats;
 try{autoNext=localStorage.getItem('biliflow.review.autoNext')!=='0';}catch(_error){}
 const $=s=>document.querySelector(s);const video=$('#video'),playerBox=$('#player'),posterImg=$('#poster');
@@ -2688,7 +3285,17 @@ const KIND_NAMES={logo_overlay:'Logo',logo_candidate:'Ứng viên logo',opening_
 const FILTER_TITLES={pending:'Chưa duyệt',adult:'18+',gore:'Máu me',violence:'Bạo lực',ads:'Quảng cáo',all:'Tất cả mục',high:'Ưu tiên cao',visual_ai:'Visual AI',visual_logo:'Logo',text:'Chữ',candidates:'Ứng viên phụ'};
 const STATUS={KEEP:['Giữ','st-keep'],BLUR:['Làm mờ','st-blur'],CUT:['Cắt','st-cut'],NEEDS_MORE_CONTEXT:['Cần xem','st-more']};
 function isSafety(x){return !!x&&Object.prototype.hasOwnProperty.call(SAFETY,x.category);}
-function catName(x){if(isSafety(x))return SAFETY[x.category][0];return KIND_NAMES[x.review_kind]||(x.category==='text'?'Chữ':x.category==='visual_logo'?'Logo / quảng cáo':String(x.category||'Khác'));}
+const SCENE_WORDS={violence:'Trận đánh',gore:'Cảnh máu',adult:'Nhóm 18+'};
+function momentsOf(x){if(!x||x.temporal_policy!=='discrete_detected_intervals')return [];return (x.detected_intervals||[]).map(d=>({start:Number(d.start_seconds),end:Number(d.end_seconds)})).filter(m=>Number.isFinite(m.start)&&Number.isFinite(m.end)&&m.end>=m.start).sort((a,b)=>a.start-b.start);}
+function isScene(x){return isSafety(x)&&momentsOf(x).length>1;}
+function momentTotal(ms){return ms.reduce((s,m)=>s+(m.end-m.start),0);}
+function sceneTitle(x){return `${SCENE_WORDS[x.category]||catName(x)} · ${momentsOf(x).length} khoảnh khắc`;}
+function sceneSpan(x){return `tổng ${mmss(momentTotal(momentsOf(x)))} (trải dài ${mmss(x.start_seconds)}–${mmss(x.end_seconds)})`;}
+function sceneHeader(x){return `${sceneTitle(x)} · ${sceneSpan(x)}`;}
+function appliesLine(x){const ms=momentsOf(x);return `Quyết định chỉ áp dụng cho ${ms.length} khoảnh khắc này (tổng ${mmss(momentTotal(ms))}); khoảng trống giữa chúng giữ nguyên.`;}
+function momentIndex(t,ms){return ms.findIndex(m=>t>=m.start-.05&&t<=m.end+.05);}
+function studioEligible(x){return !!x&&x.category==='visual_logo'&&!x.suggested_region_source_pixels&&x.candidate_type!=='persistent_overlay';}
+function catName(x){if(isSafety(x))return SAFETY[x.category][0];if(x.review_kind==='opening_promotion'&&x.opening_ident)return 'Logo mở đầu';return KIND_NAMES[x.review_kind]||(x.category==='text'?'Chữ':x.category==='visual_logo'?'Logo / quảng cáo':String(x.category||'Khác'));}
 function catColor(x){return isSafety(x)?SAFETY[x.category][1]:'var(--ad)';}
 function statusOf(x){return STATUS[x.decision]||['Chưa duyệt','st-pending'];}
 function isLogoItem(x){return x.category==='visual_logo'||x.review_kind==='logo_overlay'||x.review_kind==='logo_candidate';}
@@ -2716,7 +3323,7 @@ function initializeExportSettings(){if(exportSettingsInitialized)return;const po
 function toggleCustomOutputSize(){$('#custom-size-wrap').hidden=$('#output-size-mode').value!=='custom';}
 function outputSizeSelection(){const mode=$('#output-size-mode').value;if(mode==='unlimited')return{size_mode:'unlimited',description:'không giới hạn dung lượng'};if(mode==='default')return{size_mode:'default',description:'tối đa 3,5 GB'};const maximum=Number($('#custom-output-gb').value);if(!Number.isFinite(maximum)||maximum<0.05||maximum>1000)throw new Error('Giới hạn tùy chỉnh phải từ 0,05 đến 1.000 GB.');return{size_mode:'custom',max_output_gb:maximum,description:`tối đa ${maximum.toLocaleString('vi-VN')} GB`};}
 function pendingDescription(){const pending=queue.items.filter(x=>!x.decision),names={violence:'Bạo lực',gore:'Máu me',adult:'18+',visual_logo:'Logo / quảng cáo',text:'Chữ'};if(!pending.length)return 'Đã duyệt đủ. Bạn có thể xuất video.';return `Còn ${pending.length} mục chưa duyệt: ${pending.slice(0,3).map(x=>`${names[x.category]||x.category} ${clock(x.start_seconds)}–${clock(x.end_seconds)}`).join('; ')}. Hãy chọn Giữ nguyên, Làm mờ cả cảnh, Cắt cảnh hoặc Cần xem thêm.`;}
-function rowHtml(x){const [label,cls]=statusOf(x);return `<button type="button" class="row${x.id===focusId?' on':''}" data-id="${esc(x.id)}"><span class="dot" style="background:${catColor(x)}"></span><span>${esc(catName(x))}<small>${span(x)}</small></span><span class="st ${cls}">${label}</span></button>`;}
+function rowHtml(x){const [label,cls]=statusOf(x),scene=isScene(x),name=scene?`${SCENE_WORDS[x.category]||catName(x)} (${momentsOf(x).length})`:catName(x);return `<button type="button" class="row${x.id===focusId?' on':''}" data-id="${esc(x.id)}"${scene?` title="${esc(sceneHeader(x))}"`:''}><span class="dot" style="background:${catColor(x)}"></span><span>${esc(name)}<small>${span(x)}</small></span><span class="st ${cls}">${label}</span></button>`;}
 function renderList(){reviewStats.listBuilds++;const data=filteredItems(),rows=$('#rows');listIds=data.map(x=>x.id);rowById.clear();rows.innerHTML=data.length?data.map(rowHtml).join(''):'<div class="list-empty">Không có mục nào trong bộ lọc này.</div>';for(const el of rows.children)if(el.dataset.id)rowById.set(el.dataset.id,el);setText($('#list-title'),FILTER_TITLES[filter]||'Danh sách');setText($('#list-count'),String(data.length));markActiveRow();}
 function updateListStatuses(){const data=filteredItems();if(data.length!==listIds.length||data.some((x,i)=>x.id!==listIds[i])){renderList();return;}for(const x of data){const row=rowById.get(x.id);if(!row)continue;const [label,cls]=statusOf(x),pill=row.lastElementChild;if(pill.textContent!==label){pill.textContent=label;pill.className=`st ${cls}`;reviewStats.rowUpdates++;}}}
 function markActiveRow(){const old=$('#rows .row.on');if(old&&old.dataset.id!==focusId)old.classList.remove('on');const row=rowById.get(focusId);if(row){row.classList.add('on');ensureRowVisible(row);}}
@@ -2733,27 +3340,35 @@ function renderFocus(){reviewStats.focusRenders++;mediaGen++;const x=itemMap.get
 card.hidden=false;empty.hidden=true;card.style.setProperty('--cat',catColor(x));const safety=isSafety(x);$('#media-safety').hidden=!safety;$('#media-region').hidden=safety;if(safety){if(regionKey){regionKey='';$('#media-region').textContent='';}setupSafetyMedia(x);}else{pausePlayer();renderRegionMedia(x,true);}renderSide(x);keepFrames();schedulePrefetch();}
 function previewSrc(x){const p=(x.preview_images||[])[0];return p?'/media/'+encodeURIComponent(p):null;}
 function thumbTime(p){const m=/-(\d+(?:\.\d+)?)s\.(?:jpg|jpeg|png)$/i.exec(String(p||''));return m?Number(m[1]):null;}
-function setupSafetyMedia(x){const start=Number(x.start_seconds),end=Number(x.end_seconds);if(pstate.id!==x.id||pstate.start!==start||pstate.end!==end){pausePlayer();pstate.id=x.id;pstate.start=start;pstate.end=end;pstate.seekFor=null;pstate.pending=null;coverVideo();setPoster(null,!!mediaKey);hideNote();setTime(start);}playerBox.classList.toggle('no-video',!videoAllowed());const gen=mediaGen,cached=evidenceCache.get(x.id);if(cached!==undefined||!mediaKey){const ev=cached===undefined?null:cached;renderTimeline(x,ev);renderStrip(x,ev);if(!ev&&!pstate.reveal)setPoster(previewSrc(x));return;}renderTimeline(x,null);renderStrip(x,undefined);loadEvidence(x.id).then(ev=>{if(gen!==mediaGen||focusId!==x.id)return;renderTimeline(x,ev);renderStrip(x,ev);if(!ev&&!pstate.reveal)setPoster(previewSrc(x));playerBox.classList.toggle('no-video',!videoAllowed());renderSide(x);});}
+function setupSafetyMedia(x){const start=Number(x.start_seconds),end=Number(x.end_seconds);if(pstate.id!==x.id||pstate.start!==start||pstate.end!==end){pausePlayer();pstate.id=x.id;pstate.start=start;pstate.end=end;pstate.seekFor=null;pstate.pending=null;pstate.moments=isScene(x)?momentsOf(x):null;pstate.mi=-1;pstate.seq=false;pstate.stopAt=null;coverVideo();setPoster(null,!!mediaKey);hideNote();setTime(start);}playerBox.classList.toggle('no-video',!videoAllowed());const gen=mediaGen,cached=evidenceCache.get(x.id);if(cached!==undefined||!mediaKey){const ev=cached===undefined?null:cached;renderTimeline(x,ev);renderStrip(x,ev);if(!ev&&!pstate.reveal)setPoster(previewSrc(x));return;}renderTimeline(x,null);renderStrip(x,undefined);loadEvidence(x.id).then(ev=>{if(gen!==mediaGen||focusId!==x.id)return;renderTimeline(x,ev);renderStrip(x,ev);if(!ev&&!pstate.reveal)setPoster(previewSrc(x));playerBox.classList.toggle('no-video',!videoAllowed());renderSide(x);});}
 function pickStrip(frames,n=8){const list=(frames||[]).slice().sort((a,b)=>a.t-b.t);if(list.length<=n)return list;const chosen=new Set(),strongest=list.findIndex(f=>f.kind==='strongest');if(strongest>=0)chosen.add(strongest);const take=(indexes,slots)=>{if(slots<=0||!indexes.length)return;if(indexes.length<=slots){indexes.forEach(i=>chosen.add(i));return;}for(let s=0;s<slots;s++)chosen.add(indexes[Math.min(indexes.length-1,Math.floor((s+.5)*indexes.length/slots))]);};const seeds=list.map((f,i)=>f.kind==='seed'&&!chosen.has(i)?i:-1).filter(i=>i>=0);take(seeds,Math.ceil((n-chosen.size)/2));take(list.map((_f,i)=>chosen.has(i)?-1:i).filter(i=>i>=0),n-chosen.size);return [...chosen].sort((a,b)=>a-b).slice(0,n).map(i=>list[i]);}
-function stripFrames(x,ev){if(ev&&mediaKey&&(ev.frames||[]).length)return pickStrip(ev.frames,8).map(f=>({t:f.t,kind:f.kind,remote:true}));return (x.preview_images||[]).slice(0,8).map(p=>({t:thumbTime(p),kind:'preview',src:'/media/'+encodeURIComponent(p)}));}
-function renderStrip(x,ev){const strip=$('#strip'),gen=String(mediaGen);strip.dataset.gen=gen;if(ev===undefined){strip.innerHTML='<div class="thumb ghost"></div>'.repeat(8);return;}const frames=stripFrames(x,ev),label=(x.end_seconds-x.start_seconds)<30?mmssTenth:mmss;strip.innerHTML=frames.map((f,i)=>`<button type="button" class="thumb${f.kind==='strongest'?' peak':f.kind==='seed'?' hit':''}" data-i="${i}" data-t="${f.t==null?'':f.t}" aria-label="Khung ${f.t==null?i+1:label(f.t)}"><img alt="" loading="lazy" decoding="async"${f.src?` src="${esc(f.src)}"`:''}>${f.t==null?'':`<span>${label(f.t)}</span>`}</button>`).join('');const remote=frames.map((f,i)=>({f,i})).filter(v=>v.f.remote);if(!remote.length)return;const peak=remote.find(v=>v.f.kind==='strongest')||remote[0],order=[peak,...remote.filter(v=>v!==peak)],promises=queueFrames(x.id,order.map(v=>v.f.t),true);order.forEach((v,k)=>promises[k].then(obj=>{if(!obj||strip.dataset.gen!==gen)return;const img=strip.querySelector(`.thumb[data-i="${v.i}"] img`);if(img)img.src=obj;if(v===peak&&pstate.id===x.id&&!pstate.reveal)setPoster(obj);}));}
+function pickSceneStrip(frames,ms,n=8){const list=(frames||[]).filter(f=>momentIndex(f.t,ms)>=0).sort((a,b)=>a.t-b.t);if(list.length<=n)return list;const rank=f=>f.kind==='strongest'?3:f.kind==='seed'?2:1,groups=ms.map(()=>[]);list.forEach(f=>groups[momentIndex(f.t,ms)].push(f));let order=ms.map((_m,i)=>i).filter(i=>groups[i].length);if(order.length>n){const strong=list.find(f=>f.kind==='strongest'),picked=new Set(strong?[momentIndex(strong.t,ms)]:[]);for(let s=0;picked.size<n&&s<order.length;s++)picked.add(order[Math.min(order.length-1,Math.floor((s+.5)*order.length/n))]);order=[...picked];}const chosen=new Set();for(const i of order){if(chosen.size>=n)break;const mid=(ms[i].start+ms[i].end)/2;chosen.add(groups[i].slice().sort((a,b)=>rank(b)-rank(a)||(Number(b.score)||0)-(Number(a.score)||0)||Math.abs(a.t-mid)-Math.abs(b.t-mid))[0]);}if(chosen.size<n)for(const f of pickStrip(list.filter(f=>!chosen.has(f)),n-chosen.size))chosen.add(f);return [...chosen].sort((a,b)=>a.t-b.t);}
+function pickFor(x,frames){return isScene(x)?pickSceneStrip(frames,momentsOf(x),8):pickStrip(frames,8);}
+function stripFrames(x,ev){if(ev&&mediaKey&&(ev.frames||[]).length)return pickFor(x,ev.frames).map(f=>({t:f.t,kind:f.kind,remote:true}));const ms=momentsOf(x),inside=p=>{const t=thumbTime(p);return !isScene(x)||t==null||momentIndex(t,ms)>=0;};return (x.preview_images||[]).filter(inside).slice(0,8).map(p=>({t:thumbTime(p),kind:'preview',src:'/media/'+encodeURIComponent(p)}));}
+function renderStrip(x,ev){const strip=$('#strip'),gen=String(mediaGen);strip.dataset.gen=gen;if(ev===undefined){strip.innerHTML='<div class="thumb ghost"></div>'.repeat(8);return;}const frames=stripFrames(x,ev),label=(x.end_seconds-x.start_seconds)<30?mmssTenth:mmss,ms=isScene(x)?momentsOf(x):null,badge=t=>{if(!ms||t==null)return '';const k=momentIndex(t,ms);return k>=0?`<i>${k+1}</i>`:'';};strip.innerHTML=frames.map((f,i)=>`<button type="button" class="thumb${f.kind==='strongest'?' peak':f.kind==='seed'?' hit':''}" data-i="${i}" data-t="${f.t==null?'':f.t}" aria-label="Khung ${f.t==null?i+1:label(f.t)}"><img alt="" loading="lazy" decoding="async"${f.src?` src="${esc(f.src)}"`:''}>${f.t==null?'':`<span>${label(f.t)}</span>`}${badge(f.t)}</button>`).join('');const remote=frames.map((f,i)=>({f,i})).filter(v=>v.f.remote);if(!remote.length)return;const peak=remote.find(v=>v.f.kind==='strongest')||remote[0],order=[peak,...remote.filter(v=>v!==peak)],promises=queueFrames(x.id,order.map(v=>v.f.t),true);order.forEach((v,k)=>promises[k].then(obj=>{if(!obj||strip.dataset.gen!==gen)return;const img=strip.querySelector(`.thumb[data-i="${v.i}"] img`);if(img)img.src=obj;if(v===peak&&pstate.id===x.id&&!pstate.reveal)setPoster(obj);}));}
 function tlPos(t){const len=Math.max(.001,pstate.end-pstate.start);return 2+96*Math.min(1,Math.max(0,(Number(t)-pstate.start)/len));}
 function thin(values,limit){if(values.length<=limit)return values;const out=[];for(let s=0;s<limit;s++)out.push(values[Math.floor((s+.5)*values.length/limit)]);return out;}
-function renderTimeline(x,ev){const bar=(a,b,cls)=>{const left=tlPos(a),right=tlPos(b);return `<div class="${cls}" style="left:${left.toFixed(2)}%;width:${Math.max(.6,right-left).toFixed(2)}%"></div>`;};const segments=ev?.detected_intervals?.length?ev.detected_intervals:(x.detected_intervals||[]).map(d=>({start:d.start_seconds,end:d.end_seconds}));let html=(segments.length?segments:[{start:x.start_seconds,end:x.end_seconds}]).map(s=>bar(s.start,s.end,'seg')).join('');const seeds=ev?.seeds;if(seeds&&!seeds.known)html+=(seeds.windows||[]).map(w=>bar(w.start,w.end,'win')).join('');const ticks=seeds?.known?thin((seeds.samples||[]).map(s=>s.t),120):(ev?.frames||[]).filter(f=>f.kind==='seed').map(f=>f.t);html+=ticks.map(t=>`<div class="hit" style="left:${tlPos(t).toFixed(2)}%"></div>`).join('');const peak=ev?.strongest?.t??thumbTime((x.preview_images||[])[0]);if(peak!=null)html+=`<div class="peak" style="left:${tlPos(peak).toFixed(2)}%" title="Rõ nhất lúc ${mmss(peak)}"></div>`;html+='<div class="head" id="thead" hidden></div>';$('#timeline').innerHTML=html;}
+function renderTimeline(x,ev){const bar=(a,b,cls,extra='')=>{const left=tlPos(a),right=tlPos(b);return `<div class="${cls}"${extra} style="left:${left.toFixed(2)}%;width:${Math.max(.6,right-left).toFixed(2)}%"></div>`;};const segments=ev?.detected_intervals?.length?ev.detected_intervals:(x.detected_intervals||[]).map(d=>({start:d.start_seconds,end:d.end_seconds}));let html;if(isScene(x)){html='<div class="gapline" style="left:2%;width:96%"></div>'+momentsOf(x).map((m,i)=>bar(m.start,m.end,'mo',` data-i="${i}" title="Khoảnh khắc ${i+1}: ${mmss(m.start)}–${mmss(m.end)}"`)).join('');}else html=(segments.length?segments:[{start:x.start_seconds,end:x.end_seconds}]).map(s=>bar(s.start,s.end,'seg')).join('');const seeds=ev?.seeds;if(seeds&&!seeds.known)html+=(seeds.windows||[]).map(w=>bar(w.start,w.end,'win')).join('');const ticks=seeds?.known?thin((seeds.samples||[]).map(s=>s.t),120):(ev?.frames||[]).filter(f=>f.kind==='seed').map(f=>f.t);html+=ticks.map(t=>`<div class="hit" style="left:${tlPos(t).toFixed(2)}%"></div>`).join('');const peak=ev?.strongest?.t??thumbTime((x.preview_images||[])[0]);if(peak!=null)html+=`<div class="peak" style="left:${tlPos(peak).toFixed(2)}%" title="Rõ nhất lúc ${mmss(peak)}"></div>`;html+='<div class="head" id="thead" hidden></div>';$('#timeline').innerHTML=html;markMoment();}
 function renderRegionMedia(x,force){const owner=regionOwner(x),r=owner&&(owner.suggested_region_source_pixels||owner.decision_region_source_pixels),key=JSON.stringify([x.id,owner?.id||null,r||null,(x.preview_images||[]).slice(0,3)]);if(!force&&key===regionKey)return;regionKey=key;const box=$('#media-region');box.innerHTML=regionMediaHtml(x,owner,r);drawRegionPreviews(box);}
 function regionMediaHtml(x,owner,r){const images=(x.preview_images||[]).slice(0,3),src=p=>'/media/'+encodeURIComponent(p);if(!images.length)return '<div class="no-media">Không có ảnh xem trước cho mục này.</div>';if(!owner||!r||r==='FULL_FRAME'||!Array.isArray(owner.source_frame_size))return `<div class="shots">${images.map(p=>`<img src="${src(p)}" loading="lazy" alt="">`).join('')}</div>`;const data=p=>`data-src="${src(p)}" data-x="${Number(r.x)}" data-y="${Number(r.y)}" data-w="${Number(r.width)}" data-h="${Number(r.height)}" data-sw="${Number(owner.source_frame_size[0])}" data-sh="${Number(owner.source_frame_size[1])}"`;return `<canvas class="region-frame" ${data(images[0])}></canvas><canvas class="region-crop" ${data(images[0])}></canvas>${images.length>1?`<div class="region-more">${images.slice(1).map(p=>`<canvas class="region-frame" ${data(p)}></canvas>`).join('')}</div>`:''}`;}
 function drawRegionPreviews(root){root.querySelectorAll('canvas.region-frame,canvas.region-crop').forEach(canvas=>{const image=new Image();image.onload=()=>{if(!canvas.isConnected)return;const sourceW=Number(canvas.dataset.sw),sourceH=Number(canvas.dataset.sh),scale=Math.min(image.naturalWidth/sourceW,image.naturalHeight/sourceH),offsetX=(image.naturalWidth-sourceW*scale)/2,offsetY=(image.naturalHeight-sourceH*scale)/2,sx=Number(canvas.dataset.x)*scale+offsetX,sy=Number(canvas.dataset.y)*scale+offsetY,sw=Number(canvas.dataset.w)*scale,sh=Number(canvas.dataset.h)*scale,ctx=canvas.getContext('2d');if(canvas.classList.contains('region-crop')){const padX=sw*.12,padY=sh*.18,x=Math.max(0,sx-padX),y=Math.max(0,sy-padY),w=Math.min(image.naturalWidth-x,sw+padX*2),h=Math.min(image.naturalHeight-y,sh+padY*2);canvas.width=360;canvas.height=Math.max(100,Math.round(360*h/w));ctx.drawImage(image,x,y,w,h,0,0,canvas.width,canvas.height);ctx.strokeStyle='#ff304f';ctx.lineWidth=5;ctx.strokeRect((sx-x)/w*canvas.width,(sy-y)/h*canvas.height,sw/w*canvas.width,sh/h*canvas.height);}else{canvas.width=Math.min(960,image.naturalWidth);canvas.height=Math.round(canvas.width*image.naturalHeight/image.naturalWidth);ctx.drawImage(image,0,0,canvas.width,canvas.height);const kx=canvas.width/image.naturalWidth,ky=canvas.height/image.naturalHeight;ctx.fillStyle='rgba(255,48,79,.15)';ctx.fillRect(sx*kx,sy*ky,sw*kx,sh*ky);ctx.strokeStyle='#ff304f';ctx.lineWidth=4;ctx.strokeRect(sx*kx,sy*ky,sw*kx,sh*ky);}};image.src=canvas.dataset.src;});}
-function renderSide(x){const html=isSafety(x)?safetySide(x):adSide(x),side=$('#side');if(sideItemId===x.id&&side.__html===html)return;side.__html=html;side.innerHTML=html;sideItemId=x.id;reviewStats.sideRenders++;}
+function renderSide(x){const html=isSafety(x)?safetySide(x):adSide(x),side=$('#side');if(sideItemId===x.id&&side.__html===html)return;side.__html=html;side.innerHTML=html;sideItemId=x.id;reviewStats.sideRenders++;markMoment();}
+function markMoment(){const i=pstate.id===focusId?pstate.mi:-1;document.querySelectorAll('#side .mchip,#timeline .mo').forEach(el=>el.classList.toggle('on',Number(el.dataset.i)===i));}
 function videoReason(info){if(!mediaKey)return 'Trang này chỉ có ảnh xem trước, không phát video.';const reasons={unsupported_container:'Trình duyệt không phát được định dạng video này; hãy xem dải khung hình.',source_changed:'Video nguồn đã thay đổi sau khi quét; chỉ xem được khung hình.',source_missing:'Không tìm thấy video nguồn.',source_unknown:'Không rõ video nguồn.',decode_error:'Trình duyệt không giải mã được video này; hãy xem dải khung hình.'};return reasons[info?.reason]||'Không phát được video trong trình duyệt; hãy xem dải khung hình.';}
 function currentVideoInfo(ev){return pstate.reason?{reason:pstate.reason}:ev?.video;}
-function safetySubtitle(x,ev){const parts=[durationText(x.end_seconds-x.start_seconds)],seeds=ev?.seeds;if(seeds&&seeds.count>0){if(seeds.known)parts.push(`máy nghi ngờ ở ${seeds.count} khung`);else{const w=seeds.windows||[];parts.push(w.length===1?`máy nghi ngờ ở ${seeds.count} khung trong ${mmss(w[0].start)}–${mmss(w[0].end)}`:`máy nghi ngờ ở ${seeds.count} khung trong ${w.length} đoạn`);}}const n=(x.detected_intervals||[]).length;if(n>1)parts.push(`${n} khoảng phát hiện`);return parts.join(' · ');}
-function suggestionLine(x){const parts=[];if(x.suggested_decision)parts.push(`Đề xuất: ${esc(actionName(x,x.suggested_decision))}`);if(x.advisory)parts.push('Ứng viên phụ — không chặn xuất, chỉ áp dụng nếu bạn chọn');return parts.length?`<div class="hint">${parts.join(' · ')}</div>`:'';}
+function safetySubtitle(x,ev){const scene=isScene(x),parts=[scene?sceneSpan(x):durationText(x.end_seconds-x.start_seconds)],seeds=ev?.seeds;if(seeds&&seeds.count>0&&!scene){if(seeds.known)parts.push(`máy nghi ngờ ở ${seeds.count} khung`);else{const w=seeds.windows||[];parts.push(w.length===1?`máy nghi ngờ ở ${seeds.count} khung trong ${mmss(w[0].start)}–${mmss(w[0].end)}`:`máy nghi ngờ ở ${seeds.count} khung trong ${w.length} đoạn`);}}const n=(x.detected_intervals||[]).length;if(n>1&&!scene)parts.push(`${n} khoảng phát hiện`);return parts.join(' · ');}
+function suggestionLine(x){const parts=[];if(x.studio_logo_match)parts.push(`Khớp logo hãng phim bạn đã xác nhận giữ (giống ${Math.round(100*Number(x.studio_logo_match.similarity||0))}%), không thấy chữ lạ hay quảng cáo`);else if(x.suggested_decision)parts.push(`Đề xuất: ${esc(actionName(x,x.suggested_decision))}`);if(x.suggestion_withheld&&!x.decision&&!x.studio_logo_match)parts.push(esc(studioWithheldLine(x.suggestion_withheld)));if(x.studio_logo_match_blocked&&!x.decision)parts.push(esc(studioBlockedLine(x.studio_logo_match_blocked)));if(x.advisory)parts.push('Ứng viên phụ — không chặn xuất, chỉ áp dụng nếu bạn chọn');return parts.length?`<div class="hint">${parts.join(' · ')}</div>`:'';}
 function decideButtons(x){const d=x.decision,full=d==='BLUR'&&x.decision_region_source_pixels==='FULL_FRAME',b=(cls,decision,label,key,selected)=>`<button type="button" class="${cls}${selected?' sel':''}" data-act="decide" data-decision="${decision}"${decision==='BLUR'?' data-full="1"':''} aria-pressed="${selected?'true':'false'}">${label}<small>${selected?'✓ đã chọn':`phím ${key}`}</small></button>`;return `<div class="decide">${b('k','KEEP','Giữ nguyên',1,d==='KEEP')}${b('b','BLUR','Làm mờ cả cảnh',2,full)}${b('c','CUT','Cắt cảnh',3,d==='CUT')}${b('m','NEEDS_MORE_CONTEXT','Cần xem thêm',4,d==='NEEDS_MORE_CONTEXT')}</div>`;}
-function decisionLabel(x){if(x.decision==='BLUR'&&x.decision_region_source_pixels==='FULL_FRAME')return 'Làm mờ toàn cảnh';if(x.decision==='BLUR')return isLogoItem(x)?'Làm mờ logo':'Làm mờ vùng chữ/logo';if(x.decision==='NEEDS_MORE_CONTEXT')return 'Cần xem thêm';return actionName(x,x.decision);}
+function decisionLabel(x){if(x.decision==='KEEP'&&x.studio_logo_memory?.remembered)return 'Giữ nguyên · đã nhớ là logo hãng phim';if(x.decision==='BLUR'&&x.decision_region_source_pixels==='FULL_FRAME')return isScene(x)?`Làm mờ toàn cảnh trong ${momentsOf(x).length} khoảnh khắc`:'Làm mờ toàn cảnh';if(x.decision==='BLUR')return isLogoItem(x)?'Làm mờ logo':'Làm mờ vùng chữ/logo';if(x.decision==='NEEDS_MORE_CONTEXT')return 'Cần xem thêm';return actionName(x,x.decision);}
 function chosenLine(x){return x.decision?`<div class="chosen">Đã chọn: <b>${esc(decisionLabel(x))}</b> · <button type="button" class="linkish" data-act="clear">Bỏ chọn</button></div>`:'';}
-function safetySide(x){const ev=evidenceCache.get(x.id),peak=ev?.strongest?.t??thumbTime((x.preview_images||[])[0]),playable=videoAllowed()&&(!ev?.video||ev.video.available);return `<span class="pill">${esc(catName(x).toUpperCase())}</span><div><h2>${mmss(x.start_seconds)} – ${mmss(x.end_seconds)}</h2><div class="sub">${esc(safetySubtitle(x,ev))}</div></div>${suggestionLine(x)}<div class="focus-box">${peak!=null?`Rõ nhất lúc <b>${mmss(peak)}</b> (khung viền trắng). `:''}Xem đoạn này rồi chọn bên dưới.${playable?'<button type="button" data-act="play">▶ Phát đoạn này</button>':`<small>${esc(videoReason(currentVideoInfo(ev)))}</small>`}</div>${decideButtons(x)}${chosenLine(x)}${techDetails(x,ev,true)}`;}
-function scopeShort(x){const scope=decisionScope(x);if(scope.kind==='advisory')return 'Ứng viên phụ — không chặn xuất';if(scope.kind==='track')return trackCoversFullVideo(x)?'Một quyết định cho toàn video':'Một quyết định cho cả khoảng xuất hiện';if(scope.kind==='grouped')return `Nhóm ${(x.detected_intervals||[]).length} khoảng phát hiện`;return 'Chỉ đoạn này';}
-function adSide(x){const owner=regionOwner(x),r=owner&&(owner.suggested_region_source_pixels||owner.decision_region_source_pixels);return `<span class="pill">${esc(catName(x).toUpperCase())}</span><div><h2>${mmss(x.start_seconds)} – ${mmss(x.end_seconds)}</h2><div class="sub">${esc(durationText(x.end_seconds-x.start_seconds))} · ${esc(scopeShort(x))}</div></div>${suggestionLine(x)}${overlapCoverage(x)}${regionControlsHtml(x,owner,r)}<div class="decide-head">Quyết định cho toàn cảnh ${esc(catName(x))} · ${span(x)}</div>${decideButtons(x)}${chosenLine(x)}${techDetails(x,null,false)}`;}
+function momentChips(x){return `<div class="moments" role="group" aria-label="Các khoảnh khắc">${momentsOf(x).map((m,i)=>`<button type="button" class="mchip" data-act="moment" data-i="${i}" title="Phát riêng khoảnh khắc ${i+1}"><b>${i+1}</b>${mmss(m.start)}–${mmss(m.end)}<span>▶</span></button>`).join('')}</div>`;}
+function safetySide(x){const ev=evidenceCache.get(x.id),peak=ev?.strongest?.t??thumbTime((x.preview_images||[])[0]),playable=videoAllowed()&&(!ev?.video||ev.video.available),scene=isScene(x),n=momentsOf(x).length,heading=scene?`<h2>${esc(sceneTitle(x))}</h2>`:`<h2>${mmss(x.start_seconds)} – ${mmss(x.end_seconds)}</h2>`,play=scene?`<button type="button" data-act="seq" title="Phát từng khoảnh khắc theo thứ tự, bỏ qua khoảng trống giữa chúng">▶ Phát lần lượt ${n} khoảnh khắc</button>`:'<button type="button" data-act="play">▶ Phát đoạn này</button>',watch=scene?'':'Xem đoạn này rồi chọn bên dưới.';return `<span class="pill">${esc(catName(x).toUpperCase())}</span><div>${heading}<div class="sub">${esc(safetySubtitle(x,ev))}</div></div>${suggestionLine(x)}<div class="focus-box">${peak!=null?`Rõ nhất lúc <b>${mmss(peak)}</b> (khung viền trắng). `:''}${watch}${playable?play:`<small>${esc(videoReason(currentVideoInfo(ev)))}</small>`}${scene?momentChips(x):''}</div>${scene?`<div class="applies">${esc(appliesLine(x))}</div>`:''}${decideButtons(x)}${chosenLine(x)}${techDetails(x,ev,true)}`;}
+function scopeShort(x){const scope=decisionScope(x);if(scope.kind==='advisory')return 'Ứng viên phụ — không chặn xuất';if(scope.kind==='track')return trackCoversFullVideo(x)?'Một quyết định cho toàn video':'Một quyết định cho cả khoảng xuất hiện';if(scope.kind==='grouped')return `${(x.detected_intervals||[]).length} khoảnh khắc phát hiện`;return 'Chỉ đoạn này';}
+function adSide(x){const owner=regionOwner(x),r=owner&&(owner.suggested_region_source_pixels||owner.decision_region_source_pixels);return `<span class="pill">${esc(catName(x).toUpperCase())}</span><div><h2>${mmss(x.start_seconds)} – ${mmss(x.end_seconds)}</h2><div class="sub">${esc(durationText(x.end_seconds-x.start_seconds))} · ${esc(scopeShort(x))}</div></div>${suggestionLine(x)}${overlapCoverage(x)}${regionControlsHtml(x,owner,r)}<div class="decide-head">Quyết định cho toàn cảnh ${esc(catName(x))} · ${span(x)}</div>${decideButtons(x)}${studioHtml(x)}${chosenLine(x)}${techDetails(x,null,false)}`;}
+function studioWithheldLine(w){const head='Không đề xuất sẵn: đoạn mở đầu giống logo hãng phim';if(!Array.isArray(w.window_texts))return `${head}, không thấy website hay số điện thoại. Hãy xem cả chữ trên hình: nếu có tên web/thương hiệu lạ hãy Cắt`;const texts=w.window_texts,total=Math.max(texts.length,Number(w.window_text_count)||0);if(!total)return `${head}, không đọc thấy chữ, website hay số điện thoại nào. Hãy xem rồi tự chọn`;return `${head}, không thấy website hay số điện thoại. Chữ đọc được: ${texts.slice(0,6).join(', ')}${total>6?', …':''} — nếu là tên web/thương hiệu lạ hãy Cắt`;}
+function studioBlockedLine(b){const texts=(b.unconfirmed_texts||[]).slice(0,4).join(', ');const why=texts?`có chữ lạ: ${texts}`:(b.ad_evidence||[]).length?'có dấu hiệu quảng cáo':'chưa quét chữ trong đoạn này';return `Hình giống logo hãng phim đã nhớ nhưng ${why} — vẫn để ở danh sách chính, hãy xem kỹ`;}
+function studioHtml(x){if(!studioEligible(x))return '';const remembered=x.decision==='KEEP'&&!!x.studio_logo_memory?.remembered;return `<div class="studio-wrap"><button type="button" class="studio${remembered?' sel':''}" data-act="studio" aria-pressed="${remembered}">${remembered?'✓ Đã nhớ là logo hãng phim (giữ nguyên)':'Đây là logo hãng phim — giữ &amp; nhớ'}</button><small>Giữ nguyên đoạn này và nhớ hình logo cùng chữ trên đó${studioTextsNote(x)}. Lần quét sau, thẻ trùng khớp từ 95% với logo này sẽ nằm ở Ứng viên phụ — trừ khi có chữ lạ, website hay lớp phủ (banner), khi đó thẻ vẫn ở danh sách chính.</small></div>`;}
+function studioTextsNote(x){const texts=x.studio_logo_memory?.remembered?[]:(x.suggestion_withheld?.window_texts||[]);return texts.length?` (sẽ nhớ cả chữ: ${esc(texts.slice(0,6).join(', '))}${texts.length>6?', …':''} — nếu trong đó có tên web/thương hiệu lạ, đừng bấm nút này mà hãy Cắt)`:'';}
 function techDetails(x,ev,withRegionControls){const owner=regionOwner(x),r=owner&&(owner.suggested_region_source_pixels||owner.decision_region_source_pixels),category=x.review_kind||x.category,score=x.max_score==null?'—':Number(x.max_score).toFixed(3),parts=[`<div class="meta">${esc(category)} · ưu tiên ${esc(x.priority||'—')} · điểm ${score} · ${clock(x.start_seconds)}–${clock(x.end_seconds)} · ${esc(x.id)}</div>`,scopeBlock(x)];if(isSafety(x))parts.push(overlapCoverage(x));if(!isSafety(x)||(owner&&r&&r!=='FULL_FRAME'))parts.push(regionDetailHtml(x,owner,r));if(withRegionControls)parts.push(regionControlsHtml(x,owner,r));parts.push(`<div class="labels">${esc((x.labels||[]).join(', ')||(x.reasons||[]).join(', '))}</div>`,visualAiHtml(x),evidenceHtml(ev));if(x.model_evidence)parts.push(`<div class="labels">AI cục bộ: ${esc(JSON.stringify(x.model_evidence))}</div>`);return `<details class="tech"${techOpen?' open':''}><summary>Chi tiết kỹ thuật</summary><div class="tech-body">${parts.join('')}</div></details>`;}
 function evidenceHtml(ev){if(!ev)return '';const seeds=ev.seeds||{},windows=seeds.windows||[],context=ev.context||{},rows=[`Ngưỡng máy dò ${seeds.threshold??'—'} · lấy mẫu ${ev.sample_fps??'—'} khung/giây · ${seeds.known?'đã lưu thời điểm từng khung nghi ngờ':'bản quét cũ: chưa lưu thời điểm từng khung nghi ngờ'}`];if(ev.strongest)rows.push(`Điểm cao nhất ${Number(ev.strongest.score??0).toFixed(3)} lúc ${clock(ev.strongest.t)}`);if(windows.length)rows.push(`Cửa sổ máy dò: ${windows.map(w=>`${clock(w.start)}–${clock(w.end)} (${w.count} khung)`).join('; ')}`);if((context.extended||[]).length)rows.push(`Mở rộng theo ngữ cảnh: ${context.extended.map(w=>`${clock(w.start)}–${clock(w.end)}`).join('; ')}${context.threshold!=null?` (ngưỡng ${context.threshold})`:''}`);if(ev.ignored_ref_count)rows.push(`${ev.ignored_ref_count} tham chiếu không đọc được đã bỏ qua`);return `<div class="evidence"><strong>Bằng chứng máy dò</strong>${rows.map(v=>`<div>${esc(v)}</div>`).join('')}</div>`;}
 function visualAiHtml(x){const a=x.ai_visual_audit;return a?`<div class="visual-ai"><strong>Visual AI:</strong> ${esc(a.classification)} · tin cậy ${Math.round(100*Number(a.confidence||0))}% · đề xuất ${esc(actionName(x,a.suggested_decision))} · vùng ${esc(a.region_assessment)}<br>${esc(a.reasoning)}</div>`:'';}
@@ -2761,7 +3376,7 @@ function regionDetailHtml(x,owner,r){const borrowed=owner&&owner.id!==x.id,regio
 function regionControlsHtml(x,owner,r){if(!owner||!r||r==='FULL_FRAME')return '';const borrowed=owner.id!==x.id,ownerDecision=owner.decision;return `<div class="decision-block"><strong>${borrowed?'Xử lý riêng vùng logo khoanh đỏ':'Phân loại vùng khoanh đỏ'}</strong>${borrowed?`<small>Vùng logo áp dụng ${clock(owner.start_seconds)}–${clock(owner.end_seconds)}. Quyết định toàn cảnh bên dưới chỉ áp dụng ${clock(x.start_seconds)}–${clock(x.end_seconds)}; nếu chọn Cắt cả cảnh, đoạn bị cắt không cần làm mờ.</small>`:'<small>Chỉ lựa chọn theo phần nằm trong khung đỏ, không theo logo hoặc chữ ở vị trí khác trong ảnh.</small>'}<div class="region-decide"><button type="button" class="rk${ownerDecision==='KEEP'?' sel':''}" data-act="region" data-owner="${esc(owner.id)}" data-decision="KEEP">Đây là tiêu đề/nội dung phim — giữ lại</button><button type="button" class="rb${ownerDecision==='BLUR'?' sel':''}" data-act="region" data-owner="${esc(owner.id)}" data-decision="BLUR">Đây là logo thương hiệu — làm mờ</button></div></div>`;}
 function actionName(x,decision){if(decision==='KEEP')return 'Giữ nguyên';if(decision==='CUT')return 'Cắt cả cảnh';if(decision==='BLUR')return x.suggested_region_source_pixels?(isLogoItem(x)?'Làm mờ logo':'Làm mờ vùng chữ/logo'):'Làm mờ toàn cảnh';if(decision==='NEEDS_MORE_CONTEXT')return 'Cần xem thêm';return decision;}
 function trackCoversFullVideo(x){const duration=Number(queue.source?.duration_seconds||0),tolerance=Math.max(1.5,duration*.0005);return duration>0&&Number(x.start_seconds)<=tolerance&&Number(x.end_seconds)>=duration-tolerance;}
-function decisionScope(x){const intervals=Array.isArray(x.detected_intervals)?x.detected_intervals:[],from=clock(x.start_seconds),to=clock(x.end_seconds);if(x.advisory)return{kind:'advisory',title:'Ứng viên kiểm tra thêm — chưa thuộc quyết định chính',detail:`Bằng chứng chưa đủ để ghép mục này vào track chính. Thẻ chính khác không tự xử lý mục này. Nếu bạn chọn một hành động, mục sẽ được đưa vào kế hoạch và chỉ áp dụng ${from}–${to}.`};if(x.candidate_type==='persistent_overlay'||x.temporal_policy==='continuous_persistent_overlay'){const full=trackCoversFullVideo(x),support=Number(x.supporting_candidate_count||0);return{kind:'track',title:full?'QUYẾT ĐỊNH TOÀN VIDEO':'QUYẾT ĐỊNH TOÀN KHOẢNG XUẤT HIỆN',detail:`Một lựa chọn cho vùng khoanh đỏ áp dụng từ ${from} đến ${to}${full?' — toàn bộ video':''}. ${support?`Track này đại diện thêm ${support} lần phát hiện cùng vùng đã lưu trong Audit. `:''}Logo ở vị trí hoặc track khác vẫn cần quyết định riêng.`};}if(x.temporal_policy==='discrete_detected_intervals'&&intervals.length>1)return{kind:'grouped',title:`NHÓM SỰ KIỆN — ${intervals.length} khoảng phát hiện`,detail:`Một lựa chọn được áp dụng riêng cho ${intervals.length} khoảng gốc trong ${from}–${to}; các khoảng trống giữa chúng không bị cắt hoặc làm mờ.`};if(intervals.length>1)return{kind:'grouped',title:`Đại diện cho ${intervals.length} lần phát hiện đã gom`,detail:`Các lần phát hiện gần nhau đã được gom thành cửa sổ ${from}–${to}; quyết định áp dụng toàn bộ cửa sổ này. Không tự lan sang cảnh khác.`};return{kind:'single',title:'CHỈ ĐOẠN HIỆN TẠI',detail:`Quyết định chỉ áp dụng ${from}–${to}. Đây không phải lựa chọn đại diện cho mọi quảng cáo hoặc logo cùng loại trong toàn phim.`};}
+function decisionScope(x){const intervals=Array.isArray(x.detected_intervals)?x.detected_intervals:[],from=clock(x.start_seconds),to=clock(x.end_seconds);if(x.advisory)return{kind:'advisory',title:'Ứng viên kiểm tra thêm — chưa thuộc quyết định chính',detail:`Bằng chứng chưa đủ để ghép mục này vào track chính. Thẻ chính khác không tự xử lý mục này. Nếu bạn chọn một hành động, mục sẽ được đưa vào kế hoạch và chỉ áp dụng ${from}–${to}.`};if(x.candidate_type==='persistent_overlay'||x.temporal_policy==='continuous_persistent_overlay'){const full=trackCoversFullVideo(x),support=Number(x.supporting_candidate_count||0);return{kind:'track',title:full?'QUYẾT ĐỊNH TOÀN VIDEO':'QUYẾT ĐỊNH TOÀN KHOẢNG XUẤT HIỆN',detail:`Một lựa chọn cho vùng khoanh đỏ áp dụng từ ${from} đến ${to}${full?' — toàn bộ video':''}. ${support?`Track này đại diện thêm ${support} lần phát hiện cùng vùng đã lưu trong Audit. `:''}Logo ở vị trí hoặc track khác vẫn cần quyết định riêng.`};}if(x.temporal_policy==='discrete_detected_intervals'&&intervals.length>1)return{kind:'grouped',title:`${(SCENE_WORDS[x.category]||'Nhóm sự kiện').toUpperCase()} — ${intervals.length} KHOẢNH KHẮC`,detail:`Một lựa chọn được áp dụng riêng cho ${intervals.length} khoảnh khắc phát hiện trong ${from}–${to} (${momentsOf(x).map(m=>`${clock(m.start)}–${clock(m.end)}`).join('; ')}); các khoảng trống giữa chúng không bị cắt hoặc làm mờ.`};if(intervals.length>1)return{kind:'grouped',title:`Đại diện cho ${intervals.length} lần phát hiện đã gom`,detail:`Các lần phát hiện gần nhau đã được gom thành cửa sổ ${from}–${to}; quyết định áp dụng toàn bộ cửa sổ này. Không tự lan sang cảnh khác.`};return{kind:'single',title:'CHỈ ĐOẠN HIỆN TẠI',detail:`Quyết định chỉ áp dụng ${from}–${to}. Đây không phải lựa chọn đại diện cho mọi quảng cáo hoặc logo cùng loại trong toàn phim.`};}
 function scopeBlock(x){const scope=decisionScope(x);return `<div class="scope-detail ${scope.kind}"><strong>Phạm vi áp dụng: ${esc(scope.title)}</strong>${esc(scope.detail)}</div>`;}
 function regionOverlap(a,b){if(!a||!b||a==='FULL_FRAME'||b==='FULL_FRAME')return 0;const left=Math.max(a.x,b.x),top=Math.max(a.y,b.y),right=Math.min(a.x+a.width,b.x+b.width),bottom=Math.min(a.y+a.height,b.y+b.height),intersection=Math.max(0,right-left)*Math.max(0,bottom-top),smaller=Math.min(a.width*a.height,b.width*b.height);return smaller?intersection/smaller:0;}
 function overlapCoverage(x){const covered=queue.items.filter(other=>other.id!==x.id&&other.decision==='BLUR'&&other.start_seconds<x.end_seconds&&other.end_seconds>x.start_seconds);if(!covered.length)return '';const persistent=covered.filter(other=>other.candidate_type==='persistent_overlay'&&other.decision_region_source_pixels&&other.decision_region_source_pixels!=='FULL_FRAME');const full=covered.filter(other=>other.decision_region_source_pixels==='FULL_FRAME');const parts=[];if(persistent.length){const owner=persistent[0],r=owner.decision_region_source_pixels,current=x.suggested_region_source_pixels||x.decision_region_source_pixels,same=regionOverlap(r,current)>=.6,label=esc((owner.labels||[])[0]||'logo/watermark'),scope=trackCoversFullVideo(owner)?'toàn video':`${clock(owner.start_seconds)}–${clock(owner.end_seconds)}`;parts.push(same?`Track <strong>${label}</strong> cùng vùng này đã được duyệt làm mờ ${scope}; thẻ hiện tại chỉ là bằng chứng hỗ trợ.`:`Track <strong>${label}</strong> ở vùng khác đã được duyệt làm mờ ${scope} (x=${Number(r.x)}, y=${Number(r.y)}, rộng=${Number(r.width)}, cao=${Number(r.height)}). Vùng đỏ hiện tại vẫn là ứng viên riêng.`);}if(full.length)parts.push(`${full.length} đoạn trùng thời gian đã được duyệt làm mờ toàn cảnh.`);return parts.length?`<div class="coverage">${parts.join(' ')}</div>`:'';}
@@ -2779,7 +3394,7 @@ function pumpFrames(){while(frameActive<2){const key=frameUrgent.length?frameUrg
 function pruneFrames(keep){for(const [url,entry] of frameBlobs){if(keep.has(entry.item))continue;frameBlobs.delete(url);if(entry.obj)URL.revokeObjectURL(entry.obj);if(entry.queued)entry.resolve(null);}}
 function keepFrames(){pruneFrames(new Set([focusId,previousFocusId,nextUndecided(focusId)].filter(Boolean)));}
 function schedulePrefetch(){clearTimeout(prefetchTimer);prefetchTimer=setTimeout(prefetchNext,600);}
-async function prefetchNext(){const from=focusId,nextId=nextUndecided(from);if(!nextId||!mediaKey)return;const x=itemMap.get(nextId);if(!x||!isSafety(x))return;const ev=await loadEvidence(nextId);if(!ev||focusId!==from||nextUndecided(from)!==nextId)return;const frames=pickStrip(ev.frames,8).sort((a,b)=>(b.kind==='strongest')-(a.kind==='strongest'));queueFrames(nextId,frames.map(f=>f.t),false);}
+async function prefetchNext(){const from=focusId,nextId=nextUndecided(from);if(!nextId||!mediaKey)return;const x=itemMap.get(nextId);if(!x||!isSafety(x))return;const ev=await loadEvidence(nextId);if(!ev||focusId!==from||nextUndecided(from)!==nextId)return;const frames=pickFor(x,ev.frames).sort((a,b)=>(b.kind==='strongest')-(a.kind==='strongest'));queueFrames(nextId,frames.map(f=>f.t),false);}
 function videoAllowed(){return !!mediaKey&&pstate.available;}
 function coverVideo(){playerBox.classList.add('covered');pstate.reveal=false;const head=$('#thead');if(head)head.hidden=true;}
 function setPoster(src,loading=false){if(src){if(posterImg.getAttribute('src')!==src)posterImg.src=src;posterImg.hidden=false;}else{posterImg.removeAttribute('src');posterImg.hidden=true;}$('#poster-loading').hidden=!(loading&&!src);}
@@ -2787,17 +3402,23 @@ function revealVideo(){playerBox.classList.remove('covered');posterImg.hidden=tr
 function showNote(text){const note=$('#pnote');note.textContent=text;note.hidden=false;}
 function hideNote(){$('#pnote').hidden=true;}
 function pausePlayer(){if(!video.paused)video.pause();}
-function setTime(t){setText($('#ptime'),`${mmss(t)} / đoạn ${mmss(pstate.start)}–${mmss(pstate.end)}`);const head=$('#thead');if(head){head.style.left=`${tlPos(t).toFixed(2)}%`;head.hidden=!pstate.reveal;}}
+function setTime(t){const ms=pstate.moments;let label=`${mmss(t)} / đoạn ${mmss(pstate.start)}–${mmss(pstate.end)}`;if(ms){const k=momentIndex(t,ms);label=k>=0?`${mmss(t)} · khoảnh khắc ${k+1}/${ms.length} (${mmss(ms[k].start)}–${mmss(ms[k].end)})`:`${mmss(t)} · giữa hai khoảnh khắc`;}setText($('#ptime'),label);const head=$('#thead');if(head){head.style.left=`${tlPos(t).toFixed(2)}%`;head.hidden=!pstate.reveal;}}
 function ensureVideo(){if(!videoAllowed())return false;if(!pstate.loaded){pstate.loaded=true;pstate.srcKey=mediaKey;video.preload='metadata';video.src=`${API}video?k=${encodeURIComponent(mediaKey)}`;}return true;}
 function seekTo(t,play){if(!ensureVideo())return false;const id=pstate.id;pstate.want={id,t,play:!!play};const run=()=>{if(pstate.id!==id)return;pstate.seekFor=id;try{video.currentTime=t;}catch(_error){}if(play){const p=video.play();if(p&&p.catch)p.catch(()=>{});}};if(video.readyState>=1)run();else pstate.pending=run;return true;}
-function playRange(){if(!videoAllowed()){showNote(videoReason(currentVideoInfo(evidenceCache.get(pstate.id))));return;}if(pstate.reveal&&video.currentTime>=pstate.start&&video.currentTime<pstate.end-.2){pstate.want={id:pstate.id,t:video.currentTime,play:true};const p=video.play();if(p&&p.catch)p.catch(()=>{});return;}seekTo(pstate.start,true);}
+function setMoment(i){pstate.mi=i;markMoment();}
+function playMoment(i,sequence){const ms=pstate.moments;if(!ms||!ms[i])return;if(!videoAllowed()){showNote(videoReason(currentVideoInfo(evidenceCache.get(pstate.id))));return;}pstate.seq=!!sequence;pstate.stopAt=ms[i].end;setMoment(i);seekTo(ms[i].start,true);}
+function playSequence(){playMoment(0,true);}
+function nextMomentAfter(t){const ms=pstate.moments||[];return ms.findIndex(m=>m.start>t+.01);}
+function momentGuard(){const ms=pstate.moments;if(!ms||video.paused||!pstate.reveal||pstate.seekFor!==pstate.id)return;const t=video.currentTime,k=momentIndex(t,ms);if(pstate.stopAt!=null&&t>=pstate.stopAt-.03){const next=pstate.mi+1;if(pstate.seq&&next<ms.length){playMoment(next,true);return;}video.pause();pstate.stopAt=null;pstate.seq=false;return;}if(k<0){const next=nextMomentAfter(t);if(pstate.seq&&next>=0){playMoment(next,true);return;}video.pause();pstate.stopAt=null;return;}if(k!==pstate.mi)setMoment(k);}
+function watchMoments(){if(!pstate.moments||video.paused)return;momentGuard();requestAnimationFrame(watchMoments);}
+function playRange(){if(!videoAllowed()){showNote(videoReason(currentVideoInfo(evidenceCache.get(pstate.id))));return;}const ms=pstate.moments;if(ms){const t=video.currentTime,k=pstate.reveal?momentIndex(t,ms):-1;if(k>=0&&t<ms[k].end-.2){pstate.seq=true;pstate.stopAt=ms[k].end;setMoment(k);pstate.want={id:pstate.id,t,play:true};const p=video.play();if(p&&p.catch)p.catch(()=>{});return;}const next=pstate.reveal?nextMomentAfter(t):-1;playMoment(next>0?next:0,true);return;}if(pstate.reveal&&video.currentTime>=pstate.start&&video.currentTime<pstate.end-.2){pstate.want={id:pstate.id,t:video.currentTime,play:true};const p=video.play();if(p&&p.catch)p.catch(()=>{});return;}seekTo(pstate.start,true);}
 function togglePlay(){const x=itemMap.get(focusId);if(!x||!isSafety(x))return;if(!video.paused){video.pause();return;}playRange();}
 function releaseVideo(){pstate.loaded=false;pstate.pending=null;video.pause();video.removeAttribute('src');video.load();coverVideo();}
 video.addEventListener('loadedmetadata',()=>{pstate.keyRetries=0;const run=pstate.pending;pstate.pending=null;if(run)run();});
 video.addEventListener('seeked',()=>{if(pstate.seekFor===pstate.id){revealVideo();setTime(video.currentTime);}});
-video.addEventListener('playing',()=>{if(pstate.seekFor===pstate.id)revealVideo();playerBox.classList.add('playing');});
+video.addEventListener('playing',()=>{if(pstate.seekFor===pstate.id)revealVideo();playerBox.classList.add('playing');if(pstate.moments)requestAnimationFrame(watchMoments);});
 video.addEventListener('pause',()=>playerBox.classList.remove('playing'));
-video.addEventListener('timeupdate',()=>{if(!pstate.reveal)return;const t=video.currentTime;setTime(t);if(!video.paused&&t>=pstate.end)video.pause();});
+video.addEventListener('timeupdate',()=>{if(!pstate.reveal)return;const t=video.currentTime;setTime(t);if(pstate.moments){momentGuard();return;}if(!video.paused&&t>=pstate.end)video.pause();});
 video.addEventListener('error',()=>{if(!pstate.loaded)return;const used=pstate.srcKey,w=pstate.want&&pstate.want.id===pstate.id?pstate.want:null,now=video.currentTime,wasPlaying=playerBox.classList.contains('playing'),code=video.error?video.error.code:0,want=w?{t:pstate.reveal&&Number.isFinite(now)&&now>=pstate.start&&now<=pstate.end?now:w.t,play:w.play||wasPlaying}:null;pstate.loaded=false;pstate.pending=null;playerBox.classList.remove('playing');coverVideo();videoFailed(used,want,code);});
 function restorePoster(){const x=itemMap.get(focusId);if(!x||!isSafety(x)||pstate.reveal)return;const strong=$('#strip .thumb.peak img')?.getAttribute('src');setPoster(strong||previewSrc(x));}
 async function probeVideo(key){if(!key)return 0;try{const r=await fetch(`${API}video?k=${encodeURIComponent(key)}`,{headers:{Range:'bytes=0-0'},cache:'no-store'});try{if(r.body)r.body.cancel();}catch(_error){}return r.status;}catch(_error){return 0;}}
@@ -2805,10 +3426,10 @@ async function videoFailed(used,want,code=0){const id=pstate.id;reviewStats.vide
 function refreshSession(){if(sessionRefresh)return sessionRefresh;reviewStats.sessionRefreshes++;sessionRefresh=requestJson(API+'session',{cache:'no-store'}).then(s=>{if(s?.token)token=s.token;const before=mediaKey;if(s?.media_key)mediaKey=s.media_key;if(mediaKey!==before){mediaKeyChanged();return true;}return false;}).catch(()=>false).finally(()=>{sessionRefresh=null;});return sessionRefresh;}
 function mediaKeyChanged(){reviewStats.mediaKeyChanges++;if(pstate.loaded&&video.paused){pstate.loaded=false;pstate.pending=null;video.removeAttribute('src');video.load();coverVideo();restorePoster();}const x=itemMap.get(focusId);if(!x||!isSafety(x))return;playerBox.classList.toggle('no-video',!videoAllowed());if(evidenceCache.get(x.id)&&$('#strip .thumb:not(.ghost) img:not([src])'))renderStrip(x,evidenceCache.get(x.id));renderSide(x);}
 function isAdvisoryItem(x){return !!x&&(!!x.advisory||(queue?.advisory_items||[]).includes(x));}
-function pushUndo(item,advisory=false){undoStack.push({id:item.id,advisory,prev:{decision:item.decision||null,region:item.decision_region_source_pixels??null,note:item.decision_note??null}});if(undoStack.length>100)undoStack.shift();}
+function pushUndo(item,advisory=false){undoStack.push({id:item.id,advisory,prev:{decision:item.decision||null,region:item.decision_region_source_pixels??null,note:item.decision_note??null,studio:!!item.studio_logo_memory?.remembered}});if(undoStack.length>100)undoStack.shift();}
 function syncLocalCounts(){queue.counts=countsFrom(queue.items);queue.status=statusFrom(queue.items);}
-function applyLocalDecision(item,decision,region,note){item.decision=decision;item.decision_region_source_pixels=region;item.decision_note=note;item.decided_at=new Date().toISOString();syncLocalCounts();}
-function applyLocalClear(item){item.decision=null;item.decision_region_source_pixels=null;item.decision_note=null;item.decided_at=null;syncLocalCounts();}
+function applyLocalDecision(item,decision,region,note,studio=false){item.decision=decision;item.decision_region_source_pixels=region;item.decision_note=note;item.decided_at=new Date().toISOString();if(studio)item.studio_logo_memory={remembered:true};else delete item.studio_logo_memory;syncLocalCounts();}
+function applyLocalClear(item){item.decision=null;item.decision_region_source_pixels=null;item.decision_note=null;item.decided_at=null;delete item.studio_logo_memory;syncLocalCounts();}
 function afterLocalChange(id,advance){if(filter==='pending'&&listIds.includes(id))sticky.add(id);updateListStatuses();updateHeader();if(advance){const next=nextUndecided(id);if(next&&next!==focusId){previousFocusId=focusId;focusId=next;renderFocus();return;}}const x=itemMap.get(focusId);if(x)renderSide(x);updateNavState();}
 function setSaveState(){clearTimeout(saveTimer);const el=$('#save-state');if(pendingWrites){setText(el,'Đang lưu…');return;}setText(el,'Đã lưu');saveTimer=setTimeout(()=>setText(el,''),1500);}
 function scheduleResources(){clearTimeout(resourcesTimer);resourcesTimer=setTimeout(async()=>{try{resources=await requestJson(API+'resources',{cache:'no-store'});renderExport();}catch(_error){}},1500);}
@@ -2818,9 +3439,10 @@ async function postWrite(kind,body){for(let attempt=1;;attempt++){try{return awa
 function writeFailureMessage(kind,body,error){const x=itemMap.get(body?.id),where=x?`${catName(x)} ${span(x)}`:String(body?.id||''),what=kind==='clear'?'bỏ chọn':`“${body?.decision==='BLUR'&&body?.full_frame?'Làm mờ cả cảnh':x?actionName(x,body?.decision):String(body?.decision||'')}”`,raw=String(error?.message||''),detail=error?.status>=500&&/WinError|Errno|denied|[\\/]/i.test(raw)?'máy chủ chưa ghi được file hàng đợi (file đang bị đọc hoặc khóa)':raw;return `Chưa lưu được lựa chọn ${what} cho mục ${where}${error?.attempts>1?` (đã thử ${error.attempts} lần)`:''}. Mục này sẽ trở về trạng thái đã lưu trên máy và được mở lại để bạn chọn lại. Chi tiết: ${detail}`;}
 function enqueueWrite(kind,body){pendingWrites++;localEpoch++;setSaveState();updateNavState();const run=()=>postWrite(kind,body).then(payload=>{if(pendingWrites===1&&payload&&Array.isArray(payload.items))return applyQueueUpdate(payload);}).catch(error=>{resyncNeeded=true;reviewStats.writeFailures++;if(body?.id)reopenAfterResync=body.id;alert(writeFailureMessage(kind,body,error));}).finally(()=>{pendingWrites--;setSaveState();if(!pendingWrites){if(resyncNeeded){resyncNeeded=false;resync();}scheduleResources();}});writeChain=writeChain.then(run,run);return writeChain;}
 async function postJson(kind,body,retried=false){let response;try{response=await fetch(API+kind,{method:'POST',headers:{'Content-Type':'application/json','X-BiliFlow-Token':token},body:JSON.stringify(body)});}catch(_error){throw offlineError();}if(response.status===403&&!retried){await refreshSession();return postJson(kind,body,true);}return readJson(response);}
-async function decide(id,decision,needsFullFrame=false,note=null){if(busy||!queue)return;try{const item=itemMap.get(id);if(!item)throw new Error('Không tìm thấy mục này trong hàng đợi hiện tại.');const ai=item.ai_visual_audit,aiDecision=ai?.suggested_decision,confidence=Number(ai?.confidence||0);if(aiDecision&&confidence>=.9&&decision!==aiDecision&&['KEEP','BLUR','CUT'].includes(aiDecision)&&['KEEP','BLUR','CUT'].includes(decision)){const message=`Visual AI tin cậy ${Math.round(confidence*100)}% đề xuất “${actionName(item,aiDecision)}” vì vùng đỏ được nhận là ${ai.classification||'nội dung phim'}. Bạn vẫn muốn chọn “${actionName(item,decision)}” cho đúng vùng đỏ này?`;if(!confirm(message))return;}let full_frame=false;if(decision==='BLUR'&&needsFullFrame){full_frame=confirm('Bạn có xác nhận làm mờ toàn bộ khung hình trong đoạn này?');if(!full_frame)return;}if(decision==='BLUR'&&!full_frame&&!item.suggested_region_source_pixels)throw new Error('Mục này chưa có vùng được định vị; hãy chọn Làm mờ cả cảnh.');pushUndo(item,!item.decision&&isAdvisoryItem(item));applyLocalDecision(item,decision,decision==='BLUR'?(full_frame?'FULL_FRAME':item.suggested_region_source_pixels):null,note);afterLocalChange(id,autoNext&&id===focusId);enqueueWrite('decision',{id,decision,full_frame,note});}catch(e){alert(e.message);}}
+function sceneBlurMessage(x){const ms=momentsOf(x);return `Làm mờ toàn bộ khung hình trong ${ms.length} khoảnh khắc (tổng ${mmss(momentTotal(ms))})? Khoảng trống giữa các khoảnh khắc giữ nguyên.`;}
+async function decide(id,decision,needsFullFrame=false,note=null,rememberStudio=false){if(busy||!queue)return;try{const item=itemMap.get(id);if(!item)throw new Error('Không tìm thấy mục này trong hàng đợi hiện tại.');const ai=item.ai_visual_audit,aiDecision=ai?.suggested_decision,confidence=Number(ai?.confidence||0);if(aiDecision&&confidence>=.9&&decision!==aiDecision&&['KEEP','BLUR','CUT'].includes(aiDecision)&&['KEEP','BLUR','CUT'].includes(decision)){const message=`Visual AI tin cậy ${Math.round(confidence*100)}% đề xuất “${actionName(item,aiDecision)}” vì vùng đỏ được nhận là ${ai.classification||'nội dung phim'}. Bạn vẫn muốn chọn “${actionName(item,decision)}” cho đúng vùng đỏ này?`;if(!confirm(message))return;}let full_frame=false;if(decision==='BLUR'&&needsFullFrame){full_frame=isScene(item)?confirm(sceneBlurMessage(item)):confirm('Bạn có xác nhận làm mờ toàn bộ khung hình trong đoạn này?');if(!full_frame)return;}if(decision==='BLUR'&&!full_frame&&!item.suggested_region_source_pixels)throw new Error('Mục này chưa có vùng được định vị; hãy chọn Làm mờ cả cảnh.');const studio=!!rememberStudio&&decision==='KEEP'&&studioEligible(item);pushUndo(item,!item.decision&&isAdvisoryItem(item));applyLocalDecision(item,decision,decision==='BLUR'?(full_frame?'FULL_FRAME':item.suggested_region_source_pixels):null,note,studio);afterLocalChange(id,autoNext&&id===focusId);enqueueWrite('decision',studio?{id,decision,full_frame,note,remember_studio_logo:true}:{id,decision,full_frame,note});}catch(e){alert(e.message);}}
 async function clearDecision(id){if(busy||!queue)return;const item=itemMap.get(id);if(!item||!item.decision)return;pushUndo(item);applyLocalClear(item);afterLocalChange(id,false);enqueueWrite('clear',{id});}
-function undo(){if(busy||!queue)return;const entry=undoStack.pop();if(!entry){updateNavState();return;}const item=itemMap.get(entry.id);if(!item){alert('Mục cần hoàn tác không còn trong hàng đợi hiện tại.');updateNavState();return;}if(entry.advisory){if(item.id!==focusId&&listIds.includes(item.id)){previousFocusId=focusId;focusId=item.id;renderFocus();}else updateNavState();alert(advisoryUndoMessage(item));return;}const prev=entry.prev;if(prev.decision){applyLocalDecision(item,prev.decision,prev.region,prev.note);enqueueWrite('decision',{id:item.id,decision:prev.decision,full_frame:prev.region==='FULL_FRAME',note:prev.note});}else{applyLocalClear(item);enqueueWrite('clear',{id:item.id});}if(filter==='pending'&&listIds.includes(item.id))sticky.add(item.id);updateListStatuses();updateHeader();if(item.id!==focusId&&listIds.includes(item.id)){previousFocusId=focusId;focusId=item.id;renderFocus();}else renderSide(itemMap.get(focusId)||item);updateNavState();}
+function undo(){if(busy||!queue)return;const entry=undoStack.pop();if(!entry){updateNavState();return;}const item=itemMap.get(entry.id);if(!item){alert('Mục cần hoàn tác không còn trong hàng đợi hiện tại.');updateNavState();return;}if(entry.advisory){if(item.id!==focusId&&listIds.includes(item.id)){previousFocusId=focusId;focusId=item.id;renderFocus();}else updateNavState();alert(advisoryUndoMessage(item));return;}const prev=entry.prev;if(prev.decision){applyLocalDecision(item,prev.decision,prev.region,prev.note,prev.studio);const body={id:item.id,decision:prev.decision,full_frame:prev.region==='FULL_FRAME',note:prev.note};if(prev.studio)body.remember_studio_logo=true;enqueueWrite('decision',body);}else{applyLocalClear(item);enqueueWrite('clear',{id:item.id});}if(filter==='pending'&&listIds.includes(item.id))sticky.add(item.id);updateListStatuses();updateHeader();if(item.id!==focusId&&listIds.includes(item.id)){previousFocusId=focusId;focusId=item.id;renderFocus();}else renderSide(itemMap.get(focusId)||item);updateNavState();}
 function advisoryUndoMessage(x){return `Không hoàn tác được lựa chọn cho ứng viên phụ ${catName(x)} ${span(x)}: khi bạn chọn, mục này đã được chuyển vào danh sách chính. Bỏ chọn lúc này sẽ biến nó thành mục bắt buộc chưa duyệt và chặn xuất video, nên lựa chọn “${decisionLabel(x)}” được giữ nguyên. Nếu muốn đổi, hãy chọn lại Giữ nguyên, Làm mờ, Cắt hoặc Cần xem thêm cho mục này.`;}
 function keyDecision(n){const x=itemMap.get(focusId);if(!x)return;const choice={1:['KEEP',false],2:['BLUR',true],3:['CUT',false],4:['NEEDS_MORE_CONTEXT',false]}[n];if(choice)decide(x.id,choice[0],choice[1]);}
 function isTyping(target){if(!target||target===document.body)return false;if(target.isContentEditable||target.tagName==='TEXTAREA'||target.tagName==='SELECT')return true;return target.tagName==='INPUT'&&!['checkbox','radio','button','submit','reset'].includes(String(target.type).toLowerCase());}
@@ -2834,10 +3456,10 @@ async function finalizeExport(){await writeChain;if(queue.status!=='READY_FOR_ED
 document.querySelectorAll('#chips .chip').forEach(b=>b.addEventListener('click',()=>setFilter(b.dataset.filter)));
 $('#more-filter').addEventListener('change',e=>{if(e.target.value)setFilter(e.target.value);e.target.blur();});
 $('#rows').addEventListener('click',e=>{const row=e.target.closest('.row');if(row)selectItem(row.dataset.id);});
-$('#side').addEventListener('click',e=>{const b=e.target.closest('button[data-act]');if(!b)return;const x=itemMap.get(focusId);if(!x)return;const act=b.dataset.act;b.blur();if(act==='decide')decide(x.id,b.dataset.decision,b.dataset.full==='1');else if(act==='region')decide(b.dataset.owner,b.dataset.decision,false,b.dataset.decision==='KEEP'?'Đã xác nhận vùng khoanh đỏ là tiêu đề hoặc nội dung hợp lệ của phim':'Đã xác nhận vùng khoanh đỏ là logo thương hiệu');else if(act==='clear')clearDecision(x.id);else if(act==='play')playRange();});
+$('#side').addEventListener('click',e=>{const b=e.target.closest('button[data-act]');if(!b)return;const x=itemMap.get(focusId);if(!x)return;const act=b.dataset.act;b.blur();if(act==='decide')decide(x.id,b.dataset.decision,b.dataset.full==='1');else if(act==='seq')playSequence();else if(act==='moment')playMoment(Number(b.dataset.i),false);else if(act==='studio'){if(!(x.decision==='KEEP'&&x.studio_logo_memory?.remembered))decide(x.id,'KEEP',false,null,true);}else if(act==='region')decide(b.dataset.owner,b.dataset.decision,false,b.dataset.decision==='KEEP'?'Đã xác nhận vùng khoanh đỏ là tiêu đề hoặc nội dung hợp lệ của phim':'Đã xác nhận vùng khoanh đỏ là logo thương hiệu');else if(act==='clear')clearDecision(x.id);else if(act==='play')playRange();});
 $('#side').addEventListener('toggle',e=>{if(e.target.matches&&e.target.matches('details.tech'))techOpen=e.target.open;},true);
-$('#strip').addEventListener('click',e=>{const b=e.target.closest('.thumb');if(!b||b.classList.contains('ghost'))return;const img=b.querySelector('img'),t=b.dataset.t===''?null:Number(b.dataset.t);$('#strip').querySelectorAll('.thumb.on').forEach(n=>n.classList.remove('on'));b.classList.add('on');b.blur();if(t!=null&&Number.isFinite(t)){setTime(t);if(videoAllowed()){pausePlayer();seekTo(t,false);}}if(img&&img.getAttribute('src')&&!pstate.reveal)setPoster(img.getAttribute('src'));});
-$('#timeline').addEventListener('click',e=>{const box=e.currentTarget.getBoundingClientRect();if(!box.width||!videoAllowed())return;const ratio=((e.clientX-box.left)/box.width*100-2)/96,t=pstate.start+Math.min(1,Math.max(0,ratio))*(pstate.end-pstate.start);setTime(t);seekTo(t,false);});
+$('#strip').addEventListener('click',e=>{const b=e.target.closest('.thumb');if(!b||b.classList.contains('ghost'))return;const img=b.querySelector('img'),t=b.dataset.t===''?null:Number(b.dataset.t);$('#strip').querySelectorAll('.thumb.on').forEach(n=>n.classList.remove('on'));b.classList.add('on');b.blur();if(t!=null&&Number.isFinite(t)){if(pstate.moments){pstate.seq=false;pstate.stopAt=null;setMoment(momentIndex(t,pstate.moments));}setTime(t);if(videoAllowed()){pausePlayer();seekTo(t,false);}}if(img&&img.getAttribute('src')&&!pstate.reveal)setPoster(img.getAttribute('src'));});
+$('#timeline').addEventListener('click',e=>{const box=e.currentTarget.getBoundingClientRect();if(!box.width||!videoAllowed())return;const ratio=((e.clientX-box.left)/box.width*100-2)/96;let t=pstate.start+Math.min(1,Math.max(0,ratio))*(pstate.end-pstate.start);const ms=pstate.moments;if(ms){let k=momentIndex(t,ms);if(k<0){k=nextMomentAfter(t);if(k<0)k=ms.length-1;t=ms[k].start;}pausePlayer();pstate.seq=false;pstate.stopAt=null;setMoment(k);}setTime(t);seekTo(t,false);});
 $('#play-btn').addEventListener('click',e=>{e.currentTarget.blur();togglePlay();});
 playerBox.addEventListener('click',e=>{if(e.target===video||e.target===posterImg)togglePlay();});
 $('#prev').addEventListener('click',e=>{e.currentTarget.blur();step(-1);});
@@ -3033,6 +3655,7 @@ def serve_review_ui(
                             item_id=str(body["id"]), decision=str(body["decision"]),
                             note=body.get("note"), full_frame=bool(body.get("full_frame", False)),
                             actor="local_user", transport="local_ui",
+                            remember_studio_logo=body.get("remember_studio_logo") is True,
                         )
                     elif self.path == "/api/clear":
                         updated = clear_review_decision(

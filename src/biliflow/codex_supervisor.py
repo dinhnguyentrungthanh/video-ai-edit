@@ -413,7 +413,13 @@ def queue_quality_findings(queue_payload: dict[str, Any]) -> tuple[list[str], li
         is_promo = item.get("candidate_type") == "opening_promotion" or any(
             term in text for term in promo_terms
         )
-        if is_promo and item.get("decision") not in {None, "CUT"}:
+        # An opening studio ident has no pre-selected CUT by design (R3a/R3b, 2026-10-01):
+        # keeping it, or confirming it as a studio logo, is a valid human decision.
+        studio_ident_kept = item.get("decision") == "KEEP" and bool(
+            item.get("opening_ident") or item.get("suggestion_withheld")
+            or item.get("studio_logo_memory") or item.get("studio_logo_match")
+        )
+        if is_promo and item.get("decision") not in {None, "CUT"} and not studio_ident_kept:
             findings.append(
                 f"Opening promotion {item.get('start_seconds')}–{item.get('end_seconds')}s is {item.get('decision')} instead of CUT."
             )
@@ -781,8 +787,10 @@ def run_ai_audit(*, root: Path, job: dict[str, Any], queue_path: Path,
         "source/checksum consistency, suspicious timeline gaps, unresolved detector errors, and "
         "whether the queue is safe to present for human review. This is a PRE-REVIEW audit: null human "
         "decisions are expected and must not cause BLOCK by themselves. A pending opening promotion is safe "
-        "to present when it is explicitly classified as opening_promotion and has suggested_decision CUT; "
-        "the human still makes the actual decision. Use candidate_coverage in the queue to distinguish proven "
+        "to present when it is explicitly classified as opening_promotion and has suggested_decision CUT, "
+        "or when it is an opening studio ident (opening_ident true, suggestion_withheld) that deliberately "
+        "has no pre-selected decision; KEEP is a valid decision for such an ident. "
+        "The human still makes the actual decision. Use candidate_coverage in the queue to distinguish proven "
         "cross-detector deduplication from missing candidates: when complete is true, missing_refs is empty, "
         "and every report entry is complete, do not infer missing coverage merely because queue_item_count is "
         "smaller than source_candidate_count. Audit edit quality as well as structure: "

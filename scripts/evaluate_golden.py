@@ -72,6 +72,12 @@ def _queues(paths: list[Path], manifest: dict) -> tuple[dict, dict]:
         queues[key] = queue
         provenance[key] = {"path": path.resolve().relative_to(ROOT).as_posix(), "sha256": file_sha256(path),
                            "detection_scope": queue.get("detection_scope")}
+        studio = queue.get("studio_logo_memory")
+        if isinstance(studio, dict):
+            provenance[key]["studio_logo_memory"] = studio
+            if studio.get("moved_to_candidates"):
+                print(f"WARNING: {path} moved {studio['moved_to_candidates']} card(s) with the user's studio-logo "
+                      "memory; this score depends on state/studio-logo-memory.json", flush=True)
     return queues, provenance
 
 

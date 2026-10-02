@@ -1072,7 +1072,8 @@ def _handler_class(center: ControlCenter) -> type[BaseHTTPRequestHandler]:
                                 project_root=center.root, queue_path=queue_path,
                                 item_id=str(body["id"]), decision=str(body["decision"]),
                                 note=body.get("note"), full_frame=bool(body.get("full_frame", False)),
-                                actor="control_center_user", transport="control_center")
+                                actor="control_center_user", transport="control_center",
+                                remember_studio_logo=body.get("remember_studio_logo") is True)
                             center.sync_queue_state(job_id, result)
                         elif action == "clear":
                             result = clear_review_decision(
