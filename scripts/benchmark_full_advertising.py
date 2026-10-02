@@ -449,7 +449,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = parser.add_subparsers(dest="command", required=True)
     r = sub.add_parser("run")
-    r.add_argument("--label", required=True, choices=("standard", "fast", "overlap", "fp16", "golden"))
+    r.add_argument("--label", required=True, choices=("standard", "fast", "overlap", "fp16", "golden", "speedbase", "speedcand"))
     r.add_argument("--detect-fp16", action="store_true")
     r.add_argument("--job-id", type=int, default=39, choices=sorted(AUTHORIZED_JOBS))
     r.add_argument("--detectors", nargs="+", default=["advertising"],
@@ -466,7 +466,9 @@ def main():
     if args.command == "run":
         expected = {"standard": (False, False, False), "fast": (True, False, False),
                     "overlap": (True, True, False), "fp16": (True, False, True),
-                    "golden": (True, False, False)}[args.label]
+                    "golden": (True, False, False),
+                    # Exact-speedup work: HEAD baseline vs candidate, both fast scan.
+                    "speedbase": (True, False, False), "speedcand": (True, False, False)}[args.label]
         if (args.fast_scan, args.prewarm_overlap, args.detect_fp16) != expected:
             raise ValueError("--label must match --fast-scan/--prewarm-overlap/--detect-fp16")
     {"run": run, "compare": compare, "review-diff": review_diff}[args.command](args)

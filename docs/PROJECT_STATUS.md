@@ -1,3 +1,9 @@
+## Task B (2026-10-02): exact-output speedups, uncommitted
+
+- Kept: violence confirmation prefetch (T1), background source hash in adult/live/animation scans (T5a), R3 windows decoded two at a time (T5b), logo VLM processor prefetch (T5d), and an `IteratorPrefetch` shutdown fix. Dropped T4 (no gain); skipped Florence+DINO in one process.
+- Proven identical on the full films: every touched stage re-run on Troy and Conan 20 with the HEAD trials' commands; scan reports, JPEGs, review queues (HEAD and working-tree build code) and dry edit plans identical (`reports/benchmarks/exact-speedups/stages-20261002-075009`).
+- Estimated saving per all-groups fast scan: Troy ~5-5.5 min (confirmation 651 -> 424 s), Conan 20 ~20 s. Raw stage times against the HEAD trials are not attributable (that run was loaded); see `timing-attribution.json` there.
+
 ## Q3 (2026-10-01): watermark region, nudity shot completion, Golden Set v1.1
 
 - Conan 21 watermark blur no longer leaves "Phim" visible; Golden region 13/13 with nothing else changed.

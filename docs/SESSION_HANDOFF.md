@@ -1,6 +1,6 @@
 # BiliFlow session handoff
 
-Updated: 2026-09-29 (Asia/Bangkok)
+Updated: 2026-10-02 (Asia/Bangkok)
 
 This is the short, authoritative starting point for a new Codex account or chat. It complements the detailed history in `PROJECT_STATUS.md` and `CHANGELOG.md`.
 
@@ -24,6 +24,13 @@ The improvement sequence now present on local `main` is:
 5. `0b4ff3c Map logo candidates by geometry track`
 
 Always confirm this section with `git status` and `git log` because it becomes stale after new work.
+
+## Current work — 2026-10-02 task B exact-output speedups (uncommitted)
+
+- Changed: `vlm_confirmation.py` (T1), `scanner.py` / `live_safety_scanner.py` / `animation_safety_scanner.py` (T5a background hash), `shot_cuts.py` (T5b), `visual_logo_scanner.py` (T5d), `frame_prefetch.py` (shutdown fix); tests `test_vlm_confirmation`, `test_batch_prefetch`, `test_shot_cuts`, `test_exact_speedups`, `test_visual_logo_vlm_prefetch`; harnesses `scripts/benchmark_exact_speedups.py` (+ `.ps1`) and `scripts/benchmark_stage_equivalence.py`.
+- Verified: full-film stage-level equivalence against the HEAD trials `troy-allgroups-full-speedbase-20261001-203927` and `conan20-allgroups-full-speedbase-20261001-215759` (`reports/benchmarks/exact-speedups/stages-20261002-075009/summary.json`, all_identical true; src diff sha256 18adb60b… unchanged during the run). 643/643 tests. Decisions and numbers: `reports/benchmarks/exact-speedups/decisions-20261002.json`.
+- Another agent edits `review_workflow.py`, `brand_memory.py`, `cli.py` and review-page code in parallel; compare review queues only by rebuilding both sides with one build code (the stage harness does this).
+- Code edits invalidate stage caches; the Control Center runs the old code until restarted. Nothing committed; commit only when the user asks.
 
 ## Current work — 2026-10-01 afternoon (uncommitted)
 

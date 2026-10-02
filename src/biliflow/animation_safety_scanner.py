@@ -28,7 +28,8 @@ from biliflow.frame_prefetch import BatchPrefetch
 from biliflow.intervals import compact_interval_thumbnails, group_hits
 from biliflow.probe import duration_seconds, probe_video
 from biliflow.report import write_report
-from biliflow.scanner import _read_exact, _score_summary, sha256_file, temporal_confirm_hits
+from biliflow.scanner import _read_exact, _score_summary, temporal_confirm_hits
+from biliflow.source_hash import BackgroundSha256
 from biliflow.storage import require_capacity
 
 ANIMATION_PRECISIONS = ("fp32", "fp16")
@@ -236,6 +237,9 @@ def scan_animation_safety(
     gore_heap: list[tuple[float, int, Image.Image, str]] = []
     violence_heap: list[tuple[float, int, Image.Image, str]] = []
     prefetch_stats: dict = {}
+    # Same digest as hashing after the scan; it overlaps decoding and inference
+    # and is awaited before the reports are written.
+    input_hasher = BackgroundSha256(input_path)
     ffmpeg = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
 
     def read_frame() -> Image.Image | None:
@@ -468,7 +472,7 @@ def scan_animation_safety(
         "shared_inference": True,
         "batch_prefetch": prefetch_stats,
     }
-    input_hash = performance.call('source_hash', sha256_file, input_path)
+    input_hash = performance.call('source_hash', input_hasher.result)
     common = {
         "schema_version": 2,
         "status": status,

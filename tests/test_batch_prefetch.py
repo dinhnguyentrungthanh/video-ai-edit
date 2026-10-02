@@ -197,6 +197,64 @@ class IteratorPrefetchTests(unittest.TestCase):
         self.assertFalse(prefetch.finished)
         self.assertLessEqual(len(count), 5)  # bounded read-ahead: queue depth plus one pending item
 
+    def test_producer_without_a_process_is_joined_on_exit(self):
+        from biliflow.frame_prefetch import IteratorPrefetch
+        produced = []
+
+        def items():
+            for index in range(100):
+                produced.append(threading.current_thread().name)
+                yield index
+
+        prefetch = IteratorPrefetch(None, items(), depth=2)
+        with prefetch:
+            self.assertEqual(list(prefetch), list(range(100)))
+        self.assertTrue(prefetch.finished)
+        self.assertEqual(set(produced), {"biliflow-iterator-prefetch"})
+        self.assertFalse(prefetch._thread.is_alive())
+
+        early = IteratorPrefetch(None, items(), depth=2)
+        with early:
+            self.assertEqual(next(iter(early)), 0)
+        self.assertFalse(early._thread.is_alive())
+        self.assertFalse(early.finished)
+
+    def test_slow_item_without_a_process_is_awaited_beyond_the_stop_timeout(self):
+        # A producer without a subprocess (OpenCV seeks, JPEG writes, the VLM processor)
+        # cannot be unblocked; leaving must wait for its current item, never return
+        # while it may still use the capture or the temporary directory.
+        from biliflow import frame_prefetch
+        from biliflow.frame_prefetch import IteratorPrefetch
+        events = []
+
+        def items():
+            yield 0
+            events.append("item-1-started")
+            threading.Event().wait(0.3)  # longer than the patched stop timeout
+            events.append("item-1-done")
+            yield 1
+
+        with patch.object(frame_prefetch, "THREAD_STOP_SECONDS", 0.02):
+            prefetch = IteratorPrefetch(None, items(), depth=1)
+            with prefetch:
+                self.assertEqual(next(iter(prefetch)), 0)
+                while not events:
+                    threading.Event().wait(0.005)
+            self.assertFalse(prefetch._thread.is_alive())
+            self.assertEqual(events, ["item-1-started", "item-1-done"])
+
+            class RunningProcess:
+                def poll(self):
+                    return 0  # already exited; nothing to terminate
+
+            bounded = IteratorPrefetch(RunningProcess(), items(), depth=1)
+            with self.assertRaisesRegex(RuntimeError, "did not stop"):
+                with bounded:
+                    self.assertEqual(next(iter(bounded)), 0)
+                    while len(events) < 3:
+                        threading.Event().wait(0.005)
+            bounded._thread.join()
+
     def test_invalid_depth_is_rejected(self):
         from biliflow.frame_prefetch import IteratorPrefetch
         for depth in (0, 65, True, 2.0):

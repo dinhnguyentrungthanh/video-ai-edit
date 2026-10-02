@@ -81,10 +81,14 @@ class FramePrefetch:
         return False
 
 
+THREAD_STOP_SECONDS = 5.0
+
+
 def _stop_process_and_thread(process, thread, work_queue, name: str) -> None:
     # Killing the producer process unblocks a thread inside pipe.read;
     # closing its BufferedReader first could wait on that reader's lock.
-    if process.poll() is None:
+    # IteratorPrefetch accepts process=None for producers without a subprocess.
+    if process is not None and process.poll() is None:
         process.terminate()
         try:
             process.wait(timeout=5)
@@ -92,7 +96,11 @@ def _stop_process_and_thread(process, thread, work_queue, name: str) -> None:
             process.kill()
             process.wait(timeout=5)
     if thread is not None:
-        thread.join(timeout=5)
+        # Without a process nothing can unblock the producer, and it may still be
+        # using what the caller releases next (a VideoCapture, a temporary
+        # directory). It stops after its current item, so wait for it, as the
+        # serial loop would have waited for that item.
+        thread.join(timeout=THREAD_STOP_SECONDS if process is not None else None)
         if thread.is_alive():
             raise RuntimeError(f"{name} did not stop")
         while True:
@@ -204,7 +212,9 @@ class IteratorPrefetch:
     are re-raised to the consumer after the items before them. `finished` is true
     when the iterator ended on its own (exhausted or raised) rather than because
     the consumer left early. Leaving the context terminates a still-running FFmpeg
-    process and joins the thread.
+    process and joins the thread. ``process`` may be None when the producer owns
+    no subprocess (for example OpenCV seeks or file reads); the thread is still
+    joined before the context exits.
     """
 
     def __init__(self, process, items, *, depth=16):

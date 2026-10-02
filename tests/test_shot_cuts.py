@@ -1,9 +1,12 @@
 """Opt-in NSFW shot completion (C1 rule R3) and its window cut detector."""
+import hashlib
 import io
 import json
 import subprocess
 import sys
 import tempfile
+import threading
+import time
 import unittest
 from contextlib import redirect_stdout
 from pathlib import Path
@@ -14,7 +17,10 @@ import torch
 
 from biliflow.intervals import group_hits, merge_intervals
 from biliflow.scanner import complete_nsfw_sequence_context, complete_nsfw_shot_context, scan_nsfw
-from biliflow.shot_cuts import FrameChange, detect_cuts, frame_changes, merge_windows, window_cuts
+from biliflow.shot_cuts import (
+    FrameChange, detect_cuts, find_window_cuts, frame_changes, merge_windows, window_cuts,
+    window_frame_changes,
+)
 
 ROOT = Path(__file__).resolve().parents[1]
 FFMPEG = ROOT / "tools/ffmpeg/bin/ffmpeg.exe"
@@ -238,6 +244,96 @@ class WindowDecodeTests(unittest.TestCase):
         self.assertEqual(window_cuts(FFMPEG, self.video, 0.0, 1.9, threads=1), [])
 
 
+class ParallelWindowCutsTests(unittest.TestCase):
+    """find_window_cuts decodes merged windows two at a time with the serial result."""
+
+    WINDOWS = [(50.0, 60.0), (0.0, 10.0), (12.0, 20.0), (25.0, 30.0), (40.0, 41.0), (19.5, 22.0)]
+
+    def test_parallel_windows_give_the_serial_cuts(self):
+        calls = []
+        active = {"now": 0, "peak": 0}
+        guard = threading.Lock()
+
+        def fake_window_cuts(ffmpeg, video, start, end, *, settings, threads):
+            with guard:
+                active["now"] += 1
+                active["peak"] = max(active["peak"], active["now"])
+            try:
+                time.sleep(0.02 + 0.01 * ((int(start) * 7) % 5))  # windows finish out of order
+                calls.append((start, end, threading.current_thread().name, threads))
+                return [start + 1.0, round((start + end) / 2, 3), 5.0]  # 5.0 repeats across windows
+            finally:
+                with guard:
+                    active["now"] -= 1
+
+        with mock.patch("biliflow.shot_cuts.window_cuts", side_effect=fake_window_cuts):
+            serial = find_window_cuts(FFMPEG, Path("video.mp4"), self.WINDOWS, workers=1)
+            serial_calls, calls[:] = list(calls), []
+            serial_peak, active["peak"] = active["peak"], 0
+            parallel = find_window_cuts(FFMPEG, Path("video.mp4"), self.WINDOWS)
+        merged = merge_windows(self.WINDOWS)
+        self.assertEqual(parallel, serial)
+        self.assertEqual(serial, sorted({cut for a, b in merged for cut in (a + 1.0, round((a + b) / 2, 3), 5.0)}))
+        self.assertEqual(sorted(call[:2] for call in calls), sorted(call[:2] for call in serial_calls))
+        self.assertEqual([call[:2] for call in serial_calls], merged)  # each window decoded once
+        self.assertEqual({call[3] for call in calls}, {2})  # FFmpeg keeps threads=2 per window
+        self.assertEqual({call[2] for call in serial_calls}, {"MainThread"})
+        self.assertEqual(serial_peak, 1)
+        self.assertEqual(active["peak"], 2)
+
+    def test_first_failing_window_in_window_order_is_raised(self):
+        def fake_window_cuts(ffmpeg, video, start, end, *, settings, threads):
+            if start == 12.0:
+                time.sleep(0.15)
+                raise RuntimeError("FFmpeg cut decode failed: window 12")
+            if start == 25.0:
+                raise RuntimeError("FFmpeg cut decode failed: window 25")
+            time.sleep(0.05)
+            return [start + 1.0]
+
+        windows = [(0.0, 10.0), (12.0, 20.0), (25.0, 30.0), (40.0, 41.0)]
+        for workers in (1, 2):
+            with self.subTest(workers=workers), \
+                    mock.patch("biliflow.shot_cuts.window_cuts", side_effect=fake_window_cuts), \
+                    self.assertRaisesRegex(RuntimeError, "window 12"):
+                find_window_cuts(FFMPEG, Path("video.mp4"), windows, workers=workers)
+
+    def test_invalid_worker_count_is_rejected(self):
+        for workers in (0, -1, True, 2.0):
+            with self.subTest(workers=workers), self.assertRaises(ValueError):
+                find_window_cuts(FFMPEG, Path("video.mp4"), [(0.0, 1.0)], workers=workers)
+
+    @unittest.skipUnless(FFMPEG.exists(), "project FFmpeg is required")
+    def test_real_decode_in_parallel_matches_serial_decode(self):
+        with tempfile.TemporaryDirectory() as directory:
+            video = Path(directory) / "three-shots.mkv"
+            subprocess.run([str(FFMPEG), "-hide_banner", "-loglevel", "error",
+                "-f", "lavfi", "-i", "testsrc2=s=192x80:r=25:d=3",
+                "-f", "lavfi", "-i", "color=c=navy:s=192x80:r=25:d=3",
+                "-f", "lavfi", "-i", "testsrc=s=192x80:r=25:d=3", "-filter_complex",
+                "[0]format=yuv420p[a];[1]format=yuv420p[b];[2]format=yuv420p[c];[a][b][c]concat=n=3:v=1:a=0",
+                "-c:v", "ffv1", str(video)], check=True)
+            windows = [(0.5, 1.2), (2.5, 3.5), (5.5, 6.5), (7.8, 8.5)]
+            self.assertEqual(merge_windows(windows), windows)
+            serial = find_window_cuts(FFMPEG, video, windows, workers=1)
+            parallel = find_window_cuts(FFMPEG, video, windows, workers=2)
+            serial_changes = [window_frame_changes(FFMPEG, video, a, b) for a, b in windows]
+            results = {}
+
+            def decode(index):
+                results[index] = window_frame_changes(FFMPEG, video, *windows[index])
+
+            threads = [threading.Thread(target=decode, args=(index,)) for index in range(len(windows))]
+            for thread in threads:
+                thread.start()
+            for thread in threads:
+                thread.join()
+        self.assertEqual(serial, [3.0, 6.0])
+        self.assertEqual(parallel, serial)
+        self.assertEqual([results[index] for index in range(len(windows))], serial_changes)
+        self.assertTrue(all(serial_changes))
+
+
 class _FakeStdout:
     """Raw 448x448 RGB frames whose first two bytes carry the frame index."""
 
@@ -384,6 +480,15 @@ class ScanNsfwShotCompletionTests(unittest.TestCase):
         self.assertEqual(block["maximum_extension_seconds"], 8.0)
         self.assertEqual((block["minimum_seed_samples"], block["minimum_context_share"]), (5, 0.40))
         self.assertEqual(payload["sequence_completion"]["completed_interval_count"], 1)
+
+    def test_source_hash_runs_beside_the_scan_and_equals_the_file_digest(self):
+        with mock.patch("biliflow.shot_cuts.find_window_cuts", return_value=[10.0, 30.0]), \
+                mock.patch("biliflow.scanner.sha256_file",
+                           side_effect=AssertionError("no serial re-hash after the scan")):
+            payload, _ = self.run_scan(shot_completion=True)
+        self.assertEqual(payload["input_sha256"], hashlib.sha256(b"x").hexdigest())
+        self.assertEqual(payload["shot_completion"]["status"], "APPLIED")
+        self.assertIn("source_hash", payload["metrics"]["performance"]["phases"])
 
     def test_opt_in_decode_failure_keeps_sequence_intervals(self):
         with mock.patch("biliflow.shot_cuts.find_window_cuts", side_effect=RuntimeError("decode broke")):

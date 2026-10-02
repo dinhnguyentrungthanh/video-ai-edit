@@ -11,6 +11,7 @@ import os
 import re
 import subprocess
 import tempfile
+import threading
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -26,6 +27,7 @@ from biliflow.brand_memory import (
     memory_revision,
 )
 from biliflow.florence_regions import box_iou
+from biliflow.frame_prefetch import IteratorPrefetch
 from biliflow.probe import duration_seconds, probe_video
 from biliflow.storage import require_capacity
 
@@ -54,6 +56,9 @@ BOUNDARY_SCENE_PROMPT = (
 ROUTING_CACHE_SCHEMA_VERSION = 2
 ROUTING_ALGORITHM_VERSION = 2
 APPROVED_BRAND_MEMORY_SIMILARITY = 0.94
+# Candidate windows whose JPEGs and processor inputs may wait for the VLM; the
+# producer thread prepares the next windows while the model answers the current one.
+LOGO_VLM_PREFETCH_DEPTH = 2
 
 
 def _inside(root: Path, path: Path, label: str) -> Path:
@@ -664,6 +669,61 @@ def select_window_evidence(frames: list[dict], maximum: int = 2) -> list[dict]:
             if len(selected) >= maximum:
                 break
     return selected
+
+
+def _approved_memory_match(strongest: dict) -> bool:
+    """True when the window's strongest frame matched an approved brand-memory signature."""
+    memory_match = strongest["features"].get("brand_memory")
+    return (
+        isinstance(memory_match, dict)
+        and float(memory_match.get("similarity", 0.0))
+        >= APPROVED_BRAND_MEMORY_SIMILARITY
+        and memory_match.get("memory_class") == "brand"
+    )
+
+
+def _prepared_logo_windows(
+    keys: list[tuple[float, float]],
+    windows: dict,
+    boundary_keys,
+    temporary_root: Path,
+    prepare_inputs,
+    performance: ScanPerformance,
+):
+    """Yield (index, key, candidates, strongest, frame paths, prepared inputs) per window.
+
+    Per window, in the serial order: the evidence JPEGs are written exactly as the
+    serial loop wrote them, then ``prepare_inputs`` (the processor) runs for the
+    prompts whose use does not depend on an answer: the logo prompt unless an
+    approved brand-memory match answers the window, and the boundary-scene prompt
+    for boundary windows. The retry prompt depends on the logo answer and is
+    prepared by the consumer. ``performance`` must belong to the producer thread.
+    """
+    for index, key in enumerate(keys, start=1):
+        candidates = select_window_evidence(windows[key], maximum=2)
+        strongest = candidates[0]
+        frame_paths = []
+        with performance.measure("frame_write"):
+            for frame_index, candidate in enumerate(candidates, start=1):
+                path = temporary_root / f"window-{index:04d}-frame-{frame_index}.jpg"
+                path.write_bytes(candidate["jpeg"])
+                frame_paths.append(path)
+                if candidate.get("focus_jpeg") and len(frame_paths) < 5:
+                    crop_path = temporary_root / f"window-{index:04d}-frame-{frame_index}-crop.jpg"
+                    crop_path.write_bytes(candidate["focus_jpeg"])
+                    frame_paths.append(crop_path)
+                if len(frame_paths) >= 3:
+                    break
+        prepared = {}
+        if not _approved_memory_match(strongest):
+            prepared[VISUAL_LOGO_PROMPT] = performance.call(
+                "processor", prepare_inputs, frame_paths, VISUAL_LOGO_PROMPT
+            )
+        if key in boundary_keys:
+            prepared[BOUNDARY_SCENE_PROMPT] = performance.call(
+                "processor", prepare_inputs, frame_paths, BOUNDARY_SCENE_PROMPT
+            )
+        yield index, key, candidates, strongest, frame_paths, prepared
 
 
 def parse_logo_answer(answer: str) -> tuple[str, str | None]:
@@ -1743,134 +1803,139 @@ def scan_visual_logos(
     rejected = []
     answer_counts = {"CONFIRMED": 0, "REJECTED": 0, "UNCERTAIN": 0}
     memory_match_count = 0
-    with tempfile.TemporaryDirectory(prefix="biliflow-logo-vlm-") as temporary:
-        temporary_root = Path(temporary)
-        for index, key in enumerate(sorted(ranked_keys), start=1):
-            candidates = select_window_evidence(windows[key], maximum=2)
-            strongest = candidates[0]
-            frame_paths = []
-            for frame_index, candidate in enumerate(candidates, start=1):
-                path = temporary_root / f"window-{index:04d}-frame-{frame_index}.jpg"
-                path.write_bytes(candidate["jpeg"])
-                frame_paths.append(path)
-                if candidate.get("focus_jpeg") and len(frame_paths) < 5:
-                    crop_path = temporary_root / f"window-{index:04d}-frame-{frame_index}-crop.jpg"
-                    crop_path.write_bytes(candidate["focus_jpeg"])
-                    frame_paths.append(crop_path)
-                if len(frame_paths) >= 3:
-                    break
-            def ask(prompt: str) -> str:
-                messages = [{
-                    "role": "user",
-                    "content": (
-                        [{"type": "image", "path": str(path)} for path in frame_paths]
-                        + [{"type": "text", "text": prompt}]
-                    ),
-                }]
-                with performance.measure('model_step'):
-                    inputs = processor.apply_chat_template(
-                        messages, add_generation_prompt=True, tokenize=True,
-                        return_dict=True, return_tensors="pt",
-                    ).to(model.device)
-                    with torch.inference_mode():
-                        generated = model.generate(**inputs, do_sample=False, max_new_tokens=20)
-                    return processor.decode(
-                        generated[0][inputs["input_ids"].shape[-1]:], skip_special_tokens=True
-                    ).strip()
+    # The tokenizer is shared by the producer (encode) and this thread (decode);
+    # a fast tokenizer must not be used from two threads at once.
+    processor_lock = threading.Lock()
+    prefetch_performance = ScanPerformance()
 
-            memory_match = strongest["features"].get("brand_memory")
-            confirmation_source = "qwen_local"
-            initial_answer = None
-            if (
-                isinstance(memory_match, dict)
-                and float(memory_match.get("similarity", 0.0))
-                >= APPROVED_BRAND_MEMORY_SIMILARITY
-                and memory_match.get("memory_class") == "brand"
+    def prepare_inputs(frame_paths: list[Path], prompt: str):
+        messages = [{
+            "role": "user",
+            "content": (
+                [{"type": "image", "path": str(path)} for path in frame_paths]
+                + [{"type": "text", "text": prompt}]
+            ),
+        }]
+        with processor_lock:
+            return processor.apply_chat_template(
+                messages, add_generation_prompt=True, tokenize=True,
+                return_dict=True, return_tensors="pt",
+            )
+
+    with tempfile.TemporaryDirectory(prefix="biliflow-logo-vlm-") as temporary:
+        prepared_windows = _prepared_logo_windows(
+            sorted(ranked_keys), windows, boundary_keys, Path(temporary),
+            prepare_inputs, prefetch_performance,
+        )
+        # Only the producer writes the window JPEGs and runs the processor ahead;
+        # leaving the context joins it before the temporary directory is removed.
+        with IteratorPrefetch(None, prepared_windows, depth=LOGO_VLM_PREFETCH_DEPTH) as prefetch:
+            for index, key, candidates, strongest, frame_paths, prepared in performance.iterate(
+                "prefetch_wait", prefetch
             ):
-                state = "CONFIRMED"
-                labels = [str(value) for value in memory_match.get("labels", []) if str(value).strip()]
-                brand_name = labels[0] if labels else "Known approved external brand"
-                answer = f"MEMORY_MATCH | {brand_name}"
-                confirmation_source = "approved_brand_memory"
-                memory_match_count += 1
-            else:
-                answer = ask(VISUAL_LOGO_PROMPT)
-                if is_instruction_echo(answer):
-                    initial_answer = answer
-                    answer = ask(VISUAL_LOGO_RETRY_PROMPT)
-                state, brand_name = parse_logo_answer(answer)
-            boundary_scene = None
-            boundary_scene_answer = None
-            if key in boundary_keys:
-                boundary_scene_answer = ask(BOUNDARY_SCENE_PROMPT)
-                boundary_scene = parse_boundary_scene_answer(boundary_scene_answer)
-                if boundary_scene == "PROMO_FULL_FRAME" and state == "REJECTED":
-                    state = "UNCERTAIN"
-                    brand_name = "Full-frame promotional material"
-            answer_counts[state] += 1
-            if confirmation_source == "approved_brand_memory":
-                reason = "A visual signature from an earlier human-approved brand item matched; review is still required"
-            elif state == "CONFIRMED":
-                reason = "Local visual-language model confirmed branding/logo evidence"
-            elif state == "UNCERTAIN":
-                reason = "Visual-language answer was uncertain; human review required"
-            else:
-                reason = "Visual-language model rejected this window; retained in exhaustive audit"
-            record = {
-                "start_seconds": round(max(start_seconds, key[0]), 3),
-                "end_seconds": round(min(scan_end, key[1]), 3),
-                "max_score": strongest["features"]["score"],
-                "sample_count": int(window_sample_counts.get(key, len(windows[key]))),
-                "predicted_label": brand_name or "Visual brand/logo candidate",
-                "priority": "high" if state == "CONFIRMED" else "context",
-                "reason": reason,
-                "strongest_timestamp_seconds": round(
-                    float(strongest["timestamp_seconds"]), 3
-                ),
-                "visual_logo_confirmation": {
-                    "state": state, "answer": answer,
-                    "confirmation_source": confirmation_source,
-                    "initial_instruction_echo": initial_answer,
-                    "retry_count": 1 if initial_answer is not None else 0,
-                    "frames_sampled": len(frame_paths),
-                    "boundary_window": key in boundary_keys,
-                    "features": strongest["features"],
-                },
-            }
-            if boundary_scene is not None:
-                record["visual_logo_confirmation"]["boundary_scene_context"] = {
-                    "state": boundary_scene,
-                    "answer": boundary_scene_answer,
-                    "model": "qwen_local",
+                def ask(prompt: str) -> str:
+                    # Inputs for the answer-independent prompts were prepared by the
+                    # producer from the same JPEGs; the retry prompt is prepared here.
+                    inputs = prepared.pop(prompt, None)
+                    with performance.measure('model_step'):
+                        if inputs is None:
+                            inputs = prepare_inputs(frame_paths, prompt)
+                        inputs = inputs.to(model.device)
+                        with torch.inference_mode():
+                            generated = model.generate(**inputs, do_sample=False, max_new_tokens=20)
+                        with processor_lock:
+                            return processor.decode(
+                                generated[0][inputs["input_ids"].shape[-1]:], skip_special_tokens=True
+                            ).strip()
+
+                confirmation_source = "qwen_local"
+                initial_answer = None
+                if _approved_memory_match(strongest):
+                    memory_match = strongest["features"].get("brand_memory")
+                    state = "CONFIRMED"
+                    labels = [str(value) for value in memory_match.get("labels", []) if str(value).strip()]
+                    brand_name = labels[0] if labels else "Known approved external brand"
+                    answer = f"MEMORY_MATCH | {brand_name}"
+                    confirmation_source = "approved_brand_memory"
+                    memory_match_count += 1
+                else:
+                    answer = ask(VISUAL_LOGO_PROMPT)
+                    if is_instruction_echo(answer):
+                        initial_answer = answer
+                        answer = ask(VISUAL_LOGO_RETRY_PROMPT)
+                    state, brand_name = parse_logo_answer(answer)
+                boundary_scene = None
+                boundary_scene_answer = None
+                if key in boundary_keys:
+                    boundary_scene_answer = ask(BOUNDARY_SCENE_PROMPT)
+                    boundary_scene = parse_boundary_scene_answer(boundary_scene_answer)
+                    if boundary_scene == "PROMO_FULL_FRAME" and state == "REJECTED":
+                        state = "UNCERTAIN"
+                        brand_name = "Full-frame promotional material"
+                answer_counts[state] += 1
+                if confirmation_source == "approved_brand_memory":
+                    reason = "A visual signature from an earlier human-approved brand item matched; review is still required"
+                elif state == "CONFIRMED":
+                    reason = "Local visual-language model confirmed branding/logo evidence"
+                elif state == "UNCERTAIN":
+                    reason = "Visual-language answer was uncertain; human review required"
+                else:
+                    reason = "Visual-language model rejected this window; retained in exhaustive audit"
+                record = {
+                    "start_seconds": round(max(start_seconds, key[0]), 3),
+                    "end_seconds": round(min(scan_end, key[1]), 3),
+                    "max_score": strongest["features"]["score"],
+                    "sample_count": int(window_sample_counts.get(key, len(windows[key]))),
+                    "predicted_label": brand_name or "Visual brand/logo candidate",
+                    "priority": "high" if state == "CONFIRMED" else "context",
+                    "reason": reason,
+                    "strongest_timestamp_seconds": round(
+                        float(strongest["timestamp_seconds"]), 3
+                    ),
+                    "visual_logo_confirmation": {
+                        "state": state, "answer": answer,
+                        "confirmation_source": confirmation_source,
+                        "initial_instruction_echo": initial_answer,
+                        "retry_count": 1 if initial_answer is not None else 0,
+                        "frames_sampled": len(frame_paths),
+                        "boundary_window": key in boundary_keys,
+                        "features": strongest["features"],
+                    },
                 }
-            if boundary_scene == "PROMO_FULL_FRAME":
-                record["candidate_type"] = (
-                    "opening_promotion"
-                    if key[0] < start_seconds + boundary_seconds else "closing_promotion"
-                )
-                record["suggested_decision"] = "CUT"
-                record["priority"] = "high"
-                record["reason"] = (
-                    "Local visual-language model classified the boundary window as full-frame promotional material"
-                )
-            audit_name = f"window-{index:04d}-{strongest['timestamp_seconds']:.3f}s.jpg"
-            (audit_thumbnails_dir / audit_name).write_bytes(strongest["jpeg"])
-            record["audit_frame"] = f"audit-thumbnails/{audit_name}"
-            if state == "REJECTED":
-                if key in boundary_keys and key[0] <= start_seconds + window_seconds + 0.05:
-                    name = f"opening-boundary-{strongest['timestamp_seconds']:.3f}s.jpg"
+                if boundary_scene is not None:
+                    record["visual_logo_confirmation"]["boundary_scene_context"] = {
+                        "state": boundary_scene,
+                        "answer": boundary_scene_answer,
+                        "model": "qwen_local",
+                    }
+                if boundary_scene == "PROMO_FULL_FRAME":
+                    record["candidate_type"] = (
+                        "opening_promotion"
+                        if key[0] < start_seconds + boundary_seconds else "closing_promotion"
+                    )
+                    record["suggested_decision"] = "CUT"
+                    record["priority"] = "high"
+                    record["reason"] = (
+                        "Local visual-language model classified the boundary window as full-frame promotional material"
+                    )
+                audit_name = f"window-{index:04d}-{strongest['timestamp_seconds']:.3f}s.jpg"
+                (audit_thumbnails_dir / audit_name).write_bytes(strongest["jpeg"])
+                record["audit_frame"] = f"audit-thumbnails/{audit_name}"
+                if state == "REJECTED":
+                    if key in boundary_keys and key[0] <= start_seconds + window_seconds + 0.05:
+                        name = f"opening-boundary-{strongest['timestamp_seconds']:.3f}s.jpg"
+                        (thumbnails_dir / name).write_bytes(strongest["jpeg"])
+                        record["strongest_frame"] = f"thumbnails/{name}"
+                    rejected.append(record)
+                else:
+                    name = f"logo-{len(intervals) + 1:04d}-{strongest['timestamp_seconds']:.3f}s.jpg"
                     (thumbnails_dir / name).write_bytes(strongest["jpeg"])
                     record["strongest_frame"] = f"thumbnails/{name}"
-                rejected.append(record)
-            else:
-                name = f"logo-{len(intervals) + 1:04d}-{strongest['timestamp_seconds']:.3f}s.jpg"
-                (thumbnails_dir / name).write_bytes(strongest["jpeg"])
-                record["strongest_frame"] = f"thumbnails/{name}"
-                intervals.append(record)
-            print(
-                f"Visual-logo VLM {index}/{len(ranked_keys)} {key[0]:.1f}-{key[1]:.1f}s: {state} {answer}",
-                flush=True,
-            )
+                    intervals.append(record)
+                print(
+                    f"Visual-logo VLM {index}/{len(ranked_keys)} {key[0]:.1f}-{key[1]:.1f}s: {state} {answer}",
+                    flush=True,
+                )
 
     intervals = consolidate_opening_promotion_intervals(
         intervals, scan_start=start_seconds,
@@ -1964,6 +2029,10 @@ def scan_visual_logos(
         "model": json.loads((model_path / "manifest.json").read_text(encoding="utf-8")),
         "metrics": {
             "performance": performance.snapshot(),
+            # Producer-thread phases (frame_write, processor); they overlap model_step.
+            "vlm_prefetch_performance": {
+                **prefetch_performance.snapshot(), "depth": LOGO_VLM_PREFETCH_DEPTH,
+            },
             "routing_workers": routing_workers,
             "parallel_routing": parallel_routing_metrics,
             "decode": {"requested": decode_backend, "effective": effective_decode,

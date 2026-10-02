@@ -22,7 +22,8 @@ from biliflow.frame_prefetch import IteratorPrefetch
 from biliflow.intervals import compact_interval_thumbnails, group_hits, merge_intervals
 from biliflow.probe import duration_seconds, probe_video
 from biliflow.report import write_report
-from biliflow.scanner import _read_exact, _score_summary, sha256_file
+from biliflow.scanner import _read_exact, _score_summary
+from biliflow.source_hash import BackgroundSha256
 from biliflow.storage import require_capacity
 from biliflow.violence_scanner import aggregate_top_k_mean
 
@@ -60,8 +61,10 @@ def scan_live_safety(
     transport; every Nth left frame is byte-identical to the old 2 fps stream.
     The violence branch remains byte-identical to the old 8 fps stream.
     Reading, unpacking and the violence transform run on a producer thread, one
-    window ahead, in exactly the serial order. ``violence_precision="fp16"``
-    (opt-in, not bit-identical) autocasts only the violence ViT forward.
+    window ahead, in exactly the serial order. The source SHA-256 is computed on
+    a background thread during the scan and awaited before the reports are
+    written. ``violence_precision="fp16"`` (opt-in, not bit-identical) autocasts
+    only the violence ViT forward.
     """
     performance = ScanPerformance()
     project_root = project_root.resolve(strict=True)
@@ -270,6 +273,9 @@ def scan_live_safety(
             })
         peak_rss = max(peak_rss, process.memory_info().rss)
 
+    # Same digest as hashing after the scan; it overlaps decoding and inference
+    # and is awaited before any report is written.
+    input_hasher = BackgroundSha256(input_path)
     ffmpeg = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
 
     def events():
@@ -356,7 +362,7 @@ def scan_live_safety(
             ffmpeg.wait(timeout=10)
 
     elapsed = time.perf_counter() - started
-    input_hash = performance.call('source_hash', sha256_file, input_path)
+    input_hash = performance.call('source_hash', input_hasher.result)
     peak_cuda = (
         torch.cuda.max_memory_allocated(device) if device.type == "cuda" else 0
     )

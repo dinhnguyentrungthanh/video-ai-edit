@@ -6,6 +6,7 @@ import copy
 import json
 import re
 import tempfile
+import threading
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -17,6 +18,10 @@ VIOLENCE_CONFIRMATION_PROMPT = (
     "Do these images show people boxing, punching, or physically fighting each other? "
     "Answer with a single word: yes or no."
 )
+# Prepared intervals (5 context JPEGs + processor tensors, ~17 MB each) that may
+# wait for the GPU. Frame extraction and the processor for the next intervals run
+# on one producer thread while the model generates the current answer.
+CONFIRMATION_PREFETCH_DEPTH = 2
 
 _TIMESTAMP_RE = re.compile(r"-(\d+(?:\.\d+)?)s\.(?:jpg|jpeg|png)$", re.IGNORECASE)
 
@@ -77,6 +82,51 @@ def _sample_context_frames(
     return frames
 
 
+def _confirmation_messages(frames: list[Path]) -> list[dict]:
+    return [{
+        "role": "user",
+        "content": (
+            [{"type": "image", "path": str(frame)} for frame in frames]
+            + [{"type": "text", "text": VIOLENCE_CONFIRMATION_PROMPT}]
+        ),
+    }]
+
+
+def _prepared_intervals(
+    intervals: list[dict],
+    capture,
+    prepare,
+    performance: ScanPerformance,
+    *,
+    temporary_root: Path,
+    duration_seconds: float,
+    context_seconds: float,
+    frame_count: int,
+):
+    """Yield (index, interval copy, center, frame paths, processor inputs or None).
+
+    This is the serial loop's per-interval CPU work in its original order: the
+    same capture receives the same seek/read calls and ``prepare`` (the processor)
+    sees the same JPEGs. Only the thread differs when IteratorPrefetch advances it.
+    ``performance`` must belong to the thread that advances this generator.
+    """
+    for index, raw_interval in enumerate(intervals):
+        interval = copy.deepcopy(raw_interval)
+        frame_dir = temporary_root / f"interval-{index:05d}"
+        frame_dir.mkdir()
+        center = _timestamp(interval)
+        frames = performance.call("frame_extract", _sample_context_frames,
+            capture,
+            center_seconds=center,
+            duration_seconds=duration_seconds,
+            context_seconds=context_seconds,
+            frame_count=frame_count,
+            output_dir=frame_dir,
+        )
+        inputs = performance.call("processor", prepare, frames) if frames else None
+        yield index, interval, center, frames, inputs
+
+
 def confirm_violence_report(
     *,
     project_root: Path,
@@ -116,6 +166,7 @@ def confirm_violence_report(
     rejected = []
     answers = {"CONFIRMED": 0, "REJECTED": 0, "UNCERTAIN": 0}
     peak_cuda_memory = 0
+    prefetch_snapshot = None
 
     if intervals:
         import torch
@@ -139,72 +190,78 @@ def confirm_violence_report(
         if device_name == "cuda":
             torch.cuda.reset_peak_memory_stats()
 
+        from biliflow.frame_prefetch import IteratorPrefetch
+
+        # The tokenizer is shared by the producer (encode) and this thread
+        # (decode); a fast tokenizer must not be used from two threads at once.
+        processor_lock = threading.Lock()
+
+        def prepare(frames: list[Path]):
+            with processor_lock:
+                return processor.apply_chat_template(
+                    _confirmation_messages(frames),
+                    add_generation_prompt=True,
+                    tokenize=True,
+                    return_dict=True,
+                    return_tensors="pt",
+                )
+
         capture = cv2.VideoCapture(str(video_path))
         if not capture.isOpened():
             raise RuntimeError(f"Could not open source video: {video_path}")
         duration = float(source["duration_seconds"])
+        prefetch_performance = ScanPerformance()
         try:
             with tempfile.TemporaryDirectory(prefix="biliflow-vlm-confirm-") as temporary:
-                temporary_root = Path(temporary)
-                for index, raw_interval in enumerate(intervals):
-                    interval = copy.deepcopy(raw_interval)
-                    frame_dir = temporary_root / f"interval-{index:05d}"
-                    frame_dir.mkdir()
-                    center = _timestamp(interval)
-                    frames = performance.call("frame_extract", _sample_context_frames,
-                        capture,
-                        center_seconds=center,
-                        duration_seconds=duration,
-                        context_seconds=context_seconds,
-                        frame_count=frame_count,
-                        output_dir=frame_dir,
-                    )
-                    if not frames:
-                        answer = "NO_FRAMES"
-                        state = "UNCERTAIN"
-                    else:
-                        messages = [{
-                            "role": "user",
-                            "content": (
-                                [{"type": "image", "path": str(frame)} for frame in frames]
-                                + [{"type": "text", "text": VIOLENCE_CONFIRMATION_PROMPT}]
-                            ),
-                        }]
-                        with performance.measure('model_step'):
-                            inputs = processor.apply_chat_template(
-                                messages,
-                                add_generation_prompt=True,
-                                tokenize=True,
-                                return_dict=True,
-                                return_tensors="pt",
-                            ).to(model.device)
-                            with torch.inference_mode():
-                                generated = model.generate(
-                                    **inputs, do_sample=False, max_new_tokens=8
-                                )
-                            answer = processor.decode(
-                                generated[0][inputs["input_ids"].shape[-1]:],
-                                skip_special_tokens=True,
-                            ).strip()
+                prepared = _prepared_intervals(
+                    intervals, capture, prepare, prefetch_performance,
+                    temporary_root=Path(temporary),
+                    duration_seconds=duration,
+                    context_seconds=context_seconds,
+                    frame_count=frame_count,
+                )
+                # Only the producer thread touches the capture and the frame files;
+                # leaving the context joins it before the capture is released and
+                # the temporary directory is removed.
+                with IteratorPrefetch(None, prepared, depth=CONFIRMATION_PREFETCH_DEPTH) as prefetch:
+                    for index, interval, center, frames, inputs in performance.iterate(
+                        "prefetch_wait", prefetch
+                    ):
+                        if not frames:
+                            answer = "NO_FRAMES"
+                            state = "UNCERTAIN"
+                        else:
+                            with performance.measure('model_step'):
+                                inputs = inputs.to(model.device)
+                                with torch.inference_mode():
+                                    generated = model.generate(
+                                        **inputs, do_sample=False, max_new_tokens=8
+                                    )
+                                with processor_lock:
+                                    answer = processor.decode(
+                                        generated[0][inputs["input_ids"].shape[-1]:],
+                                        skip_special_tokens=True,
+                                    ).strip()
 
-                        state = _answer_state(answer)
-                    answers[state] += 1
-                    interval["vlm_confirmation"] = {
-                        "state": state,
-                        "answer": answer,
-                        "center_seconds": round(center, 3),
-                        "frames_sampled": len(frames),
-                    }
-                    if state == "REJECTED":
-                        rejected.append(interval)
-                    else:
-                        retained.append(interval)
-                    print(
-                        f"{index + 1}/{len(intervals)} {center:.3f}s {state}: {answer}",
-                        flush=True,
-                    )
+                            state = _answer_state(answer)
+                        answers[state] += 1
+                        interval["vlm_confirmation"] = {
+                            "state": state,
+                            "answer": answer,
+                            "center_seconds": round(center, 3),
+                            "frames_sampled": len(frames),
+                        }
+                        if state == "REJECTED":
+                            rejected.append(interval)
+                        else:
+                            retained.append(interval)
+                        print(
+                            f"{index + 1}/{len(intervals)} {center:.3f}s {state}: {answer}",
+                            flush=True,
+                        )
         finally:
             capture.release()
+        prefetch_snapshot = prefetch_performance.snapshot()
         if device_name == "cuda":
             peak_cuda_memory = int(torch.cuda.max_memory_allocated())
 
@@ -245,6 +302,11 @@ def confirm_violence_report(
     )
     payload["metrics"]["confirmation_peak_cuda_memory_bytes"] = peak_cuda_memory
     payload["metrics"]["confirmation_performance"] = performance.snapshot()
+    if prefetch_snapshot is not None:
+        # Producer-thread phases (frame_extract, processor); they overlap model_step.
+        payload["metrics"]["confirmation_prefetch_performance"] = {
+            **prefetch_snapshot, "depth": CONFIRMATION_PREFETCH_DEPTH,
+        }
     payload["safety"] = {
         "automatic_edit": False,
         "note": "VLM confirmation only filters review candidates; every retained interval still requires human review.",

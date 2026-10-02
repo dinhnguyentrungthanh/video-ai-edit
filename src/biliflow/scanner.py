@@ -21,6 +21,7 @@ from biliflow.frame_prefetch import BatchPrefetch
 from biliflow.intervals import compact_interval_thumbnails, group_hits, merge_intervals
 from biliflow.probe import duration_seconds, probe_video
 from biliflow.report import write_report
+from biliflow.source_hash import BackgroundSha256
 from biliflow.storage import require_capacity
 
 BATCH_PREFETCH_DEPTH = 2
@@ -462,6 +463,9 @@ def scan_nsfw(
     score_samples: list[dict] = []
     candidate_heap: list[tuple[float, int, Image.Image]] = []
     prefetch_stats: dict = {}
+    # Same digest as hashing after the scan; it overlaps decoding and inference
+    # and is awaited before the report is written.
+    input_hasher = BackgroundSha256(input_path)
     ffmpeg = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
 
     def read_frame() -> Image.Image | None:
@@ -644,7 +648,7 @@ def scan_nsfw(
         "created_at": datetime.now(timezone.utc).isoformat(),
         "input": str(input_path),
         "input_size_bytes": input_stat.st_size,
-        "input_sha256": performance.call('source_hash', sha256_file, input_path),
+        "input_sha256": performance.call('source_hash', input_hasher.result),
         "duration_seconds": video_duration,
         "sample_fps": sample_fps,
         "frames_scanned": frames_scanned,

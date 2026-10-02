@@ -28,6 +28,7 @@ import subprocess
 import sys
 import threading
 from collections import deque
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Iterable, Sequence
@@ -37,6 +38,10 @@ import numpy as np
 _SHOWINFO_FRAME = re.compile(r"\bn:\s*(\d+)\s+pts:\s*(-?\d+)\s+pts_time:")
 _SHOWINFO_TIME_BASE = re.compile(r"config in time_base:\s*(\d+)/(\d+)")
 _NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0) if sys.platform == "win32" else 0
+# Merged edge windows decoded at the same time (each FFmpeg keeps threads=2, so
+# 2 workers stay within 4 decode threads). Probe on Troy edge windows: 1.72x,
+# identical FrameChange lists (temp/next/taskB-pipeline-time/probe_r3_parallel.json).
+WINDOW_DECODE_WORKERS = 2
 
 
 @dataclass(frozen=True)
@@ -290,11 +295,36 @@ def find_window_cuts(
     *,
     settings: CutDetectorSettings = DEFAULT_SETTINGS,
     threads: int = 2,
+    workers: int = WINDOW_DECODE_WORKERS,
 ) -> list[float]:
-    """Cuts inside the union of the windows; each part of the source is decoded once."""
-    cuts: list[float] = []
-    for start, end in merge_windows(windows):
-        cuts.extend(
-            window_cuts(ffmpeg_path, input_path, start, end, settings=settings, threads=threads)
+    """Cuts inside the union of the windows; each part of the source is decoded once.
+
+    Each merged window is decoded by its own FFmpeg process with its own
+    differencer, so its cuts depend only on that window. ``workers`` windows are
+    decoded at a time; results are collected in window order and the first
+    failing window (in window order) raises, as in the serial loop.
+    """
+    if not isinstance(workers, int) or isinstance(workers, bool) or workers < 1:
+        raise ValueError("workers must be a positive integer")
+    merged = merge_windows(windows)
+
+    def decode(window: tuple[float, float]) -> list[float]:
+        return window_cuts(
+            ffmpeg_path, input_path, window[0], window[1], settings=settings, threads=threads
         )
+
+    cuts: list[float] = []
+    if workers == 1 or len(merged) <= 1:
+        for window in merged:
+            cuts.extend(decode(window))
+    else:
+        pool = ThreadPoolExecutor(
+            max_workers=min(workers, len(merged)), thread_name_prefix="biliflow-shot-cuts"
+        )
+        try:
+            for window_result in pool.map(decode, merged):
+                cuts.extend(window_result)
+        finally:
+            # On an error, windows that have not started are not decoded.
+            pool.shutdown(wait=True, cancel_futures=True)
     return sorted(set(cuts))
