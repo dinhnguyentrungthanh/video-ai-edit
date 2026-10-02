@@ -15,9 +15,11 @@ from biliflow.brand_memory import (
     match_region_memory,
     memory_revision,
     perceptual_hash,
+    rebuild_brand_memory,
     remember_review_item,
     tighten_brand_foreground_region,
 )
+from biliflow.stage_cache import StageArtifactCache
 
 
 class BrandMemoryTests(unittest.TestCase):
@@ -176,6 +178,103 @@ class BrandMemoryTests(unittest.TestCase):
         }
         self.assertIsNone(remember_review_item(self.root, queue, item))
         self.assertEqual(load_brand_memory(self.root)["records"], [])
+
+    def _regional_item(self, item_id: str, decision: str = "BLUR", x: int = 10) -> dict:
+        preview = self.root / "reports" / "review" / "thumbs" / f"{item_id}.jpg"
+        if not preview.exists():
+            cv2.imwrite(str(preview), cv2.cvtColor(self._frame(), cv2.COLOR_RGB2BGR))
+        return {
+            "id": item_id, "category": "visual_logo", "decision": decision,
+            "labels": ["NewGates Anime"], "candidate_type": "persistent_overlay",
+            "preview_images": [preview.relative_to(self.root).as_posix()],
+            "source_frame_size": [320, 180],
+            "decision_region_source_pixels": {"x": x, "y": 5, "width": 95, "height": 70},
+        }
+
+    def _logo_cache_key(self) -> str:
+        source = self.root / "input.mp4"
+        if not source.exists():
+            source.write_bytes(b"immutable input")
+        artifact = self.root / "reports" / "jobs" / "run-1" / "visual-logo" / "scan.json"
+        artifact.parent.mkdir(parents=True, exist_ok=True)
+        artifact.write_text('{"status":"COMPLETED"}', encoding="utf-8")
+        return StageArtifactCache(self.root).key(
+            stage_name="visual_logo", source_sha256="d" * 64, source_path=source,
+            report_root=artifact.parent.parent, commands=(("run", "--input", str(source)),),
+            artifact_paths=(artifact,),
+        )
+
+    def test_decisions_that_change_no_record_leave_memory_file_untouched(self):
+        memory_path = self.root / "state" / "brand-memory.json"
+        queue = {"source": {"sha256": "d" * 64}}
+        # A text decision on an empty memory does not even create the file.
+        self.assertIsNone(remember_review_item(
+            self.root, queue, {"id": "text-1", "category": "text", "decision": "BLUR"},
+        ))
+        self.assertFalse(memory_path.exists())
+        first = remember_review_item(self.root, queue, self._regional_item("logo-a"))
+        remember_review_item(self.root, queue, self._regional_item("logo-b", x=40))
+        stored = memory_path.read_bytes()
+        revision = memory_revision(load_brand_memory(self.root))
+        key = self._logo_cache_key()
+        unchanged = [
+            {"id": "text-2", "category": "text", "decision": "BLUR"},
+            {"id": "ad-1", "category": "advertising", "decision": "CUT"},
+            # Scene-level KEEP/CUT leave no logo signature.
+            {"id": "scene-keep", "category": "visual_logo", "decision": "KEEP",
+             "preview_images": self._regional_item("logo-a")["preview_images"],
+             "source_frame_size": [320, 180]},
+            {"id": "scene-cut", "category": "visual_logo", "decision": "CUT",
+             "preview_images": self._regional_item("logo-a")["preview_images"],
+             "source_frame_size": [320, 180]},
+        ]
+        for item in unchanged:
+            with self.subTest(item=item["id"]):
+                self.assertIsNone(remember_review_item(self.root, queue, item))
+                self.assertEqual(memory_path.read_bytes(), stored)
+        # Repeating logo-a's identical decision (not the last record) keeps the
+        # original record, its position and its created_at.
+        again = remember_review_item(self.root, queue, self._regional_item("logo-a"))
+        self.assertEqual(again["created_at"], first["created_at"])
+        self.assertEqual(memory_path.read_bytes(), stored)
+        self.assertEqual(memory_revision(load_brand_memory(self.root)), revision)
+        self.assertEqual(self._logo_cache_key(), key)
+
+        # Real changes still write: a new regional decision ...
+        remember_review_item(self.root, queue, self._regional_item("logo-c", x=80))
+        changed = memory_path.read_bytes()
+        self.assertNotEqual(changed, stored)
+        self.assertNotEqual(memory_revision(load_brand_memory(self.root)), revision)
+        self.assertNotEqual(self._logo_cache_key(), key)
+        # ... a changed decision on a remembered item ...
+        record = remember_review_item(self.root, queue, self._regional_item("logo-c", "KEEP", x=80))
+        self.assertEqual(record["memory_class"], "non_brand")
+        self.assertNotEqual(memory_path.read_bytes(), changed)
+        changed = memory_path.read_bytes()
+        # ... and a text decision that replaces a remembered item's record.
+        remember_review_item(self.root, queue, {"id": "logo-c", "category": "visual_logo",
+                                                "decision": "NEEDS_MORE_CONTEXT"})
+        self.assertNotEqual(memory_path.read_bytes(), changed)
+        self.assertEqual(
+            [item["review_item_id"] for item in load_brand_memory(self.root)["records"]],
+            ["logo-a", "logo-b"],
+        )
+
+    def test_rebuild_keeps_the_historical_replace_and_append_order(self):
+        sha = "e" * 64
+        duplicate = self._regional_item("dup")
+        other = self._regional_item("other", x=40)
+        for folder, items in (("a", [duplicate]), ("b", [other, duplicate])):
+            path = self.root / "reports" / folder / "review-queue.json"
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(json.dumps({"source": {"sha256": sha}, "items": items}), encoding="utf-8")
+        report = rebuild_brand_memory(self.root)
+        self.assertEqual(report["records_written"], 2)
+        self.assertEqual(report["decisions_processed"], 3)
+        self.assertEqual(
+            [item["review_item_id"] for item in load_brand_memory(self.root)["records"]],
+            ["other", "dup"],
+        )
 
 
 if __name__ == "__main__":

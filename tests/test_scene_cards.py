@@ -1,4 +1,5 @@
 """Scene cards (R1/R2), opening studio idents (R3a) and studio-logo memory (R3b), 2026-10-01."""
+import importlib.util
 import json
 import os
 import re
@@ -16,17 +17,32 @@ import numpy as np
 from biliflow import cli
 from biliflow.brand_memory import (
     MEMORY_PATH,
+    STUDIO_LOGO_FRAMES_PATH,
+    STUDIO_LOGO_MAX_FRAMES,
     STUDIO_LOGO_MAXIMUM_CELL_DIFFERENCE,
     STUDIO_LOGO_MEMORY_PATH,
+    STUDIO_LOGO_MIN_FRAME_RANGE,
     STUDIO_LOGO_MINIMUM_SIMILARITY,
+    compare_studio_logo,
     forget_studio_logo,
+    grid_difference,
     hash_similarity,
     load_studio_logo_memory,
     match_studio_logo,
     perceptual_hash,
+    prepare_studio_logo_frames,
+    refresh_studio_logo_masks,
     remember_studio_logo,
+    studio_logo_frame_informative,
+    studio_logo_frame_signature,
+    studio_logo_grid,
+    studio_logo_ignored_regions,
+    studio_logo_mask_area,
     studio_logo_signatures,
+    studio_logo_window_frames,
+    upgrade_studio_logo_memory,
 )
+from biliflow.cleanup import cleanup_candidates, prune_file_caches
 from biliflow.review_evidence import item_evidence
 from biliflow.review_workflow import (
     SCENE_CARD_MAXIMUM_GAP_SECONDS,
@@ -37,6 +53,7 @@ from biliflow.review_workflow import (
     application_intervals,
     build_edit_plan,
     build_review_queue,
+    bulk_accept_suggested_decisions,
     clear_review_decision,
     full_frame_logo_ad_evidence,
     group_safety_review_events,
@@ -47,6 +64,9 @@ from biliflow.review_workflow import (
 )
 
 ROOT = Path(__file__).resolve().parents[1]
+# Real-data tests read previews, queues and videos (read-only) from the project; a git worktree
+# without reports/ or input/ can point them at the main tree with BILIFLOW_TEST_DATA_ROOT.
+DATA_ROOT = Path(os.environ.get("BILIFLOW_TEST_DATA_ROOT") or ROOT)
 
 
 def _card(category, start, end, **extra):
@@ -85,6 +105,110 @@ def _flip_bits(phash, count):
     for bit in range(count):
         value ^= 1 << (bit * 7)
     return f"{value:016x}"
+
+
+def _watermarked(image, text="Motchillv.ph", origin=(10, 24)):
+    """The ident with a top-left site watermark; returns (relative box of the watermark, image)."""
+    (width, height), baseline = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 2)
+    out = image.copy()
+    cv2.putText(out, text, origin, cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 2, cv2.LINE_AA)
+    x, y = origin[0] - 2, origin[1] - height - 2
+    frame_height, frame_width = image.shape[:2]
+    box = [x / frame_width, y / frame_height, (width + 4) / frame_width, (height + baseline + 4) / frame_height]
+    return box, out
+
+
+def _legacy_match(root, item, records):
+    """match_studio_logo exactly as it was before schema 2 (2026-10-01), for the v1 equality check."""
+    records = [record for record in records if isinstance(record, dict) and record.get("decision") == "KEEP"
+               and record.get("memory_class") == "studio_logo"]
+    if not records or item.get("category") != "visual_logo" or item.get("candidate_type") == "persistent_overlay" \
+            or isinstance(item.get("suggested_region_source_pixels"), dict):
+        return None
+    signatures = studio_logo_signatures(root, item, strict=True)
+    if not signatures:
+        return None
+    weakest, worst_cells, matched = None, 0, {}
+    for signature in signatures:
+        best = None
+        for record in records:
+            for stored in record.get("signatures") or []:
+                similarity = hash_similarity(signature["phash"], str(stored.get("phash", "")))
+                if similarity < STUDIO_LOGO_MINIMUM_SIMILARITY:
+                    continue
+                cells = grid_difference(signature["grid"], stored.get("grid"))
+                if cells is None or cells > STUDIO_LOGO_MAXIMUM_CELL_DIFFERENCE:
+                    continue
+                if best is None or (similarity, -cells) > best[0]:
+                    best = ((similarity, -cells), record, similarity, cells)
+        if best is None:
+            return None
+        _, record, similarity, cells = best
+        matched.setdefault(str(record.get("key")), record)
+        weakest = similarity if weakest is None else min(weakest, similarity)
+        worst_cells = max(worst_cells, cells)
+    primary = next(iter(matched.values()))
+    return {
+        "similarity": round(weakest, 6), "minimum_similarity": STUDIO_LOGO_MINIMUM_SIMILARITY,
+        "cell_difference": worst_cells, "maximum_cell_difference": STUDIO_LOGO_MAXIMUM_CELL_DIFFERENCE,
+        "memory_key": primary.get("key"), "memory_keys": list(matched), "labels": list(primary.get("labels") or []),
+        "source_sha256": primary.get("source_sha256"), "review_item_id": primary.get("review_item_id"),
+        "matched_frames": len(signatures),
+        "known_texts": list(dict.fromkeys(str(text) for record in matched.values()
+                                          for text in ((record.get("window_text") or {}).get("texts") or []))),
+        "automatic_edit": False,
+    }
+
+
+def _legacy_compare(root, item, records):
+    """compare_studio_logo exactly as it was before schema 2."""
+    records = [record for record in records if isinstance(record, dict) and record.get("decision") == "KEEP"
+               and record.get("memory_class") == "studio_logo"]
+    if not records:
+        return None
+    signatures = studio_logo_signatures(root, item, strict=True)
+    if not signatures:
+        return None
+    weakest = None
+    for signature in signatures:
+        best = None
+        for record in records:
+            for stored in record.get("signatures") or []:
+                similarity = hash_similarity(signature["phash"], str(stored.get("phash", "")))
+                cells = grid_difference(signature["grid"], stored.get("grid"))
+                rank = (similarity, -(256 if cells is None else cells))
+                if best is None or rank > best[0]:
+                    best = (rank, similarity, cells)
+        if weakest is None or best[0] < weakest[0]:
+            weakest = best
+    return {"records": len(records), "frames": len(signatures), "best_similarity": round(weakest[1], 4),
+            "best_cell_difference": weakest[2], "minimum_similarity": STUDIO_LOGO_MINIMUM_SIMILARITY,
+            "maximum_cell_difference": STUDIO_LOGO_MAXIMUM_CELL_DIFFERENCE}
+
+
+def _ffmpeg_tools():
+    for base in (DATA_ROOT / "tools" / "ffmpeg" / "bin", ROOT / "tools" / "ffmpeg" / "bin"):
+        if (base / "ffmpeg.exe").is_file() and (base / "ffprobe.exe").is_file():
+            return base / "ffmpeg.exe", base / "ffprobe.exe"
+    found = shutil.which("ffmpeg"), shutil.which("ffprobe")
+    if all(found) and Path(found[0]).parent == Path(found[1]).parent:
+        return Path(found[0]), Path(found[1])
+    return None
+
+
+def _testsrc_clip(ffmpeg, path):
+    """A 3 s 640x360 25 fps test clip (generated, never a project video)."""
+    if path.is_file():
+        return path
+    path.parent.mkdir(parents=True, exist_ok=True)
+    for codec in ("libx264", "mpeg4"):
+        result = subprocess.run(
+            [str(ffmpeg), "-hide_banner", "-loglevel", "error", "-y", "-f", "lavfi",
+             "-i", "testsrc=size=640x360:rate=25", "-t", "3", "-pix_fmt", "yuv420p", "-c:v", codec, str(path)],
+            capture_output=True, timeout=120)
+        if result.returncode == 0 and path.is_file():
+            return path
+    raise unittest.SkipTest("ffmpeg could not encode a test clip")
 
 
 class SceneCardGroupingTests(unittest.TestCase):
@@ -388,7 +512,10 @@ class SceneCardQueueTests(unittest.TestCase):
         memory = load_studio_logo_memory(self.root)
         self.assertEqual(len(memory["records"]), 1)
         self.assertEqual(memory["records"][0]["memory_class"], "studio_logo")
-        brand = json.loads((self.root / MEMORY_PATH).read_text(encoding="utf-8"))
+        # A scene-level KEEP changes no brand record, so the brand memory file
+        # is not even written (its bytes feed the logo stage cache key).
+        brand_path = self.root / MEMORY_PATH
+        brand = json.loads(brand_path.read_text(encoding="utf-8")) if brand_path.exists() else {"records": []}
         self.assertEqual(brand["records"], [], "studio logos never enter the brand blur memory")
 
         self.assertEqual(memory["records"][0]["window_text"], {"covered": True, "texts": ["TOHO"]})
@@ -597,6 +724,178 @@ class SceneCardQueueTests(unittest.TestCase):
                                    item_id=queue_v["items"][0]["id"], decision="KEEP", remember_studio_logo=True)
         self.assertFalse((self.root / STUDIO_LOGO_MEMORY_PATH).exists())
 
+    # ------------------------------------------------- schema 2 in the decision flow (user decision 2026-10-02)
+
+    def _watermark_queue(self, name):
+        """An ident card whose preview carries the film's watermark, plus that watermark's own card."""
+        box, image = _watermarked(_ident_image())
+        queue = self._build(self._ident_report(name, image, text_tracks=[self._track(6, 9, ["TOHO"])]), name=name)
+        path = self.root / "reports" / name / "queue.json"
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        region = {"x": round(box[0] * 1920), "y": round(box[1] * 1080),
+                  "width": round(box[2] * 1920), "height": round(box[3] * 1080)}
+        payload["items"].append(_card("text", 0.0, 400.0, id="wm-1", candidate_type="persistent_overlay",
+                                      priority="high", suggested_decision="BLUR", source_frame_size=[1920, 1080],
+                                      suggested_region_source_pixels=region))
+        path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+        [ident] = self._ident(queue)
+        return path, ident
+
+    def test_later_blur_and_undo_update_masks_and_signatures(self):
+        path, ident = self._watermark_queue("film-a")
+        record_review_decision(project_root=self.root, queue_path=path, item_id=ident["id"],
+                               decision="KEEP", remember_studio_logo=True)
+        [record] = load_studio_logo_memory(self.root)["records"]
+        self.assertEqual(record["ignored_regions"], [])
+        legacy = {"key": "legacy:old", "source_sha256": "film-a", "review_item_id": "old", "decision": "KEEP",
+                  "memory_class": "studio_logo", "signatures": record["signatures"]}
+        memory_path = self.root / STUDIO_LOGO_MEMORY_PATH
+        memory = json.loads(memory_path.read_text(encoding="utf-8"))
+        memory["records"].append(legacy)
+        memory_path.write_text(json.dumps(memory), encoding="utf-8")
+        clean = self._ident_report("film-b", _ident_image(), text_tracks=[self._track(6, 9, ["TOHO"])])
+        self.assertEqual(len(self._ident(self._build(clean, name="b0", use_studio_logo_memory=True))), 1,
+                         "before the BLUR the remembered watermark breaks the match")
+
+        blurred = record_review_decision(project_root=self.root, queue_path=path, item_id="wm-1", decision="BLUR")
+        self.assertEqual(blurred["audit_log"][-1]["studio_logo_masks_refreshed"], 1)
+        card = next(i for i in blurred["items"] if i["id"] == ident["id"])["studio_logo_memory"]
+        self.assertEqual(card["ignored_regions"], [{"item_id": "wm-1", "category": "text"}])
+        self.assertTrue(card["mask_updated_at"])
+        self.assertEqual(json.loads(path.read_text(encoding="utf-8"))["items"][-1]["decision"], "BLUR")
+        masked, kept_legacy = load_studio_logo_memory(self.root)["records"]
+        self.assertEqual([region["item_id"] for region in masked["ignored_regions"]], ["wm-1"])
+        self.assertNotEqual(masked["frames"][0]["grid"], record["frames"][0]["grid"])
+        self.assertEqual(kept_legacy, legacy, "a schema-1 record is never refreshed")
+        queue_b = self._build(clean, name="b1", use_studio_logo_memory=True)
+        self.assertEqual(self._ident(queue_b), [])
+        [moved] = self._ident(queue_b, "advisory_items")
+        self.assertEqual(moved["studio_logo_match"]["masked_regions"], 1)
+        self.assertIn("không có lớp phủ lạ ngoài vùng watermark đã làm mờ", moved["reasons"][-1])
+
+        cleared = clear_review_decision(project_root=self.root, queue_path=path, item_id="wm-1")
+        self.assertEqual(cleared["audit_log"][-1]["studio_logo_masks_refreshed"], 1)
+        restored = load_studio_logo_memory(self.root)["records"][0]
+        self.assertEqual(restored["ignored_regions"], [])
+        self.assertEqual(restored["frames"], record["frames"], "undo restores the unmasked signatures")
+        record_review_decision(project_root=self.root, queue_path=path, item_id="wm-1", decision="BLUR")
+        kept = record_review_decision(project_root=self.root, queue_path=path, item_id="wm-1", decision="KEEP")
+        self.assertEqual(kept["audit_log"][-1]["studio_logo_masks_refreshed"], 1)
+        self.assertEqual(load_studio_logo_memory(self.root)["records"][0]["ignored_regions"], [])
+        again = record_review_decision(project_root=self.root, queue_path=path, item_id="wm-1", decision="CUT")
+        self.assertNotIn("studio_logo_masks_refreshed", again["audit_log"][-1], "nothing changed")
+
+        memory_path.write_text("{", encoding="utf-8")
+        unreadable = record_review_decision(project_root=self.root, queue_path=path, item_id="wm-1",
+                                            decision="BLUR")
+        self.assertEqual(next(i for i in unreadable["items"] if i["id"] == "wm-1")["decision"], "BLUR")
+        self.assertNotIn("studio_logo_masks_refreshed", unreadable["audit_log"][-1])
+        self.assertEqual(memory_path.read_text(encoding="utf-8"), "{")
+        clear_review_decision(project_root=self.root, queue_path=path, item_id="wm-1")
+
+    def test_accepting_the_watermark_suggestion_in_bulk_also_updates_the_mask(self):
+        path, ident = self._watermark_queue("film-a")
+        record_review_decision(project_root=self.root, queue_path=path, item_id=ident["id"],
+                               decision="KEEP", remember_studio_logo=True)
+        accepted = bulk_accept_suggested_decisions(project_root=self.root, queue_path=path, review_filter="text")
+        self.assertEqual(accepted["audit_log"][-1]["studio_logo_masks_refreshed"], 1)
+        [record] = load_studio_logo_memory(self.root)["records"]
+        self.assertEqual([region["item_id"] for region in record["ignored_regions"]], ["wm-1"])
+
+    def test_a_watermark_decision_in_a_rerun_queue_keeps_the_regions_decided_elsewhere(self):
+        # Review finding 2026-10-02: a refresh from another queue of the same source replaced the
+        # record's regions wholesale, dropping the BLUR decided in the queue of the remembered card.
+        path, ident = self._watermark_queue("film-a")
+        record_review_decision(project_root=self.root, queue_path=path, item_id="wm-1", decision="BLUR")
+        record_review_decision(project_root=self.root, queue_path=path, item_id=ident["id"],
+                               decision="KEEP", remember_studio_logo=True)
+        rerun = self.root / "reports" / "film-a-rerun" / "queue.json"
+        rerun.parent.mkdir(parents=True)
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        for card in payload["items"]:
+            if card.get("candidate_type") == "persistent_overlay":
+                card["id"] += "-rerun"
+                for key in ("decision", "decided_at", "decision_region_source_pixels"):
+                    card.pop(key, None)
+            card.pop("studio_logo_memory", None)
+            if card["id"] == ident["id"]:
+                card["decision"] = None
+        rerun.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+
+        def regions():
+            [record] = load_studio_logo_memory(self.root)["records"]
+            return sorted(region["item_id"] for region in record["ignored_regions"])
+
+        self.assertEqual(regions(), ["wm-1"])
+        kept = record_review_decision(project_root=self.root, queue_path=rerun, item_id="wm-1-rerun",
+                                      decision="KEEP")
+        self.assertNotIn("studio_logo_masks_refreshed", kept["audit_log"][-1], "nothing changed")
+        self.assertEqual(regions(), ["wm-1"], "the BLUR of the original queue is kept")
+        clean = self._ident_report("film-b", _ident_image(), text_tracks=[self._track(6, 9, ["TOHO"])])
+        self.assertEqual(len(self._ident(self._build(clean, name="b1", use_studio_logo_memory=True),
+                                         "advisory_items")), 1, "the masked record still matches")
+        blurred = record_review_decision(project_root=self.root, queue_path=rerun, item_id="wm-1-rerun",
+                                         decision="BLUR")
+        self.assertEqual(blurred["audit_log"][-1]["studio_logo_masks_refreshed"], 1)
+        self.assertEqual(regions(), ["wm-1", "wm-1-rerun"])
+        record_review_decision(project_root=self.root, queue_path=path, item_id="wm-1", decision="KEEP")
+        self.assertEqual(regions(), ["wm-1-rerun"], "each queue only changes its own watermark cards")
+        clear_review_decision(project_root=self.root, queue_path=rerun, item_id="wm-1-rerun")
+        self.assertEqual(regions(), [])
+
+    def test_a_refresh_gives_an_upgraded_card_the_whole_schema_2_summary(self):
+        # Review finding 2026-10-02: after studio-logo-upgrade the card had frames but no frames_source,
+        # so the page called the decoded frames "ảnh xem trước" and warned about the watermark.
+        path, ident = self._watermark_queue("film-a")
+        record_review_decision(project_root=self.root, queue_path=path, item_id=ident["id"],
+                               decision="KEEP", remember_studio_logo=True)
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        card = next(i for i in payload["items"] if i["id"] == ident["id"])
+        card["studio_logo_memory"] = {"remembered": True, "at": card["decided_at"], "frames": 8,
+                                      "text_scan_covered": True, "window_texts": ["TOHO"]}  # a v1 card
+        path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+        blurred = record_review_decision(project_root=self.root, queue_path=path, item_id="wm-1", decision="BLUR")
+        memory = next(i for i in blurred["items"] if i["id"] == ident["id"])["studio_logo_memory"]
+        [record] = load_studio_logo_memory(self.root)["records"]
+        self.assertEqual(memory["frames"], len(record["frames"]))
+        self.assertEqual(memory["frames_source"], record["frames_source"])
+        self.assertEqual(memory["frames_reason"], record["frames_reason"])
+        self.assertEqual(memory["window"], [5.0, 10.0])
+        self.assertEqual(memory["ignored_regions"], [{"item_id": "wm-1", "category": "text"}])
+        self.assertEqual(memory["mask_updated_at"], record["mask_updated_at"])
+        self.assertEqual(memory["window_texts"], ["TOHO"], "the v1 fields of the card are kept")
+        self.assertEqual(json.loads(path.read_text(encoding="utf-8")), blurred)
+
+    def test_remember_stores_frames_and_regions_on_item(self):
+        path, ident = self._watermark_queue("film-a")
+        record_review_decision(project_root=self.root, queue_path=path, item_id="wm-1", decision="BLUR")
+        updated = record_review_decision(project_root=self.root, queue_path=path, item_id=ident["id"],
+                                         decision="KEEP", remember_studio_logo=True)
+        memory = next(i for i in updated["items"] if i["id"] == ident["id"])["studio_logo_memory"]
+        self.assertTrue(memory["remembered"])
+        self.assertEqual(memory["frames"], 1)
+        self.assertEqual(memory["frames_source"], "preview_only")
+        self.assertEqual(memory["frames_reason"], "ffmpeg_missing")
+        self.assertEqual(memory["window"], [5.0, 10.0])
+        self.assertEqual(memory["ignored_regions"], [{"item_id": "wm-1", "category": "text"}])
+        self.assertFalse(memory["mask_refused"])
+        [record] = load_studio_logo_memory(self.root)["records"]
+        self.assertEqual(record["record_version"], 2)
+        self.assertEqual(record["window_text"], {"covered": True, "texts": ["TOHO"]})
+        folder = self.root / record["frames_folder"]
+        self.assertTrue((self.root / record["frames"][0]["image"]).is_file())
+        self.assertTrue(record["signatures"], "the preview signatures of schema 1 are kept")
+        record_review_decision(project_root=self.root, queue_path=path, item_id=ident["id"], decision="CUT")
+        self.assertEqual(load_studio_logo_memory(self.root)["records"], [])
+        self.assertFalse(folder.exists(), "a different decision on the card removes its frames with the record")
+        flat = self._build(self._ident_report("flat", np.zeros((180, 320, 3), np.uint8),
+                                              text_tracks=[self._track(6, 9, ["TOHO"])]), name="flat")
+        flat_path = self.root / "reports" / "flat" / "queue.json"
+        before = flat_path.read_bytes()
+        with self.assertRaisesRegex(ValueError, "gần như một màu"):
+            record_review_decision(project_root=self.root, queue_path=flat_path,
+                                   item_id=self._ident(flat)[0]["id"], decision="KEEP", remember_studio_logo=True)
+        self.assertEqual(flat_path.read_bytes(), before)
 
 class StudioLogoMemoryTests(unittest.TestCase):
     def setUp(self):
@@ -689,12 +988,452 @@ class StudioLogoMemoryTests(unittest.TestCase):
         self.assertFalse(forget_studio_logo(self.root, self.queue, "logo-1"))
         self.assertEqual(load_studio_logo_memory(self.root)["records"], [])
 
+    # ------------------------------------------------- schema 2: window frames + blurred watermarks
+
+    def queue_with(self, *cards, path=None):
+        return {"source": {"sha256": "film", "path": str(path or self.root / "missing.mp4")},
+                "items": list(cards)}
+
+    def v2_record(self, preview, regions=(), item_id="logo-1", window_frames=None):
+        item = self.item(preview, id=item_id, start_seconds=5.0, end_seconds=10.0)
+        prepared = prepare_studio_logo_frames(self.root, self.queue_with(), item, window_frames,
+                                              ignored_regions=list(regions))
+        return remember_studio_logo(self.root, self.queue_with(), item, frames=prepared)
+
+    def test_v1_record_without_frames_matches_exactly_as_before(self):
+        record = remember_studio_logo(self.root, self.queue, self.item("a.jpg"))
+        self.assertNotIn("frames", record)
+        _write_rgb(self.root / "reports" / "a-q75.jpg", _ident_image(), quality=75)
+        overlay = _ident_image()
+        cv2.putText(overlay, "PHIMMOI", (176, 171), cv2.FONT_HERSHEY_SIMPLEX, 0.36, (255, 255, 255), 1, cv2.LINE_AA)
+        _write_rgb(self.root / "reports" / "overlay.jpg", overlay)
+        other = dict(record, key="film:logo-2", signatures=studio_logo_signatures(self.root, self.item("b.jpg")))
+        for records in ([record], [record, other], [other, record]):
+            for previews in (("a.jpg",), ("a-q75.jpg",), ("b.jpg",), ("overlay.jpg",), ("a.jpg", "b.jpg"),
+                             ("a-q75.jpg", "a.jpg"), ("missing.jpg",)):
+                with self.subTest(records=len(records), previews=previews):
+                    item = self.item(*previews, decision=None)
+                    self.assertEqual(match_studio_logo(self.root, item, records),
+                                     _legacy_match(self.root, item, records))
+                    self.assertEqual(compare_studio_logo(self.root, item, records),
+                                     _legacy_compare(self.root, item, records))
+
+    def test_v1_memory_file_still_loads_and_is_written_as_v2(self):
+        record = remember_studio_logo(self.root, self.queue, self.item("a.jpg"))
+        path = self.root / STUDIO_LOGO_MEMORY_PATH
+        legacy = {"schema_version": 1, "updated_at": "2026-10-02T14:09:10+07:00", "records": [record],
+                  "safety": {"automatic_edit": False}}
+        path.write_text(json.dumps(legacy, ensure_ascii=False), encoding="utf-8")
+        loaded = load_studio_logo_memory(self.root)
+        self.assertEqual(loaded["schema_version"], 1)
+        self.assertEqual(loaded["records"], [record])
+        self.assertFalse(forget_studio_logo(self.root, self.queue, "unknown"))
+        self.assertEqual(json.loads(path.read_text(encoding="utf-8")), legacy, "nothing to forget writes nothing")
+        self.assertEqual(refresh_studio_logo_masks(self.root, {"source": {"sha256": "film"}, "items": []}), 0)
+        self.assertEqual(json.loads(path.read_text(encoding="utf-8")), legacy, "a v1 record is never refreshed")
+        remember_studio_logo(self.root, {"source": {"sha256": "film-2"}}, self.item("b.jpg", id="logo-2"))
+        written = json.loads(path.read_text(encoding="utf-8"))
+        self.assertEqual(written["schema_version"], 2)
+        self.assertEqual(written["records"][0], record, "the schema-1 record is kept as it was")
+        path.write_text(json.dumps(dict(legacy, schema_version=3)), encoding="utf-8")
+        with self.assertRaisesRegex(ValueError, "schema"):
+            load_studio_logo_memory(self.root)
+
+    def test_mask_only_from_blurred_persistent_overlay_cards(self):
+        def overlay(card_id, decision="BLUR", category="text", start=0.0, end=400.0, **extra):
+            card = {"id": card_id, "category": category, "candidate_type": "persistent_overlay",
+                    "start_seconds": start, "end_seconds": end, "decision": decision,
+                    "suggested_region_source_pixels": {"x": 46, "y": 40, "width": 191, "height": 49},
+                    "source_frame_size": [1280, 534], "decided_at": "2026-10-02T14:00:00+07:00"}
+            card.update(extra)
+            return card
+
+        ident = self.item("a.jpg", start_seconds=5.0, end_seconds=10.0)
+        queue = {"source": {"sha256": "film", "frame_size": [1920, 1080]}, "items": [
+            overlay("text-blur"),
+            overlay("logo-blur", category="visual_logo",
+                    decision_region_source_pixels={"x": 389, "y": 489, "width": 510, "height": 32}),
+            overlay("queue-size", source_frame_size=None,
+                    suggested_region_source_pixels={"x": 960, "y": 540, "width": 192, "height": 108}),
+            overlay("keep", decision="KEEP"), overlay("cut", decision="CUT"), overlay("undecided", decision=None),
+            overlay("full-frame", decision_region_source_pixels="FULL_FRAME"),
+            overlay("before", start=0.0, end=5.0), overlay("after", start=10.0, end=20.0),
+            overlay("violence", category="violence"),
+            overlay("no-region", suggested_region_source_pixels=None),
+            dict(overlay("regional-logo"), candidate_type="opening_promotion"),
+            ident,
+        ], "advisory_items": [overlay("advisory-blur", start=6.0, end=7.0)]}
+        regions = studio_logo_ignored_regions(queue, ident)
+        self.assertEqual([region["item_id"] for region in regions],
+                         ["text-blur", "logo-blur", "queue-size", "advisory-blur"])
+        self.assertEqual(regions[0]["box"], [round(46 / 1280, 6), round(40 / 534, 6),
+                                             round(191 / 1280, 6), round(49 / 534, 6)])
+        self.assertEqual(regions[1]["box"], [round(389 / 1280, 6), round(489 / 534, 6),
+                                             round(510 / 1280, 6), round(32 / 534, 6)],
+                         "the user's own region wins over the suggested one")
+        self.assertEqual(regions[2]["box"], [0.5, 0.5, 0.1, 0.1], "the queue frame size is the fallback")
+        self.assertEqual(regions[0]["category"], "text")
+        self.assertEqual(regions[1]["category"], "visual_logo")
+
+    def test_mask_area_cap_refuses_masking_above_20_percent(self):
+        tap10 = [{"box": [46 / 1280, 40 / 534, 191 / 1280, 49 / 534], "item_id": "wm"},
+                 {"box": [389 / 1280, 489 / 534, 510 / 1280, 32 / 534], "item_id": "line"}]
+        self.assertAlmostEqual(studio_logo_mask_area(tap10, (134, 320)), 0.068, places=2)
+        item = self.item("a.jpg", start_seconds=5.0, end_seconds=10.0)
+        small = prepare_studio_logo_frames(self.root, self.queue_with(), item, ignored_regions=tap10)
+        self.assertEqual([region["item_id"] for region in small["ignored_regions"]], ["wm", "line"])
+        self.assertIsNone(small["mask_refused"])
+        large = [{"box": [0.0, 0.0, 0.5, 0.5], "item_id": "big"}]
+        refused = prepare_studio_logo_frames(self.root, self.queue_with(), item, ignored_regions=large)
+        self.assertEqual(refused["ignored_regions"], [])
+        self.assertEqual(refused["mask_refused"]["reason"], "area_cap")
+        self.assertGreater(refused["mask_refused"]["area"], 0.20)
+        unmasked = prepare_studio_logo_frames(self.root, self.queue_with(), item, ignored_regions=[])
+        self.assertEqual(refused["frames"], unmasked["frames"], "a refused mask means the full picture")
+
+    def test_masked_record_matches_clean_and_same_watermark_but_not_overlays_outside(self):
+        wm_box, watermarked = _watermarked(_ident_image())
+        _write_rgb(self.root / "reports" / "wm.jpg", watermarked)
+        regions = [{"box": wm_box, "item_id": "wm", "category": "text"}]
+        record = self.v2_record("wm.jpg", regions)
+        self.assertEqual(record["record_version"], 2)
+        self.assertEqual(record["frames_source"], "preview_only")
+        unmasked = self.v2_record("wm.jpg", (), item_id="logo-unmasked")
+
+        def candidate(name, image):
+            _write_rgb(self.root / "reports" / f"{name}.jpg", image)
+            return self.item(f"{name}.jpg", decision=None)
+
+        clean = candidate("clean", _ident_image())
+        self.assertIsNone(match_studio_logo(self.root, clean, [unmasked]), "unmasked, the watermark breaks it")
+        matching = {"clean": _ident_image(), "same watermark": watermarked}
+        other_text = _ident_image()
+        x0, y0 = int(wm_box[0] * 320) + 4, int((wm_box[1] + wm_box[3]) * 180) - 4
+        cv2.putText(other_text, "XYZ.vn", (x0, y0), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (255, 255, 255), 2, cv2.LINE_AA)
+        matching["other text inside the box"] = other_text
+        for name, image in matching.items():
+            with self.subTest(match=name):
+                match = match_studio_logo(self.root, candidate(name.replace(" ", "-"), image), [record])
+                self.assertIsNotNone(match)
+                self.assertEqual(match["masked_regions"], 1)
+                self.assertEqual(match["frames_source"], "preview_only")
+                self.assertLessEqual(match["cell_difference"], STUDIO_LOGO_MAXIMUM_CELL_DIFFERENCE)
+        outside = {name: _ident_image() for name in ("corner url", "bottom banner", "box outside", "straddling")}
+        cv2.putText(outside["corner url"], "www.bet88.vip", (200, 171), cv2.FONT_HERSHEY_SIMPLEX, 0.4,
+                    (255, 255, 255), 1, cv2.LINE_AA)
+        outside["bottom banner"][162:, :] = (40, 40, 160)
+        outside["box outside"][60:74, 260:300] = (230, 30, 30)
+        x_edge = int((wm_box[0] + wm_box[2]) * 320) - 12
+        cv2.putText(outside["straddling"], "motchill.xyz", (x_edge, y0), cv2.FONT_HERSHEY_SIMPLEX, 0.45,
+                    (255, 255, 255), 2, cv2.LINE_AA)
+        for name, image in outside.items():
+            with self.subTest(no_match=name):
+                item = candidate(name.replace(" ", "-"), image)
+                self.assertIsNone(match_studio_logo(self.root, item, [record]))
+                # Forged: the stored frame carries the overlaid frame's own masked pHash.
+                masked = studio_logo_frame_signature(image, regions)
+                forged = dict(record, frames=[dict(frame, phash=masked["phash"]) for frame in record["frames"]])
+                self.assertIsNone(match_studio_logo(self.root, item, [forged]))
+                compared = compare_studio_logo(self.root, item, [record])
+                self.assertEqual(compared["masked_regions"], 1)
+
+    def test_low_information_frames_are_never_stored_and_black_candidates_never_match(self):
+        black = np.zeros((180, 320, 3), np.uint8)
+        flat = np.full((180, 320, 3), (150, 20, 20), np.uint8)
+        fade = (_ident_image().astype(np.float32) * 0.12).astype(np.uint8)
+        for name, image in (("black", black), ("flat", flat), ("fade", fade)):
+            with self.subTest(frame=name):
+                self.assertFalse(studio_logo_frame_informative(image))
+                self.assertLessEqual(studio_logo_frame_signature(image)["range"], STUDIO_LOGO_MIN_FRAME_RANGE)
+                _write_rgb(self.root / "reports" / f"{name}.jpg", image)
+        self.assertTrue(studio_logo_frame_informative(_ident_image()))
+        frames = {"frames": [(5.0 + index * 0.04, cv2.imencode(".jpg", cv2.cvtColor(image, cv2.COLOR_RGB2BGR))[1]
+                              .tobytes()) for index, image in enumerate((black, _ident_image(), fade, flat))],
+                  "frames_source": "source_video", "reason": None, "pipeline": None}
+        record = self.v2_record("a.jpg", window_frames=frames)
+        self.assertEqual(len(record["frames"]), 1, "only the ident frame is stored")
+        self.assertEqual(len(record["stored_frames"]), 4, "every decoded JPEG is kept for a later re-sign")
+        for name in ("black", "flat", "fade"):
+            with self.subTest(candidate=name):
+                self.assertIsNone(match_studio_logo(self.root, self.item(f"{name}.jpg", decision=None), [record]))
+        black_only = self.v2_record("black.jpg", item_id="logo-black")
+        self.assertEqual(black_only["frames"], [])
+        self.assertIsNone(match_studio_logo(self.root, self.item("black.jpg", decision=None), [black_only]))
+
+    def test_multi_frame_record_every_preview_must_still_match(self):
+        record = self.v2_record("a.jpg")
+        nine = match_studio_logo(self.root, self.item(*["a.jpg"] * 9, decision=None), [record])
+        self.assertEqual(nine["matched_frames"], 9)
+        self.assertEqual(len(nine["matched_stored_t"]), 9)
+        self.assertIsNone(match_studio_logo(self.root, self.item(*(["a.jpg"] * 8 + ["b.jpg"]), decision=None),
+                                            [record]))
+        self.assertIsNone(match_studio_logo(self.root, self.item("a.jpg", "missing.jpg", decision=None), [record]))
+
+    def test_frame_cap_and_dedup(self):
+        def frame(index):
+            image = np.zeros((180, 320, 3), np.uint8)
+            cv2.rectangle(image, (index % 290, 20 + index // 10), (index % 290 + 30, 120 + index // 10),
+                          (255, (index * 37) % 256, 200), -1)
+            return cv2.imencode(".jpg", cv2.cvtColor(image, cv2.COLOR_RGB2BGR))[1].tobytes()
+
+        many = {"frames": [(index * 0.04, frame(index)) for index in range(300)], "frames_source": "source_video"}
+        record = self.v2_record("a.jpg", window_frames=many)
+        self.assertLessEqual(len(record["frames"]), STUDIO_LOGO_MAX_FRAMES)
+        self.assertEqual(len(record["frames"]), STUDIO_LOGO_MAX_FRAMES)
+        ident = cv2.imencode(".jpg", cv2.cvtColor(_ident_image(), cv2.COLOR_RGB2BGR))[1].tobytes()
+        speck = _ident_image()
+        speck[2, 2] = (90, 90, 90)  # one pixel: other bytes, same pHash, grid within 2
+        near = cv2.imencode(".jpg", cv2.cvtColor(speck, cv2.COLOR_RGB2BGR))[1].tobytes()
+        self.assertNotEqual(ident, near)
+        self.assertEqual(studio_logo_frame_signature(speck)["phash"],
+                         studio_logo_frame_signature(_ident_image())["phash"])
+        duplicates = {"frames": [(0.0, ident), (0.04, ident), (0.08, near)], "frames_source": "source_video"}
+        record = self.v2_record("a.jpg", window_frames=duplicates, item_id="logo-dup")
+        self.assertEqual(len(record["frames"]), 1, "same bytes and same-signature frames are stored once")
+        self.assertEqual([entry["t"] for entry in record["stored_frames"]][:2], [0.0, 0.08])
+
+    def test_studio_logo_frames_are_never_cleanup_candidates(self):
+        record = self.v2_record("a.jpg")
+        folder = self.root / record["frames_folder"]
+        self.assertTrue(folder.is_dir())
+        self.assertEqual(folder.parent, (self.root / STUDIO_LOGO_FRAMES_PATH).resolve())
+        old = 1_000_000_000
+        for path in folder.iterdir():
+            os.utime(path, (old, old))
+        self.assertFalse(any("studio-logo-frames" in entry["path"] for entry in cleanup_candidates(self.root)))
+        prune_file_caches(self.root)
+        self.assertTrue(all(path.is_file() for path in folder.iterdir()))
+        self.assertTrue(any(folder.iterdir()))
+
+    def test_forget_removes_the_frames_only_together_with_the_record(self):
+        record = self.v2_record("a.jpg")
+        folder = self.root / record["frames_folder"]
+        other = self.v2_record("b.jpg", item_id="logo-2")
+        self.assertFalse(forget_studio_logo(self.root, self.queue, "logo-3"))
+        self.assertTrue(folder.is_dir())
+        self.assertTrue(forget_studio_logo(self.root, self.queue, "logo-1"))
+        self.assertFalse(folder.exists())
+        self.assertTrue((self.root / other["frames_folder"]).is_dir())
+        self.assertEqual([r["key"] for r in load_studio_logo_memory(self.root)["records"]], ["film:logo-2"])
+
+    def test_a_withdrawn_mask_without_its_frame_jpegs_stops_the_record_matching(self):
+        # Review finding 2026-10-02: with state/studio-logo-frames missing, an un-BLUR left the old mask.
+        wm_box, watermarked = _watermarked(_ident_image())
+        _write_rgb(self.root / "reports" / "wm.jpg", watermarked)
+        watermark = {"id": "wm", "category": "text", "candidate_type": "persistent_overlay", "decision": "BLUR",
+                     "start_seconds": 0.0, "end_seconds": 400.0, "source_frame_size": [320, 180],
+                     "suggested_region_source_pixels": {"x": wm_box[0] * 320, "y": wm_box[1] * 180,
+                                                        "width": wm_box[2] * 320, "height": wm_box[3] * 180}}
+        record = self.v2_record("wm.jpg", [{"box": wm_box, "item_id": "wm", "category": "text"}])
+        clean = self.item("a-clean.jpg", decision=None)
+        _write_rgb(self.root / "reports" / "a-clean.jpg", _ident_image())
+        self.assertIsNotNone(match_studio_logo(self.root, clean, [record]))
+        queue = self.queue_with(watermark, self.item("wm.jpg", start_seconds=5.0, end_seconds=10.0))
+        self.assertEqual(refresh_studio_logo_masks(self.root, queue), 0, "still BLUR: nothing changes")
+        shutil.rmtree(self.root / record["frames_folder"])
+        self.assertEqual(refresh_studio_logo_masks(self.root, queue), 0, "missing frames alone change nothing")
+        watermark["decision"] = "KEEP"
+        self.assertEqual(refresh_studio_logo_masks(self.root, queue), 1)
+        [refreshed] = load_studio_logo_memory(self.root)["records"]
+        self.assertEqual(refreshed["ignored_regions"], [])
+        self.assertEqual(refreshed["frames"], [], "the withdrawn mask is not kept")
+        self.assertTrue(refreshed["frames_missing"])
+        self.assertTrue(refreshed["signatures"], "nothing else of the record is removed")
+        self.assertIsNone(match_studio_logo(self.root, clean, [refreshed]))
+        self.assertIsNone(match_studio_logo(self.root, self.item("wm.jpg", decision=None), [refreshed]))
+        self.assertEqual(refresh_studio_logo_masks(self.root, queue), 0)
+
+    def test_upgrade_writes_nothing_when_the_memory_changes_while_it_decodes(self):
+        # Review finding 2026-10-02: a forget (or remember) that landed during the decode was overwritten
+        # with the stale snapshot, bringing a removed record back.
+        self.v2_record("b.jpg", item_id="other")
+        remember_studio_logo(self.root, self.queue_with(), self.item("a.jpg", id="kept"))
+        remember_studio_logo(self.root, self.queue_with(), self.item("a.jpg", id="gone"))
+        path = self.root / STUDIO_LOGO_MEMORY_PATH
+        frames_root = self.root / STUDIO_LOGO_FRAMES_PATH
+
+        def forgetting(target):
+            def plan(root, record, ffmpeg_path, ffprobe_path):
+                item = self.item("a.jpg", id=record["review_item_id"], start_seconds=5.0, end_seconds=10.0)
+                prepared = prepare_studio_logo_frames(root, self.queue_with(), item, ignored_regions=[])
+                if record["review_item_id"] == target:
+                    forget_studio_logo(root, self.queue_with(), target)  # the Control Center, meanwhile
+                return prepared, None, {}
+            return plan
+
+        folders_before = sorted(path.name for path in frames_root.iterdir())
+        with mock.patch("biliflow.brand_memory._plan_studio_logo_upgrade", forgetting("gone")):
+            report = upgrade_studio_logo_memory(self.root, apply=True, ffmpeg_path=self.root / "ffmpeg.exe")
+        self.assertEqual(report["aborted"], "memory_changed_during_upgrade")
+        self.assertIn("re-run", report["message"])
+        self.assertEqual((report["backup"], report["upgraded"]), (None, 0))
+        self.assertEqual([r["review_item_id"] for r in load_studio_logo_memory(self.root)["records"]],
+                         ["other", "kept"], "the forgotten record stays forgotten")
+        self.assertNotIn("frames", load_studio_logo_memory(self.root)["records"][1])
+        self.assertEqual(sorted(path.name for path in frames_root.iterdir()), folders_before)
+        self.assertFalse((self.root / "state" / "backups").exists())
+
+        # A change while the frame JPEGs are written: the JPEGs nobody uses are removed again.
+        memory_before = path.read_bytes()
+        from biliflow import brand_memory
+
+        real_write = brand_memory._write_studio_logo_frames
+
+        def write_then_remember(root, prepared):
+            real_write(root, prepared)
+            remember_studio_logo(self.root, self.queue_with(), self.item("b.jpg", id="new"))
+
+        def plan_only(root, record, ffmpeg_path, ffprobe_path):
+            item = self.item("a.jpg", id=record["review_item_id"], start_seconds=5.0, end_seconds=10.0)
+            return prepare_studio_logo_frames(root, self.queue_with(), item, ignored_regions=[]), None, {}
+
+        with mock.patch("biliflow.brand_memory._plan_studio_logo_upgrade", plan_only), \
+                mock.patch("biliflow.brand_memory._write_studio_logo_frames", write_then_remember):
+            report = upgrade_studio_logo_memory(self.root, apply=True, ffmpeg_path=self.root / "ffmpeg.exe")
+        self.assertEqual(report["aborted"], "memory_changed_during_upgrade")
+        self.assertNotEqual(path.read_bytes(), memory_before)
+        self.assertEqual([r["review_item_id"] for r in load_studio_logo_memory(self.root)["records"]],
+                         ["other", "kept", "new"])
+        self.assertEqual(sorted(path.name for path in frames_root.iterdir()), folders_before)
+        argv = ["studio_logo_upgrade.py", "--project-root", str(self.root), "--apply",
+                "--ffmpeg", str(self.root / "ffmpeg.exe")]
+        with mock.patch.object(sys, "argv", argv), mock.patch("builtins.print") as printed, \
+                mock.patch("biliflow.brand_memory._plan_studio_logo_upgrade", forgetting("new")):
+            self.assertEqual(_upgrade_script().main(), 1, "an aborted --apply is not a success")
+        self.assertEqual(json.loads(printed.call_args[0][0])["aborted"], "memory_changed_during_upgrade")
+        self.assertEqual([r["review_item_id"] for r in load_studio_logo_memory(self.root)["records"]],
+                         ["other", "kept"])
+
+        # Unchanged meanwhile: applied, and the backup holds exactly the bytes replaced.
+        snapshot = path.read_bytes()
+        with mock.patch("biliflow.brand_memory._plan_studio_logo_upgrade", plan_only):
+            report = upgrade_studio_logo_memory(self.root, apply=True, ffmpeg_path=self.root / "ffmpeg.exe")
+        self.assertNotIn("aborted", report)
+        self.assertEqual(report["upgraded"], 1)
+        self.assertEqual((self.root / report["backup"]).read_bytes(), snapshot)
+        self.assertTrue(all("frames" in r for r in load_studio_logo_memory(self.root)["records"]))
+
+    @unittest.skipUnless(_ffmpeg_tools(), "ffmpeg/ffprobe not available")
+    def test_window_frames_from_video_reproduce_scanner_preview_bytes(self):
+        from biliflow.visual_logo_scanner import _iter_frames, _jpeg
+
+        ffmpeg, _ = _ffmpeg_tools()
+        clip = _testsrc_clip(ffmpeg, self.root / "input" / "clip.mp4")
+        boundary = {t: _jpeg(frame) for t, frame in _iter_frames(
+            ffmpeg_path=ffmpeg, input_path=clip, start=0.0, duration=3.0, sample_every=0.25,
+            width=320, height=180, decode_backend="cpu")}
+        preview = self.root / "reports" / "x" / "logo-0001-0.250s.jpg"
+        preview.parent.mkdir(parents=True)
+        preview.write_bytes(boundary[0.25])
+        item = self.item("x/logo-0001-0.250s.jpg", start_seconds=0.0, end_seconds=2.0)
+        window = studio_logo_window_frames(self.root, self.queue_with(path=clip), item, ffmpeg)
+        self.assertEqual((window["frames_source"], window["reason"]), ("source_video", None))
+        self.assertEqual(len(window["frames"]), 50, "every frame of 0-2 s at the native 25 fps")
+        self.assertEqual(window["pipeline"]["analysis_size"], [320, 180])
+        self.assertEqual(window["pipeline"]["fps"], 25.0)
+        decoded = {round(t, 3): data for t, data in window["frames"]}
+        self.assertIn(boundary[0.25], set(decoded.values()), "the scanner's 0.25 s JPEG, byte for byte")
+        self.assertTrue(all(boundary[t] in set(decoded.values()) for t in (0.0, 0.5, 1.0, 1.75)))
+        prepared = prepare_studio_logo_frames(self.root, self.queue_with(path=clip), item, window)
+        record = remember_studio_logo(self.root, self.queue_with(path=clip), item, frames=prepared)
+        self.assertEqual(record["frames_source"], "source_video")
+        self.assertEqual(len(record["stored_frames"]), 50, "the preview equals a decoded frame, stored once")
+        self.assertTrue(all((self.root / entry["image"]).is_file() for entry in record["stored_frames"]))
+
+    def test_missing_or_mismatched_source_falls_back_to_previews(self):
+        item = self.item("a.jpg", start_seconds=0.0, end_seconds=2.0)
+        missing = studio_logo_window_frames(self.root, self.queue_with(), item, self.root / "ffmpeg.exe")
+        self.assertEqual((missing["frames_source"], missing["reason"], missing["frames"]),
+                         ("preview_only", "source_missing", []))
+        source = self.root / "input" / "source.mp4"
+        source.parent.mkdir()
+        source.write_bytes(b"not a video")
+        no_tool = studio_logo_window_frames(self.root, self.queue_with(path=source), item, self.root / "ffmpeg.exe")
+        self.assertEqual(no_tool["reason"], "ffmpeg_missing")
+        fake = self.root / "tools" / "ffmpeg.exe"
+        fake.parent.mkdir()
+        fake.write_text("not a program", encoding="utf-8")
+        timed = self.item("x/logo-0001-0.250s.jpg", start_seconds=0.0, end_seconds=2.0)
+        (self.root / "reports" / "x").mkdir()
+        shutil.copyfile(self.root / "reports" / "a.jpg", self.root / "reports" / "x" / "logo-0001-0.250s.jpg")
+        self.assertEqual(studio_logo_window_frames(self.root, self.queue_with(path=source), item, fake)["reason"],
+                         "self_check_unavailable", "a preview without a time cannot prove the source")
+        self.assertEqual(studio_logo_window_frames(self.root, self.queue_with(path=source), timed, fake)["reason"],
+                         "probe_failed")
+        prepared = prepare_studio_logo_frames(self.root, self.queue_with(path=source), item,
+                                              studio_logo_window_frames(self.root, self.queue_with(path=source),
+                                                                        item, fake))
+        self.assertEqual(prepared["frames_source"], "preview_only")
+        self.assertEqual(len(prepared["frames"]), 1, "the card's own preview is still remembered")
+        tools = _ffmpeg_tools()
+        if tools:
+            clip = _testsrc_clip(tools[0], self.root / "input" / "clip.mp4")
+            window = studio_logo_window_frames(self.root, self.queue_with(path=clip), timed, tools[0])
+            self.assertEqual((window["frames_source"], window["reason"]), ("preview_only", "self_check_failed"))
+
+    @unittest.skipUnless(_ffmpeg_tools(), "ffmpeg/ffprobe not available")
+    def test_upgrade_is_a_dry_run_by_default_and_apply_only_adds_fields(self):
+        from biliflow.visual_logo_scanner import _iter_frames, _jpeg
+
+        ffmpeg, _ = _ffmpeg_tools()
+        clip = _testsrc_clip(ffmpeg, self.root / "input" / "clip.mp4")
+        job = self.root / "reports" / "jobs" / "j1"
+        thumbs = job / "visual-logo" / "thumbnails"
+        thumbs.mkdir(parents=True)
+        frames = dict(_iter_frames(ffmpeg_path=ffmpeg, input_path=clip, start=0.0, duration=3.0,
+                                   sample_every=0.25, width=320, height=180, decode_backend="cpu"))
+        (thumbs / "logo-0001-0.250s.jpg").write_bytes(_jpeg(frames[0.25]))
+        ident = self.item("jobs/j1/visual-logo/thumbnails/logo-0001-0.250s.jpg", id="ident", start_seconds=0.0, end_seconds=2.0,
+                          studio_logo_memory={"remembered": True})
+        watermark = {"id": "wm", "category": "text", "candidate_type": "persistent_overlay", "decision": "BLUR",
+                     "start_seconds": 0.0, "end_seconds": 3.0, "source_frame_size": [640, 360],
+                     "suggested_region_source_pixels": {"x": 10, "y": 10, "width": 100, "height": 30}}
+        queue = {"source": {"sha256": "film", "path": str(clip)}, "items": [ident, watermark]}
+        (job / "review-queue.json").write_text(json.dumps(queue), encoding="utf-8")
+        record = remember_studio_logo(self.root, queue, ident)
+        self.assertIsNotNone(record)
+        orphan = remember_studio_logo(self.root, {"source": {"sha256": "gone"}}, self.item("a.jpg", id="old"))
+        path = self.root / STUDIO_LOGO_MEMORY_PATH
+        before = path.read_bytes()
+        dry = upgrade_studio_logo_memory(self.root, ffmpeg_path=ffmpeg)
+        self.assertTrue(dry["dry_run"])
+        self.assertEqual([entry["status"] for entry in dry["records"]], ["upgradable", "kept_v1"])
+        self.assertEqual(dry["records"][0]["ignored_regions"][0]["item_id"], "wm")
+        self.assertIn("Hãy bấm lại", dry["records"][1]["message"])
+        self.assertEqual(path.read_bytes(), before, "a dry run writes nothing")
+        self.assertFalse((self.root / STUDIO_LOGO_FRAMES_PATH).exists())
+        applied = upgrade_studio_logo_memory(self.root, apply=True, ffmpeg_path=ffmpeg)
+        self.assertEqual(applied["upgraded"], 1)
+        self.assertEqual((self.root / applied["backup"]).read_bytes(), before)
+        upgraded, untouched = load_studio_logo_memory(self.root)["records"]
+        self.assertEqual({key: upgraded[key] for key in record}, record, "every old field is kept unchanged")
+        self.assertEqual(untouched, orphan)
+        self.assertEqual(upgraded["frames_source"], "source_video")
+        self.assertEqual([region["item_id"] for region in upgraded["ignored_regions"]], ["wm"])
+        self.assertTrue(upgraded["frames"])
+        again = upgrade_studio_logo_memory(self.root, apply=True, ffmpeg_path=ffmpeg)
+        self.assertEqual([entry["status"] for entry in again["records"]], ["already_v2", "kept_v1"])
+        self.assertEqual(again["upgraded"], 0)
+        argv = ["studio_logo_upgrade.py", "--project-root", str(self.root), "--ffmpeg", str(ffmpeg)]
+        with mock.patch.object(sys, "argv", argv), mock.patch("builtins.print") as printed:
+            self.assertEqual(_upgrade_script().main(), 0)
+        self.assertTrue(json.loads(printed.call_args[0][0])["dry_run"])
+
+def _upgrade_script():
+    """scripts/studio_logo_upgrade.py (not a ``biliflow`` subcommand: cli.py keys every scan cache)."""
+    spec = importlib.util.spec_from_file_location(
+        "studio_logo_upgrade", Path(__file__).resolve().parents[1] / "scripts" / "studio_logo_upgrade.py",
+    )
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
 
 _REAL_IDENTS = {
-    "toho": ROOT / "reports/jobs/conan20-allgroups-full-fast-20260930-073627/visual-logo/thumbnails/logo-0002-7.750s.jpg",
-    "wb": ROOT / "reports/jobs/troy-allgroups-full-fast-20260930-162534/visual-logo/thumbnails/logo-0002-9.250s.jpg",
+    "toho": DATA_ROOT / "reports/jobs/conan20-allgroups-full-fast-20260930-073627/visual-logo/thumbnails/logo-0002-7.750s.jpg",
+    "wb": DATA_ROOT / "reports/jobs/troy-allgroups-full-fast-20260930-162534/visual-logo/thumbnails/logo-0002-9.250s.jpg",
 }
-_TOHO_CONAN21 = ROOT / "reports/jobs/conan21-allgroups-full-golden-20260930-222720/visual-logo/thumbnails/logo-0002-7.750s.jpg"
+_TOHO_CONAN21 = DATA_ROOT / "reports/jobs/conan21-allgroups-full-golden-20260930-222720/visual-logo/thumbnails/logo-0002-7.750s.jpg"
 
 
 @unittest.skipUnless(all(path.is_file() for path in _REAL_IDENTS.values()), "Golden ident previews not present")
@@ -770,6 +1509,130 @@ class RealIdentOverlayTests(unittest.TestCase):
             {"records": self.records})
         self.assertEqual((kept, [item["id"] for item in moved]), ([], ["review-toho"]))
 
+    # Tập 10's two blurred watermark boxes (review-1aa9bcb3cc7c, review-638c84b31946) on a 1280x534 source.
+    TAP10_TOP_LEFT = [46 / 1280, 40 / 534, 191 / 1280, 49 / 534]
+    TAP10_BOTTOM_LINE = [389 / 1280, 489 / 534, 510 / 1280, 32 / 534]
+
+    def v2_records(self, boxes):
+        regions = [{"box": box, "item_id": f"wm-{index}", "category": "text"} for index, box in enumerate(boxes)]
+        records = []
+        for key in ("toho", "wb"):
+            item = self.item(key, decision="KEEP")
+            queue = {"source": {"sha256": f"{key}-v2"}}
+            prepared = prepare_studio_logo_frames(self.root, queue, item, ignored_regions=regions)
+            records.append(remember_studio_logo(self.root, queue, item, window_text={"covered": True, "texts": []},
+                                                frames=prepared))
+        return records
+
+    def names(self):
+        return [name for name in ("corner", "url", "banner", "toho", "wb", "toho21")
+                if (self.folder / f"{name}.jpg").is_file()]
+
+    def test_no_mask_is_identical_to_v1(self):
+        records = self.v2_records([])
+        for name in self.names():
+            with self.subTest(card=name):
+                old = match_studio_logo(self.root, self.item(name), self.records)
+                new = match_studio_logo(self.root, self.item(name), records)
+                self.assertEqual(old is None, new is None)
+                if old is not None:
+                    self.assertEqual((new["similarity"], new["cell_difference"]),
+                                     (old["similarity"], old["cell_difference"]))
+                    self.assertEqual(new["masked_regions"], 0)
+                old_compare = compare_studio_logo(self.root, self.item(name), self.records)
+                new_compare = compare_studio_logo(self.root, self.item(name), records)
+                self.assertEqual((new_compare["best_similarity"], new_compare["best_cell_difference"]),
+                                 (old_compare["best_similarity"], old_compare["best_cell_difference"]))
+
+    def test_unrelated_mask_keeps_overlays_outside_it_unmatched(self):
+        records = self.v2_records([self.TAP10_TOP_LEFT])
+        for name in ("corner", "url", "banner"):
+            with self.subTest(overlay=name):
+                self.assertIsNone(match_studio_logo(self.root, self.item(name), records))
+        for name in self.names()[3:]:
+            with self.subTest(repeat=name):
+                match = match_studio_logo(self.root, self.item(name), records)
+                self.assertIsNotNone(match)
+                self.assertEqual(match["masked_regions"], 1)
+
+    def test_an_overlay_entirely_inside_a_blurred_region_matches_by_design(self):
+        # Documented (QUALITY_PLAN §23): the user blurred that region in the remembered episode, so the picture
+        # check ignores it; text placed there is left to the mandatory OCR window-text check.
+        records = self.v2_records([self.TAP10_TOP_LEFT, self.TAP10_BOTTOM_LINE])
+        self.assertIsNotNone(match_studio_logo(self.root, self.item("corner"), records),
+                             "the 'PHIMMOI' corner text lies inside the bottom-line mask")
+        for name in ("url", "banner"):
+            with self.subTest(overlay=name):
+                self.assertIsNone(match_studio_logo(self.root, self.item(name), records), "wider than the mask")
+        logo = {"intervals": [{"start_seconds": 5.0, "end_seconds": 10.0}]}
+        text = {"tracks": [{"start_seconds": 6.0, "end_seconds": 9.0, "persistent": False,
+                            "routing": "LIKELY_SCENE_TEXT", "semantic_top_label": "scene_text",
+                            "sample_text": ["PHIMMOI"], "policy_hits": []}],
+                "scan_start_seconds": 0.0, "scan_duration_seconds": 100.0}
+        kept, moved = route_confirmed_studio_logos(
+            self.root, [self.item("corner")], {"reports/x/logo.json": logo, "reports/x/text-scan.json": text},
+            {"records": records})
+        self.assertEqual(moved, [])
+        self.assertEqual(kept[0]["studio_logo_match_blocked"]["unconfirmed_texts"], ["PHIMMOI"])
+
+
+_TAP10_QUEUE = DATA_ROOT / "reports/jobs/nhất-âu-xuân-tập-10-f79bae15-run-20261002-135619/review-queue.json"
+_TAP_PREVIEWS = {
+    episode: next(iter(sorted((DATA_ROOT / f"reports/jobs/{folder}/visual-logo/thumbnails").glob(
+        "*-2.250s.jpg"))), None) if (DATA_ROOT / f"reports/jobs/{folder}").is_dir() else None
+    for episode, folder in ((12, "nhất-âu-xuân-tập-12-c6822dbc"), (16, "nhất-âu-xuân-tập-16-3b4dc53d"),
+                            (17, "nhất-âu-xuân-tập-17-bae453af"))
+}
+
+
+def _nhat_au_xuan_available():
+    if not _TAP10_QUEUE.is_file() or not all(_TAP_PREVIEWS.values()) or not _ffmpeg_tools():
+        return False
+    if not all(path.is_file() for path in _REAL_IDENTS.values()):
+        return False
+    source = json.loads(_TAP10_QUEUE.read_text(encoding="utf-8"))["source"]["path"]
+    return Path(source).is_file()
+
+
+@unittest.skipUnless(_nhat_au_xuan_available(), "Nhất Âu Xuân Tập 10/12/16/17 data, Golden idents or ffmpeg missing")
+class RealNhatAuXuanMaskTests(unittest.TestCase):
+    """The measured design case (temp/studio-mask-design/design.json), read-only on the project data."""
+
+    def test_masked_25fps_record_matches_clean_episodes_and_nothing_else(self):
+        self.assertEqual((STUDIO_LOGO_MINIMUM_SIMILARITY, STUDIO_LOGO_MAXIMUM_CELL_DIFFERENCE), (0.95, 20))
+        ffmpeg, _ = _ffmpeg_tools()
+        queue = json.loads(_TAP10_QUEUE.read_text(encoding="utf-8"))
+        item = next(value for value in queue["items"] if value["id"] == "review-9445dc481911")
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve()
+            preview = item["preview_images"][0]
+            (root / preview).parent.mkdir(parents=True)
+            shutil.copyfile(DATA_ROOT / preview, root / preview)
+            window = studio_logo_window_frames(root, queue, item, ffmpeg)
+            self.assertEqual((window["frames_source"], window["reason"]), ("source_video", None))
+            self.assertEqual(window["pipeline"]["analysis_size"], [320, 134])
+            prepared = prepare_studio_logo_frames(root, queue, item, window)
+            self.assertEqual(sorted(region["item_id"] for region in prepared["ignored_regions"]),
+                             ["review-1aa9bcb3cc7c", "review-638c84b31946"])
+            self.assertGreater(len(prepared["frames"]), 100)
+            record = dict(item, key="tap10:a", decision="KEEP", memory_class="studio_logo", **{
+                name: prepared[name] for name in ("frames", "ignored_regions", "frames_source")})
+            for episode, path in _TAP_PREVIEWS.items():
+                with self.subTest(episode=episode):
+                    candidate = {"id": f"tap{episode}", "category": "visual_logo",
+                                 "candidate_type": "opening_promotion",
+                                 "preview_images": [path.relative_to(DATA_ROOT).as_posix()]}
+                    match = match_studio_logo(DATA_ROOT, candidate, [record])
+                    self.assertIsNotNone(match)
+                    self.assertLessEqual(match["cell_difference"], 10)
+                    self.assertEqual(match["masked_regions"], 2)
+            _write_rgb(root / "reports" / "black-13.000s.jpg", np.zeros((134, 320, 3), np.uint8))
+            negatives = [(DATA_ROOT, path.relative_to(DATA_ROOT).as_posix()) for path in _REAL_IDENTS.values()]
+            for base, relative in (*negatives, (root, "reports/black-13.000s.jpg")):
+                with self.subTest(negative=relative):
+                    candidate = {"id": "negative", "category": "visual_logo", "candidate_type": "opening_promotion",
+                                 "preview_images": [relative]}
+                    self.assertIsNone(match_studio_logo(base, candidate, [record]))
 
 def _js_function(page, name):
     match = re.search(rf"(?:async )?function {re.escape(name)}\(", page)
@@ -881,6 +1744,75 @@ class SceneCardPageTests(unittest.TestCase):
         self.assertTrue(value["covered"])
         self.assertTrue(value["strongest"])
 
+    def test_studio_mask_and_frame_strings(self):
+        for fragment in (
+            "Sẽ bỏ qua ${blurred.length} vùng watermark bạn đã chọn làm mờ",
+            "Sẽ nhớ mọi khung hình trong đoạn", "Đã nhớ ${Number(m.frames)} khung trong đoạn",
+            "chưa được chọn Làm mờ", "với một khung bất kỳ của logo này",
+            "nằm ngoài vùng watermark đã làm mờ; khi đó thẻ vẫn ở danh sách chính",
+            "Đang bỏ qua ${m.ignored_regions.length} vùng watermark đã làm mờ.",
+            "Đã cập nhật logo hãng phim đã nhớ theo vùng watermark bạn vừa chọn.",
+            "Vùng watermark đã làm mờ quá lớn (trên 20% khung hình) nên không bỏ qua — logo được nhớ nguyên ảnh.",
+            " (đã bỏ qua vùng watermark đã làm mờ)", "bỏ qua watermark đã làm mờ",
+        ):
+            with self.subTest(fragment=fragment):
+                self.assertIn(fragment, self.page)
+        self.assertIn("${studioMaskNote(x)}", _js_function(self.page, "studioHtml"))
+        self.assertNotIn("studioOverlayWarning", self.page)
+
+    @unittest.skipUnless(shutil.which("node"), "node is not installed")
+    def test_studio_mask_note_counts_only_blurred_overlay_cards(self):
+        source = "\n".join(_js_function(self.page, name) for name in (
+            "studioRemembered", "studioMaskNote", "studioFramesNote", "studioCompareLine", "decisionLabel",
+            "readingLabel", "thumbTime"))
+        script = (
+            "const esc=s=>String(s??'').replace(/</g,'&lt;');const actionName=(x,d)=>d;"
+            "const isScene=()=>false,isLogoItem=()=>true,momentsOf=()=>[];"
+            "const mmss=s=>{const v=Math.max(0,Math.floor(Number(s)||0));return `${Math.floor(v/60)}:${String(v%60).padStart(2,'0')}`;};"
+            "const mmssTenth=s=>String(s);const span=x=>`${mmss(x.start_seconds)}–${mmss(x.end_seconds)}`;"
+            "const wm=(id,decision,extra)=>Object.assign({id,category:'text',candidate_type:'persistent_overlay',"
+            "start_seconds:0,end_seconds:2607,decision,labels:['Motchillv.ph']},extra||{});"
+            "let queue={items:[wm('a','BLUR'),wm('b','BLUR',{labels:['PHIM DUOC CAP NHAT']}),wm('c','KEEP',{start_seconds:3000}),"
+            "wm('d','BLUR',{start_seconds:3000})]};"
+            "const card={id:'x',category:'visual_logo',start_seconds:0,end_seconds:5,preview_images:['t/logo-0001-0.250s.jpg']};"
+            + source + ";const out=[studioMaskNote(card)];"
+            "queue={items:[wm('a','BLUR'),wm('c',null)]};out.push(studioMaskNote(card));"
+            "queue={items:[wm('c','CUT'),wm('e','BLUR',{start_seconds:3000})]};out.push(studioMaskNote(card));"
+            "const kept=m=>Object.assign({},card,{decision:'KEEP',studio_logo_memory:Object.assign({remembered:true},m)});"
+            "out.push(studioMaskNote(kept({frames:111,frames_source:'source_video',ignored_regions:[{item_id:'a'},{item_id:'b'}]})));"
+            "out.push(studioMaskNote(kept({frames:111,frames_source:'source_video',ignored_regions:[],mask_refused:true})));"
+            "out.push(studioMaskNote(kept({frames:111,frames_source:'source_video',ignored_regions:[{item_id:'a'}],mask_updated_at:'t'})));"
+            "out.push(studioFramesNote(kept({frames:111,frames_source:'source_video'})));"
+            "out.push(studioFramesNote(kept({frames:1,frames_source:'preview_only'})));"
+            "out.push(studioFramesNote(kept({remembered:true})));"
+            "out.push(decisionLabel(kept({frames:111,frames_source:'source_video',ignored_regions:[{item_id:'a'}]})));"
+            "out.push(decisionLabel(kept({frames:1})));"
+            "out.push(studioCompareLine(Object.assign({},card,{studio_logo_compared:{records:2,best_similarity:0.9,"
+            "best_cell_difference:52,masked_regions:2}})));"
+            "out.push(studioFramesNote(kept({frames:0,frames_source:'source_video',frames_missing:true})));"
+            "console.log(JSON.stringify(out));"
+        )
+        result = subprocess.run(["node", "-e", script], capture_output=True, text=True, encoding="utf-8",
+                                timeout=60, check=True)
+        (both, mixed, cut, ignoring, refused, refreshed, frames, preview_only, pending, label, legacy_label,
+         compared, missing) = json.loads(result.stdout)
+        self.assertIn("Sẽ bỏ qua 2 vùng watermark bạn đã chọn làm mờ (Motchillv.ph, PHIM DUOC CAP NHAT)", both)
+        self.assertNotIn("chưa được chọn Làm mờ", both, "cards outside the window do not count")
+        self.assertIn("Sẽ bỏ qua 1 vùng watermark", mixed)
+        self.assertIn("chưa được chọn Làm mờ", mixed)
+        self.assertNotIn("Sẽ bỏ qua", cut, "a CUT or KEEP watermark is not ignored")
+        self.assertIn("chưa được chọn Làm mờ", cut)
+        self.assertIn("Đang bỏ qua 2 vùng watermark đã làm mờ.", ignoring)
+        self.assertIn("quá lớn (trên 20% khung hình)", refused)
+        self.assertIn("Đã cập nhật logo hãng phim đã nhớ theo vùng watermark bạn vừa chọn.", refreshed)
+        self.assertEqual(frames, " Đã nhớ 111 khung trong đoạn 0:00–0:05.")
+        self.assertIn("Chỉ nhớ 1 ảnh xem trước (không đọc được video gốc), không phải cả đoạn 0:00–0:05", preview_only)
+        self.assertEqual(pending, "", "nothing is claimed before the server answers")
+        self.assertEqual(label, "Giữ nguyên · đã nhớ là logo hãng phim (111 khung, bỏ qua watermark đã làm mờ)")
+        self.assertEqual(legacy_label, "Giữ nguyên · đã nhớ là logo hãng phim (1 khung)")
+        self.assertTrue(compared.endswith("— chưa khớp (đã bỏ qua vùng watermark đã làm mờ)</small>"), compared)
+        self.assertIn("Không còn ảnh khung hình đã nhớ", missing)
+        self.assertIn("tạm thời không khớp thẻ nào", missing)
 
 if __name__ == "__main__":
     unittest.main()
