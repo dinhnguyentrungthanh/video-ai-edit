@@ -25,6 +25,11 @@ The improvement sequence now present on local `main` is:
 
 Always confirm this section with `git status` and `git log` because it becomes stale after new work.
 
+## Current work — 2026-10-03 dashboard batch 1 (uncommitted, integrated in the main tree)
+
+- job_store (IN_PROCESS_STATES, claim_queued, mark_queued, queued_jobs, queue_seq/queued_at migration), scheduler (FIFO _select, start/rerun/export reseq, resume keeps place, _executing_job_id guard), job_import (no overwrite of settled jobs), control_center (sticky tabs, queue badges, status queue_position/queue_kind), review_workflow (export panel closes on confirm, #export-notice). Evidence: temp/ui-plan/batch1/.
+- Done 2026-10-03 00:18: Control Center restarted with batch 1; jobs table migrated (queue_seq/queued_at), backup state/backups/control-center-before-queue-order-20261003-001806.sqlite3 (30 jobs). Next: batch 2 and batch 3 per docs/UI_QUEUE_PLAN.md.
+
 ## Current work — 2026-10-02 run-affecting fixes (uncommitted, integrated in the main tree)
 
 - `control_center.py` (picker drafts/localStorage, ordered polls, interaction-deferred render, start confirmation, setup-card order), `scheduler.start_job` guard, `codex_supervisor.queue_coverage_findings` (detector shortfall = WARN), `brand_memory.remember_review_item` no-op writes skipped; tests in test_control_center (node harness tests/fixtures/dashboard_harness.js), test_scheduler, test_codex_supervisor, test_brand_memory. Evidence and repros: `temp/run-issues-diag/` (after-fix/).
@@ -401,13 +406,72 @@ This run skipped `adult`, `gore`, and `violence`. It validates advertisement/log
 
 ## Remaining work in priority order
 
-1. **Human-check the new Troy advertising queue.** Confirm the full-timeline XEMBZ.NET region is tight and that the two opening CUT proposals are correct. This is a review task, not another detector change.
-2. **Run one fresh all-detector Troy regression when requested.** Confirm the V0.7.20 adult interval and V0.7.23 high-priority intervals appear in the current Review UI. The latest verified V0.7.24 run was advertising-only.
-3. **Golden Set v1 (quality plan).** Tooling ready (see "Current work"); waiting for the user's labels on 13 Troy/Conan segments, then the Q2 baseline scorecard. Shin sources no longer exist; add new representative videos as v1.1 later. Do not claim general accuracy from these three sources alone.
-4. **Reduce scan time without lowering coverage.** Phase timing instrumentation is complete on the improvement branch. Collect these timings on the next authorized run; older reports cannot supply them. The last advertising-only Troy rerun took roughly 27 minutes: OCR about 13 minutes and visual-logo routing/localization about 14 minutes. The requested 5-10 minute full-video target is not yet achieved.
-5. **Performance work after measurement.** Dependency-scoped exact stage cache is implemented. OCR prefetch remains off because its benefit was negligible. Opt-in same-width OCR passes sampled/synthetic/native-source comparisons plus actual GPU worker cancellation. The native Troy pilot improves total OCR scan time 7.51%, not full pipeline time. Keep serial default; a controlled full advertising opt-in comparison remains to be requested/integrated. There is no OOM/exhaustion guarantee. Inspect repeated source hashing/shared decoding next without weakening content identity. Keep source SHA/config/model revisions and existing bounded cleanup policy. Do not reduce sampling density or model thresholds without an A/B regression.
-6. **Optional export acceleration comes later.** NVENC is currently blocked by the installed driver/FFmpeg API mismatch. Smart Render is unsafe for timelines with persistent blur unless continuity and full output validation are proven. CPU libx264 remains the production path.
-7. **Merge/push only after user authorization.** The previous improvement branch was merged into local `main`; the new `improve/scan-performance-metrics` branch is separate and unmerged. Local commits are not yet on the remote.
+Updated 2026-10-02 evening (after commits 53cd9a6..f997dde). The user's requests are quoted in Vietnamese.
+
+### A. Pending user steps
+1. Restart the Control Center while the queue is idle, so it serves the dashboard and structure-audit fixes of 236fb06 (the running process still has the old page).
+2. Export Nhất Âu Xuân Tập 14 (job 44). It is reviewed (2 x KEEP) and READY_TO_EXPORT.
+3. Optional: re-run the local structure audit for jobs 40-50. Their stored structure-audit.json still says BLOCK, which the new dashboard labels "quy tắc cũ".
+
+### B. Dashboard / workflow requests from the user (2026-10-02, not started)
+4. **Skip button for videos with nothing to review.** User request: "đối với video mà không có cảnh nào để duyệt khi chạy cảnh để duyệt thì có thêm một nút bỏ qua".
+   - Today such a job goes straight to READY_TO_EXPORT (e.g. Tập 13), and the only way to finish it is to export a re-encoded copy with the same content.
+   - Add "Bỏ qua (không xuất)", which marks the job done without rendering. Keep reports and never touch the source.
+   - Confirmed by the user (2026-10-02): "Bỏ qua là đánh dấu xong mà không xuất video". A skipped job moves to "Hoàn tất".
+5. **Sticky job tabs.** User request: "thanh menu của đang xử lý, đang chạy, hoàn tất … luôn luôn được giữ lại khi scroll". The tab bar must stay visible under the header while the list scrolls (position: sticky).
+6. **Run the queue in click order.** User request: "chạy queue phải chạy theo thứ tự bấm trước bấm sau … hiện tại đang chạy từ trên xuống".
+   - Today `scheduler._select` walks `JobStore.list_jobs()` (`ORDER BY priority, updated_at DESC`), so the most recently touched queued job runs first.
+   - Use FIFO by queue time: a queued_at value set on JOB_QUEUED, EXPORT_QUEUED and rerun, with ties broken by id. Keep explicit priority.
+   - Show each card's queue position. Check that heartbeat or progress updates do not reorder the queue.
+7. **Tabs by stage.** User request: add "Đang chờ chạy cảnh để duyệt", "Đang chờ duyệt", "Đang chạy xuất video", and rename "Đang chạy" to "Đang chạy cảnh".
+   - "Đang chờ chạy cảnh để duyệt" = queued for scanning.
+   - "Đang chờ duyệt" = WAITING_REVIEW.
+   - "Đang chạy xuất video" = export queued or RENDERING.
+   - Map every job state to exactly one tab, with counts. Keep the tab bar sticky (item 5).
+
+7b. **Finished videos move to "Hoàn tất", plus a cleanup that deletes exported inputs.**
+   - Skip (item 4) and finished exports must both land in the "Hoàn tất" tab.
+   - Compression is dropped. Measured 2026-10-02: zipping the 240.5 MB Tập 12 input gave 239.5 MB with deflate-9 (13 s) and 241.9 MB with LZMA (128 s). H.264 MP4 is already compressed, and zlib/lzma samples also gave 1.000.
+   - User decision (2026-10-02), replacing compression: "bỏ qua việc nén -> thay nó bằng tính năng dọn dẹp các mục input đã xuất … kiểu như sẽ xóa đi". The user thereby approves changing the AGENTS.md invariant "never modify or delete source videos" for this explicit, user-triggered cleanup only. Update AGENTS.md when it is implemented.
+   - Design notes:
+     - A "Dọn video gốc" action in "Hoàn tất", per video and for all selected.
+     - It lists each input with its size, export file and export time, and the total space freed, then asks for one confirmation.
+     - It offers only jobs whose final export exists and passed its manifest check, or that the user skipped.
+     - It never touches reports, state, decisions, brand/studio memory or outputs.
+     - It records an event with path, size and SHA-256.
+     - User decision (2026-10-02): move to the Windows **Recycle Bin**, not a permanent delete ("chuyển vào thùng rác thôi"). Space is freed when the user empties the bin; tell them so in the dialog. Use the Windows shell API (SHFileOperation/IFileOperation with FOF_ALLOWUNDO) or Microsoft.VisualBasic FileSystem.DeleteFile(..., SendToRecycleBin) through PowerShell. Add no new dependency without a license check.
+     - Afterwards the job shows "Đã dọn video gốc". "Chạy lại kiểm tra" is disabled with the message "Chép lại video gốc vào input để chạy lại". A re-added file is accepted only if its SHA-256 matches.
+     - Discovery must not recreate a job for a cleaned file.
+     - Agents never run the cleanup themselves.
+   - Still open, as a user decision: (c) export near the source bitrate. Exports are about 1.75x their source (Tập 12: 240 MB at 0.67 Mbps in, 422 MB at 1.05 Mbps out), so this would save about 180 MB per episode. Measure SSIM/VMAF first; it changes export behaviour.
+
+7c. **"Xuất video" button on the dashboard job card.** User request (2026-10-02): "bổ sung thêm một button xuất video bên ngoài … đối với những video đã duyệt cảnh rồi, logic y chang bên trong duyệt cảnh nút xuất video".
+   - For jobs whose review is complete (queue READY_FOR_EDIT_PLAN / job READY_TO_EXPORT), show "Xuất video" on the card.
+   - It reuses exactly the review page's finalize path: the same size-policy choice (default / custom maximum GB), the same confirmation text, the same POST to finalize, and the same "every item decided" gate.
+   - Hide or disable it while an export is queued or rendering.
+7d. **Close the export dialog after confirming.** User request (2026-10-02): on the review page, "Xuất video" opens the export panel (`<details>` holding #export-panel and the button "Hoàn tất duyệt và xuất video" → finalizeExport()). After the user agrees in the confirm() dialog, close that panel automatically; today it stays open.
+   - Close it right after the user confirms, and show the export progress or result in the page header or as a notice.
+   - If the request fails, reopen the panel with the error.
+
+### C. Detection quality (needs GPU measurement, about 3-4 h together; ask before running)
+8. **Visual-logo candidate budget.**
+   - Problem: adaptive_candidate_budget gives 18 windows per 5-minute bucket, which leaves 125-290 regional leads per Nhất Âu Xuân episode unchecked by Qwen (now a structure-audit WARN).
+   - Measure a larger budget (about +40-60 s GPU per episode) on Nhất Âu Xuân plus Golden Troy/Conan.
+   - This changes visual_logo output and invalidates its cache.
+9. **Region-less "logo" false alarm in mid-film.**
+   - Example: Tập 14 37:05, a torch scene where Qwen said YES and nothing was located. It is 1 card across all current queues.
+   - Measure together with item 8, since more windows mean more chances of such false alarms.
+   - Options: a second-opinion prompt, or advisory routing (the user must approve).
+10. **Gore C1** (temp/wt-gore, off by default).
+    - The patch no longer applies cleanly: review_workflow.py needs a re-merge.
+    - Integrate only when a full scan-cache invalidation is acceptable, because it changes cli.py.
+    - Enabling it needs the user's Conan gore decisions and a third anime film.
+
+### D. Later
+11. Carry reviewed decisions across a rerun (stash@{0}, paused 2026-10-01).
+12. 18+ "balanced" triage level (needs a second live-action film).
+13. Speed: shared decode / T2-T3, only after measurement.
+14. Merge into `main` or push only with the user's explicit authorization. Commits 53cd9a6..f997dde are local on `improve/scan-performance-metrics`.
 
 ## Safety and product constraints
 

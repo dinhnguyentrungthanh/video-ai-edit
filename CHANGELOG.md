@@ -1,3 +1,17 @@
+# Unreleased — dashboard batch 1: sticky tabs, click-order queue, restart safety, export panel — 2026-10-03
+
+- Sticky job tabs: the tab bar stays under the header while the list scrolls (desktop and phone width).
+- The queue runs in click order. "Bắt đầu", "Chạy lại kiểm tra" and "Xuất video" take the next place; "Tiếp tục" and "Thử lại bước lỗi" keep the old place (user decision). Scans and exports share one queue and one worker. Cards show "Chờ chạy cảnh" / "Chờ xuất video" and "Thứ tự chờ: #N". The jobs table gains queue_seq/queued_at through an idempotent migration that backs up state/control-center.sqlite3 once (state/backups/control-center-before-queue-order-<ts>.sqlite3); schema version unchanged; older code still opens the database.
+- Restart safety (pre-existing bugs):
+  - Restarting the Control Center no longer silently turns queued reruns and exports (and PAUSED/FAILED/CANCELLED/COMPLETED jobs) back into "Sẵn sàng xuất"/"Chờ duyệt".
+  - A job interrupted during BUILDING_REVIEW, or right after its last stage, is recovered.
+  - A pause or cancel that lands between picking and starting a job now wins.
+  - "Dừng sau bước" on a waiting job takes it out of the queue.
+  - Rerun is refused while the job is queued or running.
+  - "Tiếp tục" cannot finish a job the worker is still finishing.
+- Review page: after "Hoàn tất duyệt và xuất video" and OK, the export panel closes and a header notice shows progress and result. Cancel keeps the panel; a double click sends one request; a failed request reopens the panel with the error.
+- Verification: a migration on a copy of the live database (row counts unchanged, one backup, second open a no-op, old code compatible); FIFO, restart and race scenarios on temp roots; static-mock UI checks at desktop and 375x812; no touched file in a scan stage cache key. Two reviews (1 medium finding fixed) and a re-check. 757/757 tests.
+
 # Unreleased — dashboard keeps the chosen detector scope, honest structure audit, no brand-memory cache churn — 2026-10-02
 
 - Detector picker (jobs 46/47 were started with all four groups although the user chose advertising only): the 3 s refresh rebuilt the job list under the user's clicks, a stale status poll could re-show a just-started job as "Chờ thiết lập" with every group checked, the next setup card slid into the clicked slot, drafts lived only in memory and the default is ALL. Fixed in the dashboard: ordered status polls, no rebuild while the user interacts, per-job drafts in localStorage (cleared only by that job's own start/rerun), setup cards in id order, a confirmation "Bắt đầu #… với các nhóm: …?" when the scope differs from the previous start (or includes 18+/máu me/bạo lực with no history), double-start protection; the server refuses Start for a job that is no longer waiting for setup. Default scope stays ALL (policy unchanged).

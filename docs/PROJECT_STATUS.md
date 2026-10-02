@@ -1,3 +1,7 @@
+## Dashboard batch 1 (2026-10-03): sticky tabs, click-order queue, restart safety, export panel — uncommitted, integrated
+
+- Plan: docs/UI_QUEUE_PLAN.md (batch 2: skip, stage tabs, card export button; batch 3: input cleanup to the Recycle Bin). The Control Center must be restarted while the queue is empty to serve batch 1. That first start migrates the jobs table, with a backup.
+
 ## Run-affecting fixes (2026-10-02): detector picker, structure audit, brand-memory cache churn — uncommitted, integrated
 
 - Dashboard keeps each job's chosen scope and confirms changed scopes; structure audit reports budget shortfalls as WARN; review decisions no longer invalidate the logo stage cache. Needs a Control Center restart (queue idle) to serve the new dashboard and audit. Next on the list: logo false alarm on a torch scene (Tập 14, rare), the visual-logo candidate budget gap, gore C1.
