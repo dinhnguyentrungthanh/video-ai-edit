@@ -25,6 +25,29 @@ The improvement sequence now present on local `main` is:
 
 Always confirm this section with `git status` and `git log` because it becomes stale after new work.
 
+## Current work — 2026-10-02 run-affecting fixes (uncommitted, integrated in the main tree)
+
+- `control_center.py` (picker drafts/localStorage, ordered polls, interaction-deferred render, start confirmation, setup-card order), `scheduler.start_job` guard, `codex_supervisor.queue_coverage_findings` (detector shortfall = WARN), `brand_memory.remember_review_item` no-op writes skipped; tests in test_control_center (node harness tests/fixtures/dashboard_harness.js), test_scheduler, test_codex_supervisor, test_brand_memory. Evidence and repros: `temp/run-issues-diag/` (after-fix/).
+- Open: restart the Control Center when the queue is idle; stored structure-audit.json files of jobs 40-50 still say BLOCK until re-audited; the visual-logo candidate budget (18 windows per 5-min bucket) leaves 125-290 regional leads unchecked per Nhất Âu Xuân episode — needs a measured real-video run before any change.
+
+## Current work — 2026-10-02 studio-logo memory v2 (uncommitted, integrated in the main tree)
+
+- `brand_memory.py` (schema 2: frames, masks, guard, refresh, upgrade), `review_workflow.py` (remember/refresh hooks, page texts), `scripts/studio_logo_upgrade.py`, tests in `tests/test_scene_cards.py`. Evidence `reports/benchmarks/studio-mask-20261002`, design `temp/studio-mask-design/design.json`.
+- Done 2026-10-02 17:29 at the user's request: Control Center stopped, `scripts/studio_logo_upgrade.py --apply` upgraded the 3 records (111/68/111 frames; backup `state/backups/studio-logo-memory-20261002-172902.json`, frames in `state/studio-logo-frames/`), Control Center restarted with the new code.
+- Open: the candidate queue's own blurred watermark regions are not masked; a remembered card's summary in another queue of the same source can go stale (record itself correct); OCR noise on animated idents keeps some episodes required (Tập 11, 15).
+
+## Current work — 2026-10-02 opening card UI (uncommitted, integrated in the main tree)
+
+- `review_workflow.py` (`_raw_vlm_evidence`, `evidence_regions`, `link_full_scene_logo_evidence`, page helpers `aiVerdictHtml`/`evidenceMediaHtml`/`sceneLogo`/studio notes), `brand_memory.compare_studio_logo`; tests `tests/test_opening_card_display.py`. Worktree `temp/wt-opening` holds the same code and is reused for the next step.
+- Next (approved by the user): studio-logo memory masks the regions of persistent-overlay cards decided BLUR and stores several frames per remembered ident; must be measured for false moves (Troy/Conan idents, overlays outside the mask still break a match) before integration.
+- Never call decision or edit-plan writers with the real project root in diagnostics (they rewrite state/brand-memory.json and state/studio-logo-memory.json).
+
+## Current work — 2026-10-02 watermark fix (uncommitted, integrated in the main tree)
+
+- `review_workflow.py`: `promote_fixed_text_overlays` (whole-film text track / recurring pieces of one line -> one `persistent_overlay` card), `corroborate_fixed_text_overlays`, `_text_regions_adjacent` merge guard; tests `tests/test_fixed_text_overlays.py`. Evidence: `reports/benchmarks/fixed-overlay-20261002`, `reports/benchmarks/job40-watermark-diag`, frames in `temp/job40-diag/frames`.
+- Jobs 40/45/48/49 (Nhất Âu Xuân Tập 10/15/18/19) were re-queued through the Control Center API at the user's request; the old Tập 10 and Tập 18 exports in `output/` are wrong (unblurred / over-blurred) and were left for the user.
+- Pending: integrate `temp/gore-c1.patch` after the series is redone (it changes `cli.py` and so every scan cache key); remove worktrees `temp/wt-gore` and `temp/wt-overlay` afterwards.
+
 ## Current work — 2026-10-02 task B exact-output speedups (uncommitted)
 
 - Changed: `vlm_confirmation.py` (T1), `scanner.py` / `live_safety_scanner.py` / `animation_safety_scanner.py` (T5a background hash), `shot_cuts.py` (T5b), `visual_logo_scanner.py` (T5d), `frame_prefetch.py` (shutdown fix); tests `test_vlm_confirmation`, `test_batch_prefetch`, `test_shot_cuts`, `test_exact_speedups`, `test_visual_logo_vlm_prefetch`; harnesses `scripts/benchmark_exact_speedups.py` (+ `.ps1`) and `scripts/benchmark_stage_equivalence.py`.

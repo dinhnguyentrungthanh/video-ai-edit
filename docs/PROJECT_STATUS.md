@@ -1,3 +1,21 @@
+## Run-affecting fixes (2026-10-02): detector picker, structure audit, brand-memory cache churn — uncommitted, integrated
+
+- Dashboard keeps each job's chosen scope and confirms changed scopes; structure audit reports budget shortfalls as WARN; review decisions no longer invalidate the logo stage cache. Needs a Control Center restart (queue idle) to serve the new dashboard and audit. Next on the list: logo false alarm on a torch scene (Tập 14, rare), the visual-logo candidate budget gap, gore C1.
+
+## Studio-logo memory v2 (2026-10-02): masked, multi-frame, uncommitted, integrated
+
+- Remembered idents ignore the user's blurred watermark regions and keep every informative frame of the window; measured 0 false matches on 7,803 other-film cards; Nhất Âu Xuân clean episodes now match the ident remembered on Tập 10. The 3 existing records were upgraded on 2026-10-02 17:29 with the Control Center stopped (111/68/111 frames; backup in state/backups); the Control Center now runs the new code.
+
+## Opening card UI (2026-10-02): honest whole-scene logo cards, uncommitted, integrated
+
+- "Kiểm tra đoạn mở đầu" cards now show the AI's real answer, amber reference boxes, a playable span and studio-memory match diagnostics; display-only, queues identical otherwise (`reports/benchmarks/opening-card-ui-20261002`). User decision: these cards stay in the main list. Next: studio-logo memory that ignores watermark regions the user blurred and remembers several frames of animated idents (approved; measure false moves first). Restart the Control Center to serve the new page.
+
+## Watermark fix (2026-10-02): whole-video cards for site watermarks, uncommitted
+
+- Nhất Âu Xuân Tập 10/15/18/19 (site Motchill): the corner watermark and the faint "cập nhật nhanh nhất tại MOTCHILLV" line were missed (Tập 10 export unblurred) or merged into one 839x483 box (Tập 18 export blurred over most of the frame). Fixed in build-review only (`promote_fixed_text_overlays`, text merge distance guard); Golden queues identical; 655/655 tests. Integrated into the main tree on the user's instruction while jobs ran (build-review runs in its own process; scan caches unaffected).
+- Reruns queued 2026-10-02 13:56 for jobs 40, 45, 48, 49 (Tập 10, 15, 18, 19). Tập 11, 16, 17, 20 have no watermark (queues unchanged by the fix). Tập 12-14 build their queues with the fix.
+- The gore C1 patch (`temp/gore-c1.patch`) waits: it edits `cli.py`, which is in every scan stage's cache key, so integrating it would force full rescans.
+
 ## Task B (2026-10-02): exact-output speedups, uncommitted
 
 - Kept: violence confirmation prefetch (T1), background source hash in adult/live/animation scans (T5a), R3 windows decoded two at a time (T5b), logo VLM processor prefetch (T5d), and an `IteratorPrefetch` shutdown fix. Dropped T4 (no gain); skipped Florence+DINO in one process.
