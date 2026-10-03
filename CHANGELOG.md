@@ -1,3 +1,28 @@
+# Unreleased — dashboard batch 2: "Bỏ qua (không xuất)", stage tabs, card export button — 2026-10-03
+
+- "Bỏ qua (không xuất)" (user request; scope decided by the user):
+  - Shown for a reviewed video with 0 main cards (advisory cards do not count) or with every main decision Giữ nguyên.
+  - Moves the video to "Hoàn tất" as "Đã bỏ qua — không xuất" (state SKIPPED, record skip:{id}). Video, reports, queue and decisions are untouched.
+  - "Mở lại để xuất" returns it to review; export is refused until it is reopened; "Chạy lại kiểm tra" clears the skip.
+  - Changing a decision to Làm mờ or Cắt brings the video back to "Sẵn sàng xuất".
+- Stage tabs, with counts and sub-groups; each state lands in exactly one tab and polling never jumps tabs:
+  - "Đang chờ xử lý"
+  - "Đang chờ chạy cảnh để duyệt"
+  - "Đang chạy cảnh"
+  - "Đang chờ duyệt": "Cần duyệt cảnh" / "Đã duyệt xong — chờ xuất hoặc bỏ qua"
+  - "Đang chạy xuất video"
+  - "Hoàn tất": "Đã xuất video" / "Đã bỏ qua"
+- "Xuất video" on the card:
+  - The size choice, confirmation and gate come from one shared module (export_dialog.py), so the card and the review page behave identically.
+  - The panel closes on OK and shows a notice; a double click sends one request.
+  - The button is disabled with the reason when review is unfinished or the source is missing (jobs 1, 2, 5).
+  - The server refuses a second export while one is queued or rendering, a skipped video, and a missing source, before writing anything.
+- Fixes:
+  - A review decision no longer pulls a queued or rendering export back to "Sẵn sàng xuất"; decisions are refused while an export is queued.
+  - A "Dừng ngay" or cancel during a very fast stage is no longer requeued.
+  - One scheduler lock covers start, rerun, resume, retry, export, skip and unskip.
+- Verification: static-mock checks at desktop and 375x812 with fake jobs (0-card, all-KEEP, BLUR, skipped, queued export, rendering, missing source); state, guard and race scenarios on temp roots; node syntax check of every inline script on both pages (a duplicate declaration that would have blanked the review page was caught and fixed); no file in a scan stage cache key. Two reviews (1 high, 3 medium fixed) and a re-check. 795/795 tests.
+
 # Unreleased — dashboard batch 1: sticky tabs, click-order queue, restart safety, export panel — 2026-10-03
 
 - Sticky job tabs: the tab bar stays under the header while the list scrolls (desktop and phone width).

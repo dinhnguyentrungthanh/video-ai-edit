@@ -25,6 +25,12 @@ The improvement sequence now present on local `main` is:
 
 Always confirm this section with `git status` and `git log` because it becomes stale after new work.
 
+## Current work — 2026-10-03 dashboard batch 2 (uncommitted, integrated in the main tree)
+
+- control_center (skip/unskip endpoints, jobTab stage tabs, card export panel, finalize guards, review_summary cache, source_present), scheduler (job_action_lock, SKIPPED handling, is_busy, _after_success no requeue after pause/cancel), job_store (update_job_if), review_workflow (shared export dialog, SKIPPED text), new export_dialog.py; tests test_skip_export, test_export_dialog (incl. node --check of every inline script). Evidence: temp/ui-plan/batch2/.
+- Done 2026-10-03 06:59: Control Center started with batch 2 (it was already stopped); 30 jobs intact.
+- Open (low): the standalone review server (serve_review_ui) has its own finalize without the new guards; a paused/cancelled export keeps a PENDING render stage and render:{id} until the next finalize or rerun.
+
 ## Current work — 2026-10-03 dashboard batch 1 (uncommitted, integrated in the main tree)
 
 - job_store (IN_PROCESS_STATES, claim_queued, mark_queued, queued_jobs, queue_seq/queued_at migration), scheduler (FIFO _select, start/rerun/export reseq, resume keeps place, _executing_job_id guard), job_import (no overwrite of settled jobs), control_center (sticky tabs, queue badges, status queue_position/queue_kind), review_workflow (export panel closes on confirm, #export-notice). Evidence: temp/ui-plan/batch1/.

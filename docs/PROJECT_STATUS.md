@@ -1,3 +1,7 @@
+## Dashboard batch 2 (2026-10-03): skip, stage tabs, card export — uncommitted, integrated
+
+- Needs a Control Center restart while the queue is idle. Next: batch 3, "Dọn video gốc" to the Recycle Bin (docs/UI_QUEUE_PLAN.md).
+
 ## Dashboard batch 1 (2026-10-03): sticky tabs, click-order queue, restart safety, export panel — uncommitted, integrated
 
 - Plan: docs/UI_QUEUE_PLAN.md (batch 2: skip, stage tabs, card export button; batch 3: input cleanup to the Recycle Bin). The Control Center must be restarted while the queue is empty to serve batch 1. That first start migrates the jobs table, with a backup.
