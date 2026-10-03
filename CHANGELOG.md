@@ -1,6 +1,6 @@
 # Unreleased — export identity from the render, reuse only a proven export, HTTP request limits — 2026-10-03
 
-Status: branch `fix/export-identity-http` from `main` 23aa1e4, built in the worktree `temp/wt-export-fix` (plan `temp/ui-plan/export-fix/plan.md`). Committed on the branch at the user's request on 2026-10-03; not integrated: the Control Center still runs `main`.
+Status: branch `fix/export-identity-http` from `main` 23aa1e4, built in the worktree `temp/wt-export-fix` (plan `temp/ui-plan/export-fix/plan.md`). Committed on the branch at the user's request on 2026-10-03 (2a37496); the short-export fix at the end of this entry was committed after it, also at the user's request. Not integrated: the Control Center still runs `main`.
 
 - Export identity (review finding: an export was reused after a blur change). `review_export_paths` hashed only the id, decision, start, end and region of every item. A new blur edge mode (`decision_blur_edge_mode`) or detected intervals (`temporal_policy = discrete_detected_intervals`) kept the same output name, so finalize reused the old export. The name now hashes what the render applies: the render fields of the edit-plan operations (`export_identity.render_identity(approved_operations(queue))`) plus a non-default size policy. A note, the reasons or a KEEP item's region still keep the name. An unfinished review keeps the old decision hash. Exports made before keep their old name and are still found: `output_candidates` gives the review's own name, then the legacy one.
 - Reuse only a proven export (review finding: a file at the export path became "Hoàn tất"; reproduced with an 11-byte file).
@@ -51,7 +51,33 @@ Status: branch `fix/export-identity-http` from `main` 23aa1e4, built in the work
   - Real project, read-only (`realdata_check.py` on a backup-API copy of the database under temp/):
     - `assess_job` for the 25 COMPLETED/SKIPPED jobs and the export checks for the 24 COMPLETED jobs are identical with `main` and this branch: 21 proven, #37/#38 moved, #4 stale.
     - `existing_review_export` proves the same 21 exports, under their legacy names.
-  - Side finding, pre-existing on `main` and not changed here: with the default size limit, an export whose output lasts less than about 24 s fails in libx264 (maxrate/bufsize out of range). It is flagged as a separate task.
+  - Side finding, pre-existing on `main`: with the default size limit, an export whose output lasts less than about 24 s failed in FFmpeg (maxrate/bufsize out of range). Fixed next.
+- Short exports (user request 2026-10-03, after 2a37496). With a size limit, the renderer gives libx264 a video ceiling of the size budget per second (`-maxrate`) and a buffer of twice that (`-bufsize`). FFmpeg refuses either above 2,147,483,647.
+  - Which exports failed: any output shorter than about 24 s at the default 3.5 GB limit. With a custom limit the threshold grows with the limit: about 11 minutes at 100 GB, about 45 minutes at 400 GB.
+  - Measured with real FFmpeg:
+    - a 6 s clip: "Value 4267616000 for parameter 'maxrate' out of range";
+    - a 20 s clip, and a 10-minute clip at 100 GB: `bufsize` out of range.
+  - The fix: `final_renderer.MAX_VIDEO_MAXRATE` caps the ceiling at 1,073,741,823 bit/s, the highest rate whose doubled buffer FFmpeg accepts.
+    - Every render FFmpeg accepted before keeps its exact command.
+    - A lower ceiling only makes the output smaller, so the size limit still holds.
+    - The export name and the manifest format are unchanged; the manifest records the capped `video_maxrate`.
+  - Tests: `RenderCompletionTests` read `-maxrate`, `-bufsize` and `-b:v` from the FFmpeg command.
+    - 6 s and 20 s at the default limit (20 s also with audio), and one hour at 1000 GB, stay within FFmpeg's range. These tests failed before the fix.
+    - 24.5 s (just above the boundary) and one hour, with and without audio, keep their exact old rates. This test pins the old command, so it passed before the fix too.
+    - The cap is the highest rate whose buffer fits. A budget just below the cap, at the cap and just above it gives a rate of cap − 1, cap and cap.
+    - Mutations (`mutation-shortclip.txt`) each fail at least one test: a cap 1 lower or 1 higher, 1.05e9, 1.073e9, 1e9, 2**31 − 1, no cap, and subtracting the audio after the cap.
+  - Code review (read-only agent): approve.
+    - It compared the old and the new command on 4,524 cases (six size policies, durations from 0.1 s to 4 h, with and without audio). Every command FFmpeg accepted before is identical; the refused ones become (cap, 2 × cap).
+    - It also checked the real FFmpeg 9.0.1: rate 1,073,741,823 with buffer 2,147,483,646 is accepted, and one bit/s more is refused.
+    - 1 LOW (pin the exact boundary) and 2 INFO (add an audio case; describe the exact-rates test as a characterization test) were addressed above.
+  - Real FFmpeg in throw-away roots under temp/ (`shortclip_check.py`): 20/20.
+    - Without the cap, FFmpeg refuses the 6 s, 20 s and 10-minute (100 GB) renders and leaves nothing in output/.
+    - With the cap, they render, their manifest proves them, they stay within the limit, and the source is unchanged.
+    - A 30 s clip gives byte-identical exports with and without the cap.
+  - Full suite: 1197 OK (skipped=25), `full-suite-7.log`.
+  - Noted, not changed:
+    - A custom limit larger than the free disk space is still refused before rendering, because the renderer reserves the target size: 1000 GB needs about 878 GiB free plus the reserve, and this disk had 607 GiB.
+    - x264 marks these short exports as H.264 level 6.2 because of the high ceiling. This was measured on 6–30 s clips and is the same before this fix (the 30 s export is byte-identical). Software players and upload sites ignore the level; a hardware player that checks it could refuse the file.
 
 # Unreleased — dashboard batch 4: platform logos (iQIYI) → BLUR + logo memory page, archive/restore, UI fixes — 2026-10-03
 

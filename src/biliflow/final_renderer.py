@@ -23,6 +23,14 @@ DEFAULT_MAX_OUTPUT_BYTES = 3_500_000_000
 DEFAULT_TARGET_OUTPUT_BYTES = 3_300_000_000
 MIN_CUSTOM_OUTPUT_GB = 0.05
 MAX_CUSTOM_OUTPUT_GB = 1_000.0
+# FFmpeg refuses a -maxrate or -bufsize above 2**31 - 1.  The size budget of a
+# short output (under about 24 s at the default limit) or of a very large
+# custom limit exceeds it, so the video rate is capped at the highest value
+# whose -bufsize (twice the rate) FFmpeg accepts: every render FFmpeg accepted
+# before keeps its exact command, and a lower rate only makes the output
+# smaller, so the size limit still holds.
+FFMPEG_MAX_RATE_OPTION = 2**31 - 1
+MAX_VIDEO_MAXRATE = FFMPEG_MAX_RATE_OPTION // 2
 
 
 def normalize_output_size_policy(
@@ -545,7 +553,7 @@ def _render_final_output_unlocked(
         budget_bits_per_second = int(
             target_output_bytes * 8 * (1 - overhead_fraction) / expected_duration
         )
-        video_maxrate = budget_bits_per_second - audio_bitrate
+        video_maxrate = min(budget_bits_per_second - audio_bitrate, MAX_VIDEO_MAXRATE)
         if video_maxrate < 300_000:
             raise ValueError(
                 "Video is too long for the configured output size limit at the "

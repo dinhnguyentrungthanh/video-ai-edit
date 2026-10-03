@@ -10,6 +10,7 @@ from biliflow.export_identity import manifest_problem, read_manifest
 from biliflow.final_renderer import (
     DEFAULT_MAX_OUTPUT_BYTES,
     DEFAULT_TARGET_OUTPUT_BYTES,
+    MAX_VIDEO_MAXRATE,
     approve_previews,
     authorize_final_from_resolved_review,
     build_final_filter_graph,
@@ -19,6 +20,9 @@ from biliflow.final_renderer import (
     render_final_output,
     render_progress_path,
 )
+
+# Largest value FFmpeg accepts for -maxrate and -bufsize (a signed 32-bit int).
+INT_MAX = 2**31 - 1
 
 
 class FinalRendererTests(unittest.TestCase):
@@ -281,11 +285,8 @@ class RenderCompletionTests(unittest.TestCase):
         self.source.write_bytes(b"source video " * 64)
         self.sha = hashlib.sha256(self.source.read_bytes()).hexdigest()
         self.plan_path = self.root / "work" / "movie-edit-plan.json"
-        self.plan_path.write_text(json.dumps({
-            "status": "READY_FOR_FINAL_RENDER", "final_export_allowed": True,
-            "source": {"path": str(self.source), "sha256": self.sha, "duration_seconds": 10.0},
-            "approved_operations": [],
-        }), encoding="utf-8")
+        self.duration = 10.0
+        self.write_plan()
         self.output = self.root / "output" / "movie-reviewed.mp4"
         self.partial = self.root / "output" / "movie-reviewed.partial.mp4"
         self.manifest_path = self.root / "output" / "movie-reviewed.mp4.manifest.json"
@@ -293,22 +294,86 @@ class RenderCompletionTests(unittest.TestCase):
         for tool in self.tools:
             tool.write_bytes(b"")
         self.during_render = lambda: None
+        self.commands = []
+        self.audio = False
+
+    def write_plan(self):
+        """An approved edit plan of the source, which lasts ``self.duration`` seconds."""
+        self.plan_path.write_text(json.dumps({
+            "status": "READY_FOR_FINAL_RENDER", "final_export_allowed": True,
+            "source": {"path": str(self.source), "sha256": self.sha, "duration_seconds": self.duration},
+            "approved_operations": [],
+        }), encoding="utf-8")
 
     def fake_run(self, command, **kwargs):
+        self.commands.append(command)
         if "-filter_complex" in command:
             Path(command[-1]).write_bytes(b"rendered video " * 64)
             self.during_render()
         return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
 
-    def render(self):
-        probe = {"format": {"duration": "10.0"}, "streams": [{"codec_type": "video"}]}
+    def render(self, **limits):
+        streams = [{"codec_type": "video"}] + ([{"codec_type": "audio"}] if self.audio else [])
+        probe = {"format": {"duration": str(self.duration)}, "streams": streams}
         with patch("biliflow.final_renderer.subprocess.run", side_effect=self.fake_run), \
                 patch("biliflow.final_renderer.probe_video", return_value=probe), \
                 patch("biliflow.final_renderer.require_capacity"):
             return render_final_output(
                 project_root=self.root, plan_path=self.plan_path, output_path=self.output,
-                ffmpeg_path=self.tools[0], ffprobe_path=self.tools[1],
+                ffmpeg_path=self.tools[0], ffprobe_path=self.tools[1], **limits,
             )
+
+    def rate_options(self, duration, audio=False, **limits):
+        """-maxrate, -bufsize and -b:v of the FFmpeg render of an output of ``duration`` seconds."""
+        self.duration = duration
+        self.audio = audio
+        self.write_plan()
+        self.commands = []
+        self.render(**limits)
+        self.output.unlink()
+        self.manifest_path.unlink()
+        command = next(item for item in self.commands if "-filter_complex" in item)
+        return {name: int(command[command.index(name) + 1]) for name in ("-maxrate", "-bufsize", "-b:v")}
+
+    def test_a_short_output_stays_within_the_encoder_limits(self):
+        # FFmpeg takes -maxrate and -bufsize as 32-bit numbers: the size budget of
+        # a 6 s or 20 s output exceeded them and FFmpeg refused to start.
+        for duration, audio in ((6.0, False), (20.0, False), (20.0, True)):
+            with self.subTest(duration=duration, audio=audio):
+                options = self.rate_options(duration, audio=audio)
+                self.assertEqual(options["-maxrate"], MAX_VIDEO_MAXRATE)
+                self.assertLessEqual(options["-bufsize"], INT_MAX)
+                self.assertLessEqual(options["-b:v"], options["-maxrate"])
+
+    def test_a_large_custom_limit_stays_within_the_encoder_limits(self):
+        policy = normalize_output_size_policy("custom", 1000)
+        options = self.rate_options(3600.0, max_output_bytes=policy["maximum_output_bytes"],
+                                    target_output_bytes=policy["target_output_bytes"])
+        self.assertEqual(options["-maxrate"], MAX_VIDEO_MAXRATE)
+        self.assertLessEqual(options["-bufsize"], INT_MAX)
+
+    def test_every_output_ffmpeg_accepted_keeps_its_exact_rates(self):
+        # The budget of the default limit (less 384 kbit/s of audio), unchanged
+        # wherever its -bufsize fitted: a 24.5 s clip (just above the cap's
+        # boundary) and a one-hour episode.
+        for duration, audio, rate in ((24.5, False, 1_045_224_489), (3600.0, False, 7_113_333),
+                                      (3600.0, True, 6_729_333)):
+            with self.subTest(duration=duration, audio=audio):
+                self.assertLessEqual(rate * 2, INT_MAX)
+                self.assertEqual(self.rate_options(duration, audio=audio),
+                                 {"-maxrate": rate, "-bufsize": rate * 2, "-b:v": rate})
+
+    def test_the_cap_is_the_highest_rate_whose_buffer_fits(self):
+        self.assertLessEqual(2 * MAX_VIDEO_MAXRATE, INT_MAX)
+        self.assertGreater(2 * (MAX_VIDEO_MAXRATE + 1), INT_MAX)
+
+    def test_a_budget_at_the_cap_is_unchanged_and_one_above_is_capped(self):
+        cap = 1_073_741_823
+        # A 10 s output without audio whose budget is cap - 1, cap and cap + 1.
+        for target, rate in ((1_383_687_915, cap - 1), (1_383_687_917, cap), (1_383_687_918, cap)):
+            with self.subTest(target=target):
+                options = self.rate_options(10.0, max_output_bytes=target + 1, target_output_bytes=target)
+                self.assertEqual((options["-maxrate"], options["-bufsize"]), (rate, rate * 2))
 
     def test_a_completed_render_is_proven_by_its_manifest(self):
         manifest = self.render()

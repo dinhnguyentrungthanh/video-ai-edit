@@ -54,7 +54,14 @@ Always confirm this section with `git status` and `git log` because it becomes s
   - Real FFmpeg check in a temp root (`temp/ui-plan/export-fix/e2e.py`): 11/11.
   - Mutation checks: silencing any one manifest check fails the intended tests.
   - Read-only on the real project (`realdata_check.py`): all 21 exports that still have a file are proven under their legacy names, and the cleanup assessment and export checks on a database copy are identical between `main` and this branch (25 and 24 jobs).
-- Side finding, pre-existing: with the default size limit, an export whose output lasts less than about 24 s fails in libx264. It is offered to the user as a separate task, not changed here.
+- Short exports, fixed after 2a37496 at the user's request (2026-10-03):
+  - The bug: with a size limit, an output shorter than about 24 s at the default limit failed in FFmpeg. So did an output under about 11 minutes at a 100 GB custom limit. The cause was `-maxrate`, or `-bufsize` (twice the rate), going above 2,147,483,647.
+  - The fix: `final_renderer.MAX_VIDEO_MAXRATE` = 1,073,741,823 caps the rate. Every render FFmpeg accepted before keeps its exact command.
+  - Tests: new `RenderCompletionTests` cover over-range rates, the exact old rates, the boundary and audio. Every mutation of the cap fails a test.
+  - Code review (read-only agent): approve. Comparing 4,524 cases, every command FFmpeg accepted before is identical.
+  - Real FFmpeg check: `temp/ui-plan/export-fix/shortclip_check.py`, 20/20.
+  - Full suite: 1197 OK (skipped=25).
+  - Noted, not changed: a custom limit larger than the free disk space is refused before rendering, and short exports are marked H.264 level 6.2, the same as before the fix.
 - Next: committed on the branch at the user's request (2026-10-03); the user decides on integration. Running it needs the Control Center tree on this code and a Control Center restart (ask first). The main tree has another session's uncommitted Dashboard V2 work (`dashboard_v2/`, `docs/DASHBOARD_V2_UPDATE_GUIDE.md`, and notes in CHANGELOG/PROJECT_STATUS/SESSION_HANDOFF), so integrating needs care with those files.
 
 ## Current work — 2026-10-03 dashboard batch 4: platform logos → BLUR, logo memory page, archive/restore, UI fixes (committed 6a8a59c; integrated into the main tree ~17:05; the user restarted the Control Center on it at 18:01:50)

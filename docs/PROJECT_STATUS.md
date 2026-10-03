@@ -29,6 +29,15 @@
   - Real data, read-only:
     - all 21 real exports that still have a file are proven under their legacy names;
     - on a backup-API copy of the database, the "Dọn video gốc" assessment (25 jobs) and its export checks (24 COMPLETED jobs) are identical with `main` and this branch: 21 proven, 37/38 "đã bị dời", 4 "không ứng với lần duyệt mới nhất".
+- Short exports (after 2a37496, user request 2026-10-03).
+  - The bug: with a size limit, any output shorter than about 24 s at the default limit failed in FFmpeg, and so did any output under about 11 minutes at a 100 GB custom limit. The cause was `-maxrate`, or `-bufsize` (twice the rate), going above 2,147,483,647.
+  - The fix: `MAX_VIDEO_MAXRATE` caps the rate at 1,073,741,823 bit/s, the highest whose buffer FFmpeg accepts. Every render FFmpeg accepted before keeps its exact command.
+  - Verification:
+    - the over-range tests were RED before the fix;
+    - boundary and audio tests pin the cap: every mutation of it fails a test;
+    - code review (read-only agent): approve. It compared 4,524 cases, and every command FFmpeg accepted before is identical; its 1 LOW and 2 INFO were addressed;
+    - real FFmpeg 20/20 (`shortclip_check.py`): 6 s, 20 s, and 10 minutes at 100 GB were refused before and are proven after; a 30 s clip is byte-identical with and without the cap;
+    - full suite 1197 OK (skipped=25).
 - Next: the user decides when to run it (merge into `main`, or switch the Control Center tree to the branch, then restart the Control Center).
 
 ## Dashboard batch 4 (2026-10-03): platform logos → BLUR, logo memory page, archive/restore, UI fixes — committed 6a8a59c, integrated; the user restarted the Control Center on it at 18:01:50
