@@ -38,6 +38,7 @@ from biliflow.job_pipeline import safe_job_key
 from biliflow.job_store import JobStore, now_iso, sha256_file
 from biliflow.recycle_bin import BinInfo, RecycleFailed, RecycleRefused, RecycleResult, RecycleTimeout
 from biliflow.review_evidence import ReviewMediaError
+from biliflow.export_identity import legacy_export_paths
 from biliflow.review_workflow import approved_operations, review_export_paths
 from biliflow.scheduler import InputWatcher, JobScheduler
 from biliflow.source_archive import (
@@ -216,12 +217,14 @@ class ArchiveFixture(unittest.TestCase):
         output = self.output_of(job_id)
         return output.with_name(output.name + ".manifest.json")
 
-    def make_exported_job(self, name, *, items=None, operations=False, source_name=None, job_key=None):
+    def make_exported_job(self, name, *, items=None, operations=False, source_name=None, job_key=None,
+                          legacy_name=False):
         decided = iso(NOW - timedelta(hours=1))
         job_id = self.make_job(name, state="COMPLETED", source_name=source_name, job_key=job_key,
                                items=items or [item("a", decided_at=decided), item("b", decided_at=decided)])
         job = self.store.get_job(job_id)
-        plan_path, output, _ = review_export_paths(self.root, self.queue(job_id))
+        paths = legacy_export_paths if legacy_name else review_export_paths
+        plan_path, output, _ = paths(self.root, self.queue(job_id))
         output.write_bytes(b"OUTPUT" + name.encode() * 300)
         output_sha = hashlib.sha256(output.read_bytes()).hexdigest()
         manifest = {
@@ -235,7 +238,7 @@ class ArchiveFixture(unittest.TestCase):
         }
         if operations:
             manifest["operations"] = approved_operations(self.queue(job_id))
-        self.manifest_of(job_id).write_text(json.dumps(manifest), encoding="utf-8")
+        output.with_name(output.name + ".manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
         plan_path.write_text(json.dumps({"status": "FINAL_RENDER_COMPLETED",
                                          "review_queue": job["active_queue_path"]}), encoding="utf-8")
         self.store.add_artifact(job_id, stage_name="render", kind="final_output",
@@ -383,6 +386,21 @@ class ArchiveTests(ArchiveFixture):
              "export_verified_later_at": None, "export_rechecked_at": None, "warning": None, "error": None},
         )
 
+    def test_an_export_named_before_the_operations_hash_is_archived(self):
+        # Exports made before the operations hash keep their decision-hash
+        # name; their manifest operations prove them, and that file is recycled.
+        job_id = self.make_exported_job("tap14", operations=True, legacy_name=True)
+        output = legacy_export_paths(self.root, self.queue(job_id))[1]
+        manifest = output.with_name(output.name + ".manifest.json")
+        self.assertNotEqual(output, self.output_of(job_id))
+        preview = self.preview([job_id])
+        self.assertEqual(preview["eligible"][0]["output_name"], output.name)
+        result = self.archive([job_id], preview["preview_id"])
+        self.assertEqual((result["archived_count"], result["failed_count"]), (1, 0))
+        self.assertEqual([call["path"] for call in self.recycler.calls], [output, manifest])
+        self.assertFalse(output.exists() or manifest.exists())
+        self.assertTrue(self.target_of(job_id).is_file())
+
     def test_skipped_job_moves_only_the_source(self):
         job_id = self.make_skipped_job("tap30")
         record = self.store.setting(f"skip:{job_id}")
@@ -478,7 +496,7 @@ class EligibilityTests(ArchiveFixture):
                                        cleanup_row=None, archive_row=None))
         older = self.make_exported_job("older", items=[item("a", decided_at=iso(NOW + timedelta(minutes=5)))])
         self.assertEqual(self.reason(older), "Bản xuất hiện có không khớp quyết định duyệt hiện tại "
-                                             "(dời bản xuất cũ ra khỏi thư mục output rồi xuất lại trước khi lưu trữ)")
+                                             "(mở “Duyệt cảnh” và xuất lại trước khi lưu trữ)")
         stale = self.make_exported_job("stale")
         plan = self.root / json.loads(self.manifest_of(stale).read_text(encoding="utf-8"))["edit_plan"]
         plan.write_text(json.dumps({"review_queue": "reports/jobs/x/review-queue.json"}), encoding="utf-8")

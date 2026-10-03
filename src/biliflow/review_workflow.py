@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import contextlib
 import difflib
 import hashlib
 import html
@@ -84,7 +85,19 @@ from biliflow.export_dialog import (
 )
 # serve_review_ui fails closed for every video the Control Center owns
 # (export_guards imports no module that imports this one).
-from biliflow.export_guards import standalone_edit_refusal, standalone_export_refusal
+from biliflow.export_guards import (
+    EXPORT_PATH_TAKEN_MESSAGE,
+    standalone_edit_refusal,
+    standalone_export_refusal,
+)
+from biliflow.export_identity import export_paths, render_identity, verified_export
+from biliflow.http_guards import (
+    REQUEST_TIMEOUT_MESSAGE,
+    REQUEST_TIMEOUT_SECONDS,
+    content_length,
+    loopback_bind_address,
+    require_loopback_host,
+)
 from biliflow.final_renderer import (
     authorize_final_from_resolved_review,
     normalize_output_size_policy,
@@ -2877,32 +2890,31 @@ def _guard_in_film_text(items: list[dict], references: list[dict]) -> list[dict]
 
 
 def review_export_paths(root: Path, queue: dict) -> tuple[Path, Path, Path]:
-    """Derive isolated plan, output and job-state paths from reviewed decisions."""
-    source = Path(str(queue["source"]["path"]))
-    source_hash = str(queue["source"].get("sha256") or "nohash")[:8]
-    decisions = [
-        {
-            "id": item.get("id"), "decision": item.get("decision"),
-            "start": item.get("start_seconds"), "end": item.get("end_seconds"),
-            "region": item.get("decision_region_source_pixels"),
-        }
-        for item in queue.get("items", [])
-    ]
-    export_policy = queue.get("export_size_policy")
-    identity: object = decisions
-    if isinstance(export_policy, dict) and export_policy.get("mode") not in {None, "default"}:
-        identity = {"decisions": decisions, "export_size_policy": export_policy}
-    decision_hash = hashlib.sha256(
-        json.dumps(identity, ensure_ascii=False, sort_keys=True).encode("utf-8")
-    ).hexdigest()[:8]
-    slug = re.sub(r"[^\w.-]+", "-", source.stem, flags=re.UNICODE).strip("-._")
-    slug = (slug or "video")[:80]
-    key = f"{slug}-{source_hash}-{decision_hash}"
-    return (
-        root / "work" / f"{key}-edit-plan.json",
-        root / "output" / f"{key}-reviewed.mp4",
-        root / "work" / f"{key}-export-job.json",
-    )
+    """Isolated plan, output and job-state paths of the export of the current decisions.
+
+    Named by what the render applies (export_identity.export_paths): another
+    blur edge mode or detected intervals get their own output. An unfinished
+    review keeps the older decision hash.
+    """
+    return export_paths(root, queue, queue_render_identity(queue))
+
+
+def queue_render_identity(queue: dict) -> list[dict] | None:
+    """render_identity of the queue's edit-plan operations; None while they cannot be built."""
+    try:
+        return render_identity(approved_operations(queue))
+    except (KeyError, TypeError, ValueError, AttributeError):
+        return None
+
+
+def existing_review_export(root: Path, queue: dict) -> tuple[Path, dict] | None:
+    """(output, manifest) of the export of the current decisions already on disk.
+
+    Only a file its manifest proves (export_identity.manifest_problem), under
+    its own name or the legacy name of an export made before the operations
+    hash; None otherwise.
+    """
+    return verified_export(root, queue, queue_render_identity(queue))
 
 
 def _render_queue_html(root: Path, queue_path: Path, payload: dict) -> None:
@@ -4436,6 +4448,7 @@ STANDALONE_EDIT_ROUTES = frozenset({"/api/decision", "/api/clear", "/api/bulk-ke
 def serve_review_ui(
     *, project_root: Path, queue_path: Path, host: str = "127.0.0.1", port: int = 8765,
 ) -> None:
+    require_loopback_host(host)
     # Imported here: control_center imports this module at load time.
     from biliflow.control_center import _host_allowed as host_allowed
 
@@ -4448,15 +4461,18 @@ def serve_review_ui(
 
     def export_status() -> dict:
         queue = _read_json(queue_path)
-        _, output_path, job_path = review_export_paths(root, queue)
-        if job_path.exists():
-            return _read_json(job_path)
-        if output_path.exists():
-            return {
-                "status": "COMPLETED",
-                "output": output_path.relative_to(root).as_posix(),
-            }
-        return {"status": "IDLE"}
+        _, _, job_path = review_export_paths(root, queue)
+        state = _read_json(job_path) if job_path.exists() else {}
+        if state and state.get("status") != "COMPLETED":
+            return state  # queued, rendering or failed
+        existing = existing_review_export(root, queue)
+        if existing is None:
+            # Never exported, or the export left output/: start_export renders it again.
+            return {"status": "IDLE"}
+        return state or {
+            "status": "COMPLETED",
+            "output": existing[0].relative_to(root).as_posix(),
+        }
 
     def run_export(plan_path: Path, output_path: Path, job_path: Path) -> None:
         with export_lock:
@@ -4499,17 +4515,25 @@ def serve_review_ui(
         if refusal:
             raise ValueError(refusal)
         policy = normalize_output_size_policy(size_mode, max_output_gb)
+        planned = {**queue, "export_size_policy": policy}
+        plan_path, output_path, job_path = review_export_paths(root, planned)
+        state = _read_json(job_path) if job_path.exists() else {}
+        in_flight = state.get("status") in {"QUEUED", "RENDERING"}
+        existing = None if in_flight else existing_review_export(root, planned)
+        if not in_flight and existing is None and os.path.lexists(output_path):
+            # Before the queue is written: a file (or a link, even a broken one)
+            # no manifest proves is neither the export nor overwritten by a render.
+            raise ValueError(EXPORT_PATH_TAKEN_MESSAGE.format(name=output_path.name))
         queue["export_size_policy"] = policy
         _write_json(queue_path, queue)
-        plan_path, output_path, job_path = review_export_paths(root, queue)
-        if job_path.exists():
-            existing = _read_json(job_path)
-            if existing.get("status") in {"QUEUED", "RENDERING", "COMPLETED"}:
-                return existing
-        if output_path.exists():
+        if in_flight:
+            return state
+        if existing is not None:
+            if state.get("status") == "COMPLETED":
+                return state
             return {
                 "status": "COMPLETED",
-                "output": output_path.relative_to(root).as_posix(),
+                "output": existing[0].relative_to(root).as_posix(),
             }
         build_edit_plan(project_root=root, queue_path=queue_path, plan_path=plan_path)
         authorize_final_from_resolved_review(
@@ -4531,6 +4555,10 @@ def serve_review_ui(
         return state
 
     class Handler(BaseHTTPRequestHandler):
+        # A client that stops sending its request cannot hold a thread
+        # (StreamRequestHandler sets it on the socket; nothing here streams).
+        timeout = REQUEST_TIMEOUT_SECONDS
+
         def log_message(self, format: str, *args) -> None:
             return
 
@@ -4602,7 +4630,7 @@ def serve_review_ui(
                 self._json(403, {"error": "Phiên review không hợp lệ"})
                 return
             try:
-                length = int(self.headers.get("Content-Length", "0"))
+                length = content_length(self.headers)
                 if length > 65536:
                     raise ValueError("Dữ liệu gửi lên quá lớn")
                 body = json.loads(self.rfile.read(length) or b"{}")
@@ -4650,12 +4678,18 @@ def serve_review_ui(
                         self._json(404, {"error": "Không tìm thấy"})
                         return
                 self._json(200, updated)
-            except (KeyError, TypeError, ValueError) as error:
+            except (KeyError, TypeError, ValueError, RecursionError) as error:
+                # RecursionError: a body nested too deep for json.loads.
                 self._json(400, {"error": str(error)})
+            except TimeoutError:
+                # The body stopped arriving (an OSError, but no disk write failed).
+                self.close_connection = True
+                with contextlib.suppress(OSError):
+                    self._json(408, {"error": REQUEST_TIMEOUT_MESSAGE})
             except OSError:
                 self._json(500, {"error": "Không thể ghi lựa chọn xuống ổ đĩa"})
 
-    server = ThreadingHTTPServer((host, port), Handler)
+    server = ThreadingHTTPServer((loopback_bind_address(host), port), Handler)
     print(f"BiliFlow review UI: http://{host}:{server.server_port}/", flush=True)
     try:
         server.serve_forever()
@@ -4669,10 +4703,12 @@ def approved_operations(payload: dict) -> list[dict]:
     """The edit-plan operations of a fully decided review queue; writes nothing.
 
     build_edit_plan stores exactly this list as ``approved_operations`` and the
-    renderer copies it into the export manifest as ``operations``. Source
-    cleanup compares the two to tell whether an existing export still matches
-    the current decisions, because review_export_paths does not hash every
-    field the render uses (for example ``decision_blur_edge_mode``).
+    renderer copies it into the export manifest as ``operations``.
+    review_export_paths names the export by their render fields, and an
+    existing export is reused or cleaned only when its manifest operations
+    match the current ones (export_identity.manifest_problem): an export made
+    before that hash has a legacy name that missed some of these fields (for
+    example ``decision_blur_edge_mode``).
     """
     unresolved = [
         item["id"] for item in payload["items"]

@@ -1,14 +1,16 @@
 import hashlib
 import json
+import os
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
+from biliflow.export_identity import legacy_export_paths
 from biliflow.job_import import import_existing_project
 from biliflow.job_pipeline import PipelineStage
 from biliflow.job_store import JobStore
-from biliflow.review_workflow import review_export_paths
+from biliflow.review_workflow import approved_operations, review_export_paths
 from biliflow.scheduler import InputWatcher, JobScheduler
 
 
@@ -88,7 +90,9 @@ class RestartImportTests(unittest.TestCase):
             "status": "READY_FOR_EDIT_PLAN", "updated_at": "2026-10-01T00:00:00+00:00",
             "source": {"path": str(self.source), "sha256": self.digest, "duration_seconds": 12.0},
             "reports": ["reports/jobs/movie/scan.json"],
-            "items": [{"id": "a", "decision": "BLUR", "start_seconds": 1, "end_seconds": 2}],
+            "items": [{"id": "a", "category": "advertising", "decision": "BLUR", "start_seconds": 1,
+                       "end_seconds": 2, "reasons": ["logo"], "evidence": [],
+                       "decision_region_source_pixels": {"x": 0, "y": 0, "width": 96, "height": 48}}],
         }
         self.queue_path = self.root / "reports/jobs/movie/review-queue.json"
         self.queue_path.write_text(json.dumps(self.queue), encoding="utf-8")
@@ -105,13 +109,19 @@ class RestartImportTests(unittest.TestCase):
         JobScheduler(self.root, self.store).recover_finished_stages()
         return self.store.get_job(self.job_id)
 
-    def write_manifest(self, output):
-        output.write_bytes(b"rendered")
-        manifest = output.with_suffix(output.suffix + ".manifest.json")
-        manifest.write_text(json.dumps({
-            "status": "COMPLETED", "source": {"sha256": self.digest},
-            "output": {"path": output.relative_to(self.root).as_posix(), "sha256": "f" * 64},
-        }), encoding="utf-8")
+    def write_manifest(self, target, queue=None, **changes):
+        """The export the renderer leaves at ``target``: the file and a manifest that proves it."""
+        target.write_bytes(b"rendered")
+        manifest = {
+            "status": "COMPLETED", "created_at": "2026-10-01T01:00:00+00:00",
+            "source": {"path": str(self.source), "sha256": self.digest, "modified": False},
+            "output": {"path": target.relative_to(self.root).as_posix(), "bytes": target.stat().st_size,
+                       "sha256": "f" * 64},
+            "encoding": {"full_decode_validation_passed": True},
+            "operations": approved_operations(self.queue if queue is None else queue),
+        }
+        manifest.update(changes)
+        target.with_suffix(target.suffix + ".manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
 
     def test_protected_states_survive_a_restart_unchanged(self):
         # Old behaviour (temp/ui-plan/import_restart_check.py): every one of
@@ -161,7 +171,7 @@ class RestartImportTests(unittest.TestCase):
         stale = dict(self.queue, items=[{"id": "a", "decision": "KEEP", "start_seconds": 1, "end_seconds": 2}])
         stale_output = review_export_paths(self.root, stale)[1]
         self.assertNotEqual(stale_output, review_export_paths(self.root, self.queue)[1])
-        self.write_manifest(stale_output)
+        self.write_manifest(stale_output, stale)
         self.assertEqual(self.restart()["state"], "READY_TO_EXPORT")
         self.assertFalse([item for item in self.store.artifacts(self.job_id) if item["kind"] == "final_output"])
         # The export of the active review does complete it.
@@ -331,7 +341,101 @@ class RestartImportTests(unittest.TestCase):
                 self.assertEqual(after["source_mtime_ns"], self.source.stat().st_mtime_ns)
                 self.assertEqual(len(self.store.list_jobs()), 1)
 
-    def test_first_import_still_uses_any_completed_manifest(self):
+    def test_a_file_its_manifest_does_not_prove_does_not_complete_the_job(self):
+        output = review_export_paths(self.root, self.queue)[1]
+        for name, changes in (
+            ("size", {"output": {"path": output.relative_to(self.root).as_posix(), "bytes": 3, "sha256": "f" * 64}}),
+            ("decode", {"encoding": {}}),
+            ("operations", {"operations": []}),
+            ("beside another file", {"output": {"path": "output/other-reviewed.mp4", "bytes": 8, "sha256": "f" * 64}}),
+        ):
+            with self.subTest(case=name):
+                if name == "beside another file":
+                    (self.root / "output" / "other-reviewed.mp4").write_bytes(b"rendered")
+                self.write_manifest(output, **changes)
+                self.assertEqual(self.restart()["state"], "READY_TO_EXPORT")
+                self.assertFalse([item for item in self.store.artifacts(self.job_id) if item["kind"] == "final_output"])
+        # The review's own path with no manifest at all.
+        output.with_suffix(".mp4.manifest.json").unlink()
+        output.write_bytes(b"not a video")
+        self.assertEqual(self.restart()["state"], "READY_TO_EXPORT")
+
+    def test_an_export_named_before_the_operations_hash_completes_the_job(self):
+        legacy = legacy_export_paths(self.root, self.queue)[1]
+        self.assertNotEqual(legacy, review_export_paths(self.root, self.queue)[1])
+        self.write_manifest(legacy)
+        after = self.restart()
+        self.assertEqual((after["state"], after["progress"]), ("COMPLETED", 1.0))
+        outputs = [item["path"] for item in self.store.artifacts(self.job_id) if item["kind"] == "final_output"]
+        self.assertEqual(outputs, [legacy.relative_to(self.root).as_posix()])
+
+    def test_a_hostile_manifest_in_output_never_stops_the_start(self):
+        # On main a manifest like these in output/ aborted the import, so the
+        # Control Center could not start at all.
+        stray = self.root / "output" / "stray-reviewed.mp4.manifest.json"
+        for name, text in (
+            ("source is a string", json.dumps({"status": "COMPLETED", "source": "x"})),
+            ("output is a string", json.dumps({"status": "COMPLETED", "source": {"sha256": self.digest},
+                                               "output": "x"})),
+            ("NUL in the output path", json.dumps({"status": "COMPLETED", "source": {"sha256": self.digest},
+                                                   "output": {"path": "output/bad\0name-reviewed.mp4"}})),
+            ("nested too deep", "[" * 100_000),
+        ):
+            with self.subTest(case=name):
+                stray.write_text(text, encoding="utf-8")
+                self.assertEqual(self.restart()["state"], "READY_TO_EXPORT")
+        # A proven export beside it still completes the job.
+        self.write_manifest(legacy_export_paths(self.root, self.queue)[1])
+        self.assertEqual(self.restart()["state"], "COMPLETED")
+
+    def test_a_hostile_review_queue_never_stops_the_start(self):
+        # On main each of these in reports/ aborted the import (KeyError, ValueError).
+        broken = self.root / "reports" / "jobs" / "broken" / "review-queue.json"
+        broken.parent.mkdir(parents=True)
+        source = dict(self.queue["source"])
+        for name, changes in (
+            ("no path", {"source": {"sha256": self.digest}}),
+            ("NUL in the path", {"source": dict(source, path="input/bad\0name.mp4")}),
+            ("text duration", {"source": dict(source, duration_seconds="dài")}),
+            ("status is an object", {"status": {"x": 1}}),
+            ("reports is a number", {"reports": 5}),
+        ):
+            with self.subTest(case=name):
+                broken.write_text(json.dumps(dict(self.queue, **changes)), encoding="utf-8")
+                self.assertEqual(self.restart()["state"], "READY_TO_EXPORT")
+                self.assertEqual(len(self.store.revisions(self.job_id)), 1)
+
+    def test_an_output_folder_reached_through_a_junction_still_imports(self):
+        # .resolve().relative_to(root) raised ValueError when output/ is a junction elsewhere.
+        try:
+            import _winapi
+            create_junction = _winapi.CreateJunction
+        except (ImportError, AttributeError):
+            self.skipTest("directory junctions need Windows")
+        elsewhere = TemporaryDirectory()
+        self.addCleanup(elsewhere.cleanup)
+        junction = self.root / "output"
+        junction.rmdir()
+        create_junction(elsewhere.name, str(junction))
+        self.addCleanup(os.rmdir, junction)
+        legacy = legacy_export_paths(self.root, self.queue)[1]
+        self.write_manifest(legacy)
+        after = self.restart()
+        self.assertEqual((after["state"], after["progress"]), ("COMPLETED", 1.0))
+        outputs = [item["path"] for item in self.store.artifacts(self.job_id) if item["kind"] == "final_output"]
+        self.assertEqual(outputs, [legacy.relative_to(self.root).as_posix()])
+
+    def test_an_old_name_export_of_another_edge_mode_does_not_complete_the_job(self):
+        legacy = legacy_export_paths(self.root, self.queue)[1]
+        self.write_manifest(legacy)
+        changed = json.loads(json.dumps(self.queue))
+        changed["items"][0]["decision_blur_edge_mode"] = "vertical_only"
+        self.queue_path.write_text(json.dumps(changed), encoding="utf-8")
+        self.assertEqual(legacy_export_paths(self.root, changed)[1], legacy)
+        self.assertEqual(self.restart()["state"], "READY_TO_EXPORT")
+
+    def first_import_state(self, **changes):
+        """The job state a first import (no database) gives the source of one old export."""
         with TemporaryDirectory() as directory:
             root = Path(directory).resolve()
             for name in ("input", "reports/r1", "output", "state"):
@@ -342,16 +446,31 @@ class RestartImportTests(unittest.TestCase):
             (root / "reports/r1/review-queue.json").write_text(json.dumps(queue), encoding="utf-8")
             output = root / "output" / "old-export.mp4"
             output.write_bytes(b"rendered")
-            (root / "output" / "old-export.mp4.manifest.json").write_text(json.dumps({
-                "status": "COMPLETED", "source": {"sha256": self.digest},
-                "output": {"path": "output/old-export.mp4"},
-            }), encoding="utf-8")
+            manifest = {
+                "status": "COMPLETED", "created_at": "2026-10-01T01:00:00+00:00",
+                "source": {"sha256": self.digest, "modified": False},
+                "output": {"path": "output/old-export.mp4", "bytes": 8, "sha256": "f" * 64},
+                "encoding": {"full_decode_validation_passed": True},
+            }
+            manifest.update(changes)
+            (root / "output" / "old-export.mp4.manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
             store = JobStore(root / "state" / "jobs.sqlite3")
             try:
                 import_existing_project(root, store)
-                self.assertEqual(store.list_jobs()[0]["state"], "COMPLETED")
+                return store.list_jobs()[0]["state"]
             finally:
                 store.close()
+
+    def test_first_import_still_uses_any_completed_manifest(self):
+        # Any review's export of the source, but only a file its manifest proves.
+        self.assertEqual(self.first_import_state(), "COMPLETED")
+        for changes in (
+            {"encoding": {}},
+            {"output": {"path": "output/old-export.mp4", "bytes": 3, "sha256": "f" * 64}},
+            {"source": {"sha256": self.digest, "modified": True}},
+        ):
+            with self.subTest(changes=changes):
+                self.assertEqual(self.first_import_state(**changes), "READY_TO_EXPORT")
 
 
 if __name__ == "__main__":

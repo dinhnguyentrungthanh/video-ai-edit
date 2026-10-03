@@ -7,6 +7,7 @@ import json
 import os
 import re
 import shutil
+import socket
 import subprocess
 import threading
 import time
@@ -22,6 +23,7 @@ from biliflow.control_center import (
     _handler_class,
     _merge_visual_audit_batches,
 )
+from biliflow.http_guards import CONTENT_LENGTH_MESSAGE, REQUEST_TIMEOUT_SECONDS
 from biliflow.job_pipeline import PipelineStage
 from biliflow.job_store import IN_PROCESS_STATES, JobStore
 from biliflow.final_renderer import render_progress_path
@@ -1958,6 +1960,86 @@ class ControlCenterHttpTests(unittest.TestCase):
             )
         self.assertEqual(status, 400)
         self.assertEqual(len(queued_events(job["id"])), 1)
+
+    # ---------------- Request limits (review: negative Content-Length, no read timeout)
+    def raw_exchange(self, head, body=b"", *, wait=5.0):
+        """Raw request bytes; (everything answered, seconds until the server closed or ``wait`` ran out)."""
+        started = time.monotonic()
+        chunks = []
+        with socket.create_connection(("127.0.0.1", self.port), timeout=wait) as client:
+            client.sendall(head.encode("latin-1") + body)
+            while True:
+                try:
+                    chunk = client.recv(65536)
+                except TimeoutError:
+                    break
+                if not chunk:
+                    break
+                chunks.append(chunk)
+        return b"".join(chunks), time.monotonic() - started
+
+    def post_head(self, length):
+        return (
+            f"POST /api/scheduler HTTP/1.1\r\nHost: 127.0.0.1:{self.port}\r\n"
+            "X-BiliFlow-Token: test-token\r\nContent-Type: application/json\r\n"
+            f"Content-Length: {length}\r\n\r\n"
+        )
+
+    def test_an_invalid_content_length_is_refused_at_once(self):
+        # A negative length made rfile.read(-1) wait until the client closed the connection.
+        for value in ("-1", "+5", "abc", "1e3", ""):
+            with self.subTest(value=value):
+                response, elapsed = self.raw_exchange(self.post_head(value))
+                self.assertTrue(response.startswith(b"HTTP/1.0 400 "), response[:80])
+                self.assertIn(CONTENT_LENGTH_MESSAGE.encode("utf-8"), response)
+                self.assertLess(elapsed, 3)
+        self.assertIsNone(self.store.setting("scheduler_paused"))
+
+    def test_a_request_that_stops_arriving_is_closed(self):
+        self.assertEqual(_handler_class(self.center).timeout, REQUEST_TIMEOUT_SECONDS)
+        self.server.RequestHandlerClass.timeout = 0.5
+        response, elapsed = self.raw_exchange(self.post_head(20), b'{"paused"')
+        self.assertLess(elapsed, 3)
+        self.assertTrue(response == b"" or response.startswith(b"HTTP/1.0 408 "), response[:80])
+        self.assertIsNone(self.store.setting("scheduler_paused"))
+        response, elapsed = self.raw_exchange(f"GET /healthz HTTP/1.1\r\nHost: 127.0.0.1:{self.port}\r\n")
+        self.assertLess(elapsed, 3)
+        self.assertEqual(response, b"")
+        self.assertEqual(self.request("/healthz")[0], 200)
+
+    def test_a_body_nested_too_deep_is_refused(self):
+        # json.loads raises RecursionError (not a ValueError) for it.
+        body = b"[" * 60000
+        response, elapsed = self.raw_exchange(self.post_head(len(body)), body)
+        self.assertTrue(response.startswith(b"HTTP/1.0 400 "), response[:80])
+        self.assertLess(elapsed, 3)
+        self.assertIsNone(self.store.setting("scheduler_paused"))
+
+    def test_a_paused_player_still_receives_the_whole_video(self):
+        # The request timeout must not cut a stream the player stops reading for a while.
+        self.server.RequestHandlerClass.timeout = 0.3
+        data = bytes(range(256)) * (32 * 4096)
+        self.source.write_bytes(data)
+        stat = self.source.stat()
+        self.store.upsert_job(
+            job_key="troy", source_path=self.source, source_sha256=MEDIA_SHA,
+            source_size_bytes=stat.st_size, source_mtime_ns=stat.st_mtime_ns, state="WAITING_REVIEW",
+        )
+        route = f"/api/jobs/{self.job_id}/review/video?k={self.key(self.job_id)}"
+        connection = http.client.HTTPConnection("127.0.0.1", self.port, timeout=10)
+        try:
+            connection.connect()
+            connection.sock.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 1 << 16)
+            connection.request("GET", route, headers={"Host": f"127.0.0.1:{self.port}"})
+            response = connection.getresponse()
+            self.assertEqual(response.status, 200)
+            first = response.read(1 << 20)
+            time.sleep(1.0)
+            rest = response.read()
+        finally:
+            connection.close()
+        self.assertEqual(len(first) + len(rest), len(data))
+        self.assertTrue(first + rest == data)
 
 
 if __name__ == "__main__":

@@ -60,6 +60,13 @@ QUEUE_NOT_READY_MESSAGE = "Vẫn còn mục chưa có quyết định cuối cù
 BUSY_EXPORT_MESSAGE = (
     "Video #{job_id} đang trong hàng đợi hoặc đang được xử lý; chờ xong rồi hãy xuất."
 )
+# The output path of this export already holds a file that no manifest proves
+# is its render (a copy, a leftover, a file with the same name); it is neither
+# reused nor overwritten. Format with name=...
+EXPORT_PATH_TAKEN_MESSAGE = (
+    "Thư mục output đã có file “{name}” nhưng không có manifest nào chứng minh đó là bản xuất "
+    "của lần duyệt này. BiliFlow không ghi đè: hãy dời file đó ra khỏi thư mục output rồi xuất lại."
+)
 
 # A source moved to the Windows Recycle Bin by "Dọn video gốc" (latest
 # source_cleanups row PENDING or RECYCLED) locks every action on its job.

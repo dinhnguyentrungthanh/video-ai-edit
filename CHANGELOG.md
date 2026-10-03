@@ -1,3 +1,58 @@
+# Unreleased — export identity from the render, reuse only a proven export, HTTP request limits — 2026-10-03
+
+Status: branch `fix/export-identity-http` from `main` 23aa1e4, built in the worktree `temp/wt-export-fix` (plan `temp/ui-plan/export-fix/plan.md`). Committed on the branch at the user's request on 2026-10-03; not integrated: the Control Center still runs `main`.
+
+- Export identity (review finding: an export was reused after a blur change). `review_export_paths` hashed only the id, decision, start, end and region of every item. A new blur edge mode (`decision_blur_edge_mode`) or detected intervals (`temporal_policy = discrete_detected_intervals`) kept the same output name, so finalize reused the old export. The name now hashes what the render applies: the render fields of the edit-plan operations (`export_identity.render_identity(approved_operations(queue))`) plus a non-default size policy. A note, the reasons or a KEEP item's region still keep the name. An unfinished review keeps the old decision hash. Exports made before keep their old name and are still found: `output_candidates` gives the review's own name, then the legacy one.
+- Reuse only a proven export (review finding: a file at the export path became "Hoàn tất"; reproduced with an 11-byte file).
+  - Finalize, the standalone review UI and the startup import reuse an existing file only when its manifest proves it (`export_identity.manifest_problem`). The manifest must say COMPLETED, name the same unmodified source and this file, record a full decode validation and the same size, and list the same operations. These are the checks "Dọn video gốc" already used; they are now shared.
+  - A file at the path a render would write that no manifest proves is refused with “Thư mục output đã có file … BiliFlow không ghi đè …”. The refusal comes before the queue is written. That file is never overwritten or deleted: the renderer refuses an existing output when it starts and, since this branch, again when the render takes the export name.
+  - "Dọn video gốc" and "Lưu trữ" check the same candidates with unchanged reasons and order. Only the advice of the "không khớp quyết định duyệt hiện tại" reason changes, to "mở “Duyệt cảnh” và xuất lại": a new export no longer collides with the old file.
+  - The startup import (first start or `-RefreshExisting` only): a COMPLETED manifest completes a job only when it sits beside its file and proves it. For a reviewed job, the file must also be one of the review's candidates with the same operations.
+- HTTP request limits (review finding: negative Content-Length, no body timeout, token on the LAN).
+  - `http_guards.content_length`: a Content-Length that is not a plain non-negative number answers 400. A negative one used to make the handler wait until the client closed the connection.
+  - Both servers close a request that stops arriving after 20 s (408 for a body). Video streaming lifts the timeout while it streams, so a paused player is not cut.
+  - `control_entry`, `biliflow control-center|review-ui`, `serve_control_center`, `ControlCenter.serve` and `serve_review_ui` refuse any `--host` but an IPv4 loopback address or `localhost`, written exactly (usage error, exit code 2, or ValueError), before anything starts. `localhost` binds 127.0.0.1 with no name lookup. `::1` is refused: the servers listen on IPv4 only and could not bind it. `Start-BiliFlow.ps1` already passes 127.0.0.1.
+  - Not changed: `golden_label_app`, which is meant to be opened from a phone on the LAN.
+- After the code review (approve, 4 LOW) and the security review (1 MEDIUM, 5 LOW, no CRITICAL or HIGH), then a re-review of those fixes (code: approve; security: fixes hold, 3 LOW and 2 INFO left, fixed below):
+  - Links and the source are never the export (MEDIUM).
+    - `manifest_problem` requires a plain file, so a symbolic link, junction or other reparse point is refused. Before, a symlink to the source with a manifest written for it passed, and "Dọn video gốc" would have sent the only real copy to the Recycle Bin.
+    - The export must also not be the source file itself, which catches a hard link of the source or the source reached through a junction.
+    - A hard link of the export elsewhere (for an upload, say) is still accepted.
+  - Manifests are compared as written, never resolved. `output.path` is matched with `abspath` and `normcase`, and the cleanup's early edit-plan check runs the same lexical check before `resolve()`. Resolving a UNC or device path from a manifest would make Windows contact that machine, and a link loop raised RuntimeError.
+  - Hostile files no longer raise.
+    - In finalize, the review UI and cleanup, a NUL in `output.path`, JSON nested too deep or a link loop counts as "not proven". It used to raise: the cleanup preview answered 500, and the standalone page dropped its connection.
+    - The startup import skips a malformed manifest or review queue: a source without a usable `path`, a text duration, a non-text status, or a non-list `reports`. It also no longer resolves the export path, so an output/ reached through a junction imports.
+    - On `main`, such a file in output/ or reports/ stopped the Control Center from starting.
+  - A request body nested too deep answers 400. On this branch it had become an empty reply.
+  - Only a hex source hash reaches the export name. A crafted `source.sha256` such as `..\..\x` in a review queue moved the export path out of output/.
+  - The renderer:
+    - It refuses a file or link at the export path as given, before resolving it and before FFmpeg runs. A broken link used to pass `exists()`, and the render then followed it.
+    - It hashes the render and the source before the file takes the export name.
+    - `os.rename` never replaces a file that appeared there during the render.
+    - A source that changed during the render used to leave an export with no manifest; now it leaves nothing.
+    - A stop or crash leaves only the partial, which the scheduler removes. The only exception is the instant between the rename and the manifest write; an export left without its manifest there is refused, never overwritten.
+  - Finalize and the standalone UI also refuse a broken link at the export path ("Thư mục output đã có file …").
+  - The standalone review UI reports "IDLE" (not exported) for a COMPLETED job file whose export left output/, as its export button would render it again.
+  - Tests:
+    - The finalize test now changes one manifest field at a time, and the standalone 408 path has a test.
+    - The link tests also use the link's own size, so only the link check can refuse it.
+    - Silencing the decode, operations, link or "source itself" check makes the intended tests fail.
+  - Accepted, not changed:
+    - The 20 s limit applies to each read, not to the whole request. A local program that trickles bytes can still hold a thread.
+    - A paused video stream keeps its thread and file handle until the tab is closed, as before.
+    - `allow_reuse_address` of both servers is unchanged.
+    - Manifest reads have no size cap.
+- Verification (worktree, `PYTHONPATH=src`; evidence in `temp/ui-plan/export-fix/`):
+  - Full suite: 1192 tests OK (skipped=25), `full-suite-4.log`. Every new test failed before its fix.
+  - Real FFmpeg in a throw-away root (`e2e.py`, a synthetic 40 s clip, the default size policy): 11/11 checks, re-run after each renderer change.
+    - A real manifest proves the export.
+    - Another edge mode gets another name, and the old export is neither reused nor touched.
+    - A fake file is neither taken nor overwritten.
+  - Real project, read-only (`realdata_check.py` on a backup-API copy of the database under temp/):
+    - `assess_job` for the 25 COMPLETED/SKIPPED jobs and the export checks for the 24 COMPLETED jobs are identical with `main` and this branch: 21 proven, #37/#38 moved, #4 stale.
+    - `existing_review_export` proves the same 21 exports, under their legacy names.
+  - Side finding, pre-existing on `main` and not changed here: with the default size limit, an export whose output lasts less than about 24 s fails in libx264 (maxrate/bufsize out of range). It is flagged as a separate task.
+
 # Unreleased — dashboard batch 4: platform logos (iQIYI) → BLUR + logo memory page, archive/restore, UI fixes — 2026-10-03
 
 Status: implemented in the worktree `temp/wt-batch4` (plans `temp/ui-plan/batch4/plan-4a.md` and `plan-4cd.md`), reviewed (code + security) and integrated into the main tree on 2026-10-03 at about 17:05, and committed as 6a8a59c on top of batch 3 (d90c8f3) at the user's request. The user restarted the Control Center on this code at 18:01:50 (migration backup `state/backups/control-center-before-source-archive-20261003-180150.sqlite3`; all 30 jobs intact) and found the new dashboard fine.

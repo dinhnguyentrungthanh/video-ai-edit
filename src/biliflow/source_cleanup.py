@@ -44,8 +44,19 @@ from biliflow.export_guards import (
     review_summary,
     skip_refusal,
 )
+from biliflow.export_identity import (
+    PROBLEM_CHANGED,
+    PROBLEM_DECODE,
+    PROBLEM_MANIFEST,
+    PROBLEM_NO_OPERATIONS,
+    PROBLEM_OLDER,
+    aware_datetime as _aware_datetime,
+    export_manifest_path,
+    manifest_problem,
+    output_candidates,
+)
 from biliflow.job_store import IN_PROCESS_STATES, SOURCE_ARCHIVED_STATES, now_iso, sha256_file
-from biliflow.review_workflow import approved_operations, review_export_paths
+from biliflow.review_workflow import queue_render_identity
 
 
 MAX_CLEANUP_JOBS = 50
@@ -90,18 +101,13 @@ REASON_OUTPUT_MOVED = "Không thấy bản xuất trong thư mục output (đã 
 REASON_MANIFEST = "Manifest xuất không khớp video gốc"
 REASON_DECODE = "Bản xuất chưa qua kiểm tra giải mã toàn bộ"
 REASON_OUTPUT_CHANGED = "Video xuất đã thay đổi so với manifest"
-# The export at this review's path was rendered with other render settings
-# (for example another blur edge mode, which review_export_paths does not
-# hash). Exporting again alone cannot fix it: finalize finds the output and
-# renders nothing, so the old file has to leave output/ first.
+# The export found for this review was rendered with other render settings:
+# an export made before the operations hash keeps a legacy name that did not
+# see every render field (for example another blur edge mode). Exporting again
+# renders the current decisions under their own name.
 REASON_OUTPUT_OLDER = (
-    "Bản xuất hiện có không khớp quyết định duyệt hiện tại "
-    "(dời bản xuất cũ ra khỏi thư mục output rồi xuất lại trước khi dọn)"
+    "Bản xuất hiện có không khớp quyết định duyệt hiện tại (mở “Duyệt cảnh” và xuất lại trước khi dọn)"
 )
-# The fields of an edit-plan operation that follow from the review decisions.
-# Of its "blur" settings only edge_feather_mode is a decision; sigma and
-# region_policy are code constants and edge_feather_pixels follows the region.
-RENDER_FIELDS = ("id", "type", "start_seconds", "end_seconds", "region_source_pixels")
 REASON_SKIP_RECORD = "Bản ghi bỏ qua không ứng với lần duyệt hiện tại"
 
 # Per-video results and events of an execute.
@@ -219,54 +225,15 @@ def _stat_key(info: os.stat_result) -> tuple[int, int, int, int]:
     return (int(info.st_dev), int(info.st_ino), int(info.st_size), int(info.st_mtime_ns))
 
 
-def _aware_datetime(value: Any) -> datetime | None:
-    """A timezone-aware ISO timestamp, else None (naive or unparseable)."""
-    if not isinstance(value, str):
-        return None
-    try:
-        moment = datetime.fromisoformat(value)
-    except ValueError:
-        return None
-    if moment.tzinfo is None or moment.utcoffset() is None:
-        return None
-    return moment
-
-
-def render_identity(operations: Any) -> list[dict[str, Any]] | None:
-    """The decision fields of edit-plan operations, in order; None when malformed.
-
-    Two exports with the same identity were rendered from the same review
-    decisions (cut and blur intervals, regions and blur edge mode).
-    """
-    if not isinstance(operations, list) or not all(isinstance(op, dict) for op in operations):
-        return None
-    identity = []
-    for operation in operations:
-        value = {field: operation.get(field) for field in RENDER_FIELDS}
-        blur = operation.get("blur")
-        value["edge_feather_mode"] = (
-            str((blur if isinstance(blur, dict) else {}).get("edge_feather_mode", "all_edges"))
-            if operation.get("type") == "blur" else None
-        )
-        identity.append(value)
-    return identity
-
-
-def _queue_render_identity(queue: dict[str, Any]) -> list[dict[str, Any]] | None:
-    """What an export of the queue's current decisions renders; None when it cannot be built."""
-    try:
-        return render_identity(approved_operations(queue))
-    except (KeyError, TypeError, ValueError, AttributeError):
-        return None
-
-
 def _parse_queue_facts(root: Path, data: bytes) -> dict[str, Any]:
     """What cleanup needs from a review queue (never mutated by callers)."""
     queue = json.loads(data.decode("utf-8"))
     if not isinstance(queue, dict):
         raise ValueError("Review queue is not a JSON object")
-    output_path = review_export_paths(root, queue)[1]
-    render = _queue_render_identity(queue)
+    # What an export of the current decisions renders (None when it cannot be
+    # built), and where that export may be: its own name, then the legacy one.
+    render = queue_render_identity(queue)
+    candidates = output_candidates(root, queue, render)
     latest: datetime | None = None
     decided_at_valid = True
     for item in queue.get("items") or []:
@@ -279,7 +246,7 @@ def _parse_queue_facts(root: Path, data: bytes) -> dict[str, Any]:
             latest = moment
     return {
         "status": queue.get("status"),
-        "output_path": output_path,
+        "output_candidates": candidates,
         "max_decided_at": latest,
         "decided_at_valid": decided_at_valid,
         "render_identity": render,
@@ -358,6 +325,9 @@ def _check_plan_names_active_queue(root: Path, job: dict[str, Any], plan_value: 
     if not plan_value:
         return
     plan_path = root / str(plan_value)
+    # As written first: resolving a UNC or device path makes Windows contact that machine.
+    if not _under(Path(os.path.abspath(plan_path)), Path(os.path.abspath(root))):
+        raise _Refused(REASON_OUTPUT_STALE)
     if not _under(plan_path.resolve(), root.resolve()):
         raise _Refused(REASON_OUTPUT_STALE)
     if not plan_path.is_file():
@@ -372,76 +342,75 @@ def _check_plan_names_active_queue(root: Path, job: dict[str, Any], plan_value: 
         raise _Refused(REASON_OUTPUT_STALE)
 
 
+_REASON_BY_PROBLEM = {
+    PROBLEM_MANIFEST: REASON_MANIFEST,
+    PROBLEM_DECODE: REASON_DECODE,
+    PROBLEM_CHANGED: REASON_OUTPUT_CHANGED,
+    PROBLEM_OLDER: REASON_OUTPUT_OLDER,
+}
+
+
 def _exported_facts(root: Path, store: Any, job: dict[str, Any], facts: dict[str, Any],
                     *, fresh: bool) -> dict[str, Any]:
-    """Checks of an EXPORTED video's output, manifest and plan; raises _Refused."""
+    """Checks of an EXPORTED video's output, manifest and plan; raises _Refused.
+
+    The export is the first candidate on disk (the review's own name, then
+    the legacy name of an export made before the operations hash) that its
+    manifest proves; when none does, the refusal of the first one on disk.
+    """
     job_id = int(job["id"])
-    output: Path = facts["output_path"]
-    if not output.is_file():
-        expected = _folded(_relative(root, output))
+    candidates: list[Path] = facts["output_candidates"]
+    present = [output for output in candidates if output.is_file()]
+    if not present:
+        expected = {_folded(_relative(root, output)) for output in candidates}
         exports = [
             _folded(artifact.get("path")) for artifact in store.artifacts(job_id)
             if artifact.get("kind") == "final_output"
         ]
-        if expected in exports:
+        if expected.intersection(exports):
             # This review was exported; the file just left output/.
             raise _Refused(REASON_OUTPUT_MOVED)
         raise _Refused(REASON_OUTPUT_STALE if exports else REASON_NO_OUTPUT)
-    manifest_path = output.with_suffix(output.suffix + ".manifest.json")
+    refusals: list[_Refused] = []
+    for output in present:
+        try:
+            return _proven_output_facts(root, job, facts, output, fresh=fresh)
+        except _Refused as refusal:
+            refusals.append(refusal)
+    raise refusals[0]
+
+
+def _proven_output_facts(root: Path, job: dict[str, Any], facts: dict[str, Any], output: Path,
+                         *, fresh: bool) -> dict[str, Any]:
+    """The facts of ``output`` when its manifest proves it renders the review; raises _Refused."""
     try:
-        manifest = _json_document("manifest", manifest_path, fresh=fresh)
+        manifest = _json_document("manifest", export_manifest_path(output), fresh=fresh)
     except (OSError, ValueError) as error:
         raise _Refused(REASON_MANIFEST) from error
-    job_sha = str(job.get("source_sha256") or "").casefold()
-    source = manifest.get("source") if isinstance(manifest, dict) else None
-    described = manifest.get("output") if isinstance(manifest, dict) else None
-    created_at = _aware_datetime(manifest.get("created_at")) if isinstance(manifest, dict) else None
-    matches = (
-        isinstance(source, dict) and isinstance(described, dict)
-        and manifest.get("status") == "COMPLETED"
-        and bool(job_sha) and str(source.get("sha256") or "").casefold() == job_sha
-        and source.get("modified") is False
-        and ("sha256_after_render" not in source
-             or str(source.get("sha256_after_render") or "").casefold() == job_sha)
-        and isinstance(described.get("path"), str) and bool(described.get("path"))
-        and isinstance(described.get("bytes"), int) and not isinstance(described.get("bytes"), bool)
-        and isinstance(described.get("sha256"), str)
-        and re.fullmatch(r"[0-9a-fA-F]{64}", described.get("sha256") or "") is not None
-        and created_at is not None
+    # The renderer records the operations it applied: the export matches the
+    # review when the current decisions would render the same ones.
+    # Re-recording a decision (an undo, a misclick) moves decided_at but
+    # changes nothing here, and finalize then keeps the existing export. The
+    # same holds for a rerun whose new revision has the same items and
+    # decisions: the export is the same, and the old edit plan still names the
+    # previous queue, so the plan check does not apply here.
+    problem = manifest_problem(
+        root, output, manifest, source_sha256=job.get("source_sha256"), render=facts["render_identity"],
+        source_path=job.get("source_path"),
     )
-    if matches:
-        manifest_output = (root / described["path"]).resolve()
-        matches = os.path.normcase(str(manifest_output)) == os.path.normcase(str(output.resolve()))
-    if not matches:
-        raise _Refused(REASON_MANIFEST)
-    encoding = manifest.get("encoding")
-    if not isinstance(encoding, dict) or encoding.get("full_decode_validation_passed") is not True:
-        raise _Refused(REASON_DECODE)
-    output_bytes = int(output.stat().st_size)
-    if output_bytes != described["bytes"]:
-        raise _Refused(REASON_OUTPUT_CHANGED)
-    if manifest.get("operations") is not None:
-        # The renderer records the operations it applied: the export matches
-        # the review when the current decisions would render the same ones.
-        # Re-recording a decision (an undo, a misclick) moves decided_at but
-        # changes nothing here, and finalize then keeps the existing export.
-        # The same holds for a rerun whose new revision has the same items and
-        # decisions: the export path is the same, and the old edit plan still
-        # names the previous queue, so the plan check does not apply here.
-        rendered = render_identity(manifest["operations"])
-        if rendered is None:
-            raise _Refused(REASON_MANIFEST)
-        if rendered != facts["render_identity"]:
-            raise _Refused(REASON_OUTPUT_OLDER)
-    else:
+    if problem == PROBLEM_NO_OPERATIONS:
         # A manifest without operations: fall back to the timestamps and the plan.
+        created_at = _aware_datetime(manifest["created_at"])
         latest = facts["max_decided_at"]
         if not facts["decided_at_valid"] or (latest is not None and latest > created_at):
             raise _Refused(REASON_OUTPUT_OLDER)
         _check_plan_names_active_queue(root, job, manifest.get("edit_plan"), fresh=fresh)
+    elif problem is not None:
+        raise _Refused(_REASON_BY_PROBLEM[problem])
+    described = manifest["output"]
     return {
         "output_path": _relative(root, output),
-        "output_bytes": output_bytes,
+        "output_bytes": int(described["bytes"]),
         "output_sha256": str(described["sha256"]).lower(),
         "exported_at": str(manifest["created_at"]),
     }
@@ -545,7 +514,8 @@ def assess_job(
         if not _under(queue_path, (root / "reports").resolve()):
             raise ValueError("review queue outside reports")
         facts = _queue_facts(root, queue_path, fresh=fresh)
-    except (OSError, ValueError, KeyError, TypeError, AttributeError):
+    except (OSError, ValueError, KeyError, TypeError, AttributeError, RuntimeError):
+        # RuntimeError: a link loop, or JSON nested too deep (RecursionError).
         return refused(REASON_QUEUE_UNREADABLE)
     try:
         if state == "COMPLETED":
@@ -554,8 +524,9 @@ def assess_job(
             details = _skipped_facts(store, job, facts)
     except _Refused as refusal_reason:
         return refused(refusal_reason.reason)
-    except (OSError, ValueError, TypeError, KeyError, AttributeError):
-        # A file that changed under us (or a malformed record): refuse, never pass.
+    except (OSError, ValueError, TypeError, KeyError, AttributeError, RuntimeError):
+        # A file that changed under us, a link loop or a malformed record
+        # (RuntimeError covers JSON nested too deep): refuse, never pass.
         return refused(REASON_MANIFEST if state == "COMPLETED" else REASON_SKIP_RECORD)
     values.update(details)
     return Assessment(eligible=True, reason=None, **values)

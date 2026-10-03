@@ -60,8 +60,7 @@ REASON_RECYCLED = "Video gốc đã được dọn trước đó"
 REASON_STATE = "Chỉ dọn được video đã xuất hoặc đã bỏ qua (mục “Hoàn tất”)"
 REASON_SOURCE_MISSING = "Video gốc không còn trong thư mục input"
 REASON_OUTPUT_OLDER = (
-    "Bản xuất hiện có không khớp quyết định duyệt hiện tại "
-    "(dời bản xuất cũ ra khỏi thư mục output rồi xuất lại trước khi dọn)"
+    "Bản xuất hiện có không khớp quyết định duyệt hiện tại (mở “Duyệt cảnh” và xuất lại trước khi dọn)"
 )
 REASON_OUTPUT_STALE = (
     "Bản xuất hiện có không ứng với lần duyệt mới nhất (mở “Duyệt cảnh” và xuất lại trước khi dọn)"

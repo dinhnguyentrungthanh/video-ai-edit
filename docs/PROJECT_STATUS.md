@@ -1,3 +1,36 @@
+## Export identity, proven-export reuse, HTTP request limits (2026-10-03) — branch `fix/export-identity-http`, committed on the branch, not integrated
+
+- Why: a code review found three problems.
+  - Export identity: changing only the blur edge mode or the detected intervals kept the export name, and finalize reused the old export.
+  - Existing files: finalize, the standalone review UI and the startup import took any file at the export path for the export (an 11-byte file became "Hoàn tất").
+  - HTTP: a negative Content-Length could hold a handler thread, there was no request timeout, and `--host` could expose the session token on the LAN.
+
+  Source cleanup and archive already compared the manifest operations. The security review found that a link at the export path, with a manifest written for it, still passed; that is fixed here.
+- What:
+  - New `export_identity.py` names the export by the render fields of the edit-plan operations (legacy names are still found). It holds one shared manifest proof, `manifest_problem`, which also refuses links.
+  - New `http_guards.py` handles Content-Length, the 20 s request timeout and binding to IPv4 loopback only.
+  - Changed: `review_workflow.py`, `control_center.py`, `source_cleanup.py`, `job_import.py`, `final_renderer.py` (hash before the rename, never replace), `export_guards.py`, `control_entry.py`, `cli.py`.
+- Reviews:
+  - Code review: approve, 4 LOW. Security review: 1 MEDIUM (links), 5 LOW, nothing CRITICAL or HIGH.
+  - Re-review of the fixes: code approve; security found the fixes hold, with 3 LOW and 2 INFO left.
+  - Fixed after both rounds:
+    - the MEDIUM: links and the source itself are never the export;
+    - manifest paths are compared as written, never resolved, so no UNC lookup and no link-loop error;
+    - hostile manifests and queues no longer raise (finalize, the review UI, cleanup, the startup import);
+    - deep JSON bodies answer 400;
+    - only a hex source hash reaches the export name;
+    - the renderer refuses a link at the export path and never replaces a file;
+    - the strict `--host`, test isolation and the standalone 408 test.
+  - Accepted and documented: the timeout applies per read, a paused stream keeps its thread, `golden_label_app` and `allow_reuse_address` are unchanged, and manifest reads have no size cap.
+- Verification:
+  - Full suite: 1192 OK (skipped=25).
+  - Real FFmpeg check in a temp root: 11/11.
+  - Silencing any one manifest check fails the intended tests.
+  - Real data, read-only:
+    - all 21 real exports that still have a file are proven under their legacy names;
+    - on a backup-API copy of the database, the "Dọn video gốc" assessment (25 jobs) and its export checks (24 COMPLETED jobs) are identical with `main` and this branch: 21 proven, 37/38 "đã bị dời", 4 "không ứng với lần duyệt mới nhất".
+- Next: the user decides when to run it (merge into `main`, or switch the Control Center tree to the branch, then restart the Control Center).
+
 ## Dashboard batch 4 (2026-10-03): platform logos → BLUR, logo memory page, archive/restore, UI fixes — committed 6a8a59c, integrated; the user restarted the Control Center on it at 18:01:50
 
 - Plans: `temp/ui-plan/batch4/plan.md` (decisions), `plan-4a.md`, `plan-4cd.md`; evidence, logs, mock (`mock_server.py`, port 8793) and e2e results in `temp/ui-plan/batch4/`. Full details: CHANGELOG.md, batch 4.

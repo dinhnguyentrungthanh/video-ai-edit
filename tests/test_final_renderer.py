@@ -1,8 +1,12 @@
+import hashlib
 import json
+import subprocess
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from unittest.mock import patch
 
+from biliflow.export_identity import manifest_problem, read_manifest
 from biliflow.final_renderer import (
     DEFAULT_MAX_OUTPUT_BYTES,
     DEFAULT_TARGET_OUTPUT_BYTES,
@@ -12,6 +16,7 @@ from biliflow.final_renderer import (
     expected_output_duration,
     normalize_output_size_policy,
     read_render_progress,
+    render_final_output,
     render_progress_path,
 )
 
@@ -261,6 +266,89 @@ class FinalRendererTests(unittest.TestCase):
                 approved_plan["preview_approval"]["sampled_operation_ids"],
                 ["op-1"],
             )
+
+
+class RenderCompletionTests(unittest.TestCase):
+    """How render_final_output finishes, with FFmpeg and ffprobe replaced (no real render)."""
+
+    def setUp(self):
+        temp = TemporaryDirectory()
+        self.addCleanup(temp.cleanup)
+        self.root = Path(temp.name).resolve()
+        for name in ("input", "work", "output", "tools"):
+            (self.root / name).mkdir()
+        self.source = self.root / "input" / "movie.mp4"
+        self.source.write_bytes(b"source video " * 64)
+        self.sha = hashlib.sha256(self.source.read_bytes()).hexdigest()
+        self.plan_path = self.root / "work" / "movie-edit-plan.json"
+        self.plan_path.write_text(json.dumps({
+            "status": "READY_FOR_FINAL_RENDER", "final_export_allowed": True,
+            "source": {"path": str(self.source), "sha256": self.sha, "duration_seconds": 10.0},
+            "approved_operations": [],
+        }), encoding="utf-8")
+        self.output = self.root / "output" / "movie-reviewed.mp4"
+        self.partial = self.root / "output" / "movie-reviewed.partial.mp4"
+        self.manifest_path = self.root / "output" / "movie-reviewed.mp4.manifest.json"
+        self.tools = [self.root / "tools" / "ffmpeg.exe", self.root / "tools" / "ffprobe.exe"]
+        for tool in self.tools:
+            tool.write_bytes(b"")
+        self.during_render = lambda: None
+
+    def fake_run(self, command, **kwargs):
+        if "-filter_complex" in command:
+            Path(command[-1]).write_bytes(b"rendered video " * 64)
+            self.during_render()
+        return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
+
+    def render(self):
+        probe = {"format": {"duration": "10.0"}, "streams": [{"codec_type": "video"}]}
+        with patch("biliflow.final_renderer.subprocess.run", side_effect=self.fake_run), \
+                patch("biliflow.final_renderer.probe_video", return_value=probe), \
+                patch("biliflow.final_renderer.require_capacity"):
+            return render_final_output(
+                project_root=self.root, plan_path=self.plan_path, output_path=self.output,
+                ffmpeg_path=self.tools[0], ffprobe_path=self.tools[1],
+            )
+
+    def test_a_completed_render_is_proven_by_its_manifest(self):
+        manifest = self.render()
+        self.assertEqual(manifest["output"]["sha256"], hashlib.sha256(self.output.read_bytes()).hexdigest())
+        self.assertIsNone(manifest_problem(
+            self.root, self.output, read_manifest(self.output), source_sha256=self.sha, render=[],
+        ))
+        self.assertFalse(self.partial.exists())
+
+    def test_a_file_that_appears_at_the_output_during_the_render_is_never_replaced(self):
+        self.during_render = lambda: self.output.write_bytes(b"someone else's file")
+        with self.assertRaises(FileExistsError):
+            self.render()
+        self.assertEqual(self.output.read_bytes(), b"someone else's file")
+        self.assertFalse(self.partial.exists())
+        self.assertFalse(self.manifest_path.exists())
+
+    def test_a_link_at_the_output_is_refused_before_ffmpeg_runs(self):
+        # exists() is False for a dangling link; the render would only fail at its end.
+        # (A link that points out of output/ is already refused as outside it.)
+        try:
+            self.output.symlink_to(self.root / "output" / "missing.mp4")
+        except OSError as error:
+            self.skipTest(f"cannot create a symbolic link here: {error}")
+        calls = []
+        self.during_render = lambda: calls.append("render")
+        with self.assertRaises(FileExistsError):
+            self.render()
+        self.assertEqual(calls, [])
+        self.assertTrue(self.output.is_symlink())
+        self.assertFalse(self.partial.exists())
+
+    def test_a_source_changed_during_the_render_leaves_no_export(self):
+        # Checked before the file takes the export's name: no export without a manifest.
+        self.during_render = lambda: self.source.write_bytes(b"edited source " * 64)
+        with self.assertRaisesRegex(RuntimeError, "Source checksum changed during render"):
+            self.render()
+        self.assertFalse(self.output.exists())
+        self.assertFalse(self.partial.exists())
+        self.assertFalse(self.manifest_path.exists())
 
 
 if __name__ == "__main__":

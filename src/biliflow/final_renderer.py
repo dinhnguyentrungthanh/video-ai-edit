@@ -160,6 +160,22 @@ def _sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
+def _move_into_place(partial: Path, output_path: Path) -> None:
+    """Give the validated render its export name; never replaces a file already there.
+
+    A file that appeared at the export path during the render (a copy, a
+    leftover) stays untouched and the render is discarded. On Windows
+    os.rename itself refuses an existing target.
+    """
+    try:
+        if os.path.lexists(output_path):
+            raise FileExistsError(f"Output already exists: {output_path}")
+        os.rename(partial, output_path)
+    except OSError:
+        partial.unlink(missing_ok=True)
+        raise
+
+
 def _merge_cuts(operations: list[dict], duration: float) -> list[tuple[float, float]]:
     raw = sorted(
         (
@@ -481,6 +497,10 @@ def _render_final_output_unlocked(
 ) -> dict:
     root = project_root.resolve(strict=True)
     plan_path = _inside((root / "work").resolve(strict=True), plan_path, "Edit plan path").resolve(strict=True)
+    # Checked as given, before it is resolved: a file or a link there (even a
+    # broken one) is refused, never followed, before FFmpeg runs.
+    if os.path.lexists(output_path):
+        raise FileExistsError(f"Output already exists: {output_path}")
     output_path = _inside((root / "output").resolve(strict=True), output_path, "Output path")
     ffmpeg_path = ffmpeg_path.resolve(strict=True)
     ffprobe_path = ffprobe_path.resolve(strict=True)
@@ -495,8 +515,6 @@ def _render_final_output_unlocked(
             raise ValueError("Output size limits are invalid")
     elif target_output_bytes is not None:
         raise ValueError("Unlimited output must not define a target size")
-    if output_path.exists():
-        raise FileExistsError(f"Output already exists: {output_path}")
     plan = _read_json(plan_path)
     if plan.get("status") != "READY_FOR_FINAL_RENDER" or not plan.get("final_export_allowed"):
         raise ValueError("Final render is not approved")
@@ -543,7 +561,8 @@ def _render_final_output_unlocked(
     require_capacity(root, estimated_job_gb=max(1.0, estimated_output_bytes / 1024**3))
     output_path.parent.mkdir(parents=True, exist_ok=True)
     partial = output_path.with_name(output_path.stem + ".partial" + output_path.suffix)
-    if partial.exists():
+    # A link here would make FFmpeg write wherever it points.
+    if os.path.lexists(partial):
         raise FileExistsError(f"Partial output already exists: {partial}")
     progress_path = render_progress_path(root, output_path)
     progress_path.parent.mkdir(parents=True, exist_ok=True)
@@ -613,11 +632,15 @@ def _render_final_output_unlocked(
         raise RuntimeError(
             decode_result.stderr.strip() or "Rendered output failed full decode validation"
         )
-    partial.replace(output_path)
-    output_hash = _sha256(output_path)
+    # Both hashes before the file takes the export's name, so that a failure or
+    # a stop here leaves only the partial (which the scheduler removes), never
+    # an export without its manifest.
+    output_hash = _sha256(partial)
     source_hash_after = _sha256(source)
     if source_hash_after != source_hash_before:
+        partial.unlink(missing_ok=True)
         raise RuntimeError("Source checksum changed during render")
+    _move_into_place(partial, output_path)
     manifest = {
         "schema_version": 1,
         "status": "COMPLETED",

@@ -4,12 +4,14 @@ import argparse
 from pathlib import Path
 
 from biliflow.control_center import serve_control_center
+from biliflow.http_guards import loopback_host_argument
 
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="biliflow-control-center")
     parser.add_argument("--project-root", type=Path, required=True)
-    parser.add_argument("--host", default="127.0.0.1")
+    # Loopback only: on a LAN address any machine could read the session token.
+    parser.add_argument("--host", default="127.0.0.1", type=loopback_host_argument)
     parser.add_argument("--port", type=int, default=8765)
     parser.add_argument("--stable-seconds", type=float, default=60.0)
     parser.add_argument("--no-import-existing", action="store_true")

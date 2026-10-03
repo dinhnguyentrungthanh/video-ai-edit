@@ -22,6 +22,7 @@ from biliflow.control_center import (
     skip_refusal,
 )
 from biliflow.export_guards import (
+    EXPORT_PATH_TAKEN_MESSAGE,
     QUEUE_NOT_READY_MESSAGE,
     SOURCE_CLEANED_MEDIA_MESSAGE,
     SOURCE_CLEANED_MESSAGE,
@@ -31,7 +32,7 @@ from biliflow.final_renderer import normalize_output_size_policy
 from biliflow.job_import import import_existing_project
 from biliflow.job_pipeline import PipelineStage
 from biliflow.job_store import JobStore
-from biliflow.review_workflow import review_export_paths
+from biliflow.review_workflow import approved_operations, review_export_paths
 from biliflow.scheduler import (
     EXPORT_RETIRE_MESSAGES,
     RESUME_SETTLED_REFUSAL,
@@ -698,11 +699,26 @@ class StaleExportTests(SkipFixture):
         self.assertEqual(self.events(job_id, "EXPORT_REQUEST_RETIRED"), [])
 
     def test_finalize_shortcut_retires_the_old_request(self):
-        job_id = self.paused_export("shortcut")
+        job_id = self.paused_export("shortcut", decisions=("KEEP",))
         queue = json.loads(self.queue_file(job_id).read_text(encoding="utf-8"))
         queue["export_size_policy"] = normalize_output_size_policy("default", None)
         _plan, output, _job = review_export_paths(self.root, queue)
         output.write_bytes(b"already exported")
+        # A file no manifest proves is neither the export nor overwritten.
+        with self.assertRaises(ValueError) as caught:
+            self.finalize(job_id)
+        self.assertEqual(str(caught.exception), EXPORT_PATH_TAKEN_MESSAGE.format(name=output.name))
+        self.assertEqual((self.store.get_job(job_id)["state"], self.stage_state(job_id)), ("PAUSED", "PENDING"))
+        self.assertEqual(output.read_bytes(), b"already exported")
+        job = self.store.get_job(job_id)
+        output.with_name(output.name + ".manifest.json").write_text(json.dumps({
+            "status": "COMPLETED", "created_at": "2026-10-03T12:00:00+07:00",
+            "source": {"path": job["source_path"], "sha256": job["source_sha256"], "modified": False},
+            "output": {"path": output.relative_to(self.root).as_posix(), "bytes": output.stat().st_size,
+                       "sha256": hashlib.sha256(output.read_bytes()).hexdigest()},
+            "encoding": {"full_decode_validation_passed": True},
+            "operations": approved_operations(queue),
+        }), encoding="utf-8")
         result = self.finalize(job_id)
         self.assertEqual(result["status"], "COMPLETED")
         self.assertEqual(result["output"], output.relative_to(self.root).as_posix())

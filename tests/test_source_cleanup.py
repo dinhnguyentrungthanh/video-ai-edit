@@ -37,6 +37,7 @@ from biliflow.recycle_bin import (
     RecycleResult,
     RecycleTimeout,
 )
+from biliflow.export_identity import legacy_export_paths
 from biliflow.review_workflow import approved_operations, review_export_paths
 from biliflow.scheduler import JobScheduler
 from biliflow.source_cleanup import (
@@ -235,18 +236,21 @@ class CleanupFixture(unittest.TestCase):
         return json.loads(self.queue_file(job_id).read_text(encoding="utf-8"))
 
     def make_exported_job(self, name, *, decided_at=None, created_at=None, manifest=None, plan_queue=None,
-                          items=None, operations=False):
+                          items=None, operations=False, legacy_name=False):
         """A COMPLETED job with an export of its current review.
 
         ``operations=True`` writes the manifest's ``operations`` the way the
         renderer does (the edit plan's approved operations of the queue).
+        ``legacy_name=True`` names it by the decision hash of an export made
+        before the operations hash.
         """
         decided = iso(NOW - timedelta(hours=1)) if decided_at is None else decided_at
         if items is None:
             items = [item("a", decided_at=decided), item("b", decided_at=decided)]
         job_id = self.make_job(name, state="COMPLETED", items=items)
         job = self.store.get_job(job_id)
-        plan_path, output, _ = review_export_paths(self.root, self.queue(job_id))
+        paths = legacy_export_paths if legacy_name else review_export_paths
+        plan_path, output, _ = paths(self.root, self.queue(job_id))
         output.write_bytes(b"OUTPUT" + name.encode() * 300)
         output_sha = hashlib.sha256(output.read_bytes()).hexdigest()
         value = {
@@ -558,10 +562,7 @@ class EligibleCleanupTests(CleanupFixture):
 class IneligibleTests(CleanupFixture):
     STALE = "Bản xuất hiện có không ứng với lần duyệt mới nhất (mở “Duyệt cảnh” và xuất lại trước khi dọn)"
     MANIFEST = "Manifest xuất không khớp video gốc"
-    OLDER = (
-        "Bản xuất hiện có không khớp quyết định duyệt hiện tại "
-        "(dời bản xuất cũ ra khỏi thư mục output rồi xuất lại trước khi dọn)"
-    )
+    OLDER = "Bản xuất hiện có không khớp quyết định duyệt hiện tại (mở “Duyệt cảnh” và xuất lại trước khi dọn)"
     MOVED = "Không thấy bản xuất trong thư mục output (đã bị dời hoặc đổi tên?)"
 
     def test_manifest_and_output_mismatches(self):
@@ -587,6 +588,79 @@ class IneligibleTests(CleanupFixture):
             with self.subTest(label):
                 job_id = self.make_exported_job(f"m{index}", manifest=change)
                 self.assertEqual(self.reason(job_id), expected)
+
+    def test_a_hostile_manifest_or_queue_is_refused_never_raised(self):
+        # An error here would break the Dashboard's job list (cleanup_hint).
+        deep = self.make_exported_job("deep", operations=True)
+        self.output_of(deep).with_suffix(".mp4.manifest.json").write_text("[" * 100_000, encoding="utf-8")
+        self.assertEqual(self.reason(deep), self.MANIFEST)
+        # ("nul" itself is a reserved device name on Windows.)
+        nul = self.make_exported_job(
+            "nulpath", operations=True,
+            manifest=lambda value: value["output"].update(path="output/bad\0name-reviewed.mp4"),
+        )
+        self.assertEqual(self.reason(nul), self.MANIFEST)
+        queue = self.make_exported_job("queue", operations=True)
+        self.queue_file(queue).write_text("[" * 100_000, encoding="utf-8")
+        self.assertEqual(self.reason(queue), "Không đọc được danh sách duyệt của video")
+
+    def test_a_link_at_the_export_path_is_not_the_export(self):
+        # A link with a manifest that fits its target's bytes: cleaning would
+        # leave only a link (or a copy of the unedited source) as the export.
+        job_id = self.make_exported_job("linked", operations=True)
+        output = self.output_of(job_id)
+        target = self.root / "elsewhere.mp4"
+        target.write_bytes(output.read_bytes())
+        output.unlink()
+        try:
+            output.symlink_to(target)
+        except OSError as error:
+            self.skipTest(f"cannot create a symbolic link here: {error}")
+        self.assertEqual(self.reason(job_id), "Video xuất đã thay đổi so với manifest")
+        # The link's own size (0 on Windows) in the manifest: only the link check refuses it.
+        manifest_path = output.with_suffix(".mp4.manifest.json")
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        manifest["output"]["bytes"] = os.lstat(output).st_size
+        manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+        self.assertEqual(self.reason(job_id), "Video xuất đã thay đổi so với manifest")
+
+    def test_a_symlink_loop_at_the_export_path_is_refused_never_raised(self):
+        job_id = self.make_exported_job("loop", operations=True)
+        output = self.output_of(job_id)
+        output.unlink()
+        try:
+            output.symlink_to(output)
+        except OSError as error:
+            self.skipTest(f"cannot create a symbolic link here: {error}")
+        self.assertEqual(self.reason(job_id), self.MANIFEST)
+
+    def test_the_source_itself_is_never_its_export(self):
+        # A hard link of the source at the export path, with a manifest that fits it.
+        job_id = self.make_exported_job("selflink", operations=True)
+        output = self.output_of(job_id)
+        output.unlink()
+        os.link(self.store.get_job(job_id)["source_path"], output)
+        manifest_path = output.with_suffix(".mp4.manifest.json")
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        manifest["output"]["bytes"] = output.stat().st_size
+        manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+        self.assertEqual(self.reason(job_id), "Video xuất đã thay đổi so với manifest")
+
+    def test_a_unc_edit_plan_is_never_resolved(self):
+        # An early manifest (no operations) falls back to its edit plan: a UNC path
+        # there must not make Windows contact that machine.
+        job_id = self.make_exported_job(
+            "uncplan", manifest=lambda value: value.update(edit_plan="\\\\host\\share\\plan.json"),
+        )
+        original = Path.resolve
+
+        def resolve(path, *args, **kwargs):
+            if str(path).startswith(("\\\\", "//")):
+                raise AssertionError(f"resolved {path}")
+            return original(path, *args, **kwargs)
+
+        with patch.object(Path, "resolve", resolve):
+            self.assertEqual(self.reason(job_id), self.STALE)
 
     def test_an_export_older_than_the_latest_decision_or_another_review(self):
         # A manifest without "operations" falls back to the decision timestamps.
@@ -633,24 +707,35 @@ class IneligibleTests(CleanupFixture):
         )
         self.assertEqual(self.reason(legacy), self.STALE)
 
-    def test_an_export_rendered_from_other_decisions_at_the_same_path(self):
+    def test_an_export_rendered_from_other_decisions(self):
         decided = iso(NOW - timedelta(hours=1))
         job_id = self.make_exported_job(
             "edge", items=[item("a", decided_at=decided), blur_item("b", decided_at=decided)], operations=True,
         )
         output = self.output_of(job_id)
         self.assertEqual(self.preview([job_id])["count"], 1)
-        # review_export_paths does not hash the blur edge mode: the same output
-        # path, but the export was rendered with all edges feathered.
+        # The blur edge mode names the export: another mode has no export yet.
         queue = self.queue(job_id)
         queue["items"][1]["decision_blur_edge_mode"] = "vertical_only"
         self.queue_file(job_id).write_text(json.dumps(queue), encoding="utf-8")
-        self.assertEqual(self.output_of(job_id), output)
-        self.assertEqual(self.reason(job_id), self.OLDER)
+        self.assertNotEqual(self.output_of(job_id), output)
+        self.assertEqual(self.reason(job_id), self.STALE)
         # Back to the exported edge mode: cleanable again.
         queue["items"][1]["decision_blur_edge_mode"] = "all_edges"
         self.queue_file(job_id).write_text(json.dumps(queue), encoding="utf-8")
         self.assertEqual(self.preview([job_id])["count"], 1)
+        # An export made before keeps the decision-hash name, which does not
+        # see the edge mode: its manifest operations do.
+        legacy = self.make_exported_job(
+            "edge-legacy", items=[item("a", decided_at=decided), blur_item("b", decided_at=decided)],
+            operations=True, legacy_name=True,
+        )
+        self.assertEqual(self.preview([legacy])["eligible"][0]["output_path"],
+                         legacy_export_paths(self.root, self.queue(legacy))[1].relative_to(self.root).as_posix())
+        queue = self.queue(legacy)
+        queue["items"][1]["decision_blur_edge_mode"] = "vertical_only"
+        self.queue_file(legacy).write_text(json.dumps(queue), encoding="utf-8")
+        self.assertEqual(self.reason(legacy), self.OLDER)
         # An export without the blur the review now has.
         missing = self.make_exported_job(
             "noblur", items=[blur_item("b", decided_at=decided)], operations=True,

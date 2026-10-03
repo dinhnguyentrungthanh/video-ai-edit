@@ -8,7 +8,8 @@ This is the short, authoritative starting point for a new Codex account or chat.
 
 - Project root: `E:\DungChung\BiliFlow`
 - Active branch: `main`. On 2026-10-03 the user asked to merge `improve/scan-performance-metrics` (everything since `7f5a9fb`: the scan-performance work, detector/review fixes and dashboard batches 1-4) into `main` and run it there. `main` was fast-forwarded to the branch tip (the commit that carries this note) and the working tree, which the Control Center runs from, was switched to `main` with no file change. The branch is kept.
-- Not pushed: `origin/main` is still `9155cd7`, 45 commits behind local `main`. Push only when the user asks.
+- Pushed at the user's request on 2026-10-03: `origin/main` (GitHub `dinhnguyentrungthanh/video-ai-edit`) moved `9155cd7..23aa1e4`, in sync with local `main`. Push again only when the user asks.
+- Open branch `fix/export-identity-http` (from `main` 23aa1e4) in the worktree `temp/wt-export-fix`: export identity from the render, reuse only a proven export, HTTP request limits (see Current work). It is committed on the branch (not merged), and the Control Center still runs `main`.
 - Latest code milestones: dashboard batch 3 `d90c8f3` and batch 4 `6a8a59c` (docs `bb29219`); 1130 tests OK. Earlier on the branch: `2c72280` reduces CPU RGB-distance overhead with bit-exact output; 278/278 tests. Six source excerpts show 20.50% lower CPU routing time, not whole-video scan time. Actual cold-routing/VLM-input checks also pass. Prior `6231f58` fixes lossy visual-logo cache; `bf5bc35` adds opt-in OCR controls with serial default. Prefetch stays OFF. See `docs/SCAN_PERFORMANCE.md`.
 - Runtime source version: `src/biliflow/__init__.py` reports `0.7.24`
 - Packaging metadata in `pyproject.toml` still reports `0.7.19`; use the runtime source version for dashboard diagnosis and align the package metadata during a later release housekeeping change.
@@ -24,6 +25,37 @@ Since 2026-10-03 local `main` also holds everything from `improve/scan-performan
 5. `0b4ff3c Map logo candidates by geometry track`
 
 Always confirm this section with `git status` and `git log` because it becomes stale after new work.
+
+## Current work — 2026-10-03 export identity, proven-export reuse, HTTP request limits (branch `fix/export-identity-http`, committed on the branch, not integrated)
+
+- Request (user, 2026-10-03): plan, fix and test three review findings on a new branch from `main` (not on `main`).
+  - (1) Export identity from the render operations, with a legacy fallback.
+  - (2) Never reuse an existing output without verifying its manifest.
+  - (3) Reject a bad Content-Length, add a request timeout without breaking video streaming, and make the servers refuse a non-loopback `--host`.
+- Where: the worktree `temp/wt-export-fix` (its gitignored `input/placeholder.mp4` only feeds `test_job_pipeline`/`test_job_ocr_option`). Plan and logs are in `temp/ui-plan/export-fix/`.
+- Files:
+  - New: `src/biliflow/export_identity.py`, `src/biliflow/http_guards.py`, `tests/test_export_identity.py`, `tests/test_http_guards.py`.
+  - Changed: `review_workflow.py`, `control_center.py`, `source_cleanup.py`, `job_import.py`, `final_renderer.py`, `export_guards.py`, `control_entry.py`, `cli.py` and their tests (plus `tests/test_final_renderer.py`).
+  - Two old tests encoded the bug and now encode the fix: `test_finalize_shortcut_retires_the_old_request` (a manifest-less file was taken for the export) and the source-cleanup edge-mode test (another edge mode kept the same name).
+- Reviews (code and security, read-only agents), two rounds, each followed by a fix pass. See CHANGELOG for the list.
+  - Fixed:
+    - links and the source itself are never the export (MEDIUM);
+    - manifest paths are compared as written, never resolved;
+    - hostile manifests and queues no longer raise, and the startup import skips them;
+    - deep JSON bodies → 400;
+    - hex-only source hash in the name;
+    - the renderer refuses a link at the export path, hashes before the rename and never replaces;
+    - strict `--host`, with `localhost` → 127.0.0.1.
+  - Accepted: the timeout applies per read; the stream exemption; `golden_label_app` and `allow_reuse_address` unchanged; no size cap on manifest reads.
+- Compatibility: exports made before keep their legacy decision-hash name.
+  - finalize, the standalone review UI, the startup import, "Dọn video gốc" and "Lưu trữ" look at the review's own name first, then the legacy name, and accept a file only when its manifest proves it.
+- Verification:
+  - Full suite: 1192 OK (skipped=25).
+  - Real FFmpeg check in a temp root (`temp/ui-plan/export-fix/e2e.py`): 11/11.
+  - Mutation checks: silencing any one manifest check fails the intended tests.
+  - Read-only on the real project (`realdata_check.py`): all 21 exports that still have a file are proven under their legacy names, and the cleanup assessment and export checks on a database copy are identical between `main` and this branch (25 and 24 jobs).
+- Side finding, pre-existing: with the default size limit, an export whose output lasts less than about 24 s fails in libx264. It is offered to the user as a separate task, not changed here.
+- Next: committed on the branch at the user's request (2026-10-03); the user decides on integration. Running it needs the Control Center tree on this code and a Control Center restart (ask first). The main tree has another session's uncommitted Dashboard V2 work (`dashboard_v2/`, `docs/DASHBOARD_V2_UPDATE_GUIDE.md`, and notes in CHANGELOG/PROJECT_STATUS/SESSION_HANDOFF), so integrating needs care with those files.
 
 ## Current work — 2026-10-03 dashboard batch 4: platform logos → BLUR, logo memory page, archive/restore, UI fixes (committed 6a8a59c; integrated into the main tree ~17:05; the user restarted the Control Center on it at 18:01:50)
 
@@ -42,7 +74,7 @@ Always confirm this section with `git status` and `git log` because it becomes s
 - Closes batch 2's open items:
   - (a) The standalone review server (`serve_review_ui`) now fails closed. It does not export any video with a Control Center job, nor when the DB is unreadable. It refuses decision edits while the video's export is in flight or still requested (paused, failed or interrupted, until Hủy retires it), after its source was cleaned, and while it is skipped.
   - (b) A paused, cancelled, superseded or already-exported export no longer keeps a live PENDING render. Cancel, a changed decision, a skip and the finalize shortcut retire the stage (EXPORT_REQUEST_RETIRED), and "Tiếp tục" refuses a settled job or an old export. `render:{id}` stays as history.
-- G2 fix pass (evidence `temp/ui-plan/batch3/fix/`: focused log, mutation summary, read-only identity probe, Esc mock): cleanup eligibility of an export now compares the manifest's `operations` with `review_workflow.approved_operations(current queue)` (decision fields only); review-ui also refuses edits while a paused/failed/interrupted export still holds a render request; `serve()` waits for an API `stop()`; Esc cannot close the cleanup dialog mid-POST; skipped+cleaned card text. Deferred: the finalize shortcut still marks COMPLETED when only the blur edge mode changed (review_export_paths does not hash it); cleanup now refuses such an export with a "move the old file out of output/ first" reason.
+- G2 fix pass (evidence `temp/ui-plan/batch3/fix/`: focused log, mutation summary, read-only identity probe, Esc mock): cleanup eligibility of an export now compares the manifest's `operations` with `review_workflow.approved_operations(current queue)` (decision fields only); review-ui also refuses edits while a paused/failed/interrupted export still holds a render request; `serve()` waits for an API `stop()`; Esc cannot close the cleanup dialog mid-POST; skipped+cleaned card text. Deferred: the finalize shortcut still marks COMPLETED when only the blur edge mode changed (review_export_paths does not hash it); cleanup now refuses such an export with a "move the old file out of output/ first" reason. (Resolved on branch `fix/export-identity-http`, 2026-10-03: the name hashes the render operations, and only a manifest-proven export is reused.)
 - Defaults applied without asking (from the plan): after cleanup the review page is view-only (no decision edits, no export) and the job stays in "Hoàn tất". A different file at the old path becomes a new job that needs "Bắt đầu".
 - Safety: no default recycler anywhere. Every test module that can reach cleanup patches `recycle_bin._shell_delete` to raise. `send_to_recycle_bin` refuses every folder except `<install>\input` (plus `<install>\temp\recycle-bin-test` only with BILIFLOW_TEST_RECYCLE_BIN=1). The workers' rules forbid any POST to 8765 and any access to `input/`; the G2 reviewers re-check this.
 - Gates done (evidence `temp/ui-plan/batch3/`):

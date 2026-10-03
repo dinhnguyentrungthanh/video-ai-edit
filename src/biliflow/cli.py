@@ -40,6 +40,7 @@ from biliflow.video_benchmark import benchmark_videos
 from biliflow.vlm_confirmation import confirm_violence_report
 from biliflow.visual_logo_scanner import scan_visual_logos
 from biliflow.control_center import serve_control_center
+from biliflow.http_guards import loopback_host_argument
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -450,7 +451,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     review_ui = sub.add_parser("review-ui", help="Open an interactive local confirmation page")
     review_ui.add_argument("--queue", type=Path, required=True)
-    review_ui.add_argument("--host", default="127.0.0.1")
+    review_ui.add_argument("--host", default="127.0.0.1", type=loopback_host_argument)
     review_ui.add_argument("--port", type=int, default=8765)
 
     approve = sub.add_parser("approve-previews", help="Approve preview clips and unlock final render")
@@ -475,7 +476,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
 
     control = sub.add_parser("control-center", help="Run the on-demand local dashboard")
-    control.add_argument("--host", default="127.0.0.1")
+    control.add_argument("--host", default="127.0.0.1", type=loopback_host_argument)
     control.add_argument("--port", type=int, default=8765)
     control.add_argument("--stable-seconds", type=float, default=60.0)
     control.add_argument("--no-import-existing", action="store_true")

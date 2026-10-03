@@ -5,6 +5,7 @@ import importlib.util
 import json
 import re
 import shutil
+import socket
 import subprocess
 import threading
 import time
@@ -18,11 +19,14 @@ from biliflow.export_dialog import EXPORT_DIALOG_JS
 from biliflow.export_guards import (
     CONTROL_CENTER_JOB_MESSAGE,
     CONTROL_CENTER_STATE_UNREADABLE,
+    EXPORT_PATH_TAKEN_MESSAGE,
     REVIEW_EDIT_IN_FLIGHT_MESSAGE,
     SOURCE_CLEANED_REVIEW_REFUSAL,
     SOURCE_MISSING_MESSAGE,
     STANDALONE_SKIPPED_EDIT_REFUSAL,
 )
+from biliflow.final_renderer import normalize_output_size_policy
+from biliflow.http_guards import CONTENT_LENGTH_MESSAGE, REQUEST_TIMEOUT_MESSAGE, REQUEST_TIMEOUT_SECONDS
 from biliflow.job_store import JobStore
 from biliflow.review_workflow import (
     _guard_in_film_text,
@@ -2522,6 +2526,117 @@ class StandaloneReviewServerTests(unittest.TestCase):
         status, payload = self.post_json("/api/decision", {"id": "a", "decision": "KEEP"})
         self.assertEqual(status, 200, payload)
         self.assertEqual(payload["items"][0]["decision"], "KEEP")
+
+    # ---------------- Reuse only a proven export; request limits (review fixes)
+    def test_standalone_export_never_takes_a_file_without_a_manifest(self):
+        source = self.ready_queue(sha=hashlib.sha256(b"source video").hexdigest(), source_exists=True)
+        queue = json.loads(self.queue_path.read_text(encoding="utf-8"))
+        planned = dict(queue, export_size_policy=normalize_output_size_policy("default", None))
+        output = review_export_paths(self.root, planned)[1]
+        output.parent.mkdir(parents=True)
+        output.write_bytes(b"not a video")
+        local = f"127.0.0.1:{self.port}"
+        status, body = self.request("/api/export", host=local)
+        self.assertEqual((status, json.loads(body)["status"]), (200, "IDLE"))
+        self.assert_refused("/api/finalize", {"size_mode": "default"},
+                            EXPORT_PATH_TAKEN_MESSAGE.format(name=output.name))
+        self.assertEqual(output.read_bytes(), b"not a video")
+        # The manifest the renderer writes proves the file: the export is done.
+        output.write_bytes(b"rendered video")
+        output.with_suffix(".mp4.manifest.json").write_text(json.dumps({
+            "status": "COMPLETED", "created_at": "2026-10-03T12:00:00+07:00",
+            "source": {"path": str(source), "sha256": queue["source"]["sha256"], "modified": False},
+            "output": {"path": output.relative_to(self.root).as_posix(), "bytes": output.stat().st_size,
+                       "sha256": hashlib.sha256(b"rendered video").hexdigest()},
+            "encoding": {"full_decode_validation_passed": True},
+            "operations": [],
+        }), encoding="utf-8")
+        status, body = self.request("/api/export", host=local)
+        self.assertEqual(json.loads(body), {"status": "COMPLETED", "output": output.relative_to(self.root).as_posix()})
+        status, payload = self.post_json("/api/finalize", {"size_mode": "default"})
+        self.assertEqual((status, payload["status"]), (202, "COMPLETED"))
+        self.assertEqual(sorted(self.root.rglob("*-export-job.json")), [])
+
+    def raw_decision(self, length, body=b""):
+        """A raw POST /api/decision; (everything answered, seconds until the server closed)."""
+        local = f"127.0.0.1:{self.port}"
+        token = re.search(rb'let token="([^"]+)";', self.request("/", host=local)[1]).group(1).decode()
+        started = time.monotonic()
+        chunks = []
+        with socket.create_connection(("127.0.0.1", self.port), timeout=5) as client:
+            client.sendall((
+                f"POST /api/decision HTTP/1.1\r\nHost: {local}\r\nX-BiliFlow-Token: {token}\r\n"
+                f"Content-Type: application/json\r\nContent-Length: {length}\r\n\r\n"
+            ).encode("latin-1") + body)
+            while True:
+                try:
+                    chunk = client.recv(65536)
+                except TimeoutError:
+                    break
+                if not chunk:
+                    break
+                chunks.append(chunk)
+        return b"".join(chunks), time.monotonic() - started
+
+    def test_standalone_export_refuses_a_link_left_at_the_export_path(self):
+        self.ready_queue(sha=hashlib.sha256(b"source video").hexdigest(), source_exists=True)
+        queue = json.loads(self.queue_path.read_text(encoding="utf-8"))
+        planned = dict(queue, export_size_policy=normalize_output_size_policy("default", None))
+        output = review_export_paths(self.root, planned)[1]
+        output.parent.mkdir(parents=True)
+        try:
+            output.symlink_to(self.root / "missing-target.mp4")
+        except OSError as error:
+            self.skipTest(f"cannot create a symbolic link here: {error}")
+        self.assert_refused("/api/finalize", {"size_mode": "default"},
+                            EXPORT_PATH_TAKEN_MESSAGE.format(name=output.name))
+        self.assertTrue(output.is_symlink())
+
+    def test_an_invalid_content_length_is_refused_at_once(self):
+        self.assertEqual(self.server.RequestHandlerClass.timeout, REQUEST_TIMEOUT_SECONDS)
+        before = self.queue_path.read_bytes()
+        for value in ("-1", "abc"):
+            with self.subTest(value=value):
+                response, elapsed = self.raw_decision(value)
+                self.assertTrue(response.startswith(b"HTTP/1.0 400 "), response[:80])
+                self.assertIn(CONTENT_LENGTH_MESSAGE.encode("utf-8"), response)
+                self.assertLess(elapsed, 3)
+        self.assertEqual(self.queue_path.read_bytes(), before)
+
+    def test_a_request_that_stops_arriving_is_closed(self):
+        self.server.RequestHandlerClass.timeout = 0.5
+        before = self.queue_path.read_bytes()
+        response, elapsed = self.raw_decision(40, b'{"id": "a"')
+        self.assertLess(elapsed, 3)
+        self.assertTrue(response.startswith(b"HTTP/1.0 408 "), response[:80])
+        self.assertIn(REQUEST_TIMEOUT_MESSAGE.encode("utf-8"), response)
+        self.assertEqual(self.queue_path.read_bytes(), before)
+        self.assertEqual(self.request("/api/queue", host=f"127.0.0.1:{self.port}")[0], 200)
+
+    def test_a_body_nested_too_deep_is_refused(self):
+        before = self.queue_path.read_bytes()
+        body = b"[" * 60000
+        response, elapsed = self.raw_decision(len(body), body)
+        self.assertTrue(response.startswith(b"HTTP/1.0 400 "), response[:80])
+        self.assertLess(elapsed, 3)
+        self.assertEqual(self.queue_path.read_bytes(), before)
+
+    def test_the_export_status_follows_the_file_on_disk(self):
+        # A job file that says COMPLETED for an export that left output/: the page
+        # offers the export again, as POST /api/finalize would render it again.
+        self.ready_queue(sha=hashlib.sha256(b"source video").hexdigest(), source_exists=True)
+        queue = json.loads(self.queue_path.read_text(encoding="utf-8"))
+        _, output, job_path = review_export_paths(self.root, queue)
+        job_path.parent.mkdir(parents=True)
+        job_path.write_text(json.dumps({"status": "COMPLETED", "output": output.relative_to(self.root).as_posix()}),
+                            encoding="utf-8")
+        local = f"127.0.0.1:{self.port}"
+        status, body = self.request("/api/export", host=local)
+        self.assertEqual((status, json.loads(body)), (200, {"status": "IDLE"}))
+        for state in ("QUEUED", "RENDERING", "FAILED"):
+            with self.subTest(state=state):
+                job_path.write_text(json.dumps({"status": state}), encoding="utf-8")
+                self.assertEqual(json.loads(self.request("/api/export", host=local)[1]), {"status": state})
 
 
 REVISION = "a5ce9eec1ac11773ca9ff44f45b1bb6591631562"

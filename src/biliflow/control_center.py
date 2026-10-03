@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import hmac
 import json
@@ -37,6 +38,7 @@ from biliflow.export_dialog import (
 from biliflow.export_guards import (
     DECISION_LABELS,
     EXPORT_IN_FLIGHT_MESSAGE,
+    EXPORT_PATH_TAKEN_MESSAGE,
     QUEUE_NOT_READY_MESSAGE,
     REVIEW_EDIT_IN_FLIGHT_MESSAGE,
     REVIEW_QUEUE_IO as _REVIEW_QUEUE_IO,
@@ -53,6 +55,13 @@ from biliflow.export_guards import (
     render_in_flight,
     review_summary,
     skip_refusal,
+)
+from biliflow.http_guards import (
+    REQUEST_TIMEOUT_MESSAGE,
+    REQUEST_TIMEOUT_SECONDS,
+    content_length,
+    loopback_bind_address,
+    require_loopback_host,
 )
 from biliflow.job_import import import_existing_project
 from biliflow.job_pipeline import DETECTOR_GROUPS
@@ -71,6 +80,7 @@ from biliflow.review_workflow import (
     bulk_accept_suggested_decisions,
     bulk_keep_review_items,
     clear_review_decision,
+    existing_review_export,
     record_review_decision,
     review_resource_status,
     review_export_paths,
@@ -1109,12 +1119,19 @@ class ControlCenter:
             if refusal:
                 raise ValueError(refusal)
             policy = normalize_output_size_policy(size_mode, max_output_gb)
+            planned = {**queue, "export_size_policy": policy}
+            plan_path, output_path, _ = review_export_paths(self.root, planned)
+            existing = existing_review_export(self.root, planned)
+            if existing is None and os.path.lexists(output_path):
+                # A file (or a link, even a broken one) at the path this render
+                # would write that no manifest proves: neither the export nor overwritten.
+                raise ValueError(EXPORT_PATH_TAKEN_MESSAGE.format(name=output_path.name))
             queue["export_size_policy"] = policy
             _write_json(queue_path, queue)
-            plan_path, output_path, _ = review_export_paths(self.root, queue)
-            if output_path.exists():
-                # The export of this review already exists: no render, and an
-                # old request left by a paused or failed export is retired.
+            if existing is not None:
+                # The export of this review already exists (proven by its
+                # manifest): no render, and an old request left by a paused or
+                # failed export is retired.
                 self.store.update_job(
                     job_id, state="COMPLETED", progress=1.0, current_stage=None, stop_mode=None,
                 )
@@ -1123,7 +1140,7 @@ class ControlCenter:
                 )
                 return {
                     "status": "COMPLETED",
-                    "output": output_path.relative_to(self.root).as_posix(),
+                    "output": existing[0].relative_to(self.root).as_posix(),
                     "export_size_policy": policy,
                 }
             plan = build_edit_plan(project_root=self.root, queue_path=queue_path, plan_path=plan_path)
@@ -1419,8 +1436,9 @@ class ControlCenter:
                 thread.join(12)
 
     def serve(self) -> None:
+        require_loopback_host(self.host)
         try:
-            self.server = ThreadingHTTPServer((self.host, self.port), _handler_class(self))
+            self.server = ThreadingHTTPServer((loopback_bind_address(self.host), self.port), _handler_class(self))
             actual_port = self.server.server_port
             state = {"schema_version": 1, "pid": os.getpid(), "host": self.host,
                      "port": actual_port, "url": f"http://{self.host}:{actual_port}/",
@@ -1498,6 +1516,11 @@ def _handler_class(center: ControlCenter) -> type[BaseHTTPRequestHandler]:
     """HTTP handler bound to one Control Center; module level so tests can bind port 0."""
 
     class Handler(BaseHTTPRequestHandler):
+        # A client that stops sending its request (headers or body) cannot hold
+        # a thread: StreamRequestHandler sets this on the socket. stream_video
+        # lifts it while a video streams.
+        timeout = REQUEST_TIMEOUT_SECONDS
+
         def log_message(self, format: str, *args) -> None:
             return
 
@@ -1522,7 +1545,7 @@ def _handler_class(center: ControlCenter) -> type[BaseHTTPRequestHandler]:
                             "application/json; charset=utf-8")
 
         def body(self) -> dict[str, Any]:
-            length = int(self.headers.get("Content-Length", "0"))
+            length = content_length(self.headers)
             if length > 65536:
                 raise ValueError("Request is too large")
             value = json.loads(self.rfile.read(length) or b"{}")
@@ -1537,11 +1560,26 @@ def _handler_class(center: ControlCenter) -> type[BaseHTTPRequestHandler]:
             # A refused POST still reads its small body: closing a socket with
             # unread bytes makes Windows reset it before the client reads the 403.
             try:
-                length = int(self.headers.get("Content-Length", "0"))
+                length = content_length(self.headers)
             except ValueError:
                 return
             if 0 < length <= 65536:
                 self.rfile.read(length)
+
+        def stream_video(self, source: Path, mime: str) -> None:
+            """Stream without the request timeout: a paused player stops reading for minutes."""
+            self.connection.settimeout(None)
+            try:
+                stream_file(self, source, mime, getattr(center, "_stopping", None))
+            finally:
+                with contextlib.suppress(OSError):
+                    self.connection.settimeout(self.timeout)
+
+        def request_timed_out(self) -> None:
+            """The request body stopped arriving: answer 408 if the client still reads, then close."""
+            self.close_connection = True
+            with contextlib.suppress(OSError):
+                self.send_json(408, {"error": REQUEST_TIMEOUT_MESSAGE})
 
         def host_allowed(self, *, drain: bool = False) -> bool:
             if _host_allowed(self.headers.get("Host"), getattr(center, "host", None)):
@@ -1572,7 +1610,7 @@ def _handler_class(center: ControlCenter) -> type[BaseHTTPRequestHandler]:
                     self.send_bytes(200, target.read_bytes(), "image/jpeg")
                 else:
                     source, mime = center.review_video(job_id)
-                    stream_file(self, source, mime, getattr(center, "_stopping", None))
+                    self.stream_video(source, mime)
             except ReviewMediaError as error:
                 self.send_json(error.status, {"error": str(error)})
             except KeyError as error:
@@ -1692,6 +1730,14 @@ def _handler_class(center: ControlCenter) -> type[BaseHTTPRequestHandler]:
                 return
             try:
                 body = self.body()
+            except TimeoutError:
+                self.request_timed_out()
+                return
+            except (ValueError, RecursionError) as error:
+                # RecursionError: JSON nested too deep for json.loads.
+                self.send_json(400, {"error": str(error)})
+                return
+            try:
                 if path == "/api/scheduler":
                     center.store.set_setting("scheduler_paused", bool(body.get("paused")))
                     center.scheduler._wake.set()
@@ -1831,5 +1877,7 @@ def _handler_class(center: ControlCenter) -> type[BaseHTTPRequestHandler]:
 
 def serve_control_center(*, project_root: Path, host: str = "127.0.0.1", port: int = 8765,
                          stable_seconds: float = 60.0, import_existing: bool = True) -> None:
+    # Before the database is opened or the project imported.
+    require_loopback_host(host)
     ControlCenter(project_root, host=host, port=port, stable_seconds=stable_seconds,
                   import_existing=import_existing).serve()
