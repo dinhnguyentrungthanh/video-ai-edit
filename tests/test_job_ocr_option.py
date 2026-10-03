@@ -15,6 +15,14 @@ from biliflow.stage_cache import StageArtifactCache
 ROOT = Path(__file__).resolve().parents[1]
 
 
+def _run_node(source):
+    """Run a script file: the dashboard script is longer than a Windows command line."""
+    with TemporaryDirectory() as directory:
+        path = Path(directory) / "check.js"
+        path.write_text(source, encoding="utf-8")
+        return subprocess.run([shutil.which("node"), str(path)], capture_output=True, text=True)
+
+
 class JobOcrOptionTests(unittest.TestCase):
     def test_only_text_command_changes_and_cache_separates_modes(self):
         source = next((ROOT / "input").glob("*.mp4"))
@@ -107,7 +115,7 @@ selectedDetectors=()=>['advertising'];
  values['ocr-1'].value='1';assert.equal(selectedOcrBatch(1),1);
 })().catch(e=>{console.error(e);process.exitCode=1});
 '''
-        result = subprocess.run([shutil.which("node"), "-e", script + checks], capture_output=True, text=True)
+        result = _run_node(script + checks)
         self.assertEqual(result.returncode, 0, result.stderr)
 
 
@@ -293,5 +301,5 @@ selectedDetectors=()=>['advertising'];
  global.fetch=async()=>{throw Error('save failed')};speedDrafts[1]=true;await rerun(1);assert.equal(speedDrafts[1],true);
 })().catch(e=>{console.error(e);process.exitCode=1});
 '''
-        result = subprocess.run([shutil.which("node"), "-e", script + checks], capture_output=True, text=True)
+        result = _run_node(script + checks)
         self.assertEqual(result.returncode, 0, result.stderr)

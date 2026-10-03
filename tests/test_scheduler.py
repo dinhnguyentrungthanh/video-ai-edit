@@ -648,6 +648,82 @@ class QueueOrderTests(unittest.TestCase):
         self.scheduler.resume(a)
         self.assertEqual(self.order(), [(a, "export")])
 
+    def test_pause_or_cancel_during_a_stage_without_a_subprocess_is_kept(self):
+        # Preflight (and a cache hit) runs no subprocess: Dừng ngay / Hủy only
+        # change the job row, and the finished stage must not requeue the job.
+        self.stages = [
+            PipelineStage("preflight", "PREFLIGHT", tuple()),
+            PipelineStage("two", "SCANNING_TEXT", tuple()),
+        ]
+        for action, expected in (("pause_now", "PAUSED"), ("cancel", "CANCELLED")):
+            with self.subTest(action=action):
+                job_id = self.job(action)
+                self.start(job_id)
+                selection = self.scheduler._select()
+                with patch.object(self.scheduler, "_run_preflight",
+                                  side_effect=lambda job: getattr(self.scheduler, action)(int(job["id"]))):
+                    self.scheduler._execute(*selection)
+                job = self.store.get_job(job_id)
+                self.assertEqual((job["state"], job["current_stage"]), (expected, None))
+                self.assertEqual(self.store.stage(job_id, "preflight")["state"], "COMPLETED")
+                self.assertIsNone(self.scheduler._select())
+        # Tiếp tục then continues with the next stage.
+        self.scheduler.resume(self._paused_id())
+        selection = self.scheduler._select()
+        self.assertEqual(selection[1]["name"], "two")
+
+    def _paused_id(self):
+        return next(job["id"] for job in self.store.list_jobs() if job["state"] == "PAUSED")
+
+    def test_a_stage_result_never_overwrites_a_concurrent_pause(self):
+        self.stages = [
+            PipelineStage("one", "SCANNING_TEXT", tuple()),
+            PipelineStage("two", "SCANNING_LOGO", tuple()),
+        ]
+        a = self.job("a")
+        self.start(a)
+        _job, _stage, definition = self.scheduler._select()
+        self.assertTrue(self.store.claim_queued(a, definition.job_state, definition.name))
+        self.store.update_stage(a, "one", state="COMPLETED")
+        # The pause lands between the read in _after_success and its write.
+        real_get = self.store.get_job
+        calls = {"n": 0}
+
+        def get_then_pause(job_id):
+            value = real_get(job_id)
+            calls["n"] += 1
+            if calls["n"] == 2:
+                self.store.update_job(job_id, state="PAUSED", stop_mode="PAUSED")
+            return value
+
+        with patch.object(self.store, "get_job", side_effect=get_then_pause):
+            self.scheduler._after_success(a, "one", definition)
+        self.assertEqual(self.store.get_job(a)["state"], "PAUSED")
+
+    def test_one_lock_serialises_every_job_action(self):
+        self.assertIs(self.scheduler._start_lock, self.scheduler.job_action_lock)
+        # Re-entrant: retry calls resume, finalize calls queue_render inside it.
+        with self.scheduler.job_action_lock:
+            with self.scheduler.job_action_lock:
+                pass
+        a = self.job("a")
+        self.start(a)
+        self.assertTrue(self.store.claim_queued(a, "PREFLIGHT", "preflight"))
+        for action in (self.scheduler.resume, self.scheduler.retry):
+            with self.assertRaisesRegex(ValueError, "đang được xử lý"):
+                action(a)
+        self.assertEqual(self.store.get_job(a)["state"], "PREFLIGHT")
+        # Another thread waits for the lock instead of interleaving.
+        import threading
+        entered = threading.Event()
+        with self.scheduler.job_action_lock:
+            worker = threading.Thread(target=lambda: (self.scheduler.job_action_lock.acquire(),
+                                                      entered.set(), self.scheduler.job_action_lock.release()))
+            worker.start()
+            self.assertFalse(entered.wait(0.2))
+        worker.join(5)
+        self.assertTrue(entered.is_set())
+
     def test_resume_refuses_a_job_with_nothing_left_to_run(self):
         a = self.job("a")
         self.start(a)

@@ -217,6 +217,27 @@ class JobStoreTests(unittest.TestCase):
         self.assertFalse(self.store.claim_queued(self.job["id"], "PREFLIGHT", "preflight"))
         self.assertFalse(self.store.pause_if_queued(self.job["id"]))
 
+    def test_conditional_update_only_in_the_expected_states(self):
+        job_id = self.job["id"]
+        self.store.mark_queued(job_id, reseq=True)
+        self.assertIsNone(self.store.update_job_if(job_id, states={"PREFLIGHT"}, state="PAUSED"))
+        self.assertEqual(self.store.get_job(job_id)["state"], "QUEUED")
+        value = self.store.update_job_if(job_id, states={"QUEUED"}, state="PREFLIGHT", current_stage="preflight")
+        self.assertEqual((value["state"], value["current_stage"]), ("PREFLIGHT", "preflight"))
+        self.assertIsNone(self.store.update_job_if(job_id, exclude=IN_PROCESS_STATES, state="WAITING_REVIEW"))
+        self.assertEqual(self.store.update_job_if(job_id, exclude={"QUEUED"}, state="READY_TO_EXPORT")["state"],
+                         "READY_TO_EXPORT")
+        with self.assertRaises(KeyError):
+            self.store.update_job_if(9999, states={"QUEUED"}, state="PAUSED")
+        with self.assertRaises(ValueError):
+            self.store.update_job_if(job_id, states=set(), state="PAUSED")
+
+    def test_a_skipped_job_gives_its_queue_place_back(self):
+        job_id = self.job["id"]
+        self.store.mark_queued(job_id, reseq=True)
+        value = self.store.update_job(job_id, state="SKIPPED")
+        self.assertEqual((value["queue_seq"], value["queued_at"]), (None, None))
+
     def test_watcher_stability_resets_when_size_changes(self):
         first = self.store.observe_file(self.source, 5, 1)
         second = self.store.observe_file(self.source, 6, 2)

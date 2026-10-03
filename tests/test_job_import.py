@@ -116,7 +116,8 @@ class RestartImportTests(unittest.TestCase):
     def test_protected_states_survive_a_restart_unchanged(self):
         # Old behaviour (temp/ui-plan/import_restart_check.py): every one of
         # these became READY_TO_EXPORT and a queued job silently left the queue.
-        for state in ("QUEUED", "PAUSED", "INTERRUPTED_RECOVERABLE", "FAILED", "CANCELLED", "COMPLETED"):
+        for state in ("QUEUED", "PAUSED", "INTERRUPTED_RECOVERABLE", "FAILED", "CANCELLED", "COMPLETED",
+                      "SKIPPED"):
             with self.subTest(state=state):
                 self.store.mark_queued(self.job_id, reseq=True)
                 self.store.update_job(self.job_id, state=state, error="kept", content_style="mixed")

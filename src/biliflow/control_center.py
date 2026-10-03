@@ -27,9 +27,13 @@ from biliflow.codex_supervisor import (
     start_codex_login,
     stored_coverage_block_is_outdated,
 )
+from biliflow.export_dialog import (
+    EXPORT_CUSTOM_GB_ATTRIBUTES,
+    EXPORT_DIALOG_JS,
+)
 from biliflow.job_import import import_existing_project
 from biliflow.job_pipeline import DETECTOR_GROUPS
-from biliflow.job_store import JobStore, now_iso
+from biliflow.job_store import IN_PROCESS_STATES, JobStore, now_iso
 from biliflow.final_renderer import (
     expected_output_duration,
     normalize_output_size_policy,
@@ -57,7 +61,7 @@ from biliflow.review_evidence import (
     stream_file,
     strip_time,
 )
-from biliflow.scheduler import InputWatcher, JobScheduler
+from biliflow.scheduler import SKIPPED_REFUSAL, InputWatcher, JobScheduler
 from biliflow.storage import storage_status
 
 
@@ -188,6 +192,99 @@ def _read_json(path: Path) -> dict[str, Any]:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
+SOURCE_MISSING_MESSAGE = "Video gốc không còn trong input; không thể xuất."
+EXPORT_IN_FLIGHT_MESSAGE = "Video này đang chờ xuất hoặc đang xuất; không xếp lệnh xuất thêm lần nữa."
+REVIEW_EDIT_IN_FLIGHT_MESSAGE = (
+    "Video đang chờ xuất hoặc đang xuất; hủy lệnh xuất trước khi đổi quyết định."
+)
+DECISION_LABELS = {
+    "KEEP": "Giữ nguyên", "BLUR": "Làm mờ", "CUT": "Cắt cảnh",
+    "NEEDS_MORE_CONTEXT": "Cần xem thêm",
+}
+# Jobs whose card shows a review summary (the only queues status() reads).
+REVIEW_SUMMARY_STATES = frozenset({"WAITING_REVIEW", "READY_TO_EXPORT", "SKIPPED"})
+# A review decision never moves these jobs: an export waiting or running keeps
+# the plan fixed at finalize, and a skip ends only through unskip or rerun.
+SYNC_KEEP_STATES = frozenset({"QUEUED", "SKIPPED"}) | IN_PROCESS_STATES
+
+
+def review_summary(queue: dict[str, Any]) -> dict[str, Any]:
+    """Compact counts of a review queue for the dashboard (no item data)."""
+    items = list(queue.get("items") or [])
+    decisions: dict[str, int] = {}
+    for item in items:
+        if item.get("decision"):
+            key = str(item["decision"])
+            decisions[key] = decisions.get(key, 0) + 1
+    policy = queue.get("export_size_policy")
+    summary = {
+        "status": queue.get("status"),
+        "main_items": len(items),
+        "advisory_items": len(queue.get("advisory_items") or []),
+        "pending": sum(1 for item in items if not item.get("decision")),
+        "decisions": dict(sorted(decisions.items())),
+        "export_size_policy": (
+            {"mode": policy.get("mode"), "maximum_output_gb": policy.get("maximum_output_gb")}
+            if isinstance(policy, dict) else None
+        ),
+    }
+    summary["skip_eligible"] = skip_refusal(summary) is None
+    return summary
+
+
+def skip_refusal(summary: dict[str, Any]) -> str | None:
+    """Why "Bỏ qua (không xuất)" is not allowed for this review, or None.
+
+    User decision 2026-10-02: a fully reviewed queue with no main item
+    (advisory candidates do not count), or whose every main decision is KEEP.
+    """
+    if summary.get("status") != "READY_FOR_EDIT_PLAN" or summary.get("pending"):
+        return "Video còn mục chưa có quyết định cuối cùng; không thể bỏ qua."
+    decisions = dict(summary.get("decisions") or {})
+    other = {key: value for key, value in decisions.items() if key != "KEEP"}
+    if other:
+        named = ", ".join(
+            f"{value} {DECISION_LABELS.get(key, key)}" for key, value in sorted(other.items())
+        )
+        return (
+            f"Video có cảnh chính không phải Giữ nguyên ({named}); "
+            "hãy xuất video thay vì bỏ qua."
+        )
+    if int(decisions.get("KEEP", 0)) != int(summary.get("main_items") or 0):
+        return "Video còn mục chưa có quyết định cuối cùng; không thể bỏ qua."
+    return None
+
+
+# Per-process cache of review summaries, keyed by (path, mtime_ns, size). It
+# keeps only the counts, so the 3 s dashboard poll never parses an unchanged
+# queue again and never evicts the review page's evidence cache.
+_SUMMARY_CACHE: dict[str, tuple[int, int, dict[str, Any]]] = {}
+_SUMMARY_CACHE_LOCK = threading.Lock()
+_SUMMARY_CACHE_LIMIT = 256
+
+
+def _cached_review_summary(path: Path) -> dict[str, Any] | None:
+    try:
+        stat = path.stat()
+    except OSError:
+        return None
+    key = os.path.normcase(str(path))
+    with _SUMMARY_CACHE_LOCK:
+        hit = _SUMMARY_CACHE.get(key)
+    if hit is not None and hit[0] == stat.st_mtime_ns and hit[1] == stat.st_size:
+        return dict(hit[2])
+    try:
+        with _REVIEW_QUEUE_IO:
+            summary = review_summary(_read_json(path))
+    except (OSError, ValueError, TypeError, AttributeError):
+        return None
+    with _SUMMARY_CACHE_LOCK:
+        if len(_SUMMARY_CACHE) >= _SUMMARY_CACHE_LIMIT:
+            _SUMMARY_CACHE.clear()
+        _SUMMARY_CACHE[key] = (stat.st_mtime_ns, stat.st_size, summary)
+    return dict(summary)
+
+
 def _inside(root: Path, target: Path) -> Path:
     root = root.resolve(strict=True)
     target = target.resolve(strict=True)
@@ -253,14 +350,15 @@ def _resources(root: Path) -> dict[str, Any]:
 
 
 def _dashboard_html() -> str:
-    return """<!doctype html><html lang="vi"><head><meta charset="utf-8">
+    page = """<!doctype html><html lang="vi"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1"><title>BiliFlow Control Center</title>
 <style>
-:root{color-scheme:dark;font:15px system-ui,-apple-system,"Segoe UI",sans-serif;background:#090b10;color:#e8ecf4;--panel:#141923;--panel-2:#1a202c;--line:#2b3546;--muted:#9aa7ba;--blue:#55b8f5;--green:#61d39b;--amber:#e3ad4d;--red:#ff7f8e}*{box-sizing:border-box}body{margin:0;min-height:100vh;background:radial-gradient(circle at 15% -10%,#18263a 0,transparent 34rem),#090b10}header{padding:16px 24px;background:rgba(15,19,27,.94);border-bottom:1px solid #222b39;display:flex;gap:10px;align-items:center;position:sticky;top:0;z-index:4;backdrop-filter:blur(14px)}h1{font-size:21px;margin:0 auto 0 0;letter-spacing:-.02em}.pill{padding:6px 10px;border:1px solid #303a4b;border-radius:99px;background:#202633;color:#cbd5e4;font-size:13px}main{padding:22px;max-width:1500px;margin:auto}.bar,.job,.workspace{background:rgba(20,25,35,.96);border:1px solid var(--line);border-radius:16px;box-shadow:0 14px 36px rgba(0,0,0,.16)}.bar{padding:14px;margin-bottom:14px;display:flex;gap:10px;flex-wrap:wrap;align-items:center}.ai{display:grid;grid-template-columns:1fr auto;gap:16px}.ai-controls{display:flex;gap:8px;flex-wrap:wrap;align-items:center}.workspace{overflow:clip}.workspace-head{padding:18px 20px 0}.workspace-title{font-size:19px;font-weight:750;margin:0}.workspace-subtitle{color:var(--muted);font-size:13px;margin-top:4px}.job-tabs{display:flex;gap:8px;padding:16px 20px 0;border-bottom:1px solid var(--line);overflow-x:auto;position:sticky;top:var(--header-h,64px);z-index:3;background:rgba(20,25,35,.98);backdrop-filter:blur(14px)}.job-tab{display:flex;align-items:center;gap:8px;padding:11px 14px;border:1px solid transparent;border-radius:10px 10px 0 0;background:transparent;color:#aab6c8;white-space:nowrap}.job-tab:hover{background:#1c2330;color:#fff}.job-tab.active{background:#202837;border-color:#354258;border-bottom-color:#202837;color:#fff}.tab-count{min-width:24px;padding:2px 7px;border-radius:99px;background:#2d3748;font-size:12px;text-align:center}.job-tab.active .tab-count{background:#286b96;color:#eaf7ff}.job-list{padding:16px}.job{padding:0;margin-bottom:14px;overflow:hidden}.job:last-child{margin-bottom:0}.job[data-bucket="completed"]{border-color:#285744}.job[data-bucket="running"]{border-color:#2e5872}.job-head{display:flex;gap:14px;align-items:flex-start;padding:17px 18px;border-bottom:1px solid #273142}.job-identity{min-width:0;flex:1}.job-title{font-size:17px;font-weight:750;word-break:break-word}.job-key{color:#738197;font-size:12px;margin-top:3px;word-break:break-all}.job-path{color:var(--muted);font-size:12px;margin-top:7px;word-break:break-all}.state-badge{padding:7px 10px;border:1px solid #3b4658;border-radius:99px;background:#252d3a;font-weight:700;font-size:12px;white-space:nowrap}.tone-running{color:#8fd8ff;border-color:#2e6f96;background:#153348}.tone-complete{color:#88e7b8;border-color:#297252;background:#143c2e}.tone-waiting{color:#f0c66f;border-color:#74591f;background:#3d3014}.tone-error{color:#ff9aa5;border-color:#7e3540;background:#401d24}.job-badges{display:flex;flex-direction:column;align-items:flex-end;gap:6px}.queue-badge{padding:5px 9px;border:1px dashed #5b6b84;border-radius:99px;color:#c9d6e8;font-size:12px;font-weight:700;white-space:nowrap}.job-body{padding:17px 18px}.progress-row{display:flex;align-items:center;gap:12px}.progress-label{min-width:145px;color:#c8d2e1;font-size:13px}.progress{height:8px;background:#252d39;border-radius:99px;overflow:hidden;flex:1}.progress i{display:block;height:100%;border-radius:99px;background:linear-gradient(90deg,#368fd2,#5dc6f5)}.progress-value{min-width:40px;text-align:right;color:#c9d8e9;font-variant-numeric:tabular-nums}.status-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;margin-top:15px}.status-box{min-height:106px;padding:12px;border:1px solid #2d3748;border-radius:12px;background:#10151e}.status-box.tone-complete{border-color:#285b46;background:#10261f}.status-box.tone-running{border-color:#285e7c;background:#102431}.status-box.tone-waiting{border-color:#655020;background:#2a2415}.status-box.tone-error{border-color:#70313b;background:#2c171c}.status-kicker{color:#8f9db0;font-size:11px;font-weight:750;text-transform:uppercase;letter-spacing:.06em}.status-value{font-weight:750;margin-top:7px}.status-detail{color:#9eacbf;font-size:12px;line-height:1.4;margin-top:5px}.mini-progress{height:6px;margin-top:9px;border-radius:99px;background:#273242;overflow:hidden}.mini-progress i{display:block;height:100%;border-radius:99px;background:linear-gradient(90deg,#2e8dca,#67d1ff)}.phase-group+.phase-group{margin-top:20px}.phase-heading{display:flex;align-items:center;gap:9px;margin:1px 2px 11px;color:#d8e3f1;font-size:13px;font-weight:750}.phase-heading span{padding:2px 7px;border-radius:99px;background:#293444;color:#aebdd0;font-size:11px}.job-error{margin-top:12px;padding:10px 12px;border:1px solid #793641;border-radius:10px;background:#341a20;color:#ff9ba6}.job-footer{padding:14px 18px 17px;border-top:1px solid #273142;background:#11161f}.scope-line{color:#9ba9bc;font-size:12px;margin-bottom:12px}.actions{display:flex;gap:8px;flex-wrap:wrap;align-items:center}.actions select{max-width:220px}button,select{border:1px solid transparent;border-radius:9px;padding:9px 12px;background:#2d70b7;color:#fff;cursor:pointer}button:hover{filter:brightness(1.08)}button.warn{background:#8b611d}button.danger{background:#963845}button.green{background:#247554}button:disabled{opacity:.45;cursor:not-allowed}.detectors{width:100%;border:1px solid #39445a;border-radius:10px;padding:9px 11px;text-align:left}.detectors legend{color:#9ca8bb;padding:0 5px}.detectors label{display:inline-flex;gap:5px;align-items:center;margin:3px 10px 3px 0}.rerun-panel{width:100%;border:1px solid #354055;border-radius:11px;background:#171d28}.rerun-panel summary{cursor:pointer;padding:10px 12px;color:#c5d0df;font-weight:650}.rerun-body{display:flex;gap:8px;flex-wrap:wrap;padding:0 10px 10px}.empty{text-align:center;padding:52px 20px;color:var(--muted)}.detail{font-size:13px}.muted{color:var(--muted)}.state{font-weight:700;color:var(--blue)}.ok{color:var(--green)}.error{color:var(--red)}.notice{display:none;border-radius:10px;padding:12px 14px;margin-bottom:12px;background:#173c30;border:1px solid #2f8b69}.notice.error{display:block;background:#4a2027;border-color:#a43d4a}.notice.show{display:block}@media(max-width:1050px){.status-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.ai{grid-template-columns:1fr}}@media(max-width:680px){header{align-items:flex-start;flex-wrap:wrap}h1{width:100%}main{padding:12px}.status-grid{grid-template-columns:1fr}.job-head{flex-direction:column}.job-badges{flex-direction:row;align-items:center;flex-wrap:wrap}.progress-row{align-items:flex-start;flex-wrap:wrap}.progress-label{width:100%}.progress{min-width:180px}.job-tabs{padding-left:12px}.job-list{padding:10px}.actions{align-items:stretch}.actions button,.actions select{flex:1 1 auto}}
+:root{color-scheme:dark;font:15px system-ui,-apple-system,"Segoe UI",sans-serif;background:#090b10;color:#e8ecf4;--panel:#141923;--panel-2:#1a202c;--line:#2b3546;--muted:#9aa7ba;--blue:#55b8f5;--green:#61d39b;--amber:#e3ad4d;--red:#ff7f8e}*{box-sizing:border-box}body{margin:0;min-height:100vh;background:radial-gradient(circle at 15% -10%,#18263a 0,transparent 34rem),#090b10}header{padding:16px 24px;background:rgba(15,19,27,.94);border-bottom:1px solid #222b39;display:flex;gap:10px;align-items:center;position:sticky;top:0;z-index:4;backdrop-filter:blur(14px)}h1{font-size:21px;margin:0 auto 0 0;letter-spacing:-.02em}.pill{padding:6px 10px;border:1px solid #303a4b;border-radius:99px;background:#202633;color:#cbd5e4;font-size:13px}main{padding:22px;max-width:1500px;margin:auto}.bar,.job,.workspace{background:rgba(20,25,35,.96);border:1px solid var(--line);border-radius:16px;box-shadow:0 14px 36px rgba(0,0,0,.16)}.bar{padding:14px;margin-bottom:14px;display:flex;gap:10px;flex-wrap:wrap;align-items:center}.ai{display:grid;grid-template-columns:1fr auto;gap:16px}.ai-controls{display:flex;gap:8px;flex-wrap:wrap;align-items:center}.workspace{overflow:clip}.workspace-head{padding:18px 20px 0}.workspace-title{font-size:19px;font-weight:750;margin:0}.workspace-subtitle{color:var(--muted);font-size:13px;margin-top:4px}.job-tabs{display:flex;gap:8px;padding:16px 20px 0;border-bottom:1px solid var(--line);overflow-x:auto;position:sticky;top:var(--header-h,64px);z-index:3;background:rgba(20,25,35,.98);backdrop-filter:blur(14px)}.job-tab{display:flex;align-items:center;gap:8px;padding:11px 14px;border:1px solid transparent;border-radius:10px 10px 0 0;background:transparent;color:#aab6c8;white-space:nowrap}.job-tab:hover{background:#1c2330;color:#fff}.job-tab.active{background:#202837;border-color:#354258;border-bottom-color:#202837;color:#fff}.tab-count{min-width:24px;padding:2px 7px;border-radius:99px;background:#2d3748;font-size:12px;text-align:center}.job-tab.active .tab-count{background:#286b96;color:#eaf7ff}.job-list{padding:16px}.job{padding:0;margin-bottom:14px;overflow:hidden}.job:last-child{margin-bottom:0}.job[data-bucket="completed"]{border-color:#285744}.job[data-bucket="scanning"],.job[data-bucket="export"]{border-color:#2e5872}.job[data-bucket="review"]{border-color:#4a4227}.job-head{display:flex;gap:14px;align-items:flex-start;padding:17px 18px;border-bottom:1px solid #273142}.job-identity{min-width:0;flex:1}.job-title{font-size:17px;font-weight:750;word-break:break-word}.job-key{color:#738197;font-size:12px;margin-top:3px;word-break:break-all}.job-path{color:var(--muted);font-size:12px;margin-top:7px;word-break:break-all}.state-badge{padding:7px 10px;border:1px solid #3b4658;border-radius:99px;background:#252d3a;font-weight:700;font-size:12px;white-space:nowrap}.tone-running{color:#8fd8ff;border-color:#2e6f96;background:#153348}.tone-complete{color:#88e7b8;border-color:#297252;background:#143c2e}.tone-waiting{color:#f0c66f;border-color:#74591f;background:#3d3014}.tone-error{color:#ff9aa5;border-color:#7e3540;background:#401d24}.job-badges{display:flex;flex-direction:column;align-items:flex-end;gap:6px}.queue-badge{padding:5px 9px;border:1px dashed #5b6b84;border-radius:99px;color:#c9d6e8;font-size:12px;font-weight:700;white-space:nowrap}.job-body{padding:17px 18px}.progress-row{display:flex;align-items:center;gap:12px}.progress-label{min-width:145px;color:#c8d2e1;font-size:13px}.progress{height:8px;background:#252d39;border-radius:99px;overflow:hidden;flex:1}.progress i{display:block;height:100%;border-radius:99px;background:linear-gradient(90deg,#368fd2,#5dc6f5)}.progress-value{min-width:40px;text-align:right;color:#c9d8e9;font-variant-numeric:tabular-nums}.status-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;margin-top:15px}.status-box{min-height:106px;padding:12px;border:1px solid #2d3748;border-radius:12px;background:#10151e}.status-box.tone-complete{border-color:#285b46;background:#10261f}.status-box.tone-running{border-color:#285e7c;background:#102431}.status-box.tone-waiting{border-color:#655020;background:#2a2415}.status-box.tone-error{border-color:#70313b;background:#2c171c}.status-kicker{color:#8f9db0;font-size:11px;font-weight:750;text-transform:uppercase;letter-spacing:.06em}.status-value{font-weight:750;margin-top:7px}.status-detail{color:#9eacbf;font-size:12px;line-height:1.4;margin-top:5px}.mini-progress{height:6px;margin-top:9px;border-radius:99px;background:#273242;overflow:hidden}.mini-progress i{display:block;height:100%;border-radius:99px;background:linear-gradient(90deg,#2e8dca,#67d1ff)}.phase-group+.phase-group{margin-top:20px}.phase-heading{display:flex;align-items:center;gap:9px;margin:1px 2px 11px;color:#d8e3f1;font-size:13px;font-weight:750}.phase-heading span{padding:2px 7px;border-radius:99px;background:#293444;color:#aebdd0;font-size:11px}.job-error{margin-top:12px;padding:10px 12px;border:1px solid #793641;border-radius:10px;background:#341a20;color:#ff9ba6}.job-footer{padding:14px 18px 17px;border-top:1px solid #273142;background:#11161f}.scope-line{color:#9ba9bc;font-size:12px;margin-bottom:12px}.actions{display:flex;gap:8px;flex-wrap:wrap;align-items:center}.actions select{max-width:220px}button,select{border:1px solid transparent;border-radius:9px;padding:9px 12px;background:#2d70b7;color:#fff;cursor:pointer}button:hover{filter:brightness(1.08)}button.warn{background:#8b611d}button.danger{background:#963845}button.green{background:#247554}button:disabled{opacity:.45;cursor:not-allowed}.detectors{width:100%;border:1px solid #39445a;border-radius:10px;padding:9px 11px;text-align:left}.detectors legend{color:#9ca8bb;padding:0 5px}.detectors label{display:inline-flex;gap:5px;align-items:center;margin:3px 10px 3px 0}.rerun-panel{width:100%;border:1px solid #354055;border-radius:11px;background:#171d28}.rerun-panel summary{cursor:pointer;padding:10px 12px;color:#c5d0df;font-weight:650}.rerun-body{display:flex;gap:8px;flex-wrap:wrap;padding:0 10px 10px}.export-panel{width:100%;border:1px solid #2f5a45;border-radius:11px;background:#131f1a}.export-panel summary{cursor:pointer;padding:10px 12px;color:#bfe9d2;font-weight:650}.export-body{display:flex;gap:8px;flex-wrap:wrap;align-items:center;padding:0 10px 10px}.export-body label{display:inline-flex;gap:6px;align-items:center;color:#c8d2e1}.export-body input{width:96px;border:1px solid #39445a;border-radius:9px;padding:8px;background:#0f141c;color:#e8ecf4}.export-reason{color:#f0c66f;font-size:12px;flex-basis:100%}.export-error{color:#ff9aa5;font-size:12px;flex-basis:100%}[hidden]{display:none!important}.empty{text-align:center;padding:52px 20px;color:var(--muted)}.detail{font-size:13px}.muted{color:var(--muted)}.state{font-weight:700;color:var(--blue)}.ok{color:var(--green)}.error{color:var(--red)}.notice{display:none;position:fixed;left:16px;right:16px;bottom:16px;z-index:30;max-width:640px;margin:0 auto;border-radius:10px;padding:12px 14px;background:#173c30;border:1px solid #2f8b69;box-shadow:0 10px 30px rgba(0,0,0,.45);cursor:pointer}.notice.error{display:block;background:#4a2027;border-color:#a43d4a}.notice.show{display:block}@media(max-width:1050px){.status-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.ai{grid-template-columns:1fr}}@media(max-width:680px){header{align-items:flex-start;flex-wrap:wrap}h1{width:100%}main{padding:12px}.status-grid{grid-template-columns:1fr}.job-head{flex-direction:column}.job-badges{flex-direction:row;align-items:center;flex-wrap:wrap}.progress-row{align-items:flex-start;flex-wrap:wrap}.progress-label{width:100%}.progress{min-width:180px}.job-tabs{padding-left:12px}.job-list{padding:10px}.actions{align-items:stretch}.actions button,.actions select{flex:1 1 auto}.export-body label{flex:1 1 100%;flex-wrap:wrap}.actions .export-body select{flex:1 1 100%;max-width:none}.export-body input{flex:1}}
 </style></head><body><header><h1>BiliFlow Control Center</h1><span class="pill" id="worker">Đang tải</span><span class="pill" id="resource"></span></header>
-<main><div id="notice" class="notice" role="status"></div><div class="bar"><button class="green" onclick="scheduler(false)">Chạy hàng đợi</button><button class="warn" onclick="scheduler(true)">Tạm dừng scheduler</button><button onclick="location.reload()">Làm mới</button><button class="danger" onclick="shutdown('after_stage')">Tắt sau bước hiện tại</button><button class="danger" onclick="shutdown('immediate')">Dừng ngay và tắt</button><span class="muted">Đóng tab không làm dừng xử lý. Muốn tắt hẳn, dùng nút Tắt hoặc Stop-BiliFlow.cmd.</span></div><section class="bar ai"><div><div class="job-title">AI Supervisor</div><div id="ai-message" class="muted">Đang kiểm tra Codex…</div><div class="detail muted">AI JSON không gửi media. Visual AI chỉ gửi tối đa 36 thumbnail sau khi bạn xác nhận cho từng video; không gửi video/âm thanh. Mọi lượt audit dùng chung một session AI Supervisor và được chạy tuần tự. Dùng hạn mức ChatGPT, API key và model GPT-6 bị chặn.</div></div><div class="ai-controls"><label><input type="checkbox" id="ai-enabled"> Bật</label><select id="ai-model"><option value="gpt-5.6-luna">GPT-5.6 Luna — mặc định</option><option value="gpt-5.6-terra">GPT-5.6 Terra — cân bằng</option><option value="gpt-5.6-sol">GPT-5.6 Sol — mạnh hơn</option></select><select id="ai-effort"><option value="low">Low — tiết kiệm</option><option value="medium">Medium — mặc định</option><option value="high">High — tối đa</option></select><button onclick="saveAI()">Lưu cấu hình</button><button onclick="checkAI()">Kiểm tra kết nối</button><button class="green" onclick="loginAI()">Đăng nhập Codex</button><a href="https://learn.chatgpt.com/docs/auth" target="_blank" rel="noopener" class="muted">Hướng dẫn chính thức</a></div></section><section class="workspace"><div class="workspace-head"><div class="workspace-title">Video</div><div class="workspace-subtitle">Theo dõi riêng các video đang chờ, đang xử lý và đã xuất hoàn tất.</div></div><nav id="job-tabs" class="job-tabs" aria-label="Trạng thái video"></nav><section id="jobs" class="job-list"></section></section></main>
+<main><div id="notice" class="notice" role="status" title="Bấm để ẩn" onclick="this.className='notice'"></div><div class="bar"><button class="green" onclick="scheduler(false)">Chạy hàng đợi</button><button class="warn" onclick="scheduler(true)">Tạm dừng scheduler</button><button onclick="location.reload()">Làm mới</button><button class="danger" onclick="shutdown('after_stage')">Tắt sau bước hiện tại</button><button class="danger" onclick="shutdown('immediate')">Dừng ngay và tắt</button><span class="muted">Đóng tab không làm dừng xử lý. Muốn tắt hẳn, dùng nút Tắt hoặc Stop-BiliFlow.cmd.</span></div><section class="bar ai"><div><div class="job-title">AI Supervisor</div><div id="ai-message" class="muted">Đang kiểm tra Codex…</div><div class="detail muted">AI JSON không gửi media. Visual AI chỉ gửi tối đa 36 thumbnail sau khi bạn xác nhận cho từng video; không gửi video/âm thanh. Mọi lượt audit dùng chung một session AI Supervisor và được chạy tuần tự. Dùng hạn mức ChatGPT, API key và model GPT-6 bị chặn.</div></div><div class="ai-controls"><label><input type="checkbox" id="ai-enabled"> Bật</label><select id="ai-model"><option value="gpt-5.6-luna">GPT-5.6 Luna — mặc định</option><option value="gpt-5.6-terra">GPT-5.6 Terra — cân bằng</option><option value="gpt-5.6-sol">GPT-5.6 Sol — mạnh hơn</option></select><select id="ai-effort"><option value="low">Low — tiết kiệm</option><option value="medium">Medium — mặc định</option><option value="high">High — tối đa</option></select><button onclick="saveAI()">Lưu cấu hình</button><button onclick="checkAI()">Kiểm tra kết nối</button><button class="green" onclick="loginAI()">Đăng nhập Codex</button><a href="https://learn.chatgpt.com/docs/auth" target="_blank" rel="noopener" class="muted">Hướng dẫn chính thức</a></div></section><section class="workspace"><div class="workspace-head"><div class="workspace-title">Video</div><div class="workspace-subtitle">Theo dõi video theo từng giai đoạn: chờ xử lý, chờ chạy cảnh, đang chạy cảnh, chờ duyệt, xuất video và hoàn tất.</div></div><nav id="job-tabs" class="job-tabs" aria-label="Trạng thái video"></nav><section id="jobs" class="job-list"></section></section></main>
 <script>
-let token='';let status={};let aiState={ready:false,config:{},message:'Đang kiểm tra Codex…'};let noticeTimer=null;let activeJobTab=null;const DRAFT_PREFIX='biliflow.jobDraft.';const LAST_SCOPE_KEY='biliflow.lastDetectorScope';const SENSITIVE_DETECTORS=['adult','gore','violence'];const detectorDrafts={};const metadataDrafts={};const ocrDrafts={};const speedDrafts={};const draftJobKeys={};const rerunPanelDrafts={};const startingJobs=new Set();let loadSeq=0,appliedSeq=0,jobsPointerDown=false,lastJobsInteraction=0,jobsRenderTimer=null;
+__EXPORT_DIALOG_JS__const SOURCE_MISSING_MESSAGE='__SOURCE_MISSING_MESSAGE__';
+let token='';let status={};let aiState={ready:false,config:{},message:'Đang kiểm tra Codex…'};let noticeTimer=null;let activeJobTab=null;const DRAFT_PREFIX='biliflow.jobDraft.';const LAST_SCOPE_KEY='biliflow.lastDetectorScope';const SENSITIVE_DETECTORS=['adult','gore','violence'];const detectorDrafts={};const metadataDrafts={};const ocrDrafts={};const speedDrafts={};const draftJobKeys={};const rerunPanelDrafts={};const exportPanelDrafts={};const startingJobs=new Set();const skippingJobs=new Set();const unskippingJobs=new Set();const exportingJobs=new Set();let loadSeq=0,appliedSeq=0,jobsPointerDown=false,lastJobsInteraction=0,jobsRenderTimer=null;
 function storageGet(key){try{const raw=window.localStorage.getItem(key);return raw==null?null:JSON.parse(raw)}catch(e){return null}}
 function storageSet(key,value){try{if(value==null)window.localStorage.removeItem(key);else window.localStorage.setItem(key,JSON.stringify(value))}catch(e){}}
 function forgetDraftMemory(id){delete detectorDrafts[id];delete metadataDrafts[id];delete ocrDrafts[id];delete speedDrafts[id];delete draftJobKeys[id]}
@@ -283,40 +381,54 @@ function selectedDetectors(id){captureDetectorDraft(id);const values=detectorDra
 function metadataSelection(j){const saved=metadataDrafts[j.id]||{},styles=['animation','live_action','mixed'],profiles=['careful','fast'];return{content_style:saved.content_style||(styles.includes(j.content_style)&&j.content_style!=='unknown'?j.content_style:'animation'),profile:saved.profile||(profiles.includes(j.profile)?j.profile:'careful')}}
 function captureMetadataDraft(id){const style=document.getElementById(`style-${id}`),profile=document.getElementById(`profile-${id}`);if(style&&profile){metadataDrafts[id]={content_style:style.value,profile:profile.value};saveDraft(id)}}
 function captureRerunPanelDrafts(){document.querySelectorAll('.rerun-panel[data-job-id]').forEach(panel=>{rerunPanelDrafts[panel.dataset.jobId]=panel.open})}
+function captureExportPanelDrafts(){document.querySelectorAll('.export-panel[data-job-id]').forEach(panel=>{const id=panel.dataset.jobId,mode=document.getElementById(`size-${id}`),gb=document.getElementById(`size-gb-${id}`),draft={...(exportPanelDrafts[id]||{}),open:!!panel.open};if(mode)draft.mode=mode.value;if(gb)draft.gb=gb.value;exportPanelDrafts[id]=draft})}
+function setExportPanelOpen(id,open){exportPanelDrafts[id]={...(exportPanelDrafts[id]||{}),open};try{const panel=document.querySelector(`.export-panel[data-job-id="${id}"]`);if(panel)panel.open=open}catch(e){}}
+function exportSizeChanged(id){captureExportPanelDrafts();const mode=document.getElementById(`size-${id}`),wrap=document.getElementById(`size-gb-wrap-${id}`);if(mode&&wrap)wrap.hidden=mode.value!=='custom'}
+function exportBlockReason(j){const s=j.review_summary;if(!s)return 'Chưa đọc được danh sách duyệt của video này.';if(s.status!=='READY_FOR_EDIT_PLAN')return EXPORT_GATE_MESSAGE;if(j.source_present===false)return SOURCE_MISSING_MESSAGE;return ''}
+function exportPanel(j){const id=j.id,draft=exportPanelDrafts[id]||{},choice=exportPolicyChoice(j.review_summary?.export_size_policy),mode=EXPORT_SIZE_MODES.includes(draft.mode)?draft.mode:choice.mode,gb=draft.gb!=null&&draft.gb!==''?draft.gb:choice.gb,reason=exportBlockReason(j),busy=exportingJobs.has(id);return `<details class="export-panel" data-job-id="${id}" ${draft.open?'open':''}><summary>Xuất video</summary><div class="export-body"><label>Dung lượng video<select id="size-${id}" onchange="exportSizeChanged(${id})">${exportSizeOptionsHtml(mode)}</select></label><label id="size-gb-wrap-${id}" ${mode==='custom'?'':'hidden'}>Tối đa<input id="size-gb-${id}" __EXPORT_CUSTOM_GB__ value="${esc(gb)}" oninput="exportSizeChanged(${id})">GB</label><button class="green" onclick="exportVideo(${id},this)" ${reason||busy?'disabled':''} title="${esc(reason)}">${busy?'Đang gửi lệnh xuất…':'Hoàn tất duyệt và xuất video'}</button>${reason?`<span class="export-reason">${esc(reason)}</span>`:''}${draft.error&&!busy?`<span class="export-error" role="alert">${esc(draft.error)}</span>`:''}</div></details>`}
+function skipReasonText(j){const s=j.review_summary||{};return s.main_items?`Cả ${s.main_items} cảnh chính đều được chọn Giữ nguyên.`:'Video không có cảnh chính nào cần duyệt.'}
 function selectedOcrBatch(id){return Number(document.getElementById(`ocr-${id}`)?.value||1)}
 function selectedFastScan(id){return document.getElementById(`fast-${id}`)?.checked===true}
 function speedPicker(j){const value=speedDrafts[j.id]??j.fast_scan??true;return `<label title="Ghép OCR xuyên nhiều frame, detect chữ FP16, tính routing logo song song trong lúc OCR, model an toàn hoạt hình và model bạo lực phim người đóng FP16. Không giảm mật độ quét; mục review đã kiểm chứng giống chế độ thường trên cả phim (vài track chữ credits hoặc ảnh xem trước có thể lệch nhẹ). Khác profile Nhanh (giảm mật độ quét)."><input type="checkbox" id="fast-${j.id}" ${value?'checked':''} onchange="speedDrafts[${j.id}]=this.checked;saveDraft(${j.id})"> Tăng tốc xử lý</label>`}
 function ocrPicker(j){const value=ocrDrafts[j.id]??j.ocr_recognition_batch_size??1;return `<label title="Chỉ áp dụng OCR trong nhóm Quảng cáo/logo; không đổi mật độ quét.">OCR <select id="ocr-${j.id}" onchange="ocrDrafts[${j.id}]=Number(this.value);saveDraft(${j.id})"><option value="1" ${value===1?'selected':''}>Chuẩn</option><option value="8" ${value===8?'selected':''}>Tăng tốc (thử nghiệm)</option></select></label>`}
-function controls(j){const id=j.id;let a=[];if(j.state==='NEEDS_METADATA'||j.state==='DISCOVERED'){const metadata=metadataSelection(j);a.push(`${detectorPicker(j)}${ocrPicker(j)}${speedPicker(j)}<select id="style-${id}" onchange="captureMetadataDraft(${id})"><option value="animation" ${metadata.content_style==='animation'?'selected':''}>Hoạt hình</option><option value="live_action" ${metadata.content_style==='live_action'?'selected':''}>Phim thực tế</option><option value="mixed" ${metadata.content_style==='mixed'?'selected':''}>Hỗn hợp</option></select><select id="profile-${id}" onchange="captureMetadataDraft(${id})"><option value="careful" ${metadata.profile==='careful'?'selected':''}>Tỉ mỉ</option><option value="fast" ${metadata.profile==='fast'?'selected':''}>Nhanh</option></select><button class="green" onclick="start(${id},this)" ${startingJobs.has(id)?'disabled':''}>${startingJobs.has(id)?'Đang bắt đầu…':'Bắt đầu'}</button>`)}if(['PAUSED','FAILED','INTERRUPTED_RECOVERABLE'].includes(j.state))a.push(`<button class="green" onclick="act(${id},'resume')">Tiếp tục</button>`);if(['QUEUED','PREFLIGHT','SCANNING_SAFETY','SCANNING_TEXT','SCANNING_LOGO','LOCALIZING_REGIONS','BUILDING_REVIEW','RENDERING'].includes(j.state)){a.push(`<button class="warn" onclick="act(${id},'stop-after-stage')">Dừng sau bước</button><button class="warn" onclick="act(${id},'pause')">Dừng ngay</button>`)}if(j.active_queue_path){a.push(`<button onclick="location.href='/review/${id}'">Duyệt cảnh</button>${j.ai_audit?.state==='RUNNING'?'<button disabled>Visual AI đang kiểm tra…</button>':aiState.ready?`<button class="green" onclick="audit(${id},true)">Visual AI Audit</button>`:`<button disabled title="${esc(aiState.message||'AI Supervisor chưa sẵn sàng')}">AI chưa sẵn sàng</button>`}`)}else{a.push('<button disabled title="Video cần quét xong và có review queue trước">AI: chờ queue</button>')}if(j.state==='FAILED')a.push(`<button onclick="act(${id},'retry')">Thử lại bước lỗi</button>`);if(['WAITING_REVIEW','READY_TO_EXPORT','COMPLETED','CANCELLED','FAILED','PAUSED','INTERRUPTED_RECOVERABLE'].includes(j.state))a.push(`<details class="rerun-panel" data-job-id="${id}" ${rerunPanelDrafts[id]?'open':''}><summary>Chạy lại kiểm tra</summary><div class="rerun-body">${detectorPicker(j)}${ocrPicker(j)}${speedPicker(j)}<button class="warn" onclick="rerun(${id})">Chạy lại với phạm vi đã chọn</button></div></details>`);if(!['COMPLETED','CANCELLED'].includes(j.state))a.push(`<button class="danger" onclick="act(${id},'cancel')">Hủy</button>`);return a.join('')}
+function controls(j){const id=j.id;let a=[];if(j.state==='NEEDS_METADATA'||j.state==='DISCOVERED'){const metadata=metadataSelection(j);a.push(`${detectorPicker(j)}${ocrPicker(j)}${speedPicker(j)}<select id="style-${id}" onchange="captureMetadataDraft(${id})"><option value="animation" ${metadata.content_style==='animation'?'selected':''}>Hoạt hình</option><option value="live_action" ${metadata.content_style==='live_action'?'selected':''}>Phim thực tế</option><option value="mixed" ${metadata.content_style==='mixed'?'selected':''}>Hỗn hợp</option></select><select id="profile-${id}" onchange="captureMetadataDraft(${id})"><option value="careful" ${metadata.profile==='careful'?'selected':''}>Tỉ mỉ</option><option value="fast" ${metadata.profile==='fast'?'selected':''}>Nhanh</option></select><button class="green" onclick="start(${id},this)" ${startingJobs.has(id)?'disabled':''}>${startingJobs.has(id)?'Đang bắt đầu…':'Bắt đầu'}</button>`)}if(['PAUSED','FAILED','INTERRUPTED_RECOVERABLE'].includes(j.state))a.push(`<button class="green" onclick="act(${id},'resume')">Tiếp tục</button>`);if(['QUEUED','PREFLIGHT','SCANNING_SAFETY','SCANNING_TEXT','SCANNING_LOGO','LOCALIZING_REGIONS','BUILDING_REVIEW','RENDERING'].includes(j.state)){a.push(`<button class="warn" onclick="act(${id},'stop-after-stage')">Dừng sau bước</button><button class="warn" onclick="act(${id},'pause')">Dừng ngay</button>`)}if(j.active_queue_path){a.push(`<button onclick="location.href='/review/${id}'">Duyệt cảnh</button>${j.ai_audit?.state==='RUNNING'?'<button disabled>Visual AI đang kiểm tra…</button>':aiState.ready?`<button class="green" onclick="audit(${id},true)">Visual AI Audit</button>`:`<button disabled title="${esc(aiState.message||'AI Supervisor chưa sẵn sàng')}">AI chưa sẵn sàng</button>`}`)}else{a.push('<button disabled title="Video cần quét xong và có review queue trước">AI: chờ queue</button>')}if(j.state==='FAILED')a.push(`<button onclick="act(${id},'retry')">Thử lại bước lỗi</button>`);if(j.state==='READY_TO_EXPORT'&&j.review_summary?.skip_eligible)a.push(`<button class="warn" onclick="skipJob(${id},this)" ${skippingJobs.has(id)?'disabled':''} title="${esc(skipReasonText(j))} Đánh dấu xong mà không tạo bản xuất; report và video gốc được giữ nguyên.">Bỏ qua (không xuất)</button>`);if(j.state==='SKIPPED')a.push(`<button class="green" onclick="unskipJob(${id},this)" ${unskippingJobs.has(id)?'disabled':''}>Mở lại để xuất</button>`);if(!['COMPLETED','SKIPPED','CANCELLED'].includes(j.state))a.push(`<button class="danger" onclick="act(${id},'cancel')">Hủy</button>`);if(j.state==='READY_TO_EXPORT')a.push(exportPanel(j));if(['WAITING_REVIEW','READY_TO_EXPORT','COMPLETED','SKIPPED','CANCELLED','FAILED','PAUSED','INTERRUPTED_RECOVERABLE'].includes(j.state))a.push(`<details class="rerun-panel" data-job-id="${id}" ${rerunPanelDrafts[id]?'open':''}><summary>Chạy lại kiểm tra</summary><div class="rerun-body">${detectorPicker(j)}${ocrPicker(j)}${speedPicker(j)}<button class="warn" onclick="rerun(${id})">Chạy lại với phạm vi đã chọn</button></div></details>`);return a.join('')}
 function auditText(j){const a=j.ai_audit;if(!a)return 'Visual AI: chưa chạy';if(a.state==='COMPLETED')return `Visual AI: ${a.result||'DONE'} — ${a.summary||''}`;return `Visual AI: ${a.message||a.state}`}
 function structureText(j){const a=j.structure_audit;if(!a)return 'Kiểm tra cấu trúc: chờ tạo queue';return `Kiểm tra cấu trúc cục bộ: ${a.result||'DONE'} — ${a.summary||''} · không dùng quota`}
-const runningStates=new Set(['PREFLIGHT','SCANNING_SAFETY','SCANNING_TEXT','SCANNING_LOGO','LOCALIZING_REGIONS','BUILDING_REVIEW','RENDERING','VERIFYING']);
-function jobBucket(j){if(j.state==='COMPLETED')return 'completed';if(runningStates.has(j.state))return 'running';return 'waiting'}
+const JOB_TABS=[['waiting','Đang chờ xử lý'],['scan_queue','Đang chờ chạy cảnh để duyệt'],['scanning','Đang chạy cảnh'],['review','Đang chờ duyệt'],['export','Đang chạy xuất video'],['completed','Hoàn tất']];
+const DEFAULT_TAB_ORDER=['scanning','export','scan_queue','review','waiting','completed'];
+const SCAN_STATES=new Set(['PREFLIGHT','SCANNING_SAFETY','SCANNING_TEXT','SCANNING_LOGO','LOCALIZING_REGIONS','BUILDING_REVIEW','AI_AUDITING']);
+function jobTab(j){const s=String(j&&j.state||'');if(s==='COMPLETED'||s==='SKIPPED')return 'completed';if(s==='RENDERING'||s==='VERIFYING')return 'export';if(s==='QUEUED'){const kind=queueKind(j);return kind==='export'?'export':kind==='scan'?'scan_queue':'waiting'}if(s==='WAITING_REVIEW'||s==='READY_TO_EXPORT')return 'review';if(SCAN_STATES.has(s)||s.startsWith('SCANNING_'))return 'scanning';return 'waiting'}
+function defaultJobTab(groups){return DEFAULT_TAB_ORDER.find(key=>groups[key]&&groups[key].length)||'waiting'}
 function syncHeaderHeight(){try{const h=document.querySelector('header'),r=document.documentElement;if(h&&r&&r.style)r.style.setProperty('--header-h',`${h.offsetHeight}px`)}catch(e){}}
 function watchHeaderHeight(){syncHeaderHeight();try{window.addEventListener('resize',syncHeaderHeight);const h=document.querySelector('header');if(h&&window.ResizeObserver)new ResizeObserver(syncHeaderHeight).observe(h)}catch(e){}}
 function keepTabsInView(){try{const bar=document.getElementById('job-tabs'),list=document.getElementById('jobs'),h=document.querySelector('header');if(!bar||!list||!bar.getBoundingClientRect||!list.getBoundingClientRect)return;const headerH=h?h.offsetHeight:0;if(bar.getBoundingClientRect().top>headerH+1)return;const top=window.scrollY+list.getBoundingClientRect().top-headerH-bar.offsetHeight;if(top<window.scrollY)window.scrollTo({top:Math.max(0,top)})}catch(e){}}
-function selectJobTab(tab){activeJobTab=tab;renderJobs(true);keepTabsInView()}
+function revealActiveTab(){try{const tab=document.querySelector('.job-tab.active');if(tab&&tab.scrollIntoView)tab.scrollIntoView({block:'nearest',inline:'nearest'})}catch(e){}}
+function selectJobTab(tab){activeJobTab=tab;renderJobs(true);keepTabsInView();revealActiveTab()}
 function needsSetup(j){return j.state==='NEEDS_METADATA'||j.state==='DISCOVERED'}
 function markJobsInteraction(){lastJobsInteraction=Date.now()}
-function jobsInteracting(){const box=document.getElementById('jobs'),active=document.activeElement,since=Date.now()-lastJobsInteraction;if(jobsPointerDown||since<400)return true;return !!(box&&active&&active.tagName==='SELECT'&&box.contains(active)&&since<15000)}
+function jobsInteracting(){const box=document.getElementById('jobs'),active=document.activeElement,since=Date.now()-lastJobsInteraction;if(jobsPointerDown||since<400)return true;return !!(box&&active&&(active.tagName==='SELECT'||(active.tagName==='INPUT'&&active.type!=='checkbox'))&&box.contains(active)&&since<15000)}
 function deferJobsRender(){if(jobsRenderTimer)return;jobsRenderTimer=setTimeout(()=>{jobsRenderTimer=null;renderJobs()},450)}
 function watchJobsInteraction(){const box=document.getElementById('jobs');if(!box)return;box.addEventListener('pointerdown',()=>{jobsPointerDown=true;markJobsInteraction()});['focusin','change','input','keydown'].forEach(name=>box.addEventListener(name,markJobsInteraction));const release=()=>{if(jobsPointerDown){jobsPointerDown=false;markJobsInteraction()}};document.addEventListener('pointerup',release,true);document.addEventListener('pointercancel',release,true)}
-function queueKind(j){if(j.state!=='QUEUED')return null;if(j.queue_kind)return j.queue_kind;return j.current_stage==='render'?'export':null}
+function queueKind(j){return j.state==='QUEUED'&&(j.queue_kind==='scan'||j.queue_kind==='export')?j.queue_kind:null}
 function queueLine(j){const n=status.queue?.length||0;if(!j.queue_position)return '';return n>1?`Thứ tự chờ: #${j.queue_position} trong ${n} việc`:`Thứ tự chờ: #${j.queue_position}`}
 function queuePausedNote(){return status.queue?.paused||status.scheduler_paused?'Hàng đợi đang tạm dừng — bấm “Chạy hàng đợi” để tiếp tục (vẫn giữ thứ tự).':''}
-function statePresentation(j){if(j.state==='RENDERING'&&j.render_progress?.state==='VERIFYING')return{label:'Đang kiểm tra output',tone:'running'};if(j.state==='QUEUED'&&queueKind(j)==='export')return{label:'Chờ xuất video',tone:'waiting'};if(j.state==='QUEUED'&&queueKind(j)==='scan')return{label:'Chờ chạy cảnh',tone:'waiting'};const values={DISCOVERED:['Chưa thiết lập','waiting'],NEEDS_METADATA:['Chờ thiết lập','waiting'],QUEUED:['Đang xếp hàng','waiting'],PREFLIGHT:['Đang chuẩn bị','running'],SCANNING_SAFETY:['Đang quét an toàn','running'],SCANNING_TEXT:['Đang quét chữ','running'],SCANNING_LOGO:['Đang quét logo','running'],LOCALIZING_REGIONS:['Đang khoanh vùng','running'],BUILDING_REVIEW:['Đang tạo danh sách duyệt','running'],WAITING_REVIEW:['Chờ duyệt cảnh','waiting'],READY_TO_EXPORT:['Sẵn sàng xuất','waiting'],RENDERING:['Đang xuất video','running'],VERIFYING:['Đang kiểm tra output','running'],PAUSED:['Đã tạm dừng','waiting'],FAILED:['Có lỗi cần xử lý','error'],INTERRUPTED_RECOVERABLE:['Có thể tiếp tục','waiting'],CANCELLED:['Đã hủy','waiting'],COMPLETED:['Đã hoàn tất','complete']};const value=values[j.state]||[j.state||'Chưa rõ','waiting'];return{label:value[0],tone:value[1]}}
-function scanStatus(j){const percent=Math.max(0,Math.min(100,Math.round(100*(Number(j.progress)||0))));if(runningStates.has(j.state)&&j.state!=='RENDERING'&&j.state!=='VERIFYING')return{value:`${percent}% · đang chạy`,detail:`Bước hiện tại: ${j.current_stage||'đang chuẩn bị'}`,tone:'running'};if(percent>=100)return{value:'100% · đã quét',detail:'Kết quả phân tích đã được lưu.',tone:'complete'};if(j.state==='QUEUED')return{value:`${percent}% · chờ lượt`,detail:queuePausedNote()||(j.queue_position?`${queueLine(j)}; quét cảnh và xuất video chạy lần lượt theo thứ tự bấm.`:'Video đang nằm trong hàng đợi.'),tone:'waiting'};return{value:`${percent}% · chưa hoàn tất`,detail:'Tiến độ quét và tạo cảnh duyệt.',tone:'waiting'}}
+function statePresentation(j){if(j.state==='RENDERING'&&j.render_progress?.state==='VERIFYING')return{label:'Đang kiểm tra output',tone:'running'};if(j.state==='QUEUED'&&queueKind(j)==='export')return{label:'Chờ xuất video',tone:'waiting'};if(j.state==='QUEUED'&&queueKind(j)==='scan')return{label:'Chờ chạy cảnh',tone:'waiting'};const values={DISCOVERED:['Chưa thiết lập','waiting'],NEEDS_METADATA:['Chờ thiết lập','waiting'],QUEUED:['Đang xếp hàng','waiting'],PREFLIGHT:['Đang chuẩn bị','running'],SCANNING_SAFETY:['Đang quét an toàn','running'],SCANNING_TEXT:['Đang quét chữ','running'],SCANNING_LOGO:['Đang quét logo','running'],LOCALIZING_REGIONS:['Đang khoanh vùng','running'],BUILDING_REVIEW:['Đang tạo danh sách duyệt','running'],WAITING_REVIEW:['Chờ duyệt cảnh','waiting'],READY_TO_EXPORT:['Sẵn sàng xuất','waiting'],RENDERING:['Đang xuất video','running'],VERIFYING:['Đang kiểm tra output','running'],PAUSED:['Đã tạm dừng','waiting'],FAILED:['Có lỗi cần xử lý','error'],INTERRUPTED_RECOVERABLE:['Có thể tiếp tục','waiting'],CANCELLED:['Đã hủy','waiting'],COMPLETED:['Đã hoàn tất','complete'],SKIPPED:['Đã bỏ qua — không xuất','complete']};const value=values[j.state]||[j.state||'Chưa rõ','waiting'];return{label:value[0],tone:value[1]}}
+function scanStatus(j){const percent=Math.max(0,Math.min(100,Math.round(100*(Number(j.progress)||0))));if(jobTab(j)==='scanning')return{value:`${percent}% · đang chạy`,detail:`Bước hiện tại: ${j.current_stage||'đang chuẩn bị'}`,tone:'running'};if(percent>=100)return{value:'100% · đã quét',detail:'Kết quả phân tích đã được lưu.',tone:'complete'};if(j.state==='QUEUED')return{value:`${percent}% · chờ lượt`,detail:queuePausedNote()||(j.queue_position?`${queueLine(j)}; quét cảnh và xuất video chạy lần lượt theo thứ tự bấm.`:'Video đang nằm trong hàng đợi.'),tone:'waiting'};return{value:`${percent}% · chưa hoàn tất`,detail:'Tiến độ quét và tạo cảnh duyệt.',tone:'waiting'}}
 function structureStatus(j){const a=j.structure_audit;if(!a)return{value:'Chưa kiểm tra',detail:'Sẽ có sau khi tạo danh sách duyệt.',tone:'waiting'};const result=String(a.result||'DONE').toUpperCase();return{value:result==='PASS'?'Đạt':a.outdated_rule?`${result} (quy tắc cũ)`:result,detail:(result!=='PASS'&&a.first_finding)||a.summary||'Kiểm tra cấu trúc cục bộ đã hoàn tất.',tone:result==='PASS'?'complete':result==='BLOCK'?'error':'waiting'}}
 function visualStatus(j){const a=j.ai_audit;if(!a)return{value:'Chưa chạy',detail:'Visual AI Audit là bước kiểm tra tùy chọn.',tone:'waiting'};if(a.state==='RUNNING'||a.state==='QUEUED')return{value:a.state==='RUNNING'?'Đang kiểm tra':'Đang chờ',detail:a.message||'AI Supervisor đang xử lý.',tone:'running'};if(a.state==='FAILED')return{value:'Lỗi kiểm tra',detail:a.message||'Có thể chạy lại Visual AI Audit.',tone:'error'};const result=String(a.result||'DONE').toUpperCase();return{value:`Đã kiểm tra · ${result}`,detail:a.summary||'Visual AI Audit đã hoàn tất.',tone:result==='BLOCK'?'error':result==='WARN'?'waiting':'complete'}}
 function shortDuration(seconds){const value=Number(seconds);if(!Number.isFinite(value)||value<0)return 'đang tính';const rounded=Math.ceil(value/60);if(rounded<60)return `khoảng ${Math.max(1,rounded)} phút`;const hours=Math.floor(rounded/60),minutes=rounded%60;return `khoảng ${hours} giờ${minutes?` ${minutes} phút`:''}`}
-function completedAt(value){if(!value)return 'Đã hoàn tất và qua bước kiểm tra cuối.';const date=new Date(value);if(Number.isNaN(date.getTime()))return 'Đã hoàn tất và qua bước kiểm tra cuối.';return `Hoàn thành lúc ${new Intl.DateTimeFormat('vi-VN',{hour:'2-digit',minute:'2-digit',second:'2-digit',day:'2-digit',month:'2-digit',year:'numeric'}).format(date)}`}
-function exportStatus(j){if(j.state==='COMPLETED')return{value:'100% · Đã xuất video',detail:completedAt(j.updated_at),tone:'complete',percent:100};if(j.state==='RENDERING'){const p=j.render_progress||{};if(p.state==='VERIFYING')return{value:'100% · đang kiểm tra',detail:'Đã render xong; đang xác nhận hình, tiếng và thời lượng.',tone:'running',percent:100};const percent=Math.max(0,Math.min(99.9,Number(p.percent)||0)),speed=p.speed_text?`Tốc độ ${p.speed_text}`:'Đang khởi tạo FFmpeg',eta=p.eta_seconds!=null?` · còn ${shortDuration(p.eta_seconds)}`:'';return{value:`${percent.toFixed(1)}% · đang xuất`,detail:`${speed}${eta}`,tone:'running',percent}}if(j.state==='VERIFYING')return{value:'100% · đang kiểm tra',detail:'Đang xác nhận hình, tiếng và thời lượng.',tone:'running',percent:100};if(queueKind(j)==='export')return{value:'Chờ xuất video',detail:queuePausedNote()||(j.queue_position?`${queueLine(j)}; xuất video và quét cảnh chạy lần lượt theo thứ tự bấm.`:'Lệnh xuất đã nằm trong hàng đợi.'),tone:'waiting',percent:0};if(j.current_stage==='render'&&j.state==='FAILED')return{value:'Xuất video bị lỗi',detail:'Xem lỗi bên dưới rồi chọn thử lại.',tone:'error'};if(j.state==='READY_TO_EXPORT')return{value:'Sẵn sàng xuất',detail:'Duyệt xong; có thể tạo output.',tone:'waiting'};if(j.state==='WAITING_REVIEW')return{value:'Chưa xuất',detail:'Cần hoàn tất duyệt cảnh trước.',tone:'waiting'};return{value:'Chưa tới bước xuất',detail:'Output chỉ được tạo sau khi duyệt.',tone:'waiting'}}
+function formatStamp(value){if(!value)return '';const date=new Date(value);if(Number.isNaN(date.getTime()))return '';return new Intl.DateTimeFormat('vi-VN',{hour:'2-digit',minute:'2-digit',second:'2-digit',day:'2-digit',month:'2-digit',year:'numeric'}).format(date)}
+function completedAt(value){const stamp=formatStamp(value);return stamp?`Hoàn thành lúc ${stamp}`:'Đã hoàn tất và qua bước kiểm tra cuối.'}
+function exportStatus(j){if(j.state==='COMPLETED')return{value:'100% · Đã xuất video',detail:completedAt(j.updated_at),tone:'complete',percent:100};if(j.state==='SKIPPED'){const stamp=formatStamp(j.skip?.skipped_at||j.updated_at);return{value:'Không xuất video',detail:`Đã bỏ qua${stamp?` lúc ${stamp}`:''}; video gốc, report và quyết định duyệt được giữ nguyên.`,tone:'complete'}}if(j.state==='RENDERING'){const p=j.render_progress||{};if(p.state==='VERIFYING')return{value:'100% · đang kiểm tra',detail:'Đã render xong; đang xác nhận hình, tiếng và thời lượng.',tone:'running',percent:100};const percent=Math.max(0,Math.min(99.9,Number(p.percent)||0)),speed=p.speed_text?`Tốc độ ${p.speed_text}`:'Đang khởi tạo FFmpeg',eta=p.eta_seconds!=null?` · còn ${shortDuration(p.eta_seconds)}`:'';return{value:`${percent.toFixed(1)}% · đang xuất`,detail:`${speed}${eta}`,tone:'running',percent}}if(j.state==='VERIFYING')return{value:'100% · đang kiểm tra',detail:'Đang xác nhận hình, tiếng và thời lượng.',tone:'running',percent:100};if(queueKind(j)==='export')return{value:'Chờ xuất video',detail:queuePausedNote()||(j.queue_position?`${queueLine(j)}; xuất video và quét cảnh chạy lần lượt theo thứ tự bấm.`:'Lệnh xuất đã nằm trong hàng đợi.'),tone:'waiting',percent:0};if(j.current_stage==='render'&&j.state==='FAILED')return{value:'Xuất video bị lỗi',detail:'Xem lỗi bên dưới rồi chọn thử lại.',tone:'error'};if(j.state==='READY_TO_EXPORT')return j.source_present===false?{value:'Thiếu video gốc',detail:SOURCE_MISSING_MESSAGE,tone:'error'}:{value:'Sẵn sàng xuất',detail:'Duyệt xong; bấm “Xuất video” trên thẻ hoặc trong trang duyệt cảnh.',tone:'waiting'};if(j.state==='WAITING_REVIEW')return{value:'Chưa xuất',detail:'Cần hoàn tất duyệt cảnh trước.',tone:'waiting'};return{value:'Chưa tới bước xuất',detail:'Output chỉ được tạo sau khi duyệt.',tone:'waiting'}}
 function statusBox(title,value){const progress=Number.isFinite(Number(value.percent))?`<div class="mini-progress" aria-label="${esc(title)} ${Math.round(Number(value.percent))}%"><i style="width:${Math.max(0,Math.min(100,Number(value.percent)))}%"></i></div>`:'';return `<div class="status-box tone-${value.tone}"><div class="status-kicker">${esc(title)}</div><div class="status-value">${esc(value.value)}</div><div class="status-detail">${esc(value.detail)}</div>${progress}</div>`}
 function videoName(j){const parts=String(j.source_path||j.job_key||'Video').split(/[\\\\/]/);return parts[parts.length-1]||j.job_key||'Video'}
-function jobCard(j,labels){const stateInfo=statePresentation(j),bucket=jobBucket(j),percent=Math.max(0,Math.min(100,Math.round(100*(Number(j.progress)||0)))),groups=(j.detector_groups||[]).map(x=>labels[x]||x).join(', ')||'Chưa chọn';return `<article class="job" data-bucket="${bucket}"><div class="job-head"><div class="job-identity"><div class="job-title">#${j.id} · ${esc(videoName(j))}</div><div class="job-key">${esc(j.job_key)}</div><div class="job-path">${esc(j.source_path)}</div></div><div class="job-badges"><span class="state-badge tone-${stateInfo.tone}">${esc(stateInfo.label)}</span>${j.queue_position?`<span class="queue-badge" title="Quét cảnh và xuất video dùng chung một hàng đợi, chạy lần lượt theo thứ tự bấm.">Thứ tự chờ: #${j.queue_position}</span>`:''}</div></div><div class="job-body"><div class="progress-row"><div class="progress-label">Tiến trình phân tích</div><div class="progress" aria-label="Tiến trình ${percent}%"><i style="width:${percent}%"></i></div><div class="progress-value">${percent}%</div></div><div class="status-grid">${statusBox('Phân tích cảnh',scanStatus(j))}${statusBox('Cấu trúc cục bộ',structureStatus(j))}${statusBox('Visual AI Audit',visualStatus(j))}${statusBox('Xuất video',exportStatus(j))}</div>${j.error?`<div class="job-error">${esc(j.error)}</div>`:''}</div><div class="job-footer"><div class="scope-line"><strong>Phạm vi kiểm tra:</strong> ${esc(groups)} · <strong>Chế độ:</strong> ${esc(j.profile)} · ${esc(j.content_style)} · OCR: ${j.ocr_recognition_batch_size===8?'Tăng tốc (thử nghiệm)':'Chuẩn'}${j.fast_scan?' · Tăng tốc xử lý':''}</div><div class="actions">${controls(j)}</div></div></article>`}
-function runPhase(j){return j.state==='RENDERING'||j.state==='VERIFYING'||queueKind(j)==='export'||j.current_stage==='render'?'export':'analysis'}
+function jobCard(j,labels){const stateInfo=statePresentation(j),bucket=jobTab(j),percent=Math.max(0,Math.min(100,Math.round(100*(Number(j.progress)||0)))),groups=(j.detector_groups||[]).map(x=>labels[x]||x).join(', ')||'Chưa chọn';return `<article class="job" data-bucket="${bucket}"><div class="job-head"><div class="job-identity"><div class="job-title">#${j.id} · ${esc(videoName(j))}</div><div class="job-key">${esc(j.job_key)}</div><div class="job-path">${esc(j.source_path)}</div></div><div class="job-badges"><span class="state-badge tone-${stateInfo.tone}">${esc(stateInfo.label)}</span>${j.queue_position?`<span class="queue-badge" title="Quét cảnh và xuất video dùng chung một hàng đợi, chạy lần lượt theo thứ tự bấm.">Thứ tự chờ: #${j.queue_position}</span>`:''}</div></div><div class="job-body"><div class="progress-row"><div class="progress-label">Tiến trình phân tích</div><div class="progress" aria-label="Tiến trình ${percent}%"><i style="width:${percent}%"></i></div><div class="progress-value">${percent}%</div></div><div class="status-grid">${statusBox('Phân tích cảnh',scanStatus(j))}${statusBox('Cấu trúc cục bộ',structureStatus(j))}${statusBox('Visual AI Audit',visualStatus(j))}${statusBox('Xuất video',exportStatus(j))}</div>${j.error?`<div class="job-error">${esc(j.error)}</div>`:''}</div><div class="job-footer"><div class="scope-line"><strong>Phạm vi kiểm tra:</strong> ${esc(groups)} · <strong>Chế độ:</strong> ${esc(j.profile)} · ${esc(j.content_style)} · OCR: ${j.ocr_recognition_batch_size===8?'Tăng tốc (thử nghiệm)':'Chuẩn'}${j.fast_scan?' · Tăng tốc xử lý':''}</div><div class="actions">${controls(j)}</div></div></article>`}
 function phaseSection(label,items,labels){if(!items.length)return '';return `<section class="phase-group"><div class="phase-heading">${esc(label)} <span>${items.length}</span></div>${items.map(j=>jobCard(j,labels)).join('')}</section>`}
-function renderJobs(force=false){if(!force&&jobsInteracting()){deferJobsRender();return}dropForeignDrafts();captureRerunPanelDrafts();const jobs=status.jobs||[];startingJobs.forEach(id=>{const j=jobs.find(x=>x.id===id);if(!j||!needsSetup(j))startingJobs.delete(id)});const labels=Object.fromEntries((status.detector_options||[]).map(x=>[x.id,x.label])),groups={waiting:[],running:[],completed:[]};jobs.forEach(j=>groups[jobBucket(j)].push(j));if(!activeJobTab){activeJobTab=groups.running.length?'running':groups.waiting.length?'waiting':'completed'}const tabs=[['waiting','Đang chờ xử lý'],['running','Đang chạy'],['completed','Hoàn tất']];document.getElementById('job-tabs').innerHTML=tabs.map(([key,label])=>`<button class="job-tab ${activeJobTab===key?'active':''}" onclick="selectJobTab('${key}')"><span>${label}</span><span class="tab-count">${groups[key].length}</span></button>`).join('');const visible=groups[activeJobTab]||[];let content='';if(activeJobTab==='running'){content=phaseSection('Đang phân tích để duyệt',visible.filter(j=>runPhase(j)==='analysis'),labels)+phaseSection('Đang xuất video',visible.filter(j=>runPhase(j)==='export'),labels)}else{const ordered=activeJobTab==='waiting'?visible.filter(j=>j.queue_position).sort((a,b)=>a.queue_position-b.queue_position).concat(visible.filter(j=>!j.queue_position&&!needsSetup(j)),visible.filter(needsSetup).sort((a,b)=>a.id-b.id)):visible;content=ordered.map(j=>jobCard(j,labels)).join('')}document.getElementById('jobs').innerHTML=content||`<div class="empty">${jobs.length?'Không có video trong mục này.':'Chưa có video trong input.'}</div>`}
+function byQueue(a,b){return (a.queue_position||1e9)-(b.queue_position||1e9)||a.id-b.id}
+function byId(a,b){return a.id-b.id}
+function byRecent(a,b){return String(b.updated_at||'').localeCompare(String(a.updated_at||''))||b.id-a.id}
+function tabSections(tab,items){if(tab==='waiting')return[['Cần thiết lập',items.filter(needsSetup).sort(byId)],['Tạm dừng / lỗi / có thể tiếp tục',items.filter(j=>!needsSetup(j)&&j.state!=='CANCELLED')],['Đã hủy',items.filter(j=>j.state==='CANCELLED')]];if(tab==='review')return[['Cần duyệt cảnh',items.filter(j=>j.state==='WAITING_REVIEW').sort(byId)],['Đã duyệt xong — chờ xuất hoặc bỏ qua',items.filter(j=>j.state==='READY_TO_EXPORT').sort(byId)]];if(tab==='export')return[['Đang xuất',items.filter(j=>j.state!=='QUEUED')],['Chờ xuất',items.filter(j=>j.state==='QUEUED').sort(byQueue)]];if(tab==='completed')return[['Đã xuất video',items.filter(j=>j.state==='COMPLETED').sort(byRecent)],['Đã bỏ qua (không xuất)',items.filter(j=>j.state==='SKIPPED').sort(byRecent)]];if(tab==='scan_queue')return[[null,items.slice().sort(byQueue)]];return[[null,items]]}
+function renderJobs(force=false){if(!force&&jobsInteracting()){deferJobsRender();return}dropForeignDrafts();captureRerunPanelDrafts();captureExportPanelDrafts();const jobs=status.jobs||[];startingJobs.forEach(id=>{const j=jobs.find(x=>x.id===id);if(!j||!needsSetup(j))startingJobs.delete(id)});Object.keys(exportPanelDrafts).forEach(id=>{const j=jobs.find(x=>String(x.id)===String(id));if(!j||j.state!=='READY_TO_EXPORT')delete exportPanelDrafts[id]});const labels=Object.fromEntries((status.detector_options||[]).map(x=>[x.id,x.label])),groups=Object.fromEntries(JOB_TABS.map(([key])=>[key,[]]));jobs.forEach(j=>groups[jobTab(j)].push(j));const known=JOB_TABS.some(([key])=>key===activeJobTab),tab=known?activeJobTab:defaultJobTab(groups);if(!known&&Array.isArray(status.jobs))activeJobTab=tab;document.getElementById('job-tabs').innerHTML=JOB_TABS.map(([key,label])=>`<button class="job-tab ${tab===key?'active':''}" data-tab="${key}" aria-pressed="${tab===key}" onclick="selectJobTab('${key}')"><span>${label}</span><span class="tab-count">${groups[key].length}</span></button>`).join('');const content=tabSections(tab,groups[tab]).map(([label,items])=>label?phaseSection(label,items,labels):items.map(j=>jobCard(j,labels)).join('')).join('');document.getElementById('jobs').innerHTML=content||`<div class="empty">${jobs.length?'Không có video trong mục này.':'Chưa có video trong input.'}</div>`}
 function render(){const waiting=status.queue?.length||0;document.getElementById('worker').textContent=status.active?`Đang chạy #${status.active.job_id}: ${status.active.stage}${waiting?` · ${waiting} việc đang chờ`:''}`:(status.scheduler_paused?`Scheduler tạm dừng${waiting?` · ${waiting} việc giữ nguyên thứ tự`:''}`:waiting?`Đang chờ · ${waiting} việc trong hàng đợi`:'Đang chờ');const r=status.resources||{};document.getElementById('resource').textContent=`CPU ${Math.round(r.cpu_percent||0)}% · RAM ${Math.round(r.memory?.percent||0)}% · GPU ${r.gpu?Math.round(r.gpu.utilization_percent)+'%':'N/A'}`;syncHeaderHeight();renderJobs()}
 function discardPendingLoads(){appliedSeq=Math.max(appliedSeq,loadSeq)}
 async function load(){const seq=++loadSeq;const next=await json('/api/status');if(seq<=appliedSeq)return false;appliedSeq=seq;status=next;render();return true}
@@ -329,12 +441,20 @@ function sameDetectorScope(a,b){const x=[...new Set(a||[])].sort(),y=[...new Set
 function confirmStartScope(id,detectors){const previous=storageGet(LAST_SCOPE_KEY);const ask=Array.isArray(previous)?!sameDetectorScope(previous,detectors):detectors.some(x=>SENSITIVE_DETECTORS.includes(x));if(!ask)return true;const labels=Object.fromEntries((status.detector_options||[]).map(x=>[x.id,x.label])),job=(status.jobs||[]).find(x=>x.id===id);return confirm(`Bắt đầu #${id} ${job?videoName(job):''} với các nhóm: ${detectors.map(x=>labels[x]||x).join(', ')}?`)}
 async function start(id,button){if(startingJobs.has(id))return;startingJobs.add(id);const release=()=>{startingJobs.delete(id);if(button&&button.isConnected){button.disabled=false;button.textContent='Bắt đầu'}};if(button){button.disabled=true;button.textContent='Đang bắt đầu…'}captureMetadataDraft(id);const metadata=metadataDrafts[id],detectors=selectedDetectors(id);if(!detectors||!metadata||!confirmStartScope(id,detectors)){release();return}try{await post(`/api/jobs/${id}/start`,{content_style:metadata.content_style,profile:metadata.profile,detectors,ocr_recognition_batch_size:selectedOcrBatch(id),fast_scan:selectedFastScan(id)})}catch(e){release();await load().catch(()=>{});const job=(status.jobs||[]).find(x=>x.id===id);if(job&&!needsSetup(job)){clearDraft(id);notify(`Video #${id} không còn chờ thiết lập (${statePresentation(job).label}); không cần bắt đầu lại.`)}else notify(`Không thể bắt đầu #${id}: ${e.message}`,true);return}discardPendingLoads();clearDraft(id);storageSet(LAST_SCOPE_KEY,detectors);await load()}
 async function act(id,name){try{await post(`/api/jobs/${id}/${name}`);discardPendingLoads();await load()}catch(e){alert(e.message)}}
+async function skipJob(id,button){if(skippingJobs.has(id))return;const j=(status.jobs||[]).find(x=>x.id===id);if(!j)return;skippingJobs.add(id);if(button)button.disabled=true;try{if(!confirm(`Đánh dấu #${id} ${videoName(j)} là xong mà không xuất video?\\n${skipReasonText(j)} Không tạo bản xuất; video gốc, report và quyết định duyệt được giữ nguyên. Video sẽ chuyển sang mục “Hoàn tất”; có thể bấm “Mở lại để xuất” sau.`))return;await post(`/api/jobs/${id}/skip`);discardPendingLoads();await load().catch(()=>{});notify(`Đã đánh dấu #${id} xong (không xuất video). Video đã chuyển sang mục “Hoàn tất”.`)}catch(e){notify(`Không thể bỏ qua #${id}: ${e.message}`,true)}finally{skippingJobs.delete(id);if(button&&button.isConnected)button.disabled=false}}
+async function unskipJob(id,button){if(unskippingJobs.has(id))return;const j=(status.jobs||[]).find(x=>x.id===id);if(!j)return;unskippingJobs.add(id);if(button)button.disabled=true;try{if(!confirm(`Mở lại #${id} ${videoName(j)} để xuất video?\\nVideo sẽ quay về mục “Đang chờ duyệt” (Đã duyệt xong — chờ xuất hoặc bỏ qua).`))return;await post(`/api/jobs/${id}/unskip`);discardPendingLoads();await load().catch(()=>{});notify(`Đã mở lại #${id}; video nằm ở mục “Đang chờ duyệt”.`)}catch(e){notify(`Không thể mở lại #${id}: ${e.message}`,true)}finally{unskippingJobs.delete(id);if(button&&button.isConnected)button.disabled=false}}
+async function exportVideo(id,button){if(exportingJobs.has(id))return;const j=(status.jobs||[]).find(x=>x.id===id);if(!j)return;exportingJobs.add(id);const release=()=>{exportingJobs.delete(id);if(button&&button.isConnected){button.disabled=false;button.textContent='Hoàn tất duyệt và xuất video'}};if(button){button.disabled=true;button.textContent='Đang gửi lệnh xuất…'}const fail=message=>{exportPanelDrafts[id]={...(exportPanelDrafts[id]||{}),error:message,open:true};release();setExportPanelOpen(id,true);renderJobs();notify(message,true)};if(exportPanelDrafts[id])delete exportPanelDrafts[id].error;if(!j.review_summary||j.review_summary.status!=='READY_FOR_EDIT_PLAN'){release();alert(EXPORT_GATE_MESSAGE);return}if(j.source_present===false){fail(SOURCE_MISSING_MESSAGE);return}captureExportPanelDrafts();const draft=exportPanelDrafts[id]||{},choice=exportPolicyChoice(j.review_summary.export_size_policy);let selection;try{selection=exportSizeSelection(draft.mode||choice.mode,draft.gb!=null?draft.gb:choice.gb)}catch(e){fail(e.message);return}if(!confirm(exportConfirmText(selection))){release();return}setExportPanelOpen(id,false);let result;try{result=await post(`/api/jobs/${id}/review/finalize`,selection)}catch(e){fail(`Không gửi được lệnh xuất: ${e.message}`);return}exportingJobs.delete(id);delete exportPanelDrafts[id];discardPendingLoads();await load().catch(()=>{});if(result&&result.status==='COMPLETED'){notify(`Video #${id} đã có bản xuất: ${result.output||''}.`);return}const job=(status.jobs||[]).find(x=>x.id===id),n=status.queue?.length||0;notify(`Đã xếp #${id} vào hàng đợi xuất video${job&&job.queue_position?` (lượt ${job.queue_position}/${n})`:''}. Theo dõi ở mục “Đang chạy xuất video”.`)}
 async function rerun(id){const detectors=selectedDetectors(id);if(!detectors)return;if(!confirm('Chạy lại video với các nhóm kiểm tra đang chọn? Report và quyết định cũ vẫn được giữ; lượt mới dùng thư mục revision riêng.'))return;try{await post(`/api/jobs/${id}/rerun`,{detectors,ocr_recognition_batch_size:selectedOcrBatch(id),fast_scan:selectedFastScan(id)});discardPendingLoads();clearDraft(id);delete rerunPanelDrafts[id];await load();notify('Đã xếp video chạy lại theo phạm vi mới trong một revision riêng.')}catch(e){notify(`Không thể chạy lại: ${e.message}`,true)}}
 async function audit(id,visual=false){if(visual&&!confirm('Visual AI Audit sẽ gửi tối đa 36 ảnh thumbnail của riêng video này cho Codex bằng tài khoản ChatGPT. Video và âm thanh gốc không được gửi. Tiếp tục?'))return;try{await post(`/api/jobs/${id}/ai-audit`,{visual});alert(visual?'Visual AI Audit đã được xếp chạy. AI chỉ đưa đề xuất; bạn vẫn duyệt mọi thay đổi.':'AI JSON audit đã được xếp chạy.')}catch(e){alert(e.message)}}
 async function scheduler(paused){await post('/api/scheduler',{paused});discardPendingLoads();await load()}
 async function shutdown(mode){if(!confirm(mode==='immediate'?'Dừng bước hiện tại và tắt Control Center?':'Tắt sau khi bước hiện tại hoàn tất?'))return;document.body.innerHTML='<main><div class="empty"><div class="name" id="shutdown-state">Đang gửi lệnh tắt BiliFlow…</div><p class="muted">Tab sẽ được giữ lại để hiển thị kết quả.</p></div></main>';try{await post('/api/shutdown',{mode});document.getElementById('shutdown-state').textContent=mode==='immediate'?'Đang dừng job và tắt backend…':'Đang chờ bước hiện tại hoàn tất rồi tắt…';for(let i=0;i<120;i++){await new Promise(r=>setTimeout(r,500));try{await fetch('/healthz',{cache:'no-store'})}catch(_){document.getElementById('shutdown-state').textContent='BiliFlow đã tắt hoàn toàn. Bạn có thể đóng tab.';return}}document.getElementById('shutdown-state').textContent='Lệnh tắt đã được nhận nhưng backend vẫn đang hoàn tất bước hiện tại.'}catch(e){document.getElementById('shutdown-state').textContent=`Không xác nhận được trạng thái tắt: ${e.message}`}}
 (async()=>{watchJobsInteraction();watchHeaderHeight();await refreshToken();await Promise.all([load(),loadAI()]);setInterval(()=>load().catch(e=>notify(`Mất kết nối dashboard: ${e.message}`,true)),3000);setInterval(()=>{if(aiState.login_running)loadAI().catch(()=>{})},3000)})().catch(e=>notify(e.message,true));
 </script></body></html>"""
+    return (
+        page.replace("__EXPORT_DIALOG_JS__", EXPORT_DIALOG_JS)
+        .replace("__EXPORT_CUSTOM_GB__", EXPORT_CUSTOM_GB_ATTRIBUTES)
+        .replace("__SOURCE_MISSING_MESSAGE__", SOURCE_MISSING_MESSAGE)
+    )
 
 
 class ControlCenter:
@@ -387,6 +507,11 @@ class ControlCenter:
             job["detector_groups"] = list(
                 self.scheduler.detector_groups(int(job["id"]))
             )
+            job["review_summary"] = self.review_summary_for(job)
+            job["source_present"] = Path(str(job["source_path"])).is_file()
+            job["skip"] = (
+                self.store.setting(f"skip:{int(job['id'])}") if job["state"] == "SKIPPED" else None
+            )
         return {
             "version": __version__, "started": True, "recovered_jobs": self.recovered,
             "scheduler_paused": self.store.setting("scheduler_paused", False),
@@ -400,6 +525,28 @@ class ControlCenter:
                 {"id": key, **value} for key, value in DETECTOR_GROUPS.items()
             ],
         }
+
+    def review_summary_for(self, job: dict[str, Any]) -> dict[str, Any] | None:
+        """Counts of the active review queue, only for jobs whose card needs them."""
+        if job.get("state") not in REVIEW_SUMMARY_STATES or not job.get("active_queue_path"):
+            return None
+        try:
+            path = _inside(self.root / "reports", self.root / str(job["active_queue_path"]))
+        except (OSError, ValueError):
+            return None
+        summary = _cached_review_summary(path)
+        if summary is not None and summary.get("skip_eligible") and not self._skip_state_allowed(job):
+            # The card offers "Bỏ qua" only when skip_export would accept it.
+            summary["skip_eligible"] = False
+        return summary
+
+    def _skip_state_allowed(self, job: dict[str, Any]) -> bool:
+        """The job-state half of skip_export's guards (the queue half is skip_refusal)."""
+        return (
+            job.get("state") == "READY_TO_EXPORT"
+            and not self._export_in_flight(job)
+            and not self.scheduler.is_busy(int(job["id"]))
+        )
 
     def render_progress_summary(self, job: dict[str, Any]) -> dict[str, Any] | None:
         if job.get("state") != "RENDERING":
@@ -638,43 +785,180 @@ class ControlCenter:
         return source, mime
 
     def sync_queue_state(self, job_id: int, queue: dict[str, Any]) -> None:
+        """Follow a review decision: READY_TO_EXPORT when fully decided, else WAITING_REVIEW.
+
+        An export waiting or running and any in-process job keep their state.
+        A skipped job stays skipped while its review still allows a skip;
+        otherwise it goes back to the review flow and the skip record ends.
+        """
         state = "READY_TO_EXPORT" if queue.get("status") == "READY_FOR_EDIT_PLAN" else "WAITING_REVIEW"
-        self.store.update_job(job_id, state=state, error=None)
+        job = self.store.get_job(job_id)
+        if job["state"] == "SKIPPED":
+            reason = skip_refusal(review_summary(queue))
+            if reason is None:
+                return
+            if self.store.update_job_if(job_id, states={"SKIPPED"}, state=state, error=None) is None:
+                return
+            record = self.store.setting(f"skip:{job_id}")
+            self.store.set_setting(f"skip:{job_id}", None)
+            self.store.add_event(
+                job_id, "JOB_SKIP_SUPERSEDED",
+                f"Bỏ đánh dấu bỏ qua vì quyết định duyệt đã đổi: {reason}",
+                payload={"state": state, "queue_status": queue.get("status"), "skip": record},
+            )
+            return
+        self.store.update_job_if(job_id, exclude=SYNC_KEEP_STATES, state=state, error=None)
+
+    def _export_in_flight(self, job: dict[str, Any]) -> bool:
+        job_id = int(job["id"])
+        if job["state"] in {"RENDERING", "VERIFYING"} or (
+            job["state"] == "QUEUED" and job.get("current_stage") == "render"
+        ):
+            return True
+        if self.scheduler.is_busy(job_id) and job.get("current_stage") == "render":
+            return True
+        if job["state"] != "QUEUED":
+            return False
+        pending = self.store.next_pending_stage(job_id)
+        return pending is not None and pending["name"] == "render"
+
+    def ensure_review_editable(self, job_id: int) -> None:
+        """Refuse a decision edit while an export waits or runs.
+
+        The render uses the plan fixed at finalize, so an edit then would not
+        reach the output. Call it inside _REVIEW_QUEUE_IO and the scheduler's
+        job_action_lock, before the queue is written.
+        """
+        if self._export_in_flight(self.store.get_job(job_id)):
+            raise ValueError(REVIEW_EDIT_IN_FLIGHT_MESSAGE)
 
     def finalize(
         self, job_id: int, *, size_mode: str = "default",
         max_output_gb: object = None,
     ) -> dict[str, Any]:
-        queue_path = self.queue_path(job_id)
-        queue = _read_json(queue_path)
-        if queue.get("status") != "READY_FOR_EDIT_PLAN":
-            raise ValueError("Vẫn còn mục chưa có quyết định cuối cùng")
-        policy = normalize_output_size_policy(size_mode, max_output_gb)
-        queue["export_size_policy"] = policy
-        _write_json(queue_path, queue)
-        plan_path, output_path, _ = review_export_paths(self.root, queue)
-        if output_path.exists():
-            self.store.update_job(job_id, state="COMPLETED", progress=1.0)
+        # Every guard runs before anything is written (queue policy, plan, render).
+        with _REVIEW_QUEUE_IO, self.scheduler.job_action_lock:
+            job = self.store.get_job(job_id)
+            if job["state"] == "SKIPPED":
+                raise ValueError(SKIPPED_REFUSAL)
+            if self._export_in_flight(job):
+                raise ValueError(EXPORT_IN_FLIGHT_MESSAGE)
+            if (
+                job["state"] == "QUEUED" or job["state"] in IN_PROCESS_STATES
+                or self.scheduler.is_busy(job_id)
+            ):
+                raise ValueError(
+                    f"Video #{job_id} đang trong hàng đợi hoặc đang được xử lý; chờ xong rồi hãy xuất."
+                )
+            queue_path = self.queue_path(job_id)
+            queue = _read_json(queue_path)
+            if queue.get("status") != "READY_FOR_EDIT_PLAN":
+                raise ValueError("Vẫn còn mục chưa có quyết định cuối cùng")
+            if not Path(str(job["source_path"])).is_file():
+                raise ValueError(SOURCE_MISSING_MESSAGE)
+            policy = normalize_output_size_policy(size_mode, max_output_gb)
+            queue["export_size_policy"] = policy
+            _write_json(queue_path, queue)
+            plan_path, output_path, _ = review_export_paths(self.root, queue)
+            if output_path.exists():
+                self.store.update_job(job_id, state="COMPLETED", progress=1.0)
+                return {
+                    "status": "COMPLETED",
+                    "output": output_path.relative_to(self.root).as_posix(),
+                    "export_size_policy": policy,
+                }
+            plan = build_edit_plan(project_root=self.root, queue_path=queue_path, plan_path=plan_path)
+            if plan.get("status") == "READY_FOR_PREVIEW":
+                authorize_final_from_resolved_review(
+                    project_root=self.root, plan_path=plan_path, actor="control_center_user"
+                )
+            self.scheduler.queue_render(
+                job_id, plan_path=plan_path, output_path=output_path,
+                max_output_bytes=policy["maximum_output_bytes"],
+                target_output_bytes=policy["target_output_bytes"],
+            )
             return {
-                "status": "COMPLETED",
+                "status": "QUEUED", "plan": plan_path.relative_to(self.root).as_posix(),
                 "output": output_path.relative_to(self.root).as_posix(),
                 "export_size_policy": policy,
             }
-        plan = build_edit_plan(project_root=self.root, queue_path=queue_path, plan_path=plan_path)
-        if plan.get("status") == "READY_FOR_PREVIEW":
-            authorize_final_from_resolved_review(
-                project_root=self.root, plan_path=plan_path, actor="control_center_user"
+
+    def skip_export(self, job_id: int) -> dict[str, Any]:
+        """Bỏ qua (không xuất): mark a reviewed video done without an export.
+
+        Writes only the job state, the skip:{id} setting and an event; the
+        queue, decisions, reports, source and outputs are never touched.
+        """
+        with _REVIEW_QUEUE_IO, self.scheduler.job_action_lock:
+            job = self.store.get_job(job_id)
+            if job["state"] == "SKIPPED":
+                raise ValueError(f"Video #{job_id} đã được đánh dấu bỏ qua.")
+            # A render stage left PENDING by a cancelled, paused or interrupted
+            # export is not in flight: only a QUEUED or RENDERING job exports.
+            if self._export_in_flight(job):
+                raise ValueError(f"Video #{job_id} đang chờ xuất hoặc đang xuất; không thể bỏ qua.")
+            if (
+                job["state"] == "QUEUED" or job["state"] in IN_PROCESS_STATES
+                or self.scheduler.is_busy(job_id)
+            ):
+                raise ValueError(f"Video #{job_id} đang trong hàng đợi hoặc đang được xử lý; không thể bỏ qua.")
+            if job["state"] != "READY_TO_EXPORT":
+                raise ValueError(
+                    "Chỉ bỏ qua được video đã duyệt xong (Sẵn sàng xuất) mà không có cảnh chính "
+                    "nào cần xử lý hoặc mọi cảnh chính đều Giữ nguyên."
+                )
+            try:
+                queue = _read_json(self.queue_path(job_id))
+            except (OSError, ValueError) as error:
+                raise ValueError("Video chưa có danh sách duyệt đọc được; không thể bỏ qua.") from error
+            summary = review_summary(queue)
+            reason = skip_refusal(summary)
+            if reason:
+                raise ValueError(reason)
+            record = {
+                "queue_path": job.get("active_queue_path"),
+                "revision": job.get("active_revision"),
+                "main_items": summary["main_items"],
+                "advisory_items": summary["advisory_items"],
+                "decisions": summary["decisions"],
+                "skipped_at": now_iso(),
+                "actor": "control_center_user",
+            }
+            value = self.store.update_job_if(
+                job_id, states={"READY_TO_EXPORT"}, state="SKIPPED", progress=1.0,
+                current_stage=None, stop_mode=None, error=None,
             )
-        self.scheduler.queue_render(
-            job_id, plan_path=plan_path, output_path=output_path,
-            max_output_bytes=policy["maximum_output_bytes"],
-            target_output_bytes=policy["target_output_bytes"],
-        )
-        return {
-            "status": "QUEUED", "plan": plan_path.relative_to(self.root).as_posix(),
-            "output": output_path.relative_to(self.root).as_posix(),
-            "export_size_policy": policy,
-        }
+            if value is None:
+                raise ValueError(f"Video #{job_id} vừa đổi trạng thái; tải lại Dashboard rồi thử lại.")
+            self.store.set_setting(f"skip:{job_id}", record)
+            self.store.add_event(
+                job_id, "JOB_SKIPPED",
+                "Đánh dấu xong mà không xuất video; video gốc, report và quyết định duyệt giữ nguyên",
+                payload=record,
+            )
+            return value
+
+    def unskip_export(self, job_id: int) -> dict[str, Any]:
+        """Mở lại để xuất: undo a skip; the job returns to its review state."""
+        with _REVIEW_QUEUE_IO, self.scheduler.job_action_lock:
+            job = self.store.get_job(job_id)
+            if job["state"] != "SKIPPED":
+                raise ValueError(f"Video #{job_id} không ở trạng thái Đã bỏ qua.")
+            try:
+                ready = _read_json(self.queue_path(job_id)).get("status") == "READY_FOR_EDIT_PLAN"
+            except (OSError, ValueError):
+                ready = False
+            state = "READY_TO_EXPORT" if ready else "WAITING_REVIEW"
+            value = self.store.update_job_if(job_id, states={"SKIPPED"}, state=state, error=None)
+            if value is None:
+                raise ValueError(f"Video #{job_id} vừa đổi trạng thái; tải lại Dashboard rồi thử lại.")
+            record = self.store.setting(f"skip:{job_id}")
+            self.store.set_setting(f"skip:{job_id}", None)
+            self.store.add_event(
+                job_id, "JOB_UNSKIPPED", "Mở lại để xuất video",
+                payload={"state": state, "skip": record},
+            )
+            return value
 
     def start_ai_audit(self, job_id: int, *, visual_opt_in: bool = False) -> None:
         if visual_opt_in:
@@ -948,9 +1232,21 @@ def _handler_class(center: ControlCenter) -> type[BaseHTTPRequestHandler]:
         def authorized(self) -> bool:
             return self.headers.get("X-BiliFlow-Token") == center.token
 
-        def host_allowed(self) -> bool:
+        def drain_body(self) -> None:
+            # A refused POST still reads its small body: closing a socket with
+            # unread bytes makes Windows reset it before the client reads the 403.
+            try:
+                length = int(self.headers.get("Content-Length", "0"))
+            except ValueError:
+                return
+            if 0 < length <= 65536:
+                self.rfile.read(length)
+
+        def host_allowed(self, *, drain: bool = False) -> bool:
             if _host_allowed(self.headers.get("Host"), getattr(center, "host", None)):
                 return True
+            if drain:
+                self.drain_body()
             self.send_json(403, {"error": "Địa chỉ truy cập không hợp lệ"})
             return False
 
@@ -1052,10 +1348,11 @@ def _handler_class(center: ControlCenter) -> type[BaseHTTPRequestHandler]:
                 self.send_json(500, {"error": str(error)})
 
         def do_POST(self) -> None:
-            if not self.host_allowed():
+            if not self.host_allowed(drain=True):
                 return
             path = urllib.parse.urlparse(self.path).path
             if not self.authorized():
+                self.drain_body()
                 self.send_json(403, {"error": "Phiên Control Center không hợp lệ"})
                 return
             try:
@@ -1077,7 +1374,7 @@ def _handler_class(center: ControlCenter) -> type[BaseHTTPRequestHandler]:
                     threading.Thread(target=center.stop,
                                      kwargs={"immediate": mode == "immediate"}, daemon=True).start()
                     return
-                elif match := re.fullmatch(r"/api/jobs/(\d+)/(start|resume|pause|stop-after-stage|cancel|retry|rerun|ai-audit)", path):
+                elif match := re.fullmatch(r"/api/jobs/(\d+)/(start|resume|pause|stop-after-stage|cancel|retry|rerun|skip|unskip|ai-audit)", path):
                     job_id, action = int(match.group(1)), match.group(2)
                     if action == "start":
                         detectors = body.get("detectors")
@@ -1095,6 +1392,8 @@ def _handler_class(center: ControlCenter) -> type[BaseHTTPRequestHandler]:
                     elif action == "stop-after-stage": result = center.scheduler.stop_after_stage(job_id)
                     elif action == "cancel": result = center.scheduler.cancel(job_id)
                     elif action == "retry": result = center.scheduler.retry(job_id)
+                    elif action == "skip": result = center.skip_export(job_id)
+                    elif action == "unskip": result = center.unskip_export(job_id)
                     elif action == "rerun":
                         detectors = body.get("detectors")
                         result = center.scheduler.rerun(
@@ -1118,7 +1417,10 @@ def _handler_class(center: ControlCenter) -> type[BaseHTTPRequestHandler]:
                 elif match := re.fullmatch(r"/api/jobs/(\d+)/review/(decision|clear|bulk-keep|bulk-accept|finalize)", path):
                     job_id, action = int(match.group(1)), match.group(2)
                     queue_path = center.queue_path(job_id)
-                    with _REVIEW_QUEUE_IO:
+                    with _REVIEW_QUEUE_IO, center.scheduler.job_action_lock:
+                        if action != "finalize":
+                            # Checked before any write: the queue stays byte-identical.
+                            center.ensure_review_editable(job_id)
                         if action == "decision":
                             result = record_review_decision(
                                 project_root=center.root, queue_path=queue_path,

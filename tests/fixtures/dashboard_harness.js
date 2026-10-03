@@ -10,14 +10,15 @@ const options = [
   {id: 'gore', label: 'Máu me', description: ''},
   {id: 'violence', label: 'Bạo lực', description: ''},
 ];
-const server = {jobs: [], posts: [], delays: [], clock: 0, postDelay: 0, refuseNext: false, seq: 2, paused: false};
+const server = {jobs: [], posts: [], actions: [], delays: [], clock: 0, postDelay: 0, refuseNext: false, refuseAction: null, seq: 2, paused: false};
+const TAB_KEYS = ['waiting', 'scan_queue', 'scanning', 'review', 'export', 'completed'];
 // #44 was clicked before #45 (queue_seq), although #45 was touched later.
 for (const id of [44, 45]) server.jobs.push({id, job_key: `ep-${id}`, source_path: `input/Tập ${id}.mp4`, state: 'QUEUED', updated_at: `2026-10-02T13:0${id - 40}:00`, priority: 100, queue_seq: id - 43, pending_stage: 'preflight', detector_groups: ['advertising'], content_style: 'live_action', profile: 'careful', progress: 0, ocr_recognition_batch_size: 1, fast_scan: true, active_queue_path: null});
 // #48 uses a Windows path: the card and the confirm must show only the file name.
 for (const id of [46, 47, 48]) server.jobs.push({id, job_key: `ep-${id}`, source_path: id === 48 ? ['E:', 'DungChung', 'BiliFlow', 'input', `Tập ${id}.mp4`].join(String.fromCharCode(92)) : `input/Tập ${id}.mp4`, state: 'NEEDS_METADATA', updated_at: `2026-10-02T12:${id}:00`, priority: 100, detector_groups: null, content_style: 'unknown', profile: 'careful', progress: 0, ocr_recognition_batch_size: 1, fast_scan: true, active_queue_path: null});
 // Mirrors JobScheduler.queue_order(): waiting jobs by priority, queue_seq (NULL last), id.
 function withQueue(jobs) {
-  const waiting = jobs.filter(j => j.state === 'QUEUED' && !j.stop_mode).sort((a, b) => (a.priority - b.priority) || ((a.queue_seq == null) - (b.queue_seq == null)) || ((a.queue_seq || 0) - (b.queue_seq || 0)) || (a.id - b.id));
+  const waiting = jobs.filter(j => j.state === 'QUEUED' && !j.stop_mode && j.pending_stage !== null).sort((a, b) => (a.priority - b.priority) || ((a.queue_seq == null) - (b.queue_seq == null)) || ((a.queue_seq || 0) - (b.queue_seq || 0)) || (a.id - b.id));
   jobs.forEach(j => { const index = waiting.indexOf(j); j.queue_position = index < 0 ? null : index + 1; j.queue_kind = index < 0 ? null : (j.pending_stage === 'render' ? 'export' : 'scan'); });
   return {length: waiting.length, paused: server.paused};
 }
@@ -33,6 +34,8 @@ async function fakeFetch(url, opt = {}) {
     const queue = withQueue(snapshot);
     return response(200, {jobs: snapshot, queue, scheduler_paused: server.paused, detector_options: options, resources: {}, active: null});
   }
+  const action = /^\/api\/jobs\/(\d+)\/(skip|unskip|review\/finalize)$/.exec(url);
+  if (action && opt.method === 'POST') return jobAction(Number(action[1]), action[2], JSON.parse(opt.body || '{}'));
   const match = /^\/api\/jobs\/(\d+)\/start$/.exec(url);
   if (match && opt.method === 'POST') {
     const id = Number(match[1]), body = JSON.parse(opt.body), job = server.jobs.find(x => x.id === id);
@@ -47,12 +50,28 @@ async function fakeFetch(url, opt = {}) {
   }
   return response(200, {});
 }
+// The server side of skip, unskip and finalize, as far as the dashboard sees it.
+async function jobAction(id, name, body) {
+  server.actions.push({id, name, body});
+  // Whether the card's export panel was still open when the request left.
+  const sent = server.page && (server.page.jobs.panels || []).find(x => x.className === 'export-panel' && x.dataset.jobId === String(id));
+  if (server.openAtPost) server.openAtPost.push(sent ? sent.open : null);
+  if (server.postDelay) await sleep(server.postDelay);
+  if (server.refuseAction) { const error = server.refuseAction; server.refuseAction = null; return response(400, {error}); }
+  const job = server.jobs.find(x => x.id === id);
+  server.clock += 1;
+  job.updated_at = `2026-10-02T15:${String(server.clock).padStart(2, '0')}:00`;
+  if (name === 'skip') Object.assign(job, {state: 'SKIPPED', skip: {skipped_at: '2026-10-02T15:00:00+07:00'}});
+  else if (name === 'unskip') Object.assign(job, {state: 'READY_TO_EXPORT', skip: null});
+  else { server.seq += 1; Object.assign(job, {state: 'QUEUED', current_stage: 'render', pending_stage: 'render', queue_seq: server.seq}); return response(200, {status: 'QUEUED', output: `output/${id}.mp4`, export_size_policy: {mode: body.size_mode}}); }
+  return response(200, job);
+}
 class FakeElement {
   constructor(tagName, attrs = {}) { Object.assign(this, {tagName, textContent: '', className: '', value: '', checked: false, listeners: {}}, attrs); this._html = ''; }
   addEventListener(name, fn) { (this.listeners[name] = this.listeners[name] || []).push(fn); }
   dispatch(name) { (this.listeners[name] || []).forEach(fn => fn({type: name})); }
   contains(other) { return other === this || (this.controls || []).includes(other); }
-  set innerHTML(html) { this._html = html; if (this.id === 'jobs') this.controls = parseControls(html); }
+  set innerHTML(html) { this._html = html; if (this.id === 'jobs') { this.controls = parseControls(html); this.panels = parsePanels(html); } }
   get innerHTML() { return this._html; }
 }
 function attr(text, name) { const m = new RegExp(`\\b${name}="([^"]*)"`).exec(text); return m ? m[1] : null; }
@@ -66,12 +85,16 @@ function parseControls(html) {
   }
   return els;
 }
+// <details class="export-panel|rerun-panel" data-job-id="…" [open]> as fake elements.
+function parsePanels(html) {
+  return [...html.matchAll(/<details class="(export-panel|rerun-panel)" data-job-id="(\d+)"\s*(open)?>/g)].map(m => new FakeElement('DETAILS', {className: m[1], dataset: {jobId: m[2]}, open: !!m[3]}));
+}
 function makeStorage(map) {
   return {getItem: k => (map.has(k) ? map.get(k) : null), setItem: (k, v) => map.set(k, String(v)), removeItem: k => map.delete(k), key: i => [...map.keys()][i] ?? null, get length() { return map.size; }};
 }
 function boot(storageMap, log, extra = {}) {
   const statics = {};
-  const controlId = /^(det-all|style|profile|ocr|fast)-\d+$/;
+  const controlId = /^(det-all|style|profile|ocr|fast|size|size-gb|size-gb-wrap)-\d+$/;
   const document = {
     activeElement: null, listeners: {}, body: new FakeElement('BODY'),
     getElementById(id) {
@@ -84,9 +107,16 @@ function boot(storageMap, log, extra = {}) {
     querySelectorAll(selector) {
       const m = /^\[data-detector-job="(\d+)"\]$/.exec(selector);
       if (m) return (statics.jobs.controls || []).filter(x => x.detectorJob === m[1]);
+      const panels = /^\.(export-panel|rerun-panel)\[data-job-id\]$/.exec(selector);
+      if (panels) return (statics.jobs.panels || []).filter(x => x.className === panels[1]);
       return [];
     },
-    querySelector(selector) { return selector === 'header' && extra.header ? extra.header : null; },
+    querySelector(selector) {
+      if (selector === 'header') return extra.header || null;
+      const panel = /^\.(export-panel|rerun-panel)\[data-job-id="(\d+)"\]$/.exec(selector);
+      if (panel) return (statics.jobs.panels || []).find(x => x.className === panel[1] && x.dataset.jobId === panel[2]) || null;
+      return null;
+    },
     addEventListener(name, fn) { (this.listeners[name] = this.listeners[name] || []).push(fn); },
     dispatch(name) { (this.listeners[name] || []).forEach(fn => fn({type: name})); },
   };
@@ -114,9 +144,35 @@ function cards(page) {
     const queue = (/class="queue-badge"[^>]*>([^<]*)</.exec(chunk) || [null, null])[1];
     const values = [...chunk.matchAll(/class="status-value">([^<]*)</g)].map(m => m[1]);
     const details = [...chunk.matchAll(/class="status-detail">([^<]*)</g)].map(m => m[1]);
-    return {id, badge, queue, scan: values[0], scanDetail: details[0], exportValue: values[3], exportDetail: details[3], hasStart: chunk.includes(`start(${id},`), startDisabled: chunk.includes(`start(${id},this)" disabled>Đang bắt đầu…`), title: /class="job-title">([^<]*)</.exec(chunk)[1], detectors, ocr: ocr ? Number(ocr[1]) : null};
+    const exportButton = /<button class="green" onclick="exportVideo\(\d+,this\)" ([^>]*)>([^<]*)</.exec(chunk);
+    return {id, badge, queue, scan: values[0], scanDetail: details[0], exportValue: values[3], exportDetail: details[3], hasStart: chunk.includes(`start(${id},`), startDisabled: chunk.includes(`start(${id},this)" disabled>Đang bắt đầu…`), title: /class="job-title">([^<]*)</.exec(chunk)[1], detectors, ocr: ocr ? Number(ocr[1]) : null,
+      bucket: attr(chunk, 'data-bucket'), hasSkip: chunk.includes(`onclick="skipJob(${id},`), hasUnskip: chunk.includes(`unskipJob(${id},`), hasCancel: chunk.includes(`act(${id},'cancel')`), hasRerun: chunk.includes('class="rerun-panel"'),
+      hasExport: chunk.includes('class="export-panel"'), exportDisabled: exportButton ? /disabled/.test(exportButton[1]) : null, exportTitle: exportButton ? attr(exportButton[1], 'title') : null, exportReason: (/class="export-reason">([^<]*)</.exec(chunk) || [null, null])[1], exportError: (/class="export-error"[^>]*>([^<]*)</.exec(chunk) || [null, null])[1]};
   });
 }
+// The section headings (with counts) of the visible tab, in order.
+function headings(page) {
+  return [...page.jobs.innerHTML.matchAll(/class="phase-heading">([^<]*) <span>(\d+)<\/span>/g)].map(m => [m[1], Number(m[2])]);
+}
+// The tab bar: [key, label, count] in order, plus the active key.
+function tabBar(page) {
+  const html = page.document.getElementById('job-tabs').innerHTML;
+  const tabs = [...html.matchAll(/<button class="job-tab ?(active)?" data-tab="([^"]*)"[^>]*><span>([^<]*)<\/span><span class="tab-count">(\d+)<\/span>/g)].map(m => [m[2], m[3], Number(m[4])]);
+  const active = (/class="job-tab active" data-tab="([^"]*)"/.exec(html) || [null, null])[1];
+  return {tabs, active};
+}
+// Every card of every tab (tagged with its tab); the user's tab is restored.
+function allCards(page) {
+  const previous = page.run('activeJobTab');
+  const out = [];
+  for (const key of TAB_KEYS) {
+    page.run(`activeJobTab=${JSON.stringify(key)};renderJobs(true)`);
+    for (const card of cards(page)) out.push({...card, tab: key});
+  }
+  page.run(`activeJobTab=${JSON.stringify(previous)};renderJobs(true)`);
+  return out;
+}
+function tabOf(page, id) { const card = allCards(page).find(c => c.id === id); return card ? card.tab : null; }
 function setDetectors(page, id, values) {
   page.jobs.controls.filter(x => x.detectorJob === String(id)).forEach(x => { x.checked = values.includes(x.value); });
   page.run(`captureDetectorDraft(${id})`);
@@ -137,27 +193,172 @@ async function queueScenario() {
   await sleep(30);
   out.header_h = style.props['--header-h'] || null;
   out.resize_listener = (page.run('window.listeners.resize') || []).length;
-  page.run("selectJobTab('waiting')");
-  out.waiting = cards(page);
+  out.default_tab = page.run('activeJobTab');
+  out.cards = allCards(page);
+  page.run("selectJobTab('export')");
+  out.export_headings = headings(page);
   out.worker = page.document.getElementById('worker').textContent;
-  page.run("selectJobTab('running')");
-  out.running_tab = page.jobs.innerHTML;
+  page.run("selectJobTab('scanning')");
+  out.scanning_tab = page.jobs.innerHTML;
   server.paused = true;
   await page.run('load()');
-  page.run("selectJobTab('waiting')");
-  out.paused = cards(page);
+  out.paused = allCards(page);
   out.paused_worker = page.document.getElementById('worker').textContent;
+  console.log(JSON.stringify(out));
+}
+const STATE_FIXTURE = [
+  ['NEEDS_METADATA', 'waiting'], ['DISCOVERED', 'waiting'], ['QUEUED', 'scan_queue', {pending_stage: 'preflight'}],
+  ['QUEUED', 'export', {pending_stage: 'render', current_stage: 'render'}], ['QUEUED', 'waiting', {stop_mode: 'AFTER_STAGE', pending_stage: 'text'}],
+  ['QUEUED', 'waiting', {pending_stage: null}], ['PREFLIGHT', 'scanning'], ['SCANNING_SAFETY', 'scanning'], ['SCANNING_TEXT', 'scanning'],
+  ['SCANNING_LOGO', 'scanning'], ['LOCALIZING_REGIONS', 'scanning'], ['BUILDING_REVIEW', 'scanning'], ['AI_AUDITING', 'scanning'],
+  ['WAITING_REVIEW', 'review'], ['READY_TO_EXPORT', 'review'], ['RENDERING', 'export'], ['VERIFYING', 'export'], ['COMPLETED', 'completed'],
+  ['SKIPPED', 'completed'], ['CANCELLED', 'waiting'], ['FAILED', 'waiting'], ['FAILED', 'waiting', {current_stage: 'render'}],
+  ['PAUSED', 'waiting'], ['INTERRUPTED_RECOVERABLE', 'waiting'], ['WEIRD', 'waiting'],
+];
+const BASE = {priority: 100, detector_groups: ['advertising'], content_style: 'animation', profile: 'careful', ocr_recognition_batch_size: 1, fast_scan: true, active_queue_path: null, progress: 0};
+async function tabsScenario() {
+  server.jobs.length = 0;
+  STATE_FIXTURE.forEach(([state, expected, extra], index) => {
+    const id = 100 + index;
+    server.jobs.push({...BASE, id, job_key: `ep-${id}`, source_path: `input/${id}.mp4`, state, expected, queue_seq: state === 'QUEUED' ? 50 - index : null, updated_at: `2026-10-02T10:${String(index).padStart(2, '0')}:00`, ...(extra || {})});
+  });
+  // A second scan click, clicked before #102: the scan tab follows the queue.
+  server.jobs.push({...BASE, id: 130, job_key: 'ep-130', source_path: 'input/130.mp4', state: 'QUEUED', expected: 'scan_queue', pending_stage: 'preflight', queue_seq: 1, updated_at: '2026-10-02T11:00:00'});
+  const log = {confirms: [], alerts: [], confirmAnswer: true};
+  const page = boot(new Map(), log);
+  await sleep(30);
+  const out = {default_tab: page.run('activeJobTab'), expected: Object.fromEntries(server.jobs.map(j => [j.id, j.expected]))};
+  out.cards = allCards(page).map(c => [c.id, c.tab, c.bucket]);
+  out.bar = tabBar(page);
+  out.headings = {};
+  for (const key of TAB_KEYS) { page.run(`selectJobTab('${key}')`); out.headings[key] = headings(page); if (key === 'scan_queue') out.scan_order = cards(page).map(c => c.id); }
+  // The user's tab is kept across polls even when another tab gets work.
+  page.run("selectJobTab('completed')");
+  server.jobs.find(j => j.id === 102).state = 'PREFLIGHT';
+  await page.run('load()');
+  out.tab_after_poll = page.run('activeJobTab');
+  console.log(JSON.stringify(out));
+}
+async function skipScenario() {
+  server.jobs.length = 0;
+  const summary = (main, decisions, eligible) => ({status: 'READY_FOR_EDIT_PLAN', main_items: main, advisory_items: 193, pending: 0, decisions, export_size_policy: null, skip_eligible: eligible});
+  server.jobs.push({...BASE, id: 60, job_key: 'ep-60', source_path: 'input/Tập 30.mp4', state: 'READY_TO_EXPORT', progress: 1, active_queue_path: 'reports/jobs/ep-60/review-queue.json', updated_at: '2026-10-02T10:00:00', source_present: true, review_summary: summary(0, {}, true)});
+  server.jobs.push({...BASE, id: 44, job_key: 'ep-44', source_path: 'input/Tập 14.mp4', state: 'READY_TO_EXPORT', progress: 1, active_queue_path: 'reports/jobs/ep-44/review-queue.json', updated_at: '2026-10-02T10:01:00', source_present: true, review_summary: summary(2, {KEEP: 2}, true)});
+  server.jobs.push({...BASE, id: 41, job_key: 'ep-41', source_path: 'input/Tập 11.mp4', state: 'READY_TO_EXPORT', progress: 1, active_queue_path: 'reports/jobs/ep-41/review-queue.json', updated_at: '2026-10-02T10:02:00', source_present: true, review_summary: summary(3, {BLUR: 1, KEEP: 2}, false)});
+  server.jobs.push({...BASE, id: 70, job_key: 'ep-70', source_path: 'input/Tập 40.mp4', state: 'SKIPPED', progress: 1, active_queue_path: 'reports/jobs/ep-70/review-queue.json', updated_at: '2026-10-02T09:00:00', source_present: true, review_summary: summary(0, {}, true), skip: {skipped_at: '2026-10-02T09:00:00+07:00'}});
+  const log = {confirms: [], alerts: [], confirmAnswer: true};
+  const page = boot(new Map(), log);
+  await sleep(30);
+  const out = {default_tab: page.run('activeJobTab')};
+  out.before = allCards(page);
+  page.run("selectJobTab('completed')");
+  out.completed_headings = headings(page);
+  page.run("selectJobTab('review')");
+  // Cancel posts nothing.
+  log.confirmAnswer = false;
+  await page.run('skipJob(60)');
+  out.cancel_actions = server.actions.length;
+  out.confirm_text = log.confirms[0];
+  // A double click posts once and asks once.
+  log.confirms.length = 0; log.confirmAnswer = true; server.postDelay = 80;
+  await Promise.all([page.run('skipJob(60)'), page.run('skipJob(60)')]);
+  server.postDelay = 0;
+  out.skip_actions = server.actions.slice();
+  out.skip_confirms = log.confirms.length;
+  out.skip_notice = page.notice();
+  out.tab_after_skip = page.run('activeJobTab');
+  out.after_skip = allCards(page).find(c => c.id === 60);
+  page.run("selectJobTab('completed')");
+  out.completed_after_skip = headings(page);
+  // Mở lại để xuất returns #70 to the review tab.
+  server.actions.length = 0; log.confirms.length = 0;
+  await page.run('unskipJob(70)');
+  out.unskip_actions = server.actions.slice();
+  out.unskip_confirm = log.confirms[0];
+  out.unskip_notice = page.notice();
+  out.after_unskip = allCards(page).find(c => c.id === 70);
+  // A refusal is shown as an error and the card stays where it was.
+  server.refuseAction = 'Video có cảnh chính không phải Giữ nguyên';
+  await page.run('skipJob(44)');
+  out.refused_notice = page.notice();
+  out.refused_is_error = page.document.getElementById('notice').className.includes('error');
+  out.refused_tab = tabOf(page, 44);
+  console.log(JSON.stringify(out));
+}
+async function exportScenario() {
+  server.jobs.length = 0;
+  const ready = {status: 'READY_FOR_EDIT_PLAN', main_items: 2, advisory_items: 0, pending: 0, decisions: {BLUR: 1, KEEP: 1}, export_size_policy: null, skip_eligible: false};
+  server.jobs.push({...BASE, id: 60, job_key: 'ep-60', source_path: 'input/Tập 30.mp4', state: 'READY_TO_EXPORT', progress: 1, active_queue_path: 'q', updated_at: '2026-10-02T10:00:00', source_present: true, review_summary: ready});
+  server.jobs.push({...BASE, id: 61, job_key: 'ep-61', source_path: 'input/Tập 31.mp4', state: 'READY_TO_EXPORT', progress: 1, active_queue_path: 'q', updated_at: '2026-10-02T10:01:00', source_present: true, review_summary: {...ready, status: 'REVIEW_REQUIRED', pending: 1}});
+  server.jobs.push({...BASE, id: 1, job_key: 'ep-1', source_path: 'input/Tập 1.mp4', state: 'READY_TO_EXPORT', progress: 1, active_queue_path: 'q', updated_at: '2026-10-02T10:02:00', source_present: false, review_summary: ready});
+  server.jobs.push({...BASE, id: 62, job_key: 'ep-62', source_path: 'input/Tập 32.mp4', state: 'READY_TO_EXPORT', progress: 1, active_queue_path: 'q', updated_at: '2026-10-02T10:03:00', source_present: true, review_summary: {...ready, export_size_policy: {mode: 'custom', maximum_output_gb: 2}}});
+  server.jobs.push({...BASE, id: 63, job_key: 'ep-63', source_path: 'input/Tập 33.mp4', state: 'QUEUED', current_stage: 'render', pending_stage: 'render', queue_seq: 1, progress: 1, active_queue_path: 'q', updated_at: '2026-10-02T10:04:00', source_present: true});
+  server.jobs.push({...BASE, id: 64, job_key: 'ep-64', source_path: 'input/Tập 34.mp4', state: 'RENDERING', current_stage: 'render', progress: 1, active_queue_path: 'q', updated_at: '2026-10-02T10:05:00', source_present: true, render_progress: {percent: 12.5}});
+  const log = {confirms: [], alerts: [], confirmAnswer: true};
+  const page = boot(new Map(), log);
+  await sleep(30);
+  const out = {};
+  out.before = allCards(page);
+  page.run("selectJobTab('review')");
+  out.review_headings = headings(page);
+  const panel = id => page.jobs.panels.find(x => x.className === 'export-panel' && x.dataset.jobId === String(id));
+  const control = id => page.jobs.controls.find(x => x.id === id);
+  // #62 preselects its saved custom policy, as on the review page.
+  out.preset_62 = [control('size-62').value, control('size-gb-62').value];
+  // Open #60's panel, choose a custom 2.5 GB maximum; the choice survives a poll.
+  panel(60).open = true;
+  control('size-60').value = 'custom';
+  control('size-gb-60').value = '2.5';
+  page.run('exportSizeChanged(60)');
+  await page.run('load()');
+  out.kept_after_load = {open: panel(60).open, mode: control('size-60').value, gb: control('size-gb-60').value};
+  // Cancel posts nothing and leaves the panel open.
+  log.confirmAnswer = false;
+  await page.run('exportVideo(60)');
+  out.cancel = {actions: server.actions.length, open: panel(60).open, confirm: log.confirms[0]};
+  // An invalid custom size never reaches confirm or the server.
+  log.confirms.length = 0; log.confirmAnswer = true;
+  control('size-gb-60').value = '0.01';
+  await page.run('exportVideo(60)');
+  out.invalid = {actions: server.actions.length, confirms: log.confirms.length, notice: page.notice(), error: page.document.getElementById('notice').className.includes('error')};
+  // A server refusal reopens the panel with the error.
+  control('size-gb-60').value = '2.5';
+  server.refuseAction = 'Video gốc không còn trong input; không thể xuất.';
+  server.page = page; server.openAtPost = [];
+  await page.run('exportVideo(60)');
+  out.refused = {actions: server.actions.length, open: panel(60).open, notice: page.notice(), error: page.document.getElementById('notice').className.includes('error'), openAtPost: server.openAtPost.slice()};
+  // The error also shows inside the reopened panel (after the deferred re-render), as on the review page.
+  await sleep(600);
+  const refusedCard = allCards(page).find(c => c.id === 60);
+  out.refused.panelError = refusedCard.exportError;
+  out.refused.openAfterRender = panel(60).open;
+  // OK: one confirm, one POST with the review page's body, the panel closes.
+  server.actions.length = 0; log.confirms.length = 0; server.openAtPost = []; server.postDelay = 80;
+  await Promise.all([page.run('exportVideo(60)'), page.run('exportVideo(60)')]);
+  server.postDelay = 0;
+  out.ok = {actions: server.actions.slice(), confirms: log.confirms.slice(), notice: page.notice(), openAtPost: server.openAtPost.slice(), tab: tabOf(page, 60), card: allCards(page).find(c => c.id === 60), noticeClass: page.document.getElementById('notice').className};
+  // A job whose review is not finished alerts the gate and posts nothing.
+  server.actions.length = 0; log.alerts.length = 0;
+  await page.run('exportVideo(61)');
+  out.gate = {actions: server.actions.length, alerts: log.alerts.slice()};
   console.log(JSON.stringify(out));
 }
 (async () => {
   if (process.argv[3] === 'queue') return queueScenario();
+  if (process.argv[3] === 'tabs') return tabsScenario();
+  if (process.argv[3] === 'skip') return skipScenario();
+  if (process.argv[3] === 'export') return exportScenario();
   const out = {};
   const storage = new Map();
   const log = {confirms: [], alerts: [], confirmAnswer: true};
   const page = boot(storage, log);
   await sleep(30);
+  out.initial_tab = page.run('activeJobTab');
   page.run("selectJobTab('waiting')");
   out.initial_order = cards(page).map(c => c.id);
+  page.run("selectJobTab('scan_queue')");
+  out.initial_scan_queue = cards(page).map(c => c.id);
+  page.run("selectJobTab('waiting')");
   // The user configures #46 as advertising only, live action.
   setDetectors(page, 46, ['advertising']);
   page.jobs.controls.find(x => x.id === 'style-46').value = 'live_action';
@@ -167,23 +368,24 @@ async function queueScenario() {
   const stalePoll = page.run('load()');
   await sleep(20);
   await page.run('start(46)');
-  out.after_start = cards(page);
+  out.after_start = allCards(page);
+  out.tab_after_start = page.run('activeJobTab');
   out.stale_applied = await stalePoll;
-  out.after_stale_poll = cards(page);
+  out.after_stale_poll = allCards(page);
   out.posts = server.posts.slice();
   out.confirms_for_46 = log.confirms.slice();
   // Drafts for #47 survive a periodic re-render and a reload.
   setDetectors(page, 47, ['advertising', 'adult']);
   page.run('ocrDrafts[47]=Number("8");saveDraft(47)');
   await page.run('load()');
-  out.rerender_47 = cards(page).find(c => c.id === 47);
+  out.rerender_47 = allCards(page).find(c => c.id === 47);
   out.storage_keys = [...storage.keys()].sort();
   out.last_scope = JSON.parse(storage.get('biliflow.lastDetectorScope') || 'null');
   const reloaded = boot(storage, log);
   await sleep(30);
   reloaded.run("selectJobTab('waiting')");
-  out.reload_47 = cards(reloaded).find(c => c.id === 47);
-  out.reload_46 = cards(reloaded).find(c => c.id === 46);
+  out.reload_47 = allCards(reloaded).find(c => c.id === 47);
+  out.reload_46 = allCards(reloaded).find(c => c.id === 46);
   // A scope that differs from the previous start asks first; cancelling posts nothing.
   log.confirms.length = 0; log.confirmAnswer = false;
   const postsBefore = server.posts.length;
@@ -199,7 +401,7 @@ async function queueScenario() {
   out.refused_notice = reloaded.notice();
   out.refused_notice_is_error = reloaded.document.getElementById('notice').className.includes('error');
   out.draft_48_kept_after_refusal = storage.has('biliflow.jobDraft.48');
-  out.title_48 = (cards(reloaded).find(c => c.id === 48) || {}).title;
+  out.title_48 = (allCards(reloaded).find(c => c.id === 48) || {}).title;
   // A refusal while #47 still waits for setup keeps its draft and shows an error.
   log.confirms.length = 0;
   server.refuseNext = true;
@@ -218,15 +420,16 @@ async function queueScenario() {
   const second = reloaded.run('start')(47, button47);
   out.button_47_busy = button47.disabled && button47.textContent === 'Đang bắt đầu…';
   reloaded.run('renderJobs(true)');
-  out.card_47_while_pending = cards(reloaded).find(c => c.id === 47);
+  out.card_47_while_pending = allCards(reloaded).find(c => c.id === 47);
   await Promise.all([first, second]);
   server.postDelay = 0;
   out.double_posts = server.posts.length - postsBeforeDouble;
   out.double_confirms = log.confirms.length;
   out.double_notice_is_error = reloaded.document.getElementById('notice').className.includes('error');
   out.starting_after_double = reloaded.run('startingJobs.size');
-  out.card_47_after_double = cards(reloaded).find(c => c.id === 47);
+  out.card_47_after_double = allCards(reloaded).find(c => c.id === 47);
   // A pointer held inside #jobs defers the rebuild until shortly after release.
+  reloaded.run("selectJobTab('scan_queue')");
   const before = reloaded.jobs.innerHTML;
   server.jobs.find(x => x.id === 47).progress = 0.5;
   server.jobs.find(x => x.id === 47).state = 'QUEUED';

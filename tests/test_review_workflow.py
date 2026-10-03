@@ -12,6 +12,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
+from biliflow.export_dialog import EXPORT_DIALOG_JS
 from biliflow.review_workflow import (
     _guard_in_film_text,
     _guard_title_overlays,
@@ -2705,9 +2706,57 @@ class ExportPanelTests(unittest.TestCase):
         self.assertIn(".export-notice{order:4;flex-basis:100%;max-width:none;white-space:normal;", page)
         self.assertIn("if(el.title!==full)el.title=full;", _js_function(page, "showExportNotice"))
 
+    def test_decisions_are_locked_while_the_export_waits_or_runs(self):
+        from biliflow.control_center import REVIEW_EDIT_IN_FLIGHT_MESSAGE
+
+        page = self.page
+        self.assertIn(f"const EXPORT_LOCK_MESSAGE='{REVIEW_EDIT_IN_FLIGHT_MESSAGE}';", page)
+        for name in ("decide", "clearDecision", "undo", "bulkKeep", "bulkAccept"):
+            with self.subTest(function=name):
+                body = _js_function(page, name)
+                guard = body.index("refuseWhileExporting()")
+                # Checked before anything changes locally or is sent.
+                for write in ("enqueueWrite(", "applyLocal", "postJson(", "confirm("):
+                    if write in body:
+                        self.assertLess(guard, body.index(write), write)
+        render = _js_function(page, "renderExport")
+        self.assertIn("document.body.classList.toggle('export-locked',active);", render)
+        self.assertIn("for(const b of document.querySelectorAll('.list-foot button')){b.disabled=active;", render)
+        self.assertIn("body.export-locked .decide button", page)
+
+    @unittest.skipUnless(shutil.which("node"), "node is not installed")
+    def test_export_lock_follows_the_export_status_in_node(self):
+        script = (
+            "let exportJob={status:'IDLE'};const alerts=[];globalThis.alert=m=>alerts.push(m);"
+            + re.search(r"const EXPORT_LOCK_MESSAGE='[^']*';", self.page).group(0)
+            + _js_function(self.page, "decisionsLocked") + _js_function(self.page, "refuseWhileExporting")
+            + "const out={};for(const s of ['IDLE','READY_TO_EXPORT','QUEUED','RENDERING','COMPLETED','FAILED','SKIPPED'])"
+            "{exportJob={status:s};out[s]=refuseWhileExporting();}out.alerts=alerts;console.log(JSON.stringify(out));"
+        )
+        result = subprocess.run([shutil.which("node"), "-e", script], capture_output=True, text=True,
+                                encoding="utf-8", timeout=60)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        out = json.loads(result.stdout.strip().splitlines()[-1])
+        self.assertEqual({key: value for key, value in out.items() if value is True}, {"QUEUED": True, "RENDERING": True})
+        self.assertEqual(out["alerts"], [
+            "Video đang chờ xuất hoặc đang xuất; hủy lệnh xuất trước khi đổi quyết định."] * 2)
+
+    def test_skipped_video_cannot_be_exported_from_the_review_page(self):
+        render = _js_function(self.page, "renderExport")
+        self.assertIn(
+            "skippedExport=exportJob.status==='SKIPPED',ready=status==='READY_FOR_EDIT_PLAN'&&!active&&!skippedExport;",
+            render,
+        )
+        self.assertIn(
+            "SKIPPED:'Video đã được đánh dấu bỏ qua (không xuất). Bấm “Mở lại để xuất” ở Dashboard nếu muốn xuất video.'",
+            render,
+        )
+        self.assertIn("skippedExport?'đã bỏ qua'", render)
+
     @unittest.skipUnless(shutil.which("node"), "node is not installed")
     def test_finalize_export_closes_reports_and_reopens_in_node(self):
-        source = "\n".join(_js_function(self.page, name) for name in (
+        # finalizeExport uses the shared confirm text and gate (export_dialog.py).
+        source = EXPORT_DIALOG_JS + "\n".join(_js_function(self.page, name) for name in (
             "setText", "readJson", "offlineError", "showExportNotice", "exportNoticeText",
             "updateExportNotice", "finalizeExport"))
         result = subprocess.run(

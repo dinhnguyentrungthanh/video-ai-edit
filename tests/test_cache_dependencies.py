@@ -153,10 +153,11 @@ class CacheDependencyTests(unittest.TestCase):
 class RepositoryCacheScopeTests(unittest.TestCase):
     """Dashboard, queue and review-page edits must never invalidate scan caches."""
 
-    # Control-plane modules edited by the dashboard/queue work (2026-10-02, batch 1).
+    # Control-plane modules edited by the dashboard/queue work (2026-10-02, batch 1;
+    # 2026-10-03, batch 2 adds the shared export dialog).
     CONTROL_PLANE = (
         "control_center.py", "scheduler.py", "job_store.py", "job_import.py",
-        "review_workflow.py",
+        "review_workflow.py", "export_dialog.py",
     )
 
     def test_control_plane_modules_are_in_no_scan_stage_key(self):

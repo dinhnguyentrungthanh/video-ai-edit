@@ -23,7 +23,9 @@ QUEUE_COLUMNS = (("queue_seq", "INTEGER"), ("queued_at", "TEXT"))
 # gives its place back. PAUSED, FAILED and INTERRUPTED_RECOVERABLE keep theirs
 # for Tiếp tục / Thử lại. A job an older checkout queues again then has no
 # stale place and is backfilled at the back of the queue.
-QUEUE_RELEASE_STATES = frozenset({"WAITING_REVIEW", "READY_TO_EXPORT", "COMPLETED", "CANCELLED"})
+QUEUE_RELEASE_STATES = frozenset({
+    "WAITING_REVIEW", "READY_TO_EXPORT", "COMPLETED", "SKIPPED", "CANCELLED",
+})
 
 
 def now_iso() -> str:
@@ -411,6 +413,35 @@ class JobStore:
         return self._row(row)
 
     def update_job(self, job_id: int, **values: Any) -> dict[str, Any]:
+        value = self._update_job(job_id, "", (), values)
+        if value is None:
+            raise KeyError(f"Unknown job: {job_id}")
+        return value
+
+    def update_job_if(
+        self, job_id: int, *, states: Iterable[str] | None = None,
+        exclude: Iterable[str] | None = None, **values: Any,
+    ) -> dict[str, Any] | None:
+        """update_job in one UPDATE, only while the job is in ``states`` and not in ``exclude``.
+
+        Returns None when the job was in another state, so a concurrent
+        writer (the worker claiming a job, a pause or a cancel) always wins.
+        """
+        condition, params = "", []
+        for operator, group in (("IN", states), ("NOT IN", exclude)):
+            if group is None:
+                continue
+            group = sorted(group)
+            if not group:
+                raise ValueError("State filter must not be empty")
+            condition += f" AND state {operator} ({','.join('?' * len(group))})"
+            params.extend(group)
+        self.get_job(job_id)
+        return self._update_job(job_id, condition, tuple(params), values)
+
+    def _update_job(
+        self, job_id: int, condition: str, params: tuple, values: dict[str, Any],
+    ) -> dict[str, Any] | None:
         allowed = {
             "duration_seconds", "content_style", "profile", "state",
             "current_stage", "progress", "priority", "active_queue_path",
@@ -428,12 +459,12 @@ class JobStore:
         assignments = ",".join(f"{key}=?" for key in values)
         with self._lock:
             cursor = self._connection.execute(
-                f"UPDATE jobs SET {assignments} WHERE id=?",  # noqa: S608
-                (*values.values(), job_id),
+                f"UPDATE jobs SET {assignments} WHERE id=?{condition}",  # noqa: S608
+                (*values.values(), job_id, *params),
             )
-            if cursor.rowcount != 1:
-                raise KeyError(f"Unknown job: {job_id}")
             self._connection.commit()
+        if cursor.rowcount != 1:
+            return None
         return self.get_job(job_id)
 
     def replace_stages(self, job_id: int, names: Iterable[str]) -> None:

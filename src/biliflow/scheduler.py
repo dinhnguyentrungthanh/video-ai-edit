@@ -43,6 +43,11 @@ STARTABLE_STATES = {"NEEDS_METADATA", "DISCOVERED"}
 # Stages whose _after_success sets the job's final state. The worker marks the
 # stage COMPLETED first, so a crash in between leaves no pending stage to run.
 FINISHING_STAGES = ("build_review", "render")
+# A skipped video ("Bỏ qua (không xuất)") must be reopened before it can run again.
+SKIPPED_REFUSAL = "Video đã được đánh dấu bỏ qua; bấm “Mở lại để xuất” trước."
+SKIPPED_STOP_REFUSAL = (
+    "Video đã được đánh dấu bỏ qua (không xuất); không có gì để dừng hoặc hủy."
+)
 
 
 def terminate_process_tree(process: subprocess.Popen) -> None:
@@ -81,7 +86,12 @@ class JobScheduler:
         self._stop = threading.Event()
         self._wake = threading.Event()
         self._lock = threading.RLock()
-        self._start_lock = threading.Lock()
+        # One lock for every user action that changes where a job is going:
+        # start, rerun, resume, retry, export (queue_render) here, and skip,
+        # unskip and finalize in the Control Center. Each re-reads the job
+        # state inside it, so two clicks or two pages cannot interleave.
+        self.job_action_lock = threading.RLock()
+        self._start_lock = self.job_action_lock
         self._thread: threading.Thread | None = None
         self._process: subprocess.Popen | None = None
         self._active: tuple[int, str] | None = None
@@ -98,6 +108,14 @@ class JobScheduler:
                 return None
             return {"job_id": self._active[0], "stage": self._active[1],
                     "pid": self._process.pid if self._process else None}
+
+    def is_busy(self, job_id: int) -> bool:
+        """The worker is running a stage of this job or still recording its result."""
+        with self._lock:
+            return (
+                (self._active is not None and self._active[0] == job_id)
+                or self._executing_job_id == job_id
+            )
 
     def start(self) -> None:
         if self._thread and self._thread.is_alive():
@@ -247,6 +265,8 @@ class JobScheduler:
             stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
             pipeline_key = f"{job['job_key']}-run-{stamp}"
             self.store.set_setting(f"render:{job_id}", None)
+            # A new scan replaces the review a skip was recorded for.
+            self.store.set_setting(f"skip:{job_id}", None)
             # The old revision is cleared in the same UPDATE that queues the job.
             value = self.configure_and_queue(
                 job_id, content_style=job["content_style"], profile=job["profile"],
@@ -265,84 +285,103 @@ class JobScheduler:
             return value
 
     def resume(self, job_id: int) -> dict:
-        job = self.store.get_job(job_id)
-        if job["content_style"] == "unknown":
-            raise ValueError("Choose animation, live_action, or mixed before starting")
-        # Tiếp tục / Thử lại keep the job's place in the queue (user decision
-        # 2026-10-02), including after a graceful shutdown or a restart.
-        if not self.store.stages(job_id):
-            return self.configure_and_queue(
-                job_id, content_style=job["content_style"], profile=job["profile"],
-                reseq=False,
-            )
-        if self.store.next_pending_stage(job_id) is None:
-            # Interrupted after its last stage completed: finish that step
-            # instead of queueing a job the worker can never pick. Never while
-            # the worker is still finishing that same job (double _after_success).
-            with self._start_lock:
-                current = self.store.get_job(job_id)
-                with self._lock:
-                    busy = self._executing_job_id == job_id
-                if busy or current["state"] in IN_PROCESS_STATES:
-                    raise ValueError(
-                        f"Video #{job_id} đang được xử lý; chờ bước hiện tại xong rồi hãy bấm Tiếp tục."
-                    )
-                if current["state"] in {"INTERRUPTED_RECOVERABLE", "PAUSED", "FAILED"} and (
-                    self._finish_interrupted(current)
+        with self.job_action_lock:
+            job = self.store.get_job(job_id)
+            if job["state"] == "SKIPPED":
+                raise ValueError(SKIPPED_REFUSAL)
+            if job["content_style"] == "unknown":
+                raise ValueError("Choose animation, live_action, or mixed before starting")
+            if self.is_busy(job_id) or job["state"] in IN_PROCESS_STATES:
+                raise ValueError(
+                    f"Video #{job_id} đang được xử lý; chờ bước hiện tại xong rồi hãy bấm Tiếp tục."
+                )
+            # Tiếp tục / Thử lại keep the job's place in the queue (user decision
+            # 2026-10-02), including after a graceful shutdown or a restart.
+            if not self.store.stages(job_id):
+                return self.configure_and_queue(
+                    job_id, content_style=job["content_style"], profile=job["profile"],
+                    reseq=False,
+                )
+            if self.store.next_pending_stage(job_id) is None:
+                # Interrupted after its last stage completed: finish that step
+                # instead of queueing a job the worker can never pick.
+                if job["state"] in {"INTERRUPTED_RECOVERABLE", "PAUSED", "FAILED"} and (
+                    self._finish_interrupted(job)
                 ):
                     return self.store.get_job(job_id)
-            if self._runnable(self.store.get_job(job_id)) is None:
-                raise ValueError(
-                    f"Video #{job_id} không còn bước nào để tiếp tục; hãy dùng Chạy lại kiểm tra."
-                )
-        value = self.store.mark_queued(job_id, reseq=False)
-        self.store.add_event(job_id, "JOB_RESUMED", "Job returned to the scheduler")
-        self._wake.set()
-        return value
+                if self._runnable(self.store.get_job(job_id)) is None:
+                    raise ValueError(
+                        f"Video #{job_id} không còn bước nào để tiếp tục; hãy dùng Chạy lại kiểm tra."
+                    )
+            value = self.store.mark_queued(job_id, reseq=False)
+            self.store.add_event(job_id, "JOB_RESUMED", "Job returned to the scheduler")
+            self._wake.set()
+            return value
+
+    def _refuse_skipped(self, job_id: int) -> None:
+        # A stale dashboard tab can still show Hủy / Dừng on a job another tab
+        # skipped; a skip ends only through Mở lại để xuất or Chạy lại.
+        if self.store.get_job(job_id)["state"] == "SKIPPED":
+            raise ValueError(SKIPPED_STOP_REFUSAL)
 
     def stop_after_stage(self, job_id: int) -> dict:
-        # A job still waiting in the queue has no stage to finish: take it out
-        # (PAUSED keeps its place for Tiếp tục) instead of leaving it stuck.
-        if self.store.pause_if_queued(job_id):
-            self.store.add_event(job_id, "JOB_PAUSED", "Đã rút khỏi hàng đợi trước khi chạy")
-            return self.store.get_job(job_id)
-        value = self.store.update_job(job_id, stop_mode="AFTER_STAGE")
-        self.store.add_event(job_id, "STOP_REQUESTED", "Will pause after the current stage")
-        return value
+        with self.job_action_lock:
+            self._refuse_skipped(job_id)
+            # A job still waiting in the queue has no stage to finish: take it out
+            # (PAUSED keeps its place for Tiếp tục) instead of leaving it stuck.
+            if self.store.pause_if_queued(job_id):
+                self.store.add_event(job_id, "JOB_PAUSED", "Đã rút khỏi hàng đợi trước khi chạy")
+                return self.store.get_job(job_id)
+            value = self.store.update_job(job_id, stop_mode="AFTER_STAGE")
+            self.store.add_event(job_id, "STOP_REQUESTED", "Will pause after the current stage")
+            return value
 
     def pause_now(self, job_id: int) -> dict:
-        with self._lock:
-            active = self._active
-        stages = self.store.stages(job_id)
-        for stage in stages:
-            if stage["state"] == "RUNNING":
-                self.store.update_stage(job_id, stage["name"], state="PENDING", pid=None,
-                                        heartbeat_at=None, error="Paused; this stage will restart")
-        value = self.store.update_job(job_id, state="PAUSED", stop_mode="PAUSED", error=None)
+        with self.job_action_lock:
+            self._refuse_skipped(job_id)
+            with self._lock:
+                active = self._active
+            stages = self.store.stages(job_id)
+            for stage in stages:
+                if stage["state"] == "RUNNING":
+                    self.store.update_stage(job_id, stage["name"], state="PENDING", pid=None,
+                                            heartbeat_at=None, error="Paused; this stage will restart")
+            value = self.store.update_job(job_id, state="PAUSED", stop_mode="PAUSED", error=None)
+        # The process tree is stopped outside the action lock so other clicks never wait on it.
         if active and active[0] == job_id:
             self._terminate_active("Paused by user")
         self.store.add_event(job_id, "JOB_PAUSED", "Paused safely at stage boundary")
         return value
 
     def cancel(self, job_id: int) -> dict:
-        with self._lock:
-            active = self._active
-        value = self.store.update_job(job_id, state="CANCELLED", stop_mode="CANCELLED")
-        for stage in self.store.stages(job_id):
-            if stage["state"] == "RUNNING":
-                self.store.update_stage(job_id, stage["name"], state="CANCELLED", pid=None,
-                                        heartbeat_at=None, error="Cancelled by user")
+        with self.job_action_lock:
+            self._refuse_skipped(job_id)
+            with self._lock:
+                active = self._active
+            value = self.store.update_job(job_id, state="CANCELLED", stop_mode="CANCELLED")
+            for stage in self.store.stages(job_id):
+                if stage["state"] == "RUNNING":
+                    self.store.update_stage(job_id, stage["name"], state="CANCELLED", pid=None,
+                                            heartbeat_at=None, error="Cancelled by user")
         if active and active[0] == job_id:
             self._terminate_active("Cancelled by user")
         self.store.add_event(job_id, "JOB_CANCELLED", "Job cancelled; source was not changed")
         return value
 
     def retry(self, job_id: int) -> dict:
-        stages = self.store.stages(job_id)
-        failed = next((item for item in stages if item["state"] in {"FAILED", "FAILED_RETRYABLE"}), None)
-        if failed:
-            self.store.update_stage(job_id, failed["name"], state="PENDING", error=None, pid=None)
-        return self.resume(job_id)
+        with self.job_action_lock:
+            job = self.store.get_job(job_id)
+            if job["state"] == "SKIPPED":
+                raise ValueError(SKIPPED_REFUSAL)
+            if self.is_busy(job_id) or job["state"] in IN_PROCESS_STATES:
+                raise ValueError(
+                    f"Video #{job_id} đang được xử lý; chờ bước hiện tại xong rồi hãy bấm Thử lại."
+                )
+            stages = self.store.stages(job_id)
+            failed = next((item for item in stages if item["state"] in {"FAILED", "FAILED_RETRYABLE"}), None)
+            if failed:
+                self.store.update_stage(job_id, failed["name"], state="PENDING", error=None, pid=None)
+            return self.resume(job_id)
 
     def queue_render(
         self, job_id: int, *, plan_path: Path, output_path: Path,
@@ -351,21 +390,22 @@ class JobScheduler:
     ) -> dict:
         if (max_output_bytes is None) != (target_output_bytes is None):
             raise ValueError("Output maximum and target must both be set or both be unlimited")
-        # Finalizing an export that is already waiting keeps its place.
-        reseq = self.store.get_job(job_id)["state"] != "QUEUED"
-        stage = self.store.ensure_stage(job_id, "render")
-        self.store.update_stage(job_id, "render", state="PENDING", error=None, pid=None)
-        self.store.set_setting(f"render:{job_id}", {
-            "plan": plan_path.resolve().relative_to(self.root).as_posix(),
-            "output": output_path.resolve().relative_to(self.root).as_posix(),
-            "max_output_bytes": max_output_bytes,
-            "target_output_bytes": target_output_bytes,
-        })
-        # current_stage marks the waiting job as an export for the dashboard.
-        value = self.store.mark_queued(job_id, reseq=reseq, current_stage="render")
-        self.store.add_event(job_id, "EXPORT_QUEUED", "Approved final export queued")
-        self._wake.set()
-        return value
+        with self.job_action_lock:
+            # Finalizing an export that is already waiting keeps its place.
+            reseq = self.store.get_job(job_id)["state"] != "QUEUED"
+            self.store.ensure_stage(job_id, "render")
+            self.store.update_stage(job_id, "render", state="PENDING", error=None, pid=None)
+            self.store.set_setting(f"render:{job_id}", {
+                "plan": plan_path.resolve().relative_to(self.root).as_posix(),
+                "output": output_path.resolve().relative_to(self.root).as_posix(),
+                "max_output_bytes": max_output_bytes,
+                "target_output_bytes": target_output_bytes,
+            })
+            # current_stage marks the waiting job as an export for the dashboard.
+            value = self.store.mark_queued(job_id, reseq=reseq, current_stage="render")
+            self.store.add_event(job_id, "EXPORT_QUEUED", "Approved final export queued")
+            self._wake.set()
+            return value
 
     def _definitions(self, job: dict[str, Any]) -> dict[str, PipelineStage]:
         # A job queued before verify_adult existed keeps its stored stage list; its
@@ -723,11 +763,21 @@ class JobScheduler:
             self._cleanup_interrupted_stage(job_id, name)
             return
         job = self.store.get_job(job_id)
-        if job.get("stop_mode") == "AFTER_STAGE" or self._stop.is_set():
-            self.store.update_job(job_id, state="PAUSED", current_stage=None,
-                                  stop_mode="PAUSED", progress=progress)
+        if job["state"] in {"PAUSED", "CANCELLED"}:
+            # Dừng ngay or Hủy landed while a stage without a subprocess (cache
+            # hit, preflight) finished: keep the user's choice, never requeue.
+            self.store.update_job(job_id, current_stage=None, progress=progress)
+        elif job.get("stop_mode") == "AFTER_STAGE" or self._stop.is_set():
+            self.store.update_job_if(
+                job_id, states=IN_PROCESS_STATES, state="PAUSED", current_stage=None,
+                stop_mode="PAUSED", progress=progress,
+            )
         else:
-            self.store.update_job(job_id, state="QUEUED", current_stage=None, progress=progress)
+            # Conditional: a pause or cancel landing right now still wins.
+            self.store.update_job_if(
+                job_id, states=IN_PROCESS_STATES, state="QUEUED", current_stage=None,
+                progress=progress,
+            )
 
     def _terminate_process(self, process: subprocess.Popen) -> None:
         terminate_process_tree(process)
