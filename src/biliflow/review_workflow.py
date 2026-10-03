@@ -16,7 +16,7 @@ from collections import Counter
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from typing import Iterable
+from typing import Any, Callable, Iterable
 
 from biliflow.adult_verification import (
     ADULT_TRIAGE_EVIDENCE,
@@ -39,7 +39,6 @@ from biliflow.brand_memory import (
     STUDIO_LOGO_MINIMUM_SIMILARITY,
     compare_studio_logo,
     forget_review_item,
-    forget_studio_logo,
     load_studio_logo_memory,
     match_studio_logo,
     prepare_studio_logo_frames,
@@ -52,6 +51,26 @@ from biliflow.brand_memory import (
     studio_logo_window_frames,
 )
 from biliflow.job_pipeline import DEFAULT_DETECTOR_GROUPS
+from biliflow.platform_cards import (
+    ENDING_LABEL,
+    build_platform_cards,
+    ensure_forced_ending_card,
+    link_platform_cards,
+    overlay_regions,
+)
+from biliflow.platform_logos import SourceProbe, platform_memory_records, platform_memory_runs
+from biliflow.platform_memory import (
+    UNKNOWN_PLATFORM_NAME,
+    MemoryChanged,
+    forget_remembered_logo,
+    in_fresh_folder,
+    platform_entry,
+    platform_logo_eligible,
+    prepare_platform_logo_frames,
+    remember_platform_logo as remember_platform_logo_record,
+    source_box,
+)
+from biliflow.platform_names import match_platform_texts
 from biliflow.blur_filter import (
     blur_feather_mode,
     blur_parameters,
@@ -75,6 +94,18 @@ from biliflow.final_renderer import (
 
 DECISIONS = ("KEEP", "BLUR", "CUT", "NEEDS_MORE_CONTEXT")
 _PRIORITY_RANK = {"high": 0, "context": 1, "normal": 2}
+# Cards BiliFlow always shows once (lead decision A1, 2026-10-03): the first
+# window (visual-logo scanner) and the last seconds (build-review). They ask
+# about the whole scene: a localized box is display evidence only, and no
+# corroboration gate (quarantine, revalidation, title / in-film text guards,
+# overlay reconciliation) moves or drops them; nor a platform-logo card.
+FORCED_BOUNDARY_TYPES = frozenset({"opening_boundary", "ending_boundary"})
+PLATFORM_LOGO_TYPE = "platform_logo"
+GATE_PROTECTED_TYPES = FORCED_BOUNDARY_TYPES | {PLATFORM_LOGO_TYPE}
+# The studio-logo memory route (R3b) still moves a forced card whose every
+# preview repeats a studio logo the user kept and remembered (the licence card
+# "giữ & nhớ" exists exactly for this).
+FORCED_BOUNDARY_STUDIO_MOVE = True
 
 
 def _now() -> str:
@@ -642,7 +673,7 @@ def reconcile_persistent_overlay_items(
                 or support.get("category") not in {"visual_logo", "text"}
                 or support.get("candidate_type") in {
                     "opening_promotion", "branded_end_card", "promotional_segment",
-                    "scene_text", "subtitle", "title_overlay",
+                    "scene_text", "subtitle", "title_overlay", *GATE_PROTECTED_TYPES,
                 }
                 or support.get("review_kind") == "title_overlay"
                 or not isinstance(support_region, dict)
@@ -893,6 +924,7 @@ def revalidate_preserved_review_items(
         stale = (
             original.get("migration_status") == "preserved_unresolved_from_previous_queue"
             and original.get("category") == "visual_logo"
+            and original.get("candidate_type") not in GATE_PROTECTED_TYPES
             and original.get("decision") is None
             and original.get("region_classification") in {None, "unknown"}
             and isinstance(original.get("suggested_region_source_pixels"), dict)
@@ -1252,6 +1284,7 @@ _SCANNER_LABELS = frozenset({
     "Persistent external logo / watermark",
     "Visual brand/logo candidate",
     "Opening boundary review",
+    ENDING_LABEL,
     "Full-frame promotional material",
     "Full-frame opening promotion / branded intro",
     "Branded end card / channel promotion",
@@ -1335,12 +1368,17 @@ def _scan_items(root: Path, report_path: Path, payload: dict) -> list[dict]:
         # OCR/grounding boxes inside opening/closing cards would otherwise create
         # redundant BLUR decisions and leave branded content visible.
         full_scene_cut = opening_promotion or interval_candidate_type == "branded_end_card"
-        proposal_items = [None] if full_scene_cut else (usable_proposals or [None])
+        # A forced boundary card asks about the whole window; a box there (jobs
+        # 51/60: an OCR "</s>C" in a corner) made it a region card that the
+        # quarantine then hid (A1).
+        forced_boundary = interval_candidate_type in FORCED_BOUNDARY_TYPES
+        whole_scene = full_scene_cut or forced_boundary
+        proposal_items = [None] if whole_scene else (usable_proposals or [None])
         # Display only: the boxes such a scene card drops, so the page can show
         # where the model looked (Tập 10: the site watermark that has its own
         # card). They never become a region or a suggestion.
         evidence_regions = []
-        for proposal in usable_proposals if full_scene_cut else []:
+        for proposal in usable_proposals if whole_scene else []:
             x, y, width, height = [int(value) for value in proposal["blur_region_px"]]
             if width > 0 and height > 0:
                 evidence_regions.append({
@@ -1388,6 +1426,8 @@ def _scan_items(root: Path, report_path: Path, payload: dict) -> list[dict]:
             suggested_decision = str(regional_suggestion or "").upper() or None
             if full_scene_cut:
                 suggested_decision = "CUT"
+            if forced_boundary:
+                suggested_decision = None
             if suggested_decision not in DECISIONS:
                 suggested_decision = None
             if suggested_decision == "BLUR" and region is None:
@@ -1856,6 +1896,9 @@ def route_confirmed_studio_logos(
     kept: list[dict] = []
     moved: list[dict] = []
     for item in items:
+        if item.get("candidate_type") in FORCED_BOUNDARY_TYPES and not FORCED_BOUNDARY_STUDIO_MOVE:
+            kept.append(item)
+            continue
         # match_studio_logo accepts full-frame logo cards only (studio_logo_eligible).
         match = (
             match_studio_logo(root, item, memory["records"])
@@ -1918,7 +1961,7 @@ def _quarantine_uncorroborated_visual_regions(
     advisory: list[dict] = []
     protected_types = {
         "persistent_overlay", "opening_promotion", "branded_end_card",
-        "promotional_segment",
+        "promotional_segment", *GATE_PROTECTED_TYPES,
     }
     localization_only_sources = {"grounding", "grounding_dino", "ocr"}
     for original in items:
@@ -2045,6 +2088,10 @@ def _fixed_text_ad_evidence(tracks: list[dict]) -> list[str]:
                 pattern.search(str(text)) for pattern in _AD_TEXT_PATTERNS
             ):
                 evidence.append(f"địa chỉ web/liên hệ: {text}")
+        # A whole-film platform mark (WeTV, iQIYI) is a third-party watermark.
+        platform = match_platform_texts(track.get("sample_text") or [])
+        if platform is not None:
+            evidence.append(f"tên nền tảng video: {platform['name']}")
     return list(dict.fromkeys(evidence))[:5]
 
 
@@ -2344,7 +2391,7 @@ def link_full_scene_logo_evidence(
     owners = [
         item for item in items
         if item.get("category") in {"visual_logo", "text"}
-        and item.get("candidate_type") == "persistent_overlay"
+        and item.get("candidate_type") in {"persistent_overlay", PLATFORM_LOGO_TYPE}
         and isinstance(item.get("suggested_region_source_pixels"), dict)
     ]
     for item in [*items, *extra_items]:
@@ -2747,6 +2794,7 @@ def _guard_title_overlays(items: list[dict], references: list[dict]) -> list[dic
         region_sources = set(evidence.get("region_sources") or [])
         if (
             not isinstance(region, dict)
+            or item.get("candidate_type") in GATE_PROTECTED_TYPES
             or evidence.get("vlm_source") == "approved_brand_memory"
             or "brand_memory" in region_sources
         ):
@@ -2786,6 +2834,7 @@ def _guard_in_film_text(items: list[dict], references: list[dict]) -> list[dict]
             not isinstance(region, dict)
             or item.get("candidate_type") in {
                 "persistent_overlay", "opening_promotion", "branded_end_card",
+                *GATE_PROTECTED_TYPES,
             }
             or evidence.get("vlm_source") == "approved_brand_memory"
             or "brand_memory" in region_sources
@@ -2937,6 +2986,56 @@ def studio_logo_memory_allowed(queue_path: Path, environment: dict | None = None
     return True
 
 
+def _source_frame_size(payloads: dict[str, dict]) -> tuple[int, int] | None:
+    """The source frame size a report states (text scans and fixtures carry ``source_size``)."""
+    for payload in payloads.values():
+        sizes = [payload.get("source_size")] + [
+            (interval.get("region_localization") or {}).get("frame_size")
+            for interval in payload.get("intervals") or [] if isinstance(interval, dict)
+        ]
+        for size in sizes:
+            if isinstance(size, list) and len(size) == 2 and all(
+                isinstance(value, (int, float)) and value > 0 for value in size
+            ):
+                return int(size[0]), int(size[1])
+    return None
+
+
+def _add_platform_and_ending_cards(
+    root: Path, items: list[dict], advisory_items: list[dict], payloads: dict[str, dict], *,
+    source_path: Path, duration: float, queue_dir: Path, memory: dict | None, ffmpeg_path: Path,
+) -> dict:
+    """Platform-ident BLUR cards (batch 4a) and the forced last-6-s card, added to ``items``."""
+    probe = SourceProbe(source_path, ffmpeg_path)
+    frame_size = _source_frame_size(payloads)
+    regions = overlay_regions([*items, *advisory_items], frame_size)
+    runs: list[dict] = []
+    memory_summary = None
+    records = platform_memory_records(memory) if memory is not None else []
+    if records:
+        info = probe.info()
+        if info is not None:
+            regions = overlay_regions([*items, *advisory_items], tuple(info["source_size"]))
+        runs, memory_summary = platform_memory_runs(
+            root, records, probe, duration=duration, queue_regions=regions,
+        )
+    cards, summary = build_platform_cards(
+        root, items, advisory_items, payloads, source=source_path, duration=duration,
+        frame_size=frame_size, queue_dir=queue_dir, masks=None, memory_runs=runs, probe=probe,
+    )
+    items.extend(cards)
+    ending = ensure_forced_ending_card(
+        root, items, payloads, duration=duration, queue_dir=queue_dir, probe=probe,
+    )
+    if ending is not None:
+        items.append(ending)
+    summary.update(
+        memory_used=memory is not None, memory_records=len(records), memory=memory_summary,
+        ending_card=ending is not None, probe_reason=probe.reason,
+    )
+    return summary
+
+
 def build_review_queue(
     *, project_root: Path, report_paths: list[Path], queue_path: Path,
     merge_gap_seconds: float = 1.0,
@@ -2944,6 +3043,7 @@ def build_review_queue(
     content_style: str | None = None,
     adult_triage_level: str | None = None,
     use_studio_logo_memory: bool = False,
+    ffmpeg_path: Path | None = None,
 ) -> dict:
     """Build one review queue from scan reports.
 
@@ -2955,7 +3055,10 @@ def build_review_queue(
     logo (``state/studio-logo-memory.json``) to the optional list. It is off by
     default so benchmarks and Golden measurements never depend on user state;
     the production ``build-review`` command turns it on outside benchmark trials
-    (``studio_logo_memory_allowed``).
+    (``studio_logo_memory_allowed``); remembered platform logos match only then.
+    ``ffmpeg_path`` (default ``tools/ffmpeg/bin/ffmpeg.exe``) decodes the short
+    windows of platform idents and of the forced ending card; without it those
+    cards keep their OCR bounds.
     """
     if content_style is not None and content_style not in CONTENT_STYLES:
         raise ValueError(f"Unknown content style: {content_style}")
@@ -2982,6 +3085,9 @@ def build_review_queue(
     in_film_text_references: list[dict] = []
     used_reports = []
     scan_payloads: dict[str, dict] = {}
+    # Text reports after the fixed-overlay promotion: a platform name inside a
+    # fixed watermark stays with that watermark's card.
+    platform_payloads: dict[str, dict] = {}
     detector_coverage_by_report: dict[str, dict] = {}
     for candidate in report_paths:
         report_path = _inside(reports_root, candidate, "Report path")
@@ -3031,11 +3137,13 @@ def build_review_queue(
             }
         if "tracks" in payload:
             text_payload = promote_fixed_text_overlays(payload)
+            platform_payloads[relative_report] = text_payload
             title_references.extend(_title_overlay_references(text_payload))
             in_film_text_references.extend(_in_film_text_references(text_payload))
             items.extend(_text_items(root, report_path, text_payload))
             advisory_items.extend(_advisory_text_items(root, report_path, text_payload))
         else:
+            platform_payloads[relative_report] = payload
             items.extend(_scan_items(root, report_path, payload))
             advisory_items.extend(_advisory_scan_items(root, report_path, payload))
     assert source_path is not None and source_duration is not None
@@ -3070,6 +3178,21 @@ def build_review_queue(
     )
     items, quarantined_visual_items = _quarantine_uncorroborated_visual_regions(items)
     advisory_items.extend(quarantined_visual_items)
+    studio_memory: dict = {"records": []}
+    if use_studio_logo_memory:
+        try:
+            studio_memory = load_studio_logo_memory(root)
+        except (OSError, ValueError) as error:
+            # An unreadable memory only means nothing moves: every card stays required.
+            studio_memory = {"records": [], "error": str(error)}
+    # Platform idents and the forced ending card join after the gates above
+    # (they are never quarantined) and before preserved cards are restored.
+    platform_summary = _add_platform_and_ending_cards(
+        root, items, advisory_items, platform_payloads,
+        source_path=source_path, duration=source_duration, queue_dir=queue_path.parent,
+        memory=studio_memory if use_studio_logo_memory else None,
+        ffmpeg_path=ffmpeg_path or root / "tools" / "ffmpeg" / "bin" / "ffmpeg.exe",
+    )
     if previous_queue is not None:
         previous_source = previous_queue.get("source", {})
         same_source = (
@@ -3099,13 +3222,6 @@ def build_review_queue(
     # Opening studio idents: no pre-selected CUT without ad evidence (R3a), and a
     # card repeating a user-confirmed studio logo goes to the optional list (R3b).
     items = withhold_studio_ident_suggestions(items, scan_payloads)
-    studio_memory: dict = {"records": []}
-    if use_studio_logo_memory:
-        try:
-            studio_memory = load_studio_logo_memory(root)
-        except (OSError, ValueError) as error:
-            # An unreadable memory only means nothing moves: every card stays required.
-            studio_memory = {"records": [], "error": str(error)}
     items, studio_logo_items = route_confirmed_studio_logos(
         root, items, scan_payloads, studio_memory,
     )
@@ -3123,6 +3239,7 @@ def build_review_queue(
     ))
     ensure_unique_review_item_ids([*items, *advisory_items])
     # After every reconciliation (preserved items included) and the final IDs.
+    link_platform_cards(items, advisory_items)
     link_full_scene_logo_evidence(items, advisory_items)
     represented_candidate_refs = sorted({
         str(reference)
@@ -3188,9 +3305,13 @@ def build_review_queue(
             "cards": sum(1 for item in items if item.get("scene_card")),
             "applies_to": "detected_intervals_only",
         },
+        "platform_logos": platform_summary,
         "studio_logo_memory": {
             "used": bool(use_studio_logo_memory),
-            "confirmed_logos": len(studio_memory.get("records") or []),
+            "confirmed_logos": sum(
+                1 for record in studio_memory.get("records") or []
+                if isinstance(record, dict) and record.get("memory_class", "studio_logo") == "studio_logo"
+            ),
             "minimum_similarity": STUDIO_LOGO_MINIMUM_SIMILARITY,
             "maximum_cell_difference": STUDIO_LOGO_MAXIMUM_CELL_DIFFERENCE,
             "moved_to_candidates": len(studio_logo_items),
@@ -3260,6 +3381,7 @@ def record_review_decision(
     actor: str = "local_user",
     transport: str = "local_cli",
     remember_studio_logo: bool = False,
+    remember_platform_logo: bool = False,
 ) -> dict:
     """Record one human decision.
 
@@ -3272,6 +3394,14 @@ def record_review_decision(
     The record (schema 2) also stores every frame of the card's window and
     ignores the watermark cards of this source the user decided BLUR; a later
     decision on such a watermark card updates those records the same quiet way.
+    ``remember_platform_logo`` is "Đây là logo nền tảng — làm mờ & nhớ" (batch 4a):
+    BLUR on a platform-logo card or a full-frame logo card, stored as a
+    ``platform_logo`` record of the same memory. On a full-frame card the BLUR
+    region is the logo box found in the window and the interval tightens to
+    the ident (the original stays in ``detected_interval``). Any other
+    decision forgets a record of either class. Both remember actions are
+    stored before the decision itself; nothing remembered is ever deleted (the
+    memory is backed up and old frames move to state/backups).
     """
     root = project_root.resolve(strict=True)
     queue_path = _inside((root / "reports").resolve(strict=True), queue_path, "Queue path")
@@ -3279,8 +3409,12 @@ def record_review_decision(
     decision = decision.upper()
     if decision not in DECISIONS:
         raise ValueError(f"Decision must be one of {', '.join(DECISIONS)}")
+    if remember_platform_logo and remember_studio_logo:
+        raise ValueError("Chỉ chọn một: logo hãng phim (giữ & nhớ) hoặc logo nền tảng (làm mờ & nhớ)")
     if remember_studio_logo and decision != "KEEP":
         raise ValueError("Chỉ có thể ghi nhớ logo hãng phim khi chọn Giữ nguyên")
+    if remember_platform_logo and decision != "BLUR":
+        raise ValueError("Chỉ có thể ghi nhớ logo nền tảng khi chọn Làm mờ")
     matches = [item for item in payload["items"] if item["id"] == item_id]
     if not matches:
         advisory_matches = [
@@ -3326,6 +3460,15 @@ def record_review_decision(
             )
         if note is None:
             note = "Người duyệt xác nhận đây là logo hãng phim — giữ nguyên và ghi nhớ"
+    platform_frames = None
+    platform = None
+    if remember_platform_logo:
+        platform_frames, platform, region, start_seconds, end_seconds = _prepare_platform_memory(
+            root, payload, item, region=region, full_frame=full_frame,
+            start_seconds=start_seconds, end_seconds=end_seconds,
+        )
+        if note is None:
+            note = "Người duyệt xác nhận đây là logo nền tảng video — làm mờ vùng logo và ghi nhớ"
     if (start_seconds is None) != (end_seconds is None):
         raise ValueError("Adjusted review interval requires both start and end")
     original_interval = None
@@ -3368,6 +3511,14 @@ def record_review_decision(
     item["decision_transport"] = transport
     item["decided_at"] = _now()
     item.pop("studio_logo_memory", None)
+    item.pop("platform_logo_memory", None)
+    if remember_platform_logo and platform_frames is not None:
+        item["platform_logo_memory"] = {
+            "remembered": True, "at": item["decided_at"], "platform": platform,
+            "logo_frames": len(platform_frames["platform"]["logo_frame_times"]),
+            "blur_region": platform_frames["platform"]["blur_region"],
+            **_studio_memory_frames_summary(platform_frames),
+        }
     if remember_studio_logo:
         item["studio_logo_memory"] = {
             "remembered": True, "at": item["decided_at"],
@@ -3391,22 +3542,125 @@ def record_review_decision(
     }
     if remember_studio_logo:
         entry["remember_studio_logo"] = True
+    if remember_platform_logo:
+        entry["remember_platform_logo"] = True
     payload.setdefault("audit_log", []).append(entry)
     payload["audit_log"] = payload["audit_log"][-1000:]
+    if remember_studio_logo or remember_platform_logo:
+        # Before the decision is saved (security review 2026-10-03): a memory another
+        # writer keeps changing refuses both, and nothing remembered is ever deleted.
+        _remember_logo_record(
+            root, payload, item, studio=remember_studio_logo, studio_signatures=studio_signatures,
+            studio_window_text=studio_window_text, studio_frames=studio_frames,
+            platform_frames=platform_frames, platform=platform,
+        )
     _write_json(queue_path, payload)
     remember_review_item(root, payload, item)
-    if remember_studio_logo:
-        remember_studio_logo_record(
-            root, payload, item, studio_signatures, window_text=studio_window_text,
-            frames=studio_frames,
-        )
-    else:
-        # Also when the flag is gone (rebuilt queue): any other decision forgets it.
-        _forget_studio_logo_quietly(root, payload, item_id)
+    if not (remember_studio_logo or remember_platform_logo):
+        # Also when the flag is gone (rebuilt queue): any other decision forgets
+        # the card's record, a studio or a platform logo alike.
+        _forget_remembered_logo_quietly(root, payload, item_id)
     if item.get("candidate_type") == "persistent_overlay":
         _refresh_studio_logo_masks_after_write(root, queue_path, payload, entry)
     _render_queue_html(root, queue_path, payload)
     return payload
+
+
+MEMORY_WRITE_ATTEMPTS = 3  # a remembered-logo write reads the memory again when another writer changed it
+
+
+def _retry_memory_write(write: Callable[[], Any]) -> Any:
+    """Run a remembered-logo write again, on a fresh read, after another writer changed the memory."""
+    for attempt in range(1, MEMORY_WRITE_ATTEMPTS + 1):
+        try:
+            return write()
+        except MemoryChanged:
+            if attempt == MEMORY_WRITE_ATTEMPTS:
+                raise
+    return None
+
+
+def _remember_logo_record(
+    root: Path, queue: dict, item: dict, *, studio: bool, studio_signatures: list | None,
+    studio_window_text: dict | None, studio_frames: dict | None, platform_frames: dict | None,
+    platform: dict | None,
+) -> None:
+    """Store "giữ & nhớ" / "làm mờ & nhớ"; ValueError (nothing saved) when the memory keeps changing.
+
+    The card's old record of either class is backed up and its frames moved to
+    state/backups first; brand_memory would delete them when it replaces a
+    studio record, and its new frames go to a folder nothing uses yet.
+    """
+    try:
+        if studio:
+            _retry_memory_write(lambda: forget_remembered_logo(root, queue, item["id"]))
+            remember_studio_logo_record(
+                root, queue, item, studio_signatures, window_text=studio_window_text,
+                frames=in_fresh_folder(root, studio_frames) if studio_frames is not None else None,
+            )
+        else:
+            _retry_memory_write(lambda: remember_platform_logo_record(
+                root, queue, item, platform_frames, platform=platform))
+    except MemoryChanged as error:
+        raise ValueError(str(error)) from error
+
+
+def _item_frame_size(root: Path, queue: dict, item: dict) -> list[int] | None:
+    """The source frame size of a card: its own, the queue's, else probed from the source."""
+    for size in (item.get("source_frame_size"), (queue.get("source") or {}).get("frame_size")):
+        if isinstance(size, list) and len(size) == 2 and all(
+            isinstance(value, (int, float)) and value > 0 for value in size
+        ):
+            return [int(size[0]), int(size[1])]
+    source = (queue.get("source") or {}).get("path")
+    info = SourceProbe(Path(str(source)) if source else None,
+                       root / "tools" / "ffmpeg" / "bin" / "ffmpeg.exe").info()
+    return list(info["source_size"]) if info else None
+
+
+def _prepare_platform_memory(
+    root: Path, queue: dict, item: dict, *, region: tuple[int, int, int, int] | None,
+    full_frame: bool, start_seconds: float | None, end_seconds: float | None,
+) -> tuple[dict, dict | None, tuple[int, int, int, int] | None, float | None, float | None]:
+    """Check and prepare "làm mờ & nhớ" before the decision is written (raises ValueError)."""
+    if not platform_logo_eligible(item):
+        raise ValueError(
+            "Chỉ ghi nhớ được logo nền tảng cho thẻ logo nền tảng hoặc thẻ logo toàn khung hình"
+        )
+    try:
+        load_studio_logo_memory(root)  # fail before the decision is written
+    except (OSError, ValueError) as error:
+        raise ValueError(
+            f"Không đọc được bộ nhớ logo ({STUDIO_LOGO_MEMORY_PATH.as_posix()}); "
+            f"chưa ghi quyết định: {error}"
+        ) from error
+    prepared = prepare_platform_logo_frames(
+        root, queue, item,
+        studio_logo_window_frames(root, queue, item, root / "tools" / "ffmpeg" / "bin" / "ffmpeg.exe"),
+    )
+    details = prepared["platform"]
+    if not details["logo_frame_times"]:
+        raise ValueError(
+            "Không thấy hình logo trên nền tối trong thẻ này để ghi nhớ logo nền tảng "
+            f"({details['reason']}); chưa ghi quyết định"
+        )
+    known = item.get("platform_logo") if isinstance(item.get("platform_logo"), dict) else {}
+    platform = platform_entry(known.get("key")) or platform_entry(
+        (match_platform_texts(_queue_window_text(root, queue, item).get("texts") or []) or {}).get("key")
+    ) or {"key": "unknown", "name": UNKNOWN_PLATFORM_NAME}
+    if not region and not full_frame and not isinstance(item.get("suggested_region_source_pixels"), dict):
+        # A full-frame card: blur the logo box found in the window, over the ident only.
+        box = source_box(details["blur_region"], _item_frame_size(root, queue, item))
+        if box is None:
+            raise ValueError("Không xác định được kích thước khung hình để làm mờ vùng logo; chưa ghi quyết định")
+        region = (box["x"], box["y"], box["width"], box["height"])
+        span = details.get("span")
+        if span and start_seconds is None and end_seconds is None:
+            start_seconds = max(float(item["start_seconds"]), float(span["start"]))
+            end_seconds = min(float(item["end_seconds"]), float(span["end"]))
+            if not end_seconds > start_seconds:
+                start_seconds = end_seconds = None
+    return prepared, platform, region, start_seconds, end_seconds
 
 
 def _studio_memory_frames_summary(frames: dict) -> dict:
@@ -3427,17 +3681,18 @@ def _studio_memory_frames_summary(frames: dict) -> dict:
     return summary
 
 
-def _forget_studio_logo_quietly(root: Path, queue: dict, item_id: str) -> None:
-    """Drop a studio-logo record after a saved decision; an unreadable memory never fails it.
+def _forget_remembered_logo_quietly(root: Path, queue: dict, item_id: str) -> None:
+    """Drop a card's remembered logo (studio or platform) after a saved decision; never fails it.
 
     ``build_review_queue`` ignores an unreadable memory too, so no card can move
-    because of the record that could not be removed here. The record's frame
-    JPEGs (state/studio-logo-frames) go with it: a different decision on the
-    remembered card is the user's own withdrawal of that memory.
+    because of the record that could not be removed here. A different decision
+    on the remembered card is the user's own withdrawal of that memory; nothing
+    is deleted (security review 2026-10-03): the memory is backed up and the
+    record's frame JPEGs move to state/backups/studio-logo-frames-<ts>/.
     """
     try:
-        forget_studio_logo(root, queue, item_id)
-    except (OSError, ValueError):
+        _retry_memory_write(lambda: forget_remembered_logo(root, queue, item_id))
+    except (OSError, ValueError, MemoryChanged):
         pass
 
 
@@ -3471,14 +3726,15 @@ def _refresh_studio_logo_masks_after_write(
         records = {}
     source_sha256 = str((payload.get("source") or {}).get("sha256", ""))
     for card in [*payload.get("items", []), *payload.get("advisory_items", [])]:
-        memory = card.get("studio_logo_memory") if isinstance(card, dict) else None
-        record = records.get(f"{source_sha256}:{card.get('id')}") if isinstance(memory, dict) else None
-        if record is None:
-            continue
-        # The whole schema-2 summary: a record upgraded by studio-logo-upgrade
-        # gets its frames_source and window on the card only here.
-        memory.pop("frames_missing", None)
-        memory.update(_studio_memory_frames_summary(record), mask_updated_at=record.get("mask_updated_at"))
+        for field in ("studio_logo_memory", "platform_logo_memory"):
+            memory = card.get(field) if isinstance(card, dict) else None
+            record = records.get(f"{source_sha256}:{card.get('id')}") if isinstance(memory, dict) else None
+            if record is None:
+                continue
+            # The whole schema-2 summary: a record upgraded by studio-logo-upgrade
+            # gets its frames_source and window on the card only here.
+            memory.pop("frames_missing", None)
+            memory.update(_studio_memory_frames_summary(record), mask_updated_at=record.get("mask_updated_at"))
     _write_json(queue_path, payload)
     return refreshed
 
@@ -3620,6 +3876,7 @@ def clear_review_decision(
     item["decision_transport"] = None
     item["decided_at"] = None
     item.pop("studio_logo_memory", None)
+    item.pop("platform_logo_memory", None)
     payload["updated_at"] = _now()
     payload["status"] = _queue_status(payload["items"])
     payload["counts"] = _counts(payload["items"])
@@ -3631,7 +3888,7 @@ def clear_review_decision(
     payload["audit_log"] = payload["audit_log"][-1000:]
     _write_json(queue_path, payload)
     forget_review_item(root, payload, item_id)
-    _forget_studio_logo_quietly(root, payload, item_id)
+    _forget_remembered_logo_quietly(root, payload, item_id)
     if item.get("candidate_type") == "persistent_overlay":
         _refresh_studio_logo_masks_after_write(root, queue_path, payload, entry)
     _render_queue_html(root, queue_path, payload)
@@ -3868,7 +4125,7 @@ details.export>summary .label{color:var(--text);font-weight:600}details.export>s
 .thumb i{position:absolute;right:3px;top:3px;background:rgba(0,0,0,.72);font-size:10px;line-height:13px;font-style:normal;font-weight:700;padding:0 4px;border-radius:4px}
 .moments{display:flex;flex-wrap:wrap;gap:6px;margin-top:10px}.focus-box .mchip,.mchip{display:inline-flex;gap:6px;align-items:center;width:auto;margin:0;background:transparent;border:1px solid var(--line);color:var(--text);border-radius:999px;padding:3px 9px 3px 3px;font-size:13px;font-weight:500;font-variant-numeric:tabular-nums}.focus-box .mchip:hover{background:transparent}.mchip b{display:inline-grid;place-items:center;min-width:20px;height:20px;border-radius:999px;background:#2a323d;font-size:11px}.mchip span{color:var(--accent);font-size:11px}.focus-box .mchip:hover{border-color:var(--muted)}.focus-box .mchip.on{border-color:var(--cat)}.mchip.on b{background:var(--cat);color:#0d1117}
 .applies{font-size:13px;color:#c9d3df;background:var(--card2);border:1px dashed var(--line);border-radius:10px;padding:8px 10px}.side>.applies{margin-top:auto}.side>.applies+.decide{margin-top:0}
-.studio-wrap{display:grid;gap:6px}.studio{border:1px solid var(--line);background:#202833;color:var(--text);border-radius:10px;padding:10px 8px;font-size:14px;font-weight:600}.studio:hover{border-color:var(--muted)}.studio.sel{border-color:var(--keep);background:rgba(47,191,113,.14)}.studio-wrap small{color:var(--muted);font-size:12px;text-align:center}
+.studio-wrap{display:grid;gap:6px}.studio{border:1px solid var(--line);background:#202833;color:var(--text);border-radius:10px;padding:10px 8px;font-size:14px;font-weight:600}.studio:hover{border-color:var(--muted)}.studio.sel{border-color:var(--keep);background:rgba(47,191,113,.14)}.studio.platform.sel{border-color:var(--blur);background:rgba(242,169,59,.14)}.studio-wrap small{color:var(--muted);font-size:12px;text-align:center}
 .strip{display:grid;grid-template-columns:repeat(8,minmax(0,1fr));gap:6px;padding:10px;background:var(--card2)}
 .thumb{position:relative;display:block;padding:0;border-radius:8px;overflow:hidden;border:2px solid transparent;background:#0b0e13;aspect-ratio:16/9;color:var(--text)}
 .thumb img{display:block;width:100%;height:100%;object-fit:cover}.thumb img:not([src]){visibility:hidden}
@@ -3884,7 +4141,7 @@ details.export>summary .label{color:var(--text);font-weight:600}details.export>s
 h2{margin:0;font-size:24px;font-variant-numeric:tabular-nums}.sub{color:var(--muted);margin-top:2px}.hint{font-size:13px;color:#9cc7f5}
 .focus-box{background:var(--card2);border:1px solid var(--line);border-radius:12px;padding:12px 14px}.focus-box b{color:#fff}.focus-box button{margin-top:10px;width:100%;background:transparent;border:1px solid var(--accent);color:var(--accent);padding:9px;border-radius:9px;font-weight:600;font-size:14px}.focus-box button:hover{background:rgba(77,163,255,.1)}.focus-box small{display:block;margin-top:8px;color:var(--muted)}
 .decide-head{font-size:13px;color:var(--muted);margin-bottom:-6px}
-body.export-locked .decide button,body.export-locked .region-decide button,body.export-locked [data-act="clear"],body.export-locked [data-act="studio"],body.export-locked .list-foot button{opacity:.45;cursor:not-allowed;filter:none}
+body.export-locked .decide button,body.export-locked .region-decide button,body.export-locked [data-act="clear"],body.export-locked [data-act="studio"],body.export-locked [data-act="platform"],body.export-locked .list-foot button{opacity:.45;cursor:not-allowed;filter:none}
 .decide{display:grid;grid-template-columns:1fr 1fr;gap:10px}.side>.decide{margin-top:auto}
 .decide button{border:0;border-radius:12px;padding:14px 10px;font-size:16px;font-weight:700;color:#0d1117;display:flex;flex-direction:column;align-items:center;gap:2px}.decide button:hover{filter:brightness(1.08)}
 .decide small{font-weight:500;font-size:12px;opacity:.75}.decide .k{background:var(--keep)}.decide .b{background:var(--blur)}.decide .c{background:var(--cut);color:#fff}.decide .m{background:#2a323d;color:var(--text)}.decide button.sel{box-shadow:0 0 0 3px var(--card),0 0 0 5px #fff}.decide button.sel small{opacity:1;font-weight:700}
@@ -3935,7 +4192,7 @@ async function readJson(response){let data=null;try{data=await response.json();}
 function offlineError(){const error=new Error('Mất kết nối với Review. Hãy tải lại trang; các lựa chọn đã lưu trước đó vẫn được giữ nguyên.');error.status=0;return error;}
 async function requestJson(path,options={}){let response;try{response=await fetch(path,options);}catch(_error){throw offlineError();}return readJson(response);}
 const SAFETY={adult:['18+','var(--adult)'],gore:['Máu me','var(--gore)'],violence:['Bạo lực','var(--violence)']};
-const KIND_NAMES={logo_overlay:'Logo',logo_candidate:'Ứng viên logo',opening_promotion:'Quảng cáo mở đầu',text_candidate:'Ứng viên chữ',title_overlay:'Tiêu đề phim',in_film_text:'Chữ trong phim'};
+const KIND_NAMES={logo_overlay:'Logo',logo_candidate:'Ứng viên logo',opening_promotion:'Quảng cáo mở đầu',text_candidate:'Ứng viên chữ',title_overlay:'Tiêu đề phim',in_film_text:'Chữ trong phim',platform_logo:'Logo nền tảng'};
 const FILTER_TITLES={pending:'Chưa duyệt',adult:'18+',gore:'Máu me',violence:'Bạo lực',ads:'Quảng cáo',all:'Tất cả mục',high:'Ưu tiên cao',visual_ai:'Visual AI',visual_logo:'Logo',text:'Chữ',candidates:'Ứng viên phụ'};
 const STATUS={KEEP:['Giữ','st-keep'],BLUR:['Làm mờ','st-blur'],CUT:['Cắt','st-cut'],NEEDS_MORE_CONTEXT:['Cần xem','st-more']};
 function isSafety(x){return !!x&&Object.prototype.hasOwnProperty.call(SAFETY,x.category);}
@@ -3949,8 +4206,8 @@ function sceneHeader(x){return `${sceneTitle(x)} · ${sceneSpan(x)}`;}
 function appliesLine(x){const ms=momentsOf(x);return `Quyết định chỉ áp dụng cho ${ms.length} khoảnh khắc này (tổng ${mmss(momentTotal(ms))}); khoảng trống giữa chúng giữ nguyên.`;}
 function momentIndex(t,ms){return ms.findIndex(m=>t>=m.start-.05&&t<=m.end+.05);}
 function studioEligible(x){return !!x&&x.category==='visual_logo'&&!x.suggested_region_source_pixels&&x.candidate_type!=='persistent_overlay';}
-function catName(x){if(isSafety(x))return SAFETY[x.category][0];if(x.review_kind==='opening_promotion'&&x.opening_ident)return 'Logo mở đầu';if(x.category==='visual_logo'&&x.candidate_type==='opening_boundary')return 'Kiểm tra đoạn mở đầu';if(x.category==='visual_logo'&&x.candidate_type==null&&!x.suggested_region_source_pixels)return 'Logo toàn khung (chưa khoanh vùng)';return KIND_NAMES[x.review_kind]||(x.category==='text'?'Chữ':x.category==='visual_logo'?'Logo / quảng cáo':String(x.category||'Khác'));}
-function sceneLogo(x){return !!x&&x.category==='visual_logo'&&!x.suggested_region_source_pixels&&(x.candidate_type==null||['opening_boundary','opening_promotion','branded_end_card'].includes(x.candidate_type));}
+function catName(x){if(isSafety(x))return SAFETY[x.category][0];if(x.review_kind==='opening_promotion'&&x.opening_ident)return 'Logo mở đầu';if(x.category==='visual_logo'&&x.candidate_type==='opening_boundary')return 'Kiểm tra đoạn mở đầu';if(x.category==='visual_logo'&&x.candidate_type==='ending_boundary')return 'Kiểm tra đoạn kết';if(x.category==='visual_logo'&&x.candidate_type==='platform_logo')return `Logo nền tảng ${x.platform_logo?.name||''}`.trim();if(x.category==='visual_logo'&&x.candidate_type==null&&!x.suggested_region_source_pixels)return 'Logo toàn khung (chưa khoanh vùng)';return KIND_NAMES[x.review_kind]||(x.category==='text'?'Chữ':x.category==='visual_logo'?'Logo / quảng cáo':String(x.category||'Khác'));}
+function sceneLogo(x){return !!x&&x.category==='visual_logo'&&!x.suggested_region_source_pixels&&(x.candidate_type==null||['opening_boundary','ending_boundary','opening_promotion','branded_end_card'].includes(x.candidate_type));}
 function hasPlayer(x){return isSafety(x)||sceneLogo(x);}
 function catColor(x){return isSafety(x)?SAFETY[x.category][1]:'var(--ad)';}
 function statusOf(x){return STATUS[x.decision]||['Chưa duyệt','st-pending'];}
@@ -3969,13 +4226,13 @@ function render(){reviewStats.fullRenders++;renderChips();renderList();if(!focus
 function renderChips(){document.querySelectorAll('#chips .chip').forEach(b=>b.classList.toggle('on',b.dataset.filter===filter));const more=$('#more-filter'),extra=['high','visual_ai','visual_logo','text','candidates'].includes(filter);more.value=extra?filter:'';more.classList.toggle('on',extra);}
 function sourceTitle(){const path=String(queue?.source?.path||''),name=path.split(/[\\/]/).pop().replace(/\.[^.]+$/,'').replace(/[._]+/g,' ').trim(),year=name.match(/^(.*?\b(?:19|20)\d{2})\b/);return (year?year[1]:name)||'video';}
 function updateHeader(){if(!queue)return;const c=countsFrom(queue.items),done=c.total-c.pending,advisory=(queue.advisory_items||[]).length;setText($('#count'),`${done}/${c.total} xong`);const width=`${c.total?done/c.total*100:100}%`;if($('#progress').style.width!==width)$('#progress').style.width=width;setText($('#chip-pending'),`Chưa duyệt (${c.pending})`);setText($('#candidate-filter'),`Ứng viên phụ (${advisory})`);const title=`Duyệt nội dung · ${sourceTitle()}`;setText($('#title'),title);if(document.title!==title)document.title=title;const names={advertising:'Quảng cáo / logo',adult:'18+',gore:'Máu me',violence:'Bạo lực'},skipped=((queue.detection_scope||{}).skipped||[]).map(x=>names[x]||x),warn=$('#scope-warning');warn.hidden=!skipped.length;if(skipped.length)setText(warn,`Không quét trong lượt này: ${skipped.join(', ')}. Ít mục hơn không có nghĩa các nhóm này đã an toàn.`);setText($('#next-text'),nextNote(c));renderExport();updateNavState();}
-function reviewDoneHint(){return exportJob&&exportJob.source_cleaned?'Video gốc đã được dọn vào Thùng rác; trang duyệt chỉ để xem.':'Bấm “Xuất video” ở trên để xuất.';}
+function reviewDoneHint(){return exportJob&&exportJob.source_cleaned?'Video gốc đã được dọn vào Thùng rác; trang duyệt chỉ để xem.':exportJob&&exportJob.source_archived?'Video gốc đang ở kho lưu trữ; bấm “Khôi phục bản xuất” trên Dashboard để xuất lại.':'Bấm “Xuất video” ở trên để xuất.';}
 function nextNote(c){if(!c.pending)return `Đã duyệt đủ mọi mục chính. ${reviewDoneHint()}`;let inList=0;for(const id of listIds){const x=itemMap.get(id);if(x&&!x.decision)inList++;}const where=filter==='pending'||inList===c.pending?'':` (${inList} trong bộ lọc này)`;return `Còn ${c.pending} mục chưa duyệt${where} · ${autoNext?'mục kế tiếp tự hiện sau khi chọn':'bấm “Sau →” để sang mục kế'}`;}
 function renderExport(){if(!queue)return;const c=countsFrom(queue.items),done=c.total-c.pending,scope=queue.detection_scope||{},scopeNames={advertising:'Quảng cáo / logo',adult:'18+',gore:'Máu me',violence:'Bạo lực'},selected=(scope.selected||[]).map(x=>scopeNames[x]||x),skipped=(scope.skipped||[]).map(x=>scopeNames[x]||x);let fullTracks=0,rangeTracks=0;for(const x of queue.items){if(x.candidate_type==='persistent_overlay'){if(trackCoversFullVideo(x))fullTracks++;else rangeTracks++;}}const advisory=(queue.advisory_items||[]).length,visual=queue.visual_ai_audit?.assessment_count||0,status=queue.status;
 setText($('#summary'),`${done}/${c.total} mục chính đã duyệt · ${c.pending} mục chính còn lại · ${fullTracks} track toàn video · ${rangeTracks} track theo khoảng · ${advisory} ứng viên phụ · Đã quét: ${selected.length?selected.join(', '):'phạm vi cũ'} · Visual AI ${visual} mục · Trạng thái: ${status}`);
 if(resources){const range=resources.estimated_preview_megabytes_range||[0,0];setHtml($('#resources'),`<div class="resource">Video nguồn<strong>${size(resources.source_bytes)}</strong></div><div class="resource">Ảnh và report<strong>${size(resources.report_bytes)}</strong></div><div class="resource">Ổ E còn trống<strong>${size(resources.disk_free_bytes)}</strong></div><div class="resource">Preview dự kiến<strong>${resources.estimated_preview_seconds} giây · khoảng ${range[0]}–${range[1]} MB</strong></div><div class="resource-note">Review không chạy model AI. Khung xem nhanh được trích bằng FFmpeg (CPU) khi mở từng mục, lưu tạm có giới hạn và tự dọn; video phát thẳng từ file gốc, không tạo bản sao. ${skipped.length?`Không quét trong lượt này: ${skipped.join(', ')}. Ít thẻ hơn không có nghĩa các nhóm này đã an toàn. `:''}Có ${c.total} mục chính bắt buộc duyệt và ${advisory} ứng viên phụ không chặn xuất. Track toàn video, track theo khoảng và nhóm sự kiện được ghi riêng; nhóm sự kiện chỉ áp dụng các khoảng phát hiện gốc, không sửa khoảng trống.</div>`);}
-const active=['QUEUED','RENDERING'].includes(exportJob.status),skippedExport=exportJob.status==='SKIPPED',cleaned=!!exportJob.source_cleaned,locked=active||cleaned,ready=status==='READY_FOR_EDIT_PLAN'&&!active&&!skippedExport&&!cleaned;$('#finalize').disabled=!ready||exportRequestInFlight;document.body.classList.toggle('export-locked',locked);for(const b of document.querySelectorAll('.list-foot button')){b.disabled=locked;b.title=locked?(cleaned?SOURCE_CLEANED_LOCK_MESSAGE:EXPORT_LOCK_MESSAGE):'';}const exportText={IDLE:pendingDescription(),WAITING_REVIEW:pendingDescription(),READY_TO_EXPORT:'Đã duyệt đủ. Bạn có thể xuất video.',QUEUED:'Đã xếp hàng xuất video.',RENDERING:'Đang render và kiểm tra video…',COMPLETED:`Hoàn tất: ${exportJob.output||''}`,FAILED:`Xuất thất bại: ${exportJob.error||'không rõ lỗi'}`,SKIPPED:'Video đã được đánh dấu bỏ qua (không xuất). Bấm “Mở lại để xuất” ở Dashboard nếu muốn xuất video.'};const when=formatStamp(exportJob.source_cleanup?.finished_at),cleanedText=`${exportJob.status==='COMPLETED'?`Hoàn tất: ${exportJob.output||''}. `:''}Video gốc đã được dọn vào Thùng rác${when?` lúc ${when}`:''}. Chép lại đúng tên “${exportJob.source_name||''}” vào input để xuất lại hoặc sửa quyết định.`;setText($('#export-status'),exportError||(cleaned?cleanedText:exportText[exportJob.status])||pendingDescription());$('#export-status').classList.toggle('error',!!exportError);
-setText($('#export-summary'),active?'đang xuất…':cleaned?'đã dọn video gốc':skippedExport?'đã bỏ qua':exportJob.status==='COMPLETED'?'đã xuất':exportJob.status==='FAILED'?'lỗi':ready?'sẵn sàng':status==='NEEDS_MORE_CONTEXT'?'còn mục cần xem':'');$('#export-section').classList.toggle('ready',ready);}
+const active=['QUEUED','RENDERING'].includes(exportJob.status),skippedExport=exportJob.status==='SKIPPED',cleaned=!!exportJob.source_cleaned,archived=!!exportJob.source_archived,locked=active||cleaned||archived,ready=status==='READY_FOR_EDIT_PLAN'&&!active&&!skippedExport&&!cleaned&&!archived;$('#finalize').disabled=!ready||exportRequestInFlight;document.body.classList.toggle('export-locked',locked);for(const b of document.querySelectorAll('.list-foot button')){b.disabled=locked;b.title=locked?(cleaned?SOURCE_CLEANED_LOCK_MESSAGE:archived?SOURCE_ARCHIVED_LOCK_MESSAGE:EXPORT_LOCK_MESSAGE):'';}const exportText={IDLE:pendingDescription(),WAITING_REVIEW:pendingDescription(),READY_TO_EXPORT:'Đã duyệt đủ. Bạn có thể xuất video.',QUEUED:'Đã xếp hàng xuất video.',RENDERING:'Đang render và kiểm tra video…',COMPLETED:`Hoàn tất: ${exportJob.output||''}`,FAILED:`Xuất thất bại: ${exportJob.error||'không rõ lỗi'}`,SKIPPED:'Video đã được đánh dấu bỏ qua (không xuất). Bấm “Mở lại để xuất” ở Dashboard nếu muốn xuất video.'};const when=formatStamp(exportJob.source_cleanup?.finished_at),cleanedText=`${exportJob.status==='COMPLETED'?`Hoàn tất: ${exportJob.output||''}. `:''}Video gốc đã được dọn vào Thùng rác${when?` lúc ${when}`:''}. Chép lại đúng tên “${exportJob.source_name||''}” vào input để xuất lại hoặc sửa quyết định.`,archivedWhen=formatStamp(exportJob.source_archive?.archived_at),archivedText=`${exportJob.status==='COMPLETED'?`Hoàn tất: ${exportJob.output||''}. `:''}Video gốc đang ở kho lưu trữ${archivedWhen?` từ ${archivedWhen}`:''}. Bấm “Khôi phục bản xuất” trên Dashboard để xuất lại hoặc sửa quyết định.`;setText($('#export-status'),exportError||(cleaned?cleanedText:archived?archivedText:exportText[exportJob.status])||pendingDescription());$('#export-status').classList.toggle('error',!!exportError);
+setText($('#export-summary'),active?'đang xuất…':cleaned?'đã dọn video gốc':archived?'video gốc ở kho lưu trữ':skippedExport?'đã bỏ qua':exportJob.status==='COMPLETED'?'đã xuất':exportJob.status==='FAILED'?'lỗi':ready?'sẵn sàng':status==='NEEDS_MORE_CONTEXT'?'còn mục cần xem':'');$('#export-section').classList.toggle('ready',ready);}
 function showExportNotice(text,tone,detail){const el=$('#export-notice');if(!el)return;$('#top .top')?.classList.toggle('has-notice',!!text);if(!text){el.hidden=true;setText(el,'');el.removeAttribute('title');return;}setText(el,text);const full=detail||text;if(el.title!==full)el.title=full;const cls=`export-notice ${tone||'running'}`;if(el.className!==cls)el.className=cls;el.hidden=false;}
 function exportNoticeText(job){const p=(job&&job.render_progress)||{},percent=Number(p.percent);switch(job&&job.status){case 'QUEUED':return['Đã xếp hàng xuất video.','running'];case 'RENDERING':if(p.state==='VERIFYING')return['Đang kiểm tra video đã xuất…','running'];if(Number.isFinite(percent)&&percent>0){const eta=Number.isFinite(Number(p.eta_seconds))&&p.eta_seconds!=null?` · còn khoảng ${Math.max(1,Math.ceil(Number(p.eta_seconds)/60))} phút`:'';return[`Đang xuất video: ${percent.toLocaleString('vi-VN',{maximumFractionDigits:1})}%${eta}`,'running'];}return['Đang xuất video…','running'];case 'COMPLETED':{const output=String(job.output||''),name=output.split(/[\\/]/).pop();return[`Đã xuất xong: ${name}`,'ok',output?`Đã xuất xong: ${output}`:''];}case 'FAILED':return[`Xuất video thất bại: ${job.error||'không rõ lỗi'}`,'error'];default:return null;}}
 function updateExportNotice(){if(['QUEUED','RENDERING'].includes(exportJob.status))exportNoticeActive=true;if(!exportNoticeActive)return;const value=exportNoticeText(exportJob);if(value)showExportNotice(value[0],value[1],value[2]);}
@@ -4019,30 +4276,36 @@ function markMoment(){const i=pstate.id===focusId?pstate.mi:-1;document.querySel
 function videoReason(info){if(!mediaKey)return 'Trang này chỉ có ảnh xem trước, không phát video.';const reasons={unsupported_container:'Trình duyệt không phát được định dạng video này; hãy xem dải khung hình.',source_changed:'Video nguồn đã thay đổi sau khi quét; chỉ xem được khung hình.',source_missing:'Không tìm thấy video nguồn.',source_cleaned:'Video gốc đã được dọn vào Thùng rác; chỉ xem được ảnh đã lưu trong report.',source_unknown:'Không rõ video nguồn.',decode_error:'Trình duyệt không giải mã được video này; hãy xem dải khung hình.'};return reasons[info?.reason]||'Không phát được video trong trình duyệt; hãy xem dải khung hình.';}
 function currentVideoInfo(ev){return pstate.reason?{reason:pstate.reason}:ev?.video;}
 function safetySubtitle(x,ev){const scene=isScene(x),parts=[scene?sceneSpan(x):durationText(x.end_seconds-x.start_seconds)],seeds=ev?.seeds;if(seeds&&seeds.count>0&&!scene){if(seeds.known)parts.push(`máy nghi ngờ ở ${seeds.count} khung`);else{const w=seeds.windows||[];parts.push(w.length===1?`máy nghi ngờ ở ${seeds.count} khung trong ${mmss(w[0].start)}–${mmss(w[0].end)}`:`máy nghi ngờ ở ${seeds.count} khung trong ${w.length} đoạn`);}}const n=(x.detected_intervals||[]).length;if(n>1&&!scene)parts.push(`${n} khoảng phát hiện`);return parts.join(' · ');}
-function suggestionLine(x){const parts=[];if(x.studio_logo_match)parts.push(`Khớp logo hãng phim bạn đã xác nhận giữ (giống ${Math.round(100*Number(x.studio_logo_match.similarity||0))}%), không thấy chữ lạ hay quảng cáo`);else if(x.suggested_decision)parts.push(`Đề xuất: ${esc(actionName(x,x.suggested_decision))}`);if(x.suggestion_withheld&&!x.decision&&!x.studio_logo_match)parts.push(esc(studioWithheldLine(x.suggestion_withheld)));if(x.studio_logo_match_blocked&&!x.decision)parts.push(esc(studioBlockedLine(x.studio_logo_match_blocked)));if(x.advisory)parts.push('Ứng viên phụ — không chặn xuất, chỉ áp dụng nếu bạn chọn');return parts.length?`<div class="hint">${parts.join(' · ')}</div>`:'';}
+function suggestionLine(x){const parts=[];if(x.studio_logo_match)parts.push(`Khớp logo hãng phim bạn đã xác nhận giữ (giống ${Math.round(100*Number(x.studio_logo_match.similarity||0))}%), không thấy chữ lạ hay quảng cáo`);else if(x.suggested_decision)parts.push(`Đề xuất: ${esc(actionName(x,x.suggested_decision))}`);if(x.suggestion_withheld&&!x.decision&&!x.studio_logo_match)parts.push(esc(studioWithheldLine(x.suggestion_withheld)));if(x.studio_logo_match_blocked&&!x.decision)parts.push(esc(studioBlockedLine(x.studio_logo_match_blocked)));if(x.platform_logo_link&&!x.decision)parts.push(`Logo nền tảng ${esc(x.platform_logo_link.platform||'')} ở đoạn này đã có thẻ riêng làm mờ vùng logo — thẻ này chỉ hỏi về cả cảnh: Giữ nguyên nếu phần còn lại là nội dung phim`);else if(x.covered_by&&!x.decision)parts.push(`Trùng thẻ “${esc(x.covered_by_label||'Logo nền tảng')}” ở danh sách chính — logo đó đã có thẻ làm mờ riêng`);if(x.advisory)parts.push('Ứng viên phụ — không chặn xuất, chỉ áp dụng nếu bạn chọn');return parts.length?`<div class="hint">${parts.join(' · ')}</div>`:'';}
 function decideButtons(x){const d=x.decision,full=d==='BLUR'&&x.decision_region_source_pixels==='FULL_FRAME',b=(cls,decision,label,key,selected)=>`<button type="button" class="${cls}${selected?' sel':''}" data-act="decide" data-decision="${decision}"${decision==='BLUR'?' data-full="1"':''} aria-pressed="${selected?'true':'false'}">${label}<small>${selected?'✓ đã chọn':`phím ${key}`}</small></button>`;return `<div class="decide">${b('k','KEEP','Giữ nguyên',1,d==='KEEP')}${b('b','BLUR','Làm mờ cả cảnh',2,full)}${b('c','CUT','Cắt cảnh',3,d==='CUT')}${b('m','NEEDS_MORE_CONTEXT','Cần xem thêm',4,d==='NEEDS_MORE_CONTEXT')}</div>`;}
-function decisionLabel(x){if(x.decision==='KEEP'&&x.studio_logo_memory?.remembered){const m=x.studio_logo_memory;return m.frames!=null?`Giữ nguyên · đã nhớ là logo hãng phim (${Number(m.frames)} khung${m.ignored_regions?.length?', bỏ qua watermark đã làm mờ':''})`:'Giữ nguyên · đã nhớ là logo hãng phim';}if(x.decision==='BLUR'&&x.decision_region_source_pixels==='FULL_FRAME')return isScene(x)?`Làm mờ toàn cảnh trong ${momentsOf(x).length} khoảnh khắc`:'Làm mờ toàn cảnh';if(x.decision==='BLUR')return isLogoItem(x)?'Làm mờ logo':'Làm mờ vùng chữ/logo';if(x.decision==='NEEDS_MORE_CONTEXT')return 'Cần xem thêm';return actionName(x,x.decision);}
+function decisionLabel(x){if(x.decision==='BLUR'&&x.platform_logo_memory?.remembered){const m=x.platform_logo_memory,name=m.platform&&m.platform.key!=='unknown'&&m.platform.name?` ${m.platform.name}`:'';return `Làm mờ logo · đã nhớ là logo nền tảng${name}`;}if(x.decision==='KEEP'&&x.studio_logo_memory?.remembered){const m=x.studio_logo_memory;return m.frames!=null?`Giữ nguyên · đã nhớ là logo hãng phim (${Number(m.frames)} khung${m.ignored_regions?.length?', bỏ qua watermark đã làm mờ':''})`:'Giữ nguyên · đã nhớ là logo hãng phim';}if(x.decision==='BLUR'&&x.decision_region_source_pixels==='FULL_FRAME')return isScene(x)?`Làm mờ toàn cảnh trong ${momentsOf(x).length} khoảnh khắc`:'Làm mờ toàn cảnh';if(x.decision==='BLUR')return isLogoItem(x)?'Làm mờ logo':'Làm mờ vùng chữ/logo';if(x.decision==='NEEDS_MORE_CONTEXT')return 'Cần xem thêm';return actionName(x,x.decision);}
 function chosenLine(x){return x.decision?`<div class="chosen">Đã chọn: <b>${esc(decisionLabel(x))}</b> · <button type="button" class="linkish" data-act="clear">Bỏ chọn</button></div>`:'';}
 function momentChips(x){return `<div class="moments" role="group" aria-label="Các khoảnh khắc">${momentsOf(x).map((m,i)=>`<button type="button" class="mchip" data-act="moment" data-i="${i}" title="Phát riêng khoảnh khắc ${i+1}"><b>${i+1}</b>${mmss(m.start)}–${mmss(m.end)}<span>▶</span></button>`).join('')}</div>`;}
 function safetySide(x){const ev=evidenceCache.get(x.id),peak=ev?.strongest?.t??thumbTime((x.preview_images||[])[0]),playable=videoAllowed()&&(!ev?.video||ev.video.available),scene=isScene(x),n=momentsOf(x).length,heading=scene?`<h2>${esc(sceneTitle(x))}</h2>`:`<h2>${mmss(x.start_seconds)} – ${mmss(x.end_seconds)}</h2>`,play=scene?`<button type="button" data-act="seq" title="Phát từng khoảnh khắc theo thứ tự, bỏ qua khoảng trống giữa chúng">▶ Phát lần lượt ${n} khoảnh khắc</button>`:'<button type="button" data-act="play">▶ Phát đoạn này</button>',watch=scene?'':'Xem đoạn này rồi chọn bên dưới.';return `<span class="pill">${esc(catName(x).toUpperCase())}</span><div>${heading}<div class="sub">${esc(safetySubtitle(x,ev))}</div></div>${suggestionLine(x)}<div class="focus-box">${peak!=null?`Rõ nhất lúc <b>${mmss(peak)}</b> (khung viền trắng). `:''}${watch}${playable?play:`<small>${esc(videoReason(currentVideoInfo(ev)))}</small>`}${scene?momentChips(x):''}</div>${scene?`<div class="applies">${esc(appliesLine(x))}</div>`:''}${decideButtons(x)}${chosenLine(x)}${techDetails(x,ev,true)}`;}
 function scopeShort(x){const scope=decisionScope(x);if(scope.kind==='advisory')return 'Ứng viên phụ — không chặn xuất';if(scope.kind==='track')return trackCoversFullVideo(x)?'Một quyết định cho toàn video':'Một quyết định cho cả khoảng xuất hiện';if(scope.kind==='grouped')return `${(x.detected_intervals||[]).length} khoảnh khắc phát hiện`;return 'Chỉ đoạn này';}
-function adSide(x){const owner=regionOwner(x),r=owner&&(owner.suggested_region_source_pixels||owner.decision_region_source_pixels);return `<span class="pill">${esc(catName(x).toUpperCase())}</span><div><h2>${mmss(x.start_seconds)} – ${mmss(x.end_seconds)}</h2><div class="sub">${esc(durationText(x.end_seconds-x.start_seconds))} · ${esc(scopeShort(x))}</div></div>${sceneLogo(x)||!(owner&&r&&r!=='FULL_FRAME')?aiVerdictHtml(x):''}${suggestionLine(x)}${sceneLogo(x)?logoPlayHtml(x):''}${overlapCoverage(x)}${regionControlsHtml(x,owner,r)}<div class="decide-head">Quyết định cho toàn cảnh ${esc(catName(x))} · ${span(x)}</div>${decideButtons(x)}${studioHtml(x)}${chosenLine(x)}${techDetails(x,null,false)}`;}
-function aiVerdictHtml(x){if(!x||x.category!=='visual_logo'||x.suggested_region_source_pixels)return '';const m=x.model_evidence||{},answer=String(m.vlm_answer||'').trim(),promoted=!!m.promoted_from_rejected_boundary,memory=memoryMatch(m),promo=String(m.vlm_scene||'').toUpperCase()==='PROMO_FULL_FRAME',no=/^no\b/i.test(answer),yes=/^yes\b/i.test(answer),boundary=promoted||x.candidate_type==='opening_boundary',boxes=(Array.isArray(x.evidence_regions)?x.evidence_regions:[]).filter(Boolean),covered=boxes.filter(b=>b.covered_by),open=boxes.length>covered.length,who=boxesFromMemory(boxes)?'bộ nhớ thương hiệu':'AI',coveredText=covered.length?` ${covered.length===boxes.length?(boxes.length===1?'Vùng logo duy nhất':'Mọi vùng logo'):covered.length===1?'Một vùng logo':`${covered.length} vùng logo`} ${who} khoanh ở đoạn này là watermark ${[...new Set(covered.map(b=>String(b.covered_by_label||'').trim()||'watermark'))].map(esc).join(', ')} — đã có thẻ riêng; thẻ này chỉ hỏi về cả đoạn.`:'',boundaryText='BiliFlow luôn đưa 5 giây đầu video ra một lần để bạn tự kiểm tra intro ngoài phim; thẻ này không khoanh vùng logo nào — chọn Giữ nguyên nếu là nội dung phim/logo hãng, Cắt cảnh nếu là intro ngoài.';let text;if(memory){const name=memoryBrandName(m);text=`Khớp hình một logo thương hiệu bạn đã duyệt trước đó${name?` (${esc(name)})`:''} — không phải câu trả lời của AI; vẫn cần bạn duyệt lại, quyết định áp dụng cho cả cảnh.${open?` Khung vàng là vùng ${who} định vị, chỉ để tham khảo.`:''}${coveredText}`;}else if(promo&&!yes)text=`AI ${no?'trả lời KHÔNG thấy logo riêng':'chưa chắc có logo riêng'} trong ${span(x)}, nhưng nhận định cả cảnh là quảng cáo / intro toàn khung — chọn Cắt cảnh nếu đúng là quảng cáo hay intro ngoài, Giữ nguyên nếu là nội dung phim.${coveredText}`;else if(promoted||no)text=`AI trả lời KHÔNG thấy logo hay chữ quảng cáo trong ${span(x)}. ${boundary?boundaryText:'Thẻ này không khoanh vùng logo nào — chọn Giữ nguyên nếu là nội dung phim, Cắt cảnh nếu là quảng cáo.'}`;else if(yes||(answer&&m.vlm_confirmation==='CONFIRMED')){text=open?`AI trả lời CÓ thấy logo/thương hiệu trong khung; khung vàng là vùng ${who} khoanh, chỉ để tham khảo — quyết định áp dụng cho cả cảnh.`:covered.length?'AI trả lời CÓ thấy logo/thương hiệu trong khung nhưng không định vị được logo nào khác ngoài watermark đã có thẻ riêng — quyết định áp dụng cho cả cảnh.':'AI trả lời CÓ thấy logo/thương hiệu trong khung nhưng không định vị được vị trí — quyết định áp dụng cho cả cảnh.';text+=coveredText;}else if(!answer)text=`Thẻ cũ: chưa lưu câu trả lời gốc của AI.${boundary?` ${boundaryText}`:''}`;else text=`AI trả lời “${esc(answer)}” (chưa chắc chắn). ${boundary?boundaryText:'Thẻ này không khoanh vùng logo nào — quyết định áp dụng cho cả cảnh.'}`;return `<div class="ai-verdict">${text}</div>`;}
+function adSide(x){const owner=regionOwner(x),r=owner&&(owner.suggested_region_source_pixels||owner.decision_region_source_pixels);return `<span class="pill">${esc(catName(x).toUpperCase())}</span><div><h2>${mmss(x.start_seconds)} – ${mmss(x.end_seconds)}</h2><div class="sub">${esc(durationText(x.end_seconds-x.start_seconds))} · ${esc(scopeShort(x))}</div></div>${sceneLogo(x)||!(owner&&r&&r!=='FULL_FRAME')?aiVerdictHtml(x):''}${platformVerdictHtml(x)}${suggestionLine(x)}${sceneLogo(x)?logoPlayHtml(x):''}${overlapCoverage(x)}${regionControlsHtml(x,owner,r)}<div class="decide-head">Quyết định cho toàn cảnh ${esc(catName(x))} · ${span(x)}</div>${decideButtons(x)}${studioHtml(x)}${platformHtml(x)}${chosenLine(x)}${techDetails(x,null,false)}`;}
+function aiVerdictHtml(x){if(!x||x.category!=='visual_logo'||x.suggested_region_source_pixels)return '';if(x.candidate_type==='ending_boundary')return endingVerdictHtml(x);const m=x.model_evidence||{},answer=String(m.vlm_answer||'').trim(),promoted=!!m.promoted_from_rejected_boundary,memory=memoryMatch(m),promo=String(m.vlm_scene||'').toUpperCase()==='PROMO_FULL_FRAME',no=/^no\b/i.test(answer),yes=/^yes\b/i.test(answer),boundary=promoted||x.candidate_type==='opening_boundary',boxes=(Array.isArray(x.evidence_regions)?x.evidence_regions:[]).filter(Boolean),covered=boxes.filter(b=>b.covered_by),open=boxes.length>covered.length,who=boxesFromMemory(boxes)?'bộ nhớ thương hiệu':'AI',coveredText=covered.length?` ${covered.length===boxes.length?(boxes.length===1?'Vùng logo duy nhất':'Mọi vùng logo'):covered.length===1?'Một vùng logo':`${covered.length} vùng logo`} ${who} khoanh ở đoạn này là watermark ${[...new Set(covered.map(b=>String(b.covered_by_label||'').trim()||'watermark'))].map(esc).join(', ')} — đã có thẻ riêng; thẻ này chỉ hỏi về cả đoạn.`:'',boundaryText='BiliFlow luôn đưa 5 giây đầu video ra một lần để bạn tự kiểm tra intro ngoài phim; thẻ này không khoanh vùng logo nào — chọn Giữ nguyên nếu là nội dung phim/logo hãng, Cắt cảnh nếu là intro ngoài.';let text;if(memory){const name=memoryBrandName(m);text=`Khớp hình một logo thương hiệu bạn đã duyệt trước đó${name?` (${esc(name)})`:''} — không phải câu trả lời của AI; vẫn cần bạn duyệt lại, quyết định áp dụng cho cả cảnh.${open?` Khung vàng là vùng ${who} định vị, chỉ để tham khảo.`:''}${coveredText}`;}else if(promo&&!yes)text=`AI ${no?'trả lời KHÔNG thấy logo riêng':'chưa chắc có logo riêng'} trong ${span(x)}, nhưng nhận định cả cảnh là quảng cáo / intro toàn khung — chọn Cắt cảnh nếu đúng là quảng cáo hay intro ngoài, Giữ nguyên nếu là nội dung phim.${coveredText}`;else if(promoted||no)text=`AI trả lời KHÔNG thấy logo hay chữ quảng cáo trong ${span(x)}. ${boundary?boundaryText:'Thẻ này không khoanh vùng logo nào — chọn Giữ nguyên nếu là nội dung phim, Cắt cảnh nếu là quảng cáo.'}`;else if(yes||(answer&&m.vlm_confirmation==='CONFIRMED')){text=open?`AI trả lời CÓ thấy logo/thương hiệu trong khung; khung vàng là vùng ${who} khoanh, chỉ để tham khảo — quyết định áp dụng cho cả cảnh.`:covered.length?'AI trả lời CÓ thấy logo/thương hiệu trong khung nhưng không định vị được logo nào khác ngoài watermark đã có thẻ riêng — quyết định áp dụng cho cả cảnh.':'AI trả lời CÓ thấy logo/thương hiệu trong khung nhưng không định vị được vị trí — quyết định áp dụng cho cả cảnh.';text+=coveredText;}else if(!answer)text=`Thẻ cũ: chưa lưu câu trả lời gốc của AI.${boundary?` ${boundaryText}`:''}`;else text=`AI trả lời “${esc(answer)}” (chưa chắc chắn). ${boundary?boundaryText:'Thẻ này không khoanh vùng logo nào — quyết định áp dụng cho cả cảnh.'}`;return `<div class="ai-verdict">${text}</div>`;}
+function endingVerdictHtml(x){const m=x.model_evidence||{},tails=(Array.isArray(m.tail_windows)?m.tail_windows:[]).filter(w=>w&&String(w.answer||'').trim()).slice(-3),answers=tails.length?` AI (Qwen) ở các cửa sổ cuối: ${tails.map(w=>`${mmss(w.start_seconds)}–${mmss(w.end_seconds)} “${esc(String(w.answer).trim())}”`).join('; ')}.`:'',boxes=(Array.isArray(x.evidence_regions)?x.evidence_regions:[]).filter(Boolean).length?' Khung vàng là vùng AI định vị ở cuối video, chỉ để tham khảo.':'';return `<div class="ai-verdict">BiliFlow luôn đưa 6 giây cuối video ra một lần để bạn tự kiểm tra logo nền tảng hay đoạn kết ngoài phim; thẻ này không khoanh vùng logo nào — chọn Giữ nguyên nếu là nội dung phim, Cắt cảnh nếu là đoạn kết ngoài phim; nếu chỉ có logo nền tảng (iQIYI, WeTV…) trên nền tối, bấm “Đây là logo nền tảng — làm mờ &amp; nhớ”.${answers}${boxes}</div>`;}
+function platformVerdictHtml(x){const p=x&&x.candidate_type==='platform_logo'?x.platform_logo:null;if(!p)return '';const name=esc(p.name||'nền tảng video'),found=Array.isArray(p.detections)?p.detections:[],ocr=found.find(d=>d.kind==='ocr_text'),model=found.find(d=>d.kind!=='ocr_text'&&d.kind!=='platform_memory'),memory=found.filter(d=>d.kind==='platform_memory'),parts=[];if(ocr)parts.push(`OCR đọc “${esc(ocr.text)}” lúc ${mmss(ocr.observed_seconds)} — logo nền tảng ${name}`);else if(model)parts.push(`Mô hình logo đọc “${esc(model.text)}” — logo nền tảng ${name}`);if(memory.length)parts.push(`Khớp logo nền tảng ${name} bạn đã nhớ (giống ${Math.round(100*Math.max(...memory.map(d=>Number(d.similarity)||0)))}%)`);const loose=p.snap&&p.snap.method&&p.snap.method!=='dark_run'?' Không thấy đoạn màn hình đen quanh logo nên khoảng thời gian chỉ là ước lượng — hãy xem kỹ đầu và cuối đoạn.':'';return `<div class="ai-verdict">${parts.join(' · ')||`Logo nền tảng ${name}`}; đề xuất Làm mờ vùng logo ${mmss(x.start_seconds)}–${mmss(x.end_seconds)}, không cắt cảnh — khung đỏ là vùng sẽ làm mờ.${loose}</div>`;}
 function memoryMatch(m){return m?.vlm_source==='approved_brand_memory'||/^MEMORY_MATCH\b/i.test(String(m?.vlm_answer||''));}
 function memoryBrandName(m){return readingLabel({labels:[String(m?.vlm_answer||'').replace(/^MEMORY_MATCH\s*\|?\s*/i,'')]},'');}
 function boxesFromMemory(boxes){return boxes.length>0&&boxes.every(b=>Array.isArray(b.sources)&&b.sources.length>0&&b.sources.every(s=>s==='brand_memory'));}
-function readingLabel(o,fallback){const scanner=['Persistent external logo / watermark','Visual brand/logo candidate','Opening boundary review','Full-frame promotional material','Full-frame opening promotion / branded intro','Branded end card / channel promotion','Known approved external brand'];return (o?.labels||[]).map(v=>String(v??'').replace(/<\/?s>/g,'').trim()).find(l=>l&&!scanner.includes(l)&&!(l===l.toLowerCase()&&/^[\p{L} ]+$/u.test(l)))||fallback;}
+function readingLabel(o,fallback){const scanner=['Persistent external logo / watermark','Visual brand/logo candidate','Opening boundary review','Ending boundary review','Full-frame promotional material','Full-frame opening promotion / branded intro','Branded end card / channel promotion','Known approved external brand'];return (o?.labels||[]).map(v=>String(v??'').replace(/<\/?s>/g,'').trim()).find(l=>l&&!scanner.includes(l)&&!(l===l.toLowerCase()&&/^[\p{L} ]+$/u.test(l)))||fallback;}
 function logoPlayHtml(x){const ev=evidenceCache.get(x.id),playable=videoAllowed()&&(!ev?.video||ev.video.available);return `<div class="focus-box">Thẻ hỏi về cả đoạn ${span(x)}: xem đoạn này rồi chọn bên dưới.${playable?'<button type="button" data-act="play">▶ Phát đoạn này</button>':`<small>${esc(videoReason(currentVideoInfo(ev)))}</small>`}</div>`;}
 function studioWithheldLine(w){const head='Không đề xuất sẵn: đoạn mở đầu giống logo hãng phim';if(!Array.isArray(w.window_texts))return `${head}, không thấy website hay số điện thoại. Hãy xem cả chữ trên hình: nếu có tên web/thương hiệu lạ hãy Cắt`;const texts=w.window_texts,total=Math.max(texts.length,Number(w.window_text_count)||0);if(!total)return `${head}, không đọc thấy chữ, website hay số điện thoại nào. Hãy xem rồi tự chọn`;return `${head}, không thấy website hay số điện thoại. Chữ đọc được: ${texts.slice(0,6).join(', ')}${total>6?', …':''} — nếu là tên web/thương hiệu lạ hãy Cắt`;}
 function studioBlockedLine(b){const texts=(b.unconfirmed_texts||[]).slice(0,4).join(', ');const why=texts?`có chữ lạ: ${texts}`:(b.ad_evidence||[]).length?'có dấu hiệu quảng cáo':'chưa quét chữ trong đoạn này';return `Hình giống logo hãng phim đã nhớ nhưng ${why} — vẫn để ở danh sách chính, hãy xem kỹ`;}
 function studioHtml(x){if(!studioEligible(x))return '';const remembered=x.decision==='KEEP'&&!!x.studio_logo_memory?.remembered;return `<div class="studio-wrap">${studioCompareLine(x)}<button type="button" class="studio${remembered?' sel':''}" data-act="studio" aria-pressed="${remembered}">${remembered?'✓ Đã nhớ là logo hãng phim (giữ nguyên)':'Đây là logo hãng phim — giữ &amp; nhớ'}</button><small>Giữ nguyên đoạn này và nhớ hình logo cùng chữ trên đó${studioTextsNote(x)}. Lần quét sau, thẻ có ảnh trùng khớp từ 95% với một khung bất kỳ của logo này sẽ nằm ở Ứng viên phụ — trừ khi có chữ lạ, website hay lớp phủ (banner) nằm ngoài vùng watermark đã làm mờ; khi đó thẻ vẫn ở danh sách chính.${studioFramesNote(x)}</small>${studioMaskNote(x)}</div>`;}
+function platformEligible(x){return !!x&&x.category==='visual_logo'&&(x.candidate_type==='platform_logo'||studioEligible(x));}
+function platformRemembered(x){return x.decision==='BLUR'&&x.platform_logo_memory?.remembered?x.platform_logo_memory:null;}
+function platformHtml(x){if(!platformEligible(x))return '';const m=platformRemembered(x);return `<div class="studio-wrap"><button type="button" class="studio platform${m?' sel':''}" data-act="platform" aria-pressed="${!!m}">${m?'✓ Đã nhớ là logo nền tảng (làm mờ)':'Đây là logo nền tảng — làm mờ &amp; nhớ'}</button><small>${platformNote(x,m)}</small></div>`;}
+function platformNote(x,m){if(m){if(m.logo_frames==null)return '';const name=m.platform&&m.platform.key!=='unknown'&&m.platform.name?` ${esc(m.platform.name)}`:'';return `Đã nhớ logo nền tảng${name}: ${Number(m.logo_frames)} khung có logo trên nền tối. Lần quét sau, đầu hoặc cuối tập khác có hình trùng khớp sẽ thành thẻ Làm mờ vùng logo — vẫn chờ bạn duyệt.`;}const where=x.suggested_region_source_pixels?'vùng khoanh đỏ':'vùng logo BiliFlow tìm thấy trên nền tối trong đoạn này (không làm mờ cả khung; khoảng thời gian thu lại đúng lúc logo hiện)';return `Làm mờ ${where} và nhớ hình logo. Lần quét sau, logo nền tảng trùng khớp ở đầu hoặc cuối tập khác sẽ thành thẻ Làm mờ — vẫn chờ bạn duyệt. Dùng cho logo nền tảng phát hành (iQIYI, WeTV…), không dùng cho logo hãng phim hay giấy phép.`;}
 function studioCompareLine(x){const c=x.studio_logo_compared;if(!c||x.decision||x.studio_logo_match)return '';const pct=Math.floor(100*Number(c.best_similarity||0)),need=Math.round(100*Number(c.minimum_similarity??.95)),cells=c.best_cell_difference,limit=Number(c.maximum_cell_difference??20),grid=pct>=need&&cells!=null&&Number(cells)>limit?` nhưng lệch màu ${Number(cells)} (cần ≤ ${limit})`:'';return `<small class="studio-note">Đã so với ${Number(c.records)||0} logo hãng phim bạn đã nhớ: giống nhất ${pct}% (cần ≥ ${need}%)${grid} — chưa khớp${Number(c.masked_regions)>0?' (đã bỏ qua vùng watermark đã làm mờ)':''}</small>`;}
 function studioRemembered(x){return x.decision==='KEEP'&&x.studio_logo_memory?.remembered?x.studio_logo_memory:null;}
 function studioFramesNote(x){const m=studioRemembered(x);if(m){if(m.frames==null)return '';if(m.frames_missing)return ' Không còn ảnh khung hình đã nhớ (state/studio-logo-frames) nên không cập nhật được vùng watermark — logo này tạm thời không khớp thẻ nào cho tới khi bạn nhớ lại nó.';if(m.frames_source==='source_video')return ` Đã nhớ ${Number(m.frames)} khung trong đoạn ${span(x)}.`;if(m.frames_source)return ` Chỉ nhớ ${Number(m.frames)} ảnh xem trước (không đọc được video gốc), không phải cả đoạn ${span(x)} — tập khác có thể không khớp.`;return ` Chỉ nhớ ${Number(m.frames)} ảnh xem trước của thẻ này, không phải cả đoạn ${span(x)}.`;}const shots=(x.preview_images||[]).slice(0,8),times=shots.map(thumbTime).filter(t=>t!=null).map(mmssTenth);return ` Sẽ nhớ mọi khung hình trong đoạn ${span(x)} (giải mã lại từ video gốc đúng như lúc quét, tối đa 250 khung); nếu không đọc được video gốc thì chỉ nhớ ${shots.length} ảnh xem trước${times.length?` (lúc ${times.join(', ')})`:''}.`;}
 function studioMaskNote(x){const m=studioRemembered(x);if(m&&m.frames==null)return '';if(m&&m.frames_source){const parts=[];if(m.mask_refused)parts.push('Vùng watermark đã làm mờ quá lớn (trên 20% khung hình) nên không bỏ qua — logo được nhớ nguyên ảnh.');else if((m.ignored_regions||[]).length)parts.push(`Đang bỏ qua ${m.ignored_regions.length} vùng watermark đã làm mờ.`);if(m.mask_updated_at)parts.push('Đã cập nhật logo hãng phim đã nhớ theo vùng watermark bạn vừa chọn.');return parts.length?`<small class="studio-note">${parts.join(' ')}</small>`:'';}const overlays=(queue?.items||[]).filter(o=>o.id!==x.id&&o.candidate_type==='persistent_overlay'&&Number(o.start_seconds)<Number(x.end_seconds)&&Number(o.end_seconds)>Number(x.start_seconds)),blurred=overlays.filter(o=>o.decision==='BLUR'&&o.decision_region_source_pixels!=='FULL_FRAME'&&(o.category==='text'||o.category==='visual_logo')),pending=overlays.length>blurred.length||(x.evidence_regions||[]).some(b=>b&&b.covered_by&&!blurred.some(o=>o.id===b.covered_by));if(m)return pending||blurred.length?'<small class="studio-note">Ảnh đã nhớ đang có watermark/lớp phủ — tập không có lớp phủ này sẽ không khớp.</small>':'';const notes=[];if(blurred.length)notes.push(`<small class="studio-note">Sẽ bỏ qua ${blurred.length} vùng watermark bạn đã chọn làm mờ (${blurred.map(o=>esc(readingLabel(o,'watermark'))).join(', ')}) khi so khớp — tập không có watermark hoặc có watermark ở đúng chỗ đó vẫn khớp; chữ, website, banner hay lớp phủ ở chỗ khác vẫn giữ thẻ ở danh sách chính.</small>`);if(pending)notes.push('<small class="studio-note">Ảnh đang có watermark/lớp phủ chưa được chọn Làm mờ. Nếu bạn chọn Làm mờ thẻ watermark đó (trước hay sau khi bấm nút này), BiliFlow sẽ tự bỏ qua vùng đó trong logo đã nhớ; nếu không, tập không có lớp phủ này sẽ không khớp.</small>');return notes.join('');}
 function studioTextsNote(x){const texts=x.studio_logo_memory?.remembered?[]:(x.suggestion_withheld?.window_texts||[]);return texts.length?` (sẽ nhớ cả chữ: ${esc(texts.slice(0,6).join(', '))}${texts.length>6?', …':''} — nếu trong đó có tên web/thương hiệu lạ, đừng bấm nút này mà hãy Cắt)`:'';}
 function techDetails(x,ev,withRegionControls){const owner=regionOwner(x),r=owner&&(owner.suggested_region_source_pixels||owner.decision_region_source_pixels),category=x.review_kind||x.category,score=x.max_score==null?'—':Number(x.max_score).toFixed(3),parts=[`<div class="meta">${esc(category)} · ưu tiên ${esc(x.priority||'—')} · điểm ${score} · ${clock(x.start_seconds)}–${clock(x.end_seconds)} · ${esc(x.id)}</div>`,scopeBlock(x)];if(isSafety(x))parts.push(overlapCoverage(x));if(!isSafety(x)||(owner&&r&&r!=='FULL_FRAME'))parts.push(regionDetailHtml(x,owner,r));if(withRegionControls)parts.push(regionControlsHtml(x,owner,r));parts.push(labelsReasonsHtml(x),visualAiHtml(x),evidenceHtml(ev));if(x.model_evidence)parts.push(aiModelLine(x),`<div class="labels">AI cục bộ: ${esc(JSON.stringify(x.model_evidence))}</div>`);return `<details class="tech"${techOpen?' open':''}><summary>Chi tiết kỹ thuật</summary><div class="tech-body">${parts.join('')}</div></details>`;}
-function viText(value){const text=String(value??''),names={'The first video window is retained once so external intros are not silently missed':'Luôn giữ 5 giây đầu video một lần để không bỏ sót intro ngoài phim','Opening boundary review':'Kiểm tra đoạn mở đầu','Visual brand/logo candidate':'Ứng viên logo/thương hiệu','Local visual-language model confirmed branding/logo evidence':'AI hình ảnh cục bộ xác nhận có logo/thương hiệu trong khung','Visual-language answer was uncertain; human review required':'AI hình ảnh trả lời không chắc chắn; cần người duyệt','Visual-language model rejected this window; retained in exhaustive audit':'AI hình ảnh đã loại cửa sổ này; vẫn lưu trong audit đầy đủ','A visual signature from an earlier human-approved brand item matched; review is still required':'Khớp hình một logo thương hiệu bạn đã duyệt trước đó; vẫn cần duyệt lại','Full-frame opening promotion / branded intro':'Quảng bá / intro thương hiệu toàn khung ở đầu video','Local boundary semantics grouped consecutive full-frame promotional windows':'Các cửa sổ quảng bá toàn khung liên tiếp ở đầu video được gom thành một thẻ','Branded end card / channel promotion':'End card thương hiệu / quảng bá kênh','Temporal boundary evidence grouped branded final windows; one human decision covers the complete end card':'Các cửa sổ thương hiệu ở cuối video được gom; một quyết định áp dụng cho cả end card','Persistent external logo / watermark':'Logo / watermark bên ngoài cố định','Repeated regional visual-brand confirmations were grouped into one human review item':'Nhiều lần xác nhận logo ở cùng vùng được gom thành một thẻ duyệt','Full-frame promotional material':'Quảng cáo / intro toàn khung','Local visual-language model classified the boundary window as full-frame promotional material':'AI hình ảnh cục bộ nhận định đoạn đầu/cuối video là quảng cáo toàn khung','Known approved external brand':'Thương hiệu bên ngoài bạn đã duyệt'};return names[text]||text;}
+function viText(value){const text=String(value??''),names={'The first video window is retained once so external intros are not silently missed':'Luôn giữ 5 giây đầu video một lần để không bỏ sót intro ngoài phim','Opening boundary review':'Kiểm tra đoạn mở đầu','Ending boundary review':'Kiểm tra đoạn kết','Visual brand/logo candidate':'Ứng viên logo/thương hiệu','Local visual-language model confirmed branding/logo evidence':'AI hình ảnh cục bộ xác nhận có logo/thương hiệu trong khung','Visual-language answer was uncertain; human review required':'AI hình ảnh trả lời không chắc chắn; cần người duyệt','Visual-language model rejected this window; retained in exhaustive audit':'AI hình ảnh đã loại cửa sổ này; vẫn lưu trong audit đầy đủ','A visual signature from an earlier human-approved brand item matched; review is still required':'Khớp hình một logo thương hiệu bạn đã duyệt trước đó; vẫn cần duyệt lại','Full-frame opening promotion / branded intro':'Quảng bá / intro thương hiệu toàn khung ở đầu video','Local boundary semantics grouped consecutive full-frame promotional windows':'Các cửa sổ quảng bá toàn khung liên tiếp ở đầu video được gom thành một thẻ','Branded end card / channel promotion':'End card thương hiệu / quảng bá kênh','Temporal boundary evidence grouped branded final windows; one human decision covers the complete end card':'Các cửa sổ thương hiệu ở cuối video được gom; một quyết định áp dụng cho cả end card','Persistent external logo / watermark':'Logo / watermark bên ngoài cố định','Repeated regional visual-brand confirmations were grouped into one human review item':'Nhiều lần xác nhận logo ở cùng vùng được gom thành một thẻ duyệt','Full-frame promotional material':'Quảng cáo / intro toàn khung','Local visual-language model classified the boundary window as full-frame promotional material':'AI hình ảnh cục bộ nhận định đoạn đầu/cuối video là quảng cáo toàn khung','Known approved external brand':'Thương hiệu bên ngoài bạn đã duyệt'};return names[text]||text;}
 function labelsReasonsHtml(x){const labels=(x.labels||[]).map(viText),reasons=(x.reasons||[]).map(viText);return `${labels.length?`<div class="labels">Nhãn: ${esc(labels.join(', '))}</div>`:''}${reasons.length?`<div class="labels">Lý do: ${esc(reasons.join(' · '))}</div>`:''}`;}
 function aiModelLine(x){const m=x.model_evidence||{};if(x.category!=='visual_logo'||!('vlm_confirmation' in m||m.vlm_answer))return '';const score=x.max_score==null?'—':Number(x.max_score).toFixed(3),scenes={PROMO_FULL_FRAME:'quảng cáo / intro toàn khung',MOVIE_CONTENT:'nội dung phim',UNCERTAIN:'chưa chắc'},scene=m.vlm_scene?`; AI (Qwen) về cả cảnh: ${esc(scenes[m.vlm_scene]||m.vlm_scene)} (${esc(m.vlm_scene)})`:'';if(memoryMatch(m)){const name=memoryBrandName(m);return `<div class="labels">Bộ nhớ thương hiệu: khớp hình logo bạn đã duyệt trước đó${name?` (${esc(name)})`:''}, AI không được hỏi về logo; trạng thái ${esc(m.vlm_confirmation||'—')}${scene}; điểm ${score} là điểm xếp hạng (độ giống với bộ nhớ hoặc điểm hình học), không phải độ tin cậy AI</div>`;}return `<div class="labels">AI (Qwen): trả lời ${m.vlm_answer?`“${esc(m.vlm_answer)}”`:'— (thẻ cũ, chưa lưu câu trả lời gốc)'}; trạng thái ${esc(m.vlm_confirmation||'—')}${m.promoted_from_rejected_boundary?' (đổi từ câu trả lời KHÔNG để giữ 5 giây đầu)':''}${scene}; điểm ${score} là điểm hình học, không phải độ tin cậy AI</div>`;}
 function evidenceHtml(ev){if(!ev)return '';const seeds=ev.seeds||{},windows=seeds.windows||[],context=ev.context||{},rows=[`Ngưỡng máy dò ${seeds.threshold??'—'} · lấy mẫu ${ev.sample_fps??'—'} khung/giây · ${seeds.known?'đã lưu thời điểm từng khung nghi ngờ':'bản quét cũ: chưa lưu thời điểm từng khung nghi ngờ'}`];if(ev.strongest)rows.push(`Điểm cao nhất ${Number(ev.strongest.score??0).toFixed(3)} lúc ${clock(ev.strongest.t)}`);if(windows.length)rows.push(`Cửa sổ máy dò: ${windows.map(w=>`${clock(w.start)}–${clock(w.end)} (${w.count} khung)`).join('; ')}`);if((context.extended||[]).length)rows.push(`Mở rộng theo ngữ cảnh: ${context.extended.map(w=>`${clock(w.start)}–${clock(w.end)}`).join('; ')}${context.threshold!=null?` (ngưỡng ${context.threshold})`:''}`);if(ev.ignored_ref_count)rows.push(`${ev.ignored_ref_count} tham chiếu không đọc được đã bỏ qua`);return `<div class="evidence"><strong>Bằng chứng máy dò</strong>${rows.map(v=>`<div>${esc(v)}</div>`).join('')}</div>`;}
@@ -4101,28 +4364,29 @@ async function videoFailed(used,want,code=0){const id=pstate.id;reviewStats.vide
 function refreshSession(){if(sessionRefresh)return sessionRefresh;reviewStats.sessionRefreshes++;sessionRefresh=requestJson(API+'session',{cache:'no-store'}).then(s=>{if(s?.token)token=s.token;const before=mediaKey;if(s?.media_key)mediaKey=s.media_key;if(mediaKey!==before){mediaKeyChanged();return true;}return false;}).catch(()=>false).finally(()=>{sessionRefresh=null;});return sessionRefresh;}
 function mediaKeyChanged(){reviewStats.mediaKeyChanges++;if(pstate.loaded&&video.paused){pstate.loaded=false;pstate.pending=null;video.removeAttribute('src');video.load();coverVideo();restorePoster();}const x=itemMap.get(focusId);if(!x||!hasPlayer(x))return;playerBox.classList.toggle('no-video',!videoAllowed());if(evidenceCache.get(x.id)&&$('#strip .thumb:not(.ghost) img:not([src])'))renderStrip(x,evidenceCache.get(x.id));renderSide(x);}
 function isAdvisoryItem(x){return !!x&&(!!x.advisory||(queue?.advisory_items||[]).includes(x));}
-function pushUndo(item,advisory=false){undoStack.push({id:item.id,advisory,prev:{decision:item.decision||null,region:item.decision_region_source_pixels??null,note:item.decision_note??null,studio:!!item.studio_logo_memory?.remembered}});if(undoStack.length>100)undoStack.shift();}
+function pushUndo(item,advisory=false){undoStack.push({id:item.id,advisory,prev:{decision:item.decision||null,region:item.decision_region_source_pixels??null,note:item.decision_note??null,studio:!!item.studio_logo_memory?.remembered,platform:!!item.platform_logo_memory?.remembered}});if(undoStack.length>100)undoStack.shift();}
 function syncLocalCounts(){queue.counts=countsFrom(queue.items);queue.status=statusFrom(queue.items);}
-function applyLocalDecision(item,decision,region,note,studio=false){item.decision=decision;item.decision_region_source_pixels=region;item.decision_note=note;item.decided_at=new Date().toISOString();if(studio)item.studio_logo_memory={remembered:true};else delete item.studio_logo_memory;syncLocalCounts();}
-function applyLocalClear(item){item.decision=null;item.decision_region_source_pixels=null;item.decision_note=null;item.decided_at=null;delete item.studio_logo_memory;syncLocalCounts();}
+function applyLocalDecision(item,decision,region,note,studio=false,platform=false){item.decision=decision;item.decision_region_source_pixels=region;item.decision_note=note;item.decided_at=new Date().toISOString();if(studio)item.studio_logo_memory={remembered:true};else delete item.studio_logo_memory;if(platform)item.platform_logo_memory={remembered:true};else delete item.platform_logo_memory;syncLocalCounts();}
+function applyLocalClear(item){item.decision=null;item.decision_region_source_pixels=null;item.decision_note=null;item.decided_at=null;delete item.studio_logo_memory;delete item.platform_logo_memory;syncLocalCounts();}
 function afterLocalChange(id,advance){if(filter==='pending'&&listIds.includes(id))sticky.add(id);updateListStatuses();updateHeader();if(advance){const next=nextUndecided(id);if(next&&next!==focusId){previousFocusId=focusId;focusId=next;renderFocus();return;}}const x=itemMap.get(focusId);if(x)renderSide(x);updateNavState();}
 function setSaveState(){clearTimeout(saveTimer);const el=$('#save-state');if(pendingWrites){setText(el,'Đang lưu…');return;}setText(el,'Đã lưu');saveTimer=setTimeout(()=>setText(el,''),1500);}
 function scheduleResources(){clearTimeout(resourcesTimer);resourcesTimer=setTimeout(async()=>{try{resources=await requestJson(API+'resources',{cache:'no-store'});renderExport();}catch(_error){}},1500);}
 async function resync(){try{await applyQueueUpdate(await requestJson(API+'queue',{cache:'no-store'}));}catch(error){alert(error.message);}const id=reopenAfterResync;reopenAfterResync=null;if(id&&itemMap.has(id)){if(!listIds.includes(id))setFilter('all');selectItem(id);}}
 const WRITE_RETRY_MS=[300,900];
 async function postWrite(kind,body){for(let attempt=1;;attempt++){try{return await postJson(kind,body);}catch(error){error.attempts=attempt;const transient=!error.status||error.status>=500;if(!transient||attempt>WRITE_RETRY_MS.length)throw error;reviewStats.writeRetries++;await new Promise(resolve=>setTimeout(resolve,WRITE_RETRY_MS[attempt-1]));}}}
-function writeFailureMessage(kind,body,error){const x=itemMap.get(body?.id),where=x?`${catName(x)} ${span(x)}`:String(body?.id||''),what=kind==='clear'?'bỏ chọn':`“${body?.decision==='BLUR'&&body?.full_frame?'Làm mờ cả cảnh':x?actionName(x,body?.decision):String(body?.decision||'')}”`,raw=String(error?.message||''),detail=error?.status>=500&&/WinError|Errno|denied|[\\/]/i.test(raw)?'máy chủ chưa ghi được file hàng đợi (file đang bị đọc hoặc khóa)':raw;return `Chưa lưu được lựa chọn ${what} cho mục ${where}${error?.attempts>1?` (đã thử ${error.attempts} lần)`:''}. Mục này sẽ trở về trạng thái đã lưu trên máy và được mở lại để bạn chọn lại. Chi tiết: ${detail}`;}
+function writeFailureMessage(kind,body,error){const x=itemMap.get(body?.id),where=x?`${catName(x)} ${span(x)}`:String(body?.id||''),what=kind==='clear'?'bỏ chọn':`“${body?.remember_platform_logo?'Đây là logo nền tảng — làm mờ & nhớ':body?.decision==='BLUR'&&body?.full_frame?'Làm mờ cả cảnh':x?actionName(x,body?.decision):String(body?.decision||'')}”`,raw=String(error?.message||''),detail=error?.status>=500&&/WinError|Errno|denied|[\\/]/i.test(raw)?'máy chủ chưa ghi được file hàng đợi (file đang bị đọc hoặc khóa)':raw;return `Chưa lưu được lựa chọn ${what} cho mục ${where}${error?.attempts>1?` (đã thử ${error.attempts} lần)`:''}. Mục này sẽ trở về trạng thái đã lưu trên máy và được mở lại để bạn chọn lại. Chi tiết: ${detail}`;}
 function enqueueWrite(kind,body){pendingWrites++;localEpoch++;setSaveState();updateNavState();const run=()=>postWrite(kind,body).then(payload=>{if(pendingWrites===1&&payload&&Array.isArray(payload.items))return applyQueueUpdate(payload);}).catch(error=>{resyncNeeded=true;reviewStats.writeFailures++;if(body?.id)reopenAfterResync=body.id;alert(writeFailureMessage(kind,body,error));}).finally(()=>{pendingWrites--;setSaveState();if(!pendingWrites){if(resyncNeeded){resyncNeeded=false;resync();}scheduleResources();}});writeChain=writeChain.then(run,run);return writeChain;}
 async function postJson(kind,body,retried=false){let response;try{response=await fetch(API+kind,{method:'POST',headers:{'Content-Type':'application/json','X-BiliFlow-Token':token},body:JSON.stringify(body)});}catch(_error){throw offlineError();}if(response.status===403&&!retried){await refreshSession();return postJson(kind,body,true);}return readJson(response);}
 function sceneBlurMessage(x){const ms=momentsOf(x);return `Làm mờ toàn bộ khung hình trong ${ms.length} khoảnh khắc (tổng ${mmss(momentTotal(ms))})? Khoảng trống giữa các khoảnh khắc giữ nguyên.`;}
 const EXPORT_LOCK_MESSAGE='Video đang chờ xuất hoặc đang xuất; hủy lệnh xuất trước khi đổi quyết định.';
 const SOURCE_CLEANED_LOCK_MESSAGE='Video gốc đã được dọn vào Thùng rác; trang duyệt chỉ để xem. Chép lại video gốc vào input để sửa quyết định hoặc xuất lại.';
+const SOURCE_ARCHIVED_LOCK_MESSAGE='Video gốc đang ở kho lưu trữ; trang duyệt chỉ để xem. Bấm “Khôi phục bản xuất” trên Dashboard để sửa quyết định hoặc xuất lại.';
 function formatStamp(value){if(!value)return '';const date=new Date(value);if(Number.isNaN(date.getTime()))return '';return new Intl.DateTimeFormat('vi-VN',{hour:'2-digit',minute:'2-digit',second:'2-digit',day:'2-digit',month:'2-digit',year:'numeric'}).format(date);}
-function decisionsLocked(){return ['QUEUED','RENDERING'].includes(exportJob.status)||!!exportJob.source_cleaned;}
-function refuseWhileExporting(){if(!decisionsLocked())return false;alert(exportJob.source_cleaned?SOURCE_CLEANED_LOCK_MESSAGE:EXPORT_LOCK_MESSAGE);return true;}
-async function decide(id,decision,needsFullFrame=false,note=null,rememberStudio=false){if(busy||!queue||refuseWhileExporting())return;try{const item=itemMap.get(id);if(!item)throw new Error('Không tìm thấy mục này trong hàng đợi hiện tại.');const ai=item.ai_visual_audit,aiDecision=ai?.suggested_decision,confidence=Number(ai?.confidence||0);if(aiDecision&&confidence>=.9&&decision!==aiDecision&&['KEEP','BLUR','CUT'].includes(aiDecision)&&['KEEP','BLUR','CUT'].includes(decision)){const message=`Visual AI tin cậy ${Math.round(confidence*100)}% đề xuất “${actionName(item,aiDecision)}” vì vùng đỏ được nhận là ${ai.classification||'nội dung phim'}. Bạn vẫn muốn chọn “${actionName(item,decision)}” cho đúng vùng đỏ này?`;if(!confirm(message))return;}let full_frame=false;if(decision==='BLUR'&&needsFullFrame){full_frame=isScene(item)?confirm(sceneBlurMessage(item)):confirm('Bạn có xác nhận làm mờ toàn bộ khung hình trong đoạn này?');if(!full_frame)return;}if(decision==='BLUR'&&!full_frame&&!item.suggested_region_source_pixels)throw new Error('Mục này chưa có vùng được định vị; hãy chọn Làm mờ cả cảnh.');const studio=!!rememberStudio&&decision==='KEEP'&&studioEligible(item);pushUndo(item,!item.decision&&isAdvisoryItem(item));applyLocalDecision(item,decision,decision==='BLUR'?(full_frame?'FULL_FRAME':item.suggested_region_source_pixels):null,note,studio);afterLocalChange(id,autoNext&&id===focusId);enqueueWrite('decision',studio?{id,decision,full_frame,note,remember_studio_logo:true}:{id,decision,full_frame,note});}catch(e){alert(e.message);}}
+function decisionsLocked(){return ['QUEUED','RENDERING'].includes(exportJob.status)||!!exportJob.source_cleaned||!!exportJob.source_archived;}
+function refuseWhileExporting(){if(!decisionsLocked())return false;alert(exportJob.source_cleaned?SOURCE_CLEANED_LOCK_MESSAGE:exportJob.source_archived?SOURCE_ARCHIVED_LOCK_MESSAGE:EXPORT_LOCK_MESSAGE);return true;}
+async function decide(id,decision,needsFullFrame=false,note=null,rememberStudio=false,rememberPlatform=false){if(busy||!queue||refuseWhileExporting())return;try{const item=itemMap.get(id);if(!item)throw new Error('Không tìm thấy mục này trong hàng đợi hiện tại.');const ai=item.ai_visual_audit,aiDecision=ai?.suggested_decision,confidence=Number(ai?.confidence||0);if(aiDecision&&confidence>=.9&&decision!==aiDecision&&['KEEP','BLUR','CUT'].includes(aiDecision)&&['KEEP','BLUR','CUT'].includes(decision)){const message=`Visual AI tin cậy ${Math.round(confidence*100)}% đề xuất “${actionName(item,aiDecision)}” vì vùng đỏ được nhận là ${ai.classification||'nội dung phim'}. Bạn vẫn muốn chọn “${actionName(item,decision)}” cho đúng vùng đỏ này?`;if(!confirm(message))return;}let full_frame=false;if(decision==='BLUR'&&needsFullFrame){full_frame=isScene(item)?confirm(sceneBlurMessage(item)):confirm('Bạn có xác nhận làm mờ toàn bộ khung hình trong đoạn này?');if(!full_frame)return;}const platform=!!rememberPlatform&&decision==='BLUR'&&!full_frame&&platformEligible(item);if(decision==='BLUR'&&!full_frame&&!platform&&!item.suggested_region_source_pixels)throw new Error('Mục này chưa có vùng được định vị; hãy chọn Làm mờ cả cảnh.');const studio=!!rememberStudio&&decision==='KEEP'&&studioEligible(item);pushUndo(item,!item.decision&&isAdvisoryItem(item));applyLocalDecision(item,decision,decision==='BLUR'?(full_frame?'FULL_FRAME':item.suggested_region_source_pixels):null,note,studio,platform);afterLocalChange(id,autoNext&&id===focusId);enqueueWrite('decision',platform?{id,decision,full_frame,note,remember_platform_logo:true}:studio?{id,decision,full_frame,note,remember_studio_logo:true}:{id,decision,full_frame,note});}catch(e){alert(e.message);}}
 async function clearDecision(id){if(busy||!queue||refuseWhileExporting())return;const item=itemMap.get(id);if(!item||!item.decision)return;pushUndo(item);applyLocalClear(item);afterLocalChange(id,false);enqueueWrite('clear',{id});}
-function undo(){if(busy||!queue||refuseWhileExporting())return;const entry=undoStack.pop();if(!entry){updateNavState();return;}const item=itemMap.get(entry.id);if(!item){alert('Mục cần hoàn tác không còn trong hàng đợi hiện tại.');updateNavState();return;}if(entry.advisory){if(item.id!==focusId&&listIds.includes(item.id)){previousFocusId=focusId;focusId=item.id;renderFocus();}else updateNavState();alert(advisoryUndoMessage(item));return;}const prev=entry.prev;if(prev.decision){applyLocalDecision(item,prev.decision,prev.region,prev.note,prev.studio);const body={id:item.id,decision:prev.decision,full_frame:prev.region==='FULL_FRAME',note:prev.note};if(prev.studio)body.remember_studio_logo=true;enqueueWrite('decision',body);}else{applyLocalClear(item);enqueueWrite('clear',{id:item.id});}if(filter==='pending'&&listIds.includes(item.id))sticky.add(item.id);updateListStatuses();updateHeader();if(item.id!==focusId&&listIds.includes(item.id)){previousFocusId=focusId;focusId=item.id;renderFocus();}else renderSide(itemMap.get(focusId)||item);updateNavState();}
+function undo(){if(busy||!queue||refuseWhileExporting())return;const entry=undoStack.pop();if(!entry){updateNavState();return;}const item=itemMap.get(entry.id);if(!item){alert('Mục cần hoàn tác không còn trong hàng đợi hiện tại.');updateNavState();return;}if(entry.advisory){if(item.id!==focusId&&listIds.includes(item.id)){previousFocusId=focusId;focusId=item.id;renderFocus();}else updateNavState();alert(advisoryUndoMessage(item));return;}const prev=entry.prev;if(prev.decision){applyLocalDecision(item,prev.decision,prev.region,prev.note,prev.studio,prev.platform);const body={id:item.id,decision:prev.decision,full_frame:prev.region==='FULL_FRAME',note:prev.note};if(prev.studio)body.remember_studio_logo=true;if(prev.platform)body.remember_platform_logo=true;enqueueWrite('decision',body);}else{applyLocalClear(item);enqueueWrite('clear',{id:item.id});}if(filter==='pending'&&listIds.includes(item.id))sticky.add(item.id);updateListStatuses();updateHeader();if(item.id!==focusId&&listIds.includes(item.id)){previousFocusId=focusId;focusId=item.id;renderFocus();}else renderSide(itemMap.get(focusId)||item);updateNavState();}
 function advisoryUndoMessage(x){return `Không hoàn tác được lựa chọn cho ứng viên phụ ${catName(x)} ${span(x)}: khi bạn chọn, mục này đã được chuyển vào danh sách chính. Bỏ chọn lúc này sẽ biến nó thành mục bắt buộc chưa duyệt và chặn xuất video, nên lựa chọn “${decisionLabel(x)}” được giữ nguyên. Nếu muốn đổi, hãy chọn lại Giữ nguyên, Làm mờ, Cắt hoặc Cần xem thêm cho mục này.`;}
 function keyDecision(n){const x=itemMap.get(focusId);if(!x)return;const choice={1:['KEEP',false],2:['BLUR',true],3:['CUT',false],4:['NEEDS_MORE_CONTEXT',false]}[n];if(choice)decide(x.id,choice[0],choice[1]);}
 function isTyping(target){if(!target||target===document.body)return false;if(target.isContentEditable||target.tagName==='TEXTAREA'||target.tagName==='SELECT')return true;return target.tagName==='INPUT'&&!['checkbox','radio','button','submit','reset'].includes(String(target.type).toLowerCase());}
@@ -4136,7 +4400,7 @@ async function finalizeExport(){if(exportRequestInFlight)return;exportRequestInF
 document.querySelectorAll('#chips .chip').forEach(b=>b.addEventListener('click',()=>setFilter(b.dataset.filter)));
 $('#more-filter').addEventListener('change',e=>{if(e.target.value)setFilter(e.target.value);e.target.blur();});
 $('#rows').addEventListener('click',e=>{const row=e.target.closest('.row');if(row)selectItem(row.dataset.id);});
-$('#side').addEventListener('click',e=>{const b=e.target.closest('button[data-act]');if(!b)return;const x=itemMap.get(focusId);if(!x)return;const act=b.dataset.act;b.blur();if(act==='decide')decide(x.id,b.dataset.decision,b.dataset.full==='1');else if(act==='seq')playSequence();else if(act==='moment')playMoment(Number(b.dataset.i),false);else if(act==='studio'){if(!(x.decision==='KEEP'&&x.studio_logo_memory?.remembered))decide(x.id,'KEEP',false,null,true);}else if(act==='region')decide(b.dataset.owner,b.dataset.decision,false,b.dataset.decision==='KEEP'?'Đã xác nhận vùng khoanh đỏ là tiêu đề hoặc nội dung hợp lệ của phim':'Đã xác nhận vùng khoanh đỏ là logo thương hiệu');else if(act==='clear')clearDecision(x.id);else if(act==='play')playRange();});
+$('#side').addEventListener('click',e=>{const b=e.target.closest('button[data-act]');if(!b)return;const x=itemMap.get(focusId);if(!x)return;const act=b.dataset.act;b.blur();if(act==='decide')decide(x.id,b.dataset.decision,b.dataset.full==='1');else if(act==='seq')playSequence();else if(act==='moment')playMoment(Number(b.dataset.i),false);else if(act==='studio'){if(!(x.decision==='KEEP'&&x.studio_logo_memory?.remembered))decide(x.id,'KEEP',false,null,true);}else if(act==='platform'){if(!platformRemembered(x))decide(x.id,'BLUR',false,null,false,true);}else if(act==='region')decide(b.dataset.owner,b.dataset.decision,false,b.dataset.decision==='KEEP'?'Đã xác nhận vùng khoanh đỏ là tiêu đề hoặc nội dung hợp lệ của phim':'Đã xác nhận vùng khoanh đỏ là logo thương hiệu');else if(act==='clear')clearDecision(x.id);else if(act==='play')playRange();});
 $('#side').addEventListener('toggle',e=>{if(e.target.matches&&e.target.matches('details.tech'))techOpen=e.target.open;},true);
 $('#strip').addEventListener('click',e=>{const b=e.target.closest('.thumb');if(!b||b.classList.contains('ghost'))return;const img=b.querySelector('img'),t=b.dataset.t===''?null:Number(b.dataset.t);$('#strip').querySelectorAll('.thumb.on').forEach(n=>n.classList.remove('on'));b.classList.add('on');b.blur();if(t!=null&&Number.isFinite(t)){if(pstate.moments){pstate.seq=false;pstate.stopAt=null;setMoment(momentIndex(t,pstate.moments));}setTime(t);if(videoAllowed()){pausePlayer();seekTo(t,false);}}if(img&&img.getAttribute('src')&&!pstate.reveal)setPoster(img.getAttribute('src'));});
 $('#timeline').addEventListener('click',e=>{const box=e.currentTarget.getBoundingClientRect();if(!box.width||!videoAllowed())return;const ratio=((e.clientX-box.left)/box.width*100-2)/96;let t=pstate.start+Math.min(1,Math.max(0,ratio))*(pstate.end-pstate.start);const ms=pstate.moments;if(ms){let k=momentIndex(t,ms);if(k<0){k=nextMomentAfter(t);if(k<0)k=ms.length-1;t=ms[k].start;}pausePlayer();pstate.seq=false;pstate.stopAt=null;setMoment(k);}setTime(t);seekTo(t,false);});
@@ -4356,6 +4620,7 @@ def serve_review_ui(
                             note=body.get("note"), full_frame=bool(body.get("full_frame", False)),
                             actor="local_user", transport="local_ui",
                             remember_studio_logo=body.get("remember_studio_logo") is True,
+                            remember_platform_logo=body.get("remember_platform_logo") is True,
                         )
                     elif self.path == "/api/clear":
                         updated = clear_review_decision(

@@ -45,6 +45,7 @@ from biliflow.brand_memory import (
 from biliflow.cleanup import cleanup_candidates, prune_file_caches
 from biliflow.review_evidence import item_evidence
 from biliflow.review_workflow import (
+    FORCED_BOUNDARY_STUDIO_MOVE,
     SCENE_CARD_MAXIMUM_GAP_SECONDS,
     SCENE_CARD_MAXIMUM_SPAN_SECONDS,
     STUDIO_IDENT_REASON,
@@ -363,14 +364,14 @@ class SceneCardQueueTests(unittest.TestCase):
     # ------------------------------------------------------------------ R3a / R3b
 
     def _ident_report(self, name, image, *, text_tracks=None, proposals=None, start=5.0, end=10.0,
-                      duration=400, extra_interval=None):
+                      duration=400, extra_interval=None, thumbnail="ident.jpg"):
         directory = self.root / "reports" / name
         (directory / "thumbs").mkdir(parents=True, exist_ok=True)
         ok, encoded = cv2.imencode(".jpg", cv2.cvtColor(image, cv2.COLOR_RGB2BGR))
         self.assertTrue(ok)
-        (directory / "thumbs" / "ident.jpg").write_bytes(encoded.tobytes())
+        (directory / "thumbs" / thumbnail).write_bytes(encoded.tobytes())
         interval = {
-            "start_seconds": start, "end_seconds": end, "max_score": 1.0, "strongest_frame": "thumbs/ident.jpg",
+            "start_seconds": start, "end_seconds": end, "max_score": 1.0, "strongest_frame": f"thumbs/{thumbnail}",
             "predicted_label": "Visual brand/logo candidate",
             "visual_logo_confirmation": {
                 "state": "CONFIRMED", "confirmation_source": "qwen_local", "boundary_window": True,
@@ -724,6 +725,129 @@ class SceneCardQueueTests(unittest.TestCase):
                                    item_id=queue_v["items"][0]["id"], decision="KEEP", remember_studio_logo=True)
         self.assertFalse((self.root / STUDIO_LOGO_MEMORY_PATH).exists())
 
+    # ------------------------------------------------- platform logos "làm mờ & nhớ" (batch 4a, 2026-10-03)
+
+    @staticmethod
+    def _platform_logo_image():
+        """A dark frame with a small green logo, like the iQIYI ident."""
+        image = np.zeros((180, 320, 3), dtype=np.uint8)
+        cv2.rectangle(image, (130, 70), (190, 100), (90, 230, 120), -1)
+        return image
+
+    def _platform_queue(self, name, image=None):
+        reports = self._ident_report(name, self._platform_logo_image() if image is None else image,
+                                     text_tracks=[self._track(6, 9, ["iQIYI"])], thumbnail="ident-6.000s.jpg")
+        queue = self._build(reports, name=name)
+        [ident] = self._ident(queue)
+        return self.root / "reports" / name / "queue.json", ident
+
+    def test_remember_platform_logo_requires_blur_and_writes_record(self):
+        path, ident = self._platform_queue("plat")
+        decide = lambda **kwargs: record_review_decision(  # noqa: E731
+            project_root=self.root, queue_path=path, item_id=ident["id"], **kwargs)
+        with self.assertRaisesRegex(ValueError, "Làm mờ"):
+            decide(decision="KEEP", remember_platform_logo=True)
+        with self.assertRaisesRegex(ValueError, "Chỉ chọn một"):
+            decide(decision="BLUR", remember_platform_logo=True, remember_studio_logo=True)
+        bright_path, bright = self._platform_queue("bright", _ident_image())
+        before = bright_path.read_bytes()
+        with self.assertRaisesRegex(ValueError, "Không thấy hình logo trên nền tối"):
+            record_review_decision(project_root=self.root, queue_path=bright_path, item_id=bright["id"],
+                                   decision="BLUR", remember_platform_logo=True)
+        self.assertEqual(bright_path.read_bytes(), before, "a refused remember writes nothing")
+        self.assertFalse((self.root / STUDIO_LOGO_MEMORY_PATH).exists())
+
+        updated = decide(decision="BLUR", remember_platform_logo=True)
+        item = next(value for value in updated["items"] if value["id"] == ident["id"])
+        self.assertEqual(item["decision"], "BLUR")
+        region = item["decision_region_source_pixels"]
+        # The logo box found in the preview (130-190 x 70-100 of 320x180), padded 3 %, in 1920x1080 pixels.
+        self.assertLessEqual((region["x"], region["y"]), (780, 420))
+        self.assertGreaterEqual((region["x"] + region["width"], region["y"] + region["height"]), (1146, 606))
+        self.assertLess(region["width"] * region["height"], 0.10 * 1920 * 1080)
+        self.assertEqual((item["start_seconds"], item["end_seconds"]), (5.0, 10.0),
+                         "only a decoded window tightens the interval")
+        memory = item["platform_logo_memory"]
+        self.assertTrue(memory["remembered"])
+        self.assertEqual(memory["platform"], {"key": "iqiyi", "name": "iQIYI"}, "named by the window's OCR")
+        self.assertEqual((memory["logo_frames"], memory["frames_source"]), (1, "preview_only"))
+        self.assertNotIn("studio_logo_memory", item)
+        self.assertTrue(updated["audit_log"][-1]["remember_platform_logo"])
+        [record] = load_studio_logo_memory(self.root)["records"]
+        self.assertEqual((record["memory_class"], record["decision"]), ("platform_logo", "BLUR"))
+        self.assertEqual(record["key"], f"plat:{ident['id']}")
+        self.assertEqual(record["logo_frame_times"], [6.0])
+        self.assertEqual(record["blur_region"]["method"], "logo_pixels")
+        self.assertEqual(record["platform"], {"key": "iqiyi", "name": "iQIYI"})
+        self.assertTrue((self.root / record["stored_frames"][0]["image"]).is_file())
+        self.assertIsNone(match_studio_logo(self.root, dict(ident, decision=None), [record]),
+                          "studio matching never reads a platform record")
+
+    def test_other_decision_forgets_platform_record(self):
+        path, ident = self._platform_queue("plat")
+        record_review_decision(project_root=self.root, queue_path=path, item_id=ident["id"],
+                               decision="BLUR", remember_platform_logo=True)
+        [record] = load_studio_logo_memory(self.root)["records"]
+        folder = self.root / record["frames_folder"]
+        self.assertTrue(folder.is_dir())
+        files = sorted(value.name for value in folder.iterdir())
+        snapshot = (self.root / STUDIO_LOGO_MEMORY_PATH).read_bytes()
+        updated = record_review_decision(project_root=self.root, queue_path=path, item_id=ident["id"],
+                                         decision="BLUR", full_frame=True)
+        self.assertNotIn("platform_logo_memory", next(v for v in updated["items"] if v["id"] == ident["id"]))
+        self.assertEqual(load_studio_logo_memory(self.root)["records"], [])
+        self.assertFalse(folder.exists())
+        # Security review 2026-10-03: forgetting backs the memory up and moves the frames, never deletes.
+        backups = self.root / "state" / "backups"
+        [moved] = backups.glob(f"studio-logo-frames-*/{folder.name}")
+        self.assertEqual(sorted(value.name for value in moved.iterdir()), files)
+        self.assertIn(snapshot, [value.read_bytes() for value in backups.glob("studio-logo-memory-*.json")])
+        record_review_decision(project_root=self.root, queue_path=path, item_id=ident["id"],
+                               decision="BLUR", remember_platform_logo=True)
+        cleared = clear_review_decision(project_root=self.root, queue_path=path, item_id=ident["id"])
+        self.assertNotIn("platform_logo_memory", next(v for v in cleared["items"] if v["id"] == ident["id"]))
+        self.assertEqual(load_studio_logo_memory(self.root)["records"], [])
+        self.assertEqual(len(list(backups.glob(f"studio-logo-frames-*/{folder.name}*"))), 2)
+
+    def test_platform_remember_writes_nothing_while_the_memory_keeps_changing(self):
+        path, ident = self._platform_queue("plat")
+        record_review_decision(project_root=self.root, queue_path=path, item_id=ident["id"],
+                               decision="BLUR", remember_platform_logo=True)
+        [record] = load_studio_logo_memory(self.root)["records"]
+        memory = self.root / STUDIO_LOGO_MEMORY_PATH
+        before = path.read_bytes()
+        from biliflow import platform_memory
+        original = platform_memory.backup_memory
+
+        def backup_then_touch(root, snapshot):
+            saved = original(root, snapshot)
+            memory.write_bytes(memory.read_bytes() + b" ")  # another writer, every time
+            return saved
+
+        with mock.patch("biliflow.platform_memory.backup_memory", backup_then_touch):
+            with self.assertRaisesRegex(ValueError, "Bộ nhớ logo vừa thay đổi"):
+                record_review_decision(project_root=self.root, queue_path=path, item_id=ident["id"],
+                                       decision="BLUR", remember_platform_logo=True)
+        self.assertEqual(path.read_bytes(), before, "the decision is not written either")
+        [kept] = load_studio_logo_memory(self.root)["records"]
+        self.assertEqual(kept["frames_folder"], record["frames_folder"])
+        self.assertTrue((self.root / record["frames_folder"]).is_dir())
+
+    def test_studio_re_remember_keeps_the_old_frames_in_backups(self):
+        path, ident = self._confirm_studio_logo("film-a", [self._track(6, 9, ["TOHO"])])
+        [record] = load_studio_logo_memory(self.root)["records"]
+        folder = self.root / record["frames_folder"]
+        files = sorted(value.name for value in folder.iterdir())
+        snapshot = (self.root / STUDIO_LOGO_MEMORY_PATH).read_bytes()
+        record_review_decision(project_root=self.root, queue_path=path, item_id=ident["id"],
+                               decision="KEEP", remember_studio_logo=True)
+        [again] = load_studio_logo_memory(self.root)["records"]
+        self.assertTrue(all((self.root / entry["image"]).is_file() for entry in again["stored_frames"]))
+        backups = self.root / "state" / "backups"
+        [moved] = backups.glob(f"studio-logo-frames-*/{folder.name}")
+        self.assertEqual(sorted(value.name for value in moved.iterdir()), files)
+        self.assertIn(snapshot, [value.read_bytes() for value in backups.glob("studio-logo-memory-*.json")])
+
     # ------------------------------------------------- schema 2 in the decision flow (user decision 2026-10-02)
 
     def _watermark_queue(self, name):
@@ -975,6 +1099,24 @@ class StudioLogoMemoryTests(unittest.TestCase):
             self.root, self.item("a.jpg", decision=None),
             [dict(record, signatures=[{"phash": record["signatures"][0]["phash"]}])]),
             "a stored frame without a colour grid never matches")
+
+    def test_forced_cards_matching_studio_logo_still_move_to_advisory(self):
+        # Lead decision A1 (2026-10-03): the licence card "giữ & nhớ" keeps moving the forced
+        # first-window and last-6-s cards; only the corroboration gates spare them.
+        self.assertIs(FORCED_BOUNDARY_STUDIO_MOVE, True)
+        record = remember_studio_logo(self.root, self.queue, self.item("a.jpg"))
+        quiet = {"tracks": [], "scan_start_seconds": 0.0, "scan_duration_seconds": 100.0}
+        for kind, start, end in (("opening_boundary", 0.0, 5.0), ("ending_boundary", 94.0, 100.0)):
+            with self.subTest(kind=kind):
+                card = self.item("a.jpg", id=f"review-{kind}", decision=None, candidate_type=kind,
+                                 start_seconds=start, end_seconds=end, source_candidate_refs=[])
+                kept, moved = route_confirmed_studio_logos(
+                    self.root, [card], {"reports/x/text-scan.json": quiet}, {"records": [record]})
+                self.assertEqual(kept, [])
+                [routed] = moved
+                self.assertEqual(routed["suggested_decision"], "KEEP")
+                self.assertIs(routed["advisory"], True)
+                self.assertEqual(routed["studio_logo_match"]["memory_key"], record["key"])
 
     def test_memory_file_is_separate_and_forget_removes_the_record(self):
         self.assertIsNone(remember_studio_logo(self.root, self.queue, self.item("a.jpg", decision="CUT")))
@@ -1674,6 +1816,77 @@ class SceneCardPageTests(unittest.TestCase):
         self.assertIn("remember_studio_logo:true", decide)
         self.assertIn("confirm(sceneBlurMessage(item))", decide)
         self.assertIn("body.remember_studio_logo=true", _js_function(self.page, "undo"))
+
+    @unittest.skipUnless(shutil.which("node"), "node is not installed")
+    def test_platform_action_posts_flag_and_undo_restores_it(self):
+        """"Đây là logo nền tảng — làm mờ & nhớ" (batch 4a): BLUR + flag, no region needed, undo keeps it."""
+        source = "\n".join(_js_function(self.page, name) for name in (
+            "decide", "undo", "pushUndo", "applyLocalDecision", "applyLocalClear", "platformEligible",
+            "studioEligible", "platformRemembered", "platformHtml", "platformNote", "decisionLabel"))
+        script = (
+            "let busy=false,autoNext=false,focusId='e',previousFocusId=null,filter='all',listIds=['e','p','w'];"
+            "const undoStack=[],writes=[],alerts=[],sticky=new Set();"
+            "globalThis.alert=m=>alerts.push(m);globalThis.confirm=()=>true;"
+            "const esc=s=>String(s??'').replace(/</g,'&lt;');const actionName=(x,d)=>d;"
+            "const isScene=()=>false,isLogoItem=()=>true,momentsOf=()=>[],isAdvisoryItem=()=>false;"
+            "const refuseWhileExporting=()=>false,syncLocalCounts=()=>{},afterLocalChange=()=>{},updateNavState=()=>{},"
+            "updateListStatuses=()=>{},updateHeader=()=>{},renderFocus=()=>{},renderSide=()=>{},"
+            "advisoryUndoMessage=()=>'';const enqueueWrite=(kind,body)=>writes.push([kind,JSON.parse(JSON.stringify(body))]);"
+            "const box={x:470,y:179,width:317,height:168};"
+            "const ending={id:'e',category:'visual_logo',candidate_type:'ending_boundary',suggested_region_source_pixels:null,"
+            "decision:null,start_seconds:2697.68,end_seconds:2703.68};"
+            "const card={id:'p',category:'visual_logo',candidate_type:'platform_logo',suggested_region_source_pixels:box,decision:null};"
+            "const track={id:'w',category:'visual_logo',candidate_type:'persistent_overlay',suggested_region_source_pixels:box,decision:null};"
+            "let queue={items:[ending,card,track]};const itemMap=new Map(queue.items.map(x=>[x.id,x]));"
+            + source + ";(async()=>{const out={};"
+            "out.offer=platformHtml(ending);out.track=platformHtml(track);"
+            "await decide('e','BLUR');out.plain=[writes.length,alerts.splice(0)];"
+            "await decide('e','BLUR',false,null,false,true);out.first=writes[writes.length-1];"
+            "out.local=[ending.decision,ending.platform_logo_memory,platformNote(ending,platformRemembered(ending))];"
+            # The server's answer: the derived logo region and the summary.
+            "Object.assign(ending,{decision_region_source_pixels:{x:374,y:203,width:541,height:108},"
+            "platform_logo_memory:{remembered:true,logo_frames:79,platform:{key:'iqiyi',name:'iQIYI'}}});"
+            "out.label=decisionLabel(ending);out.shown=platformHtml(ending);"
+            "await decide('e','KEEP');out.keep=[writes[writes.length-1],'platform_logo_memory' in ending];"
+            "undo();out.undo=[writes[writes.length-1],ending.decision,ending.decision_region_source_pixels,"
+            "ending.platform_logo_memory];undo();out.cleared=[writes[writes.length-1],'platform_logo_memory' in ending];"
+            "await decide('p','BLUR',false,null,false,true);out.card=[writes[writes.length-1],card.decision_region_source_pixels];"
+            "await decide('w','BLUR',false,null,false,true);out.trackWrite=writes[writes.length-1];"
+            "out.alerts=alerts;console.log(JSON.stringify(out));})();"
+        )
+        result = subprocess.run(["node", "-e", script], capture_output=True, text=True, encoding="utf-8",
+                                timeout=60, check=True)
+        out = json.loads(result.stdout)
+        self.assertIn('data-act="platform"', out["offer"])
+        self.assertIn("Đây là logo nền tảng — làm mờ &amp; nhớ", out["offer"])
+        self.assertIn("không làm mờ cả khung", out["offer"])
+        self.assertEqual(out["track"], "", "a watermark track is not a platform ident")
+        # Without the flag a region-less card still needs "Làm mờ cả cảnh".
+        self.assertEqual(out["plain"], [0, ["Mục này chưa có vùng được định vị; hãy chọn Làm mờ cả cảnh."]])
+        flagged = {"id": "e", "decision": "BLUR", "full_frame": False, "note": None, "remember_platform_logo": True}
+        self.assertEqual(out["first"], ["decision", flagged])
+        self.assertEqual(out["local"], ["BLUR", {"remembered": True}, ""], "nothing is claimed before the server answers")
+        self.assertEqual(out["label"], "Làm mờ logo · đã nhớ là logo nền tảng iQIYI")
+        self.assertIn("✓ Đã nhớ là logo nền tảng (làm mờ)", out["shown"])
+        self.assertIn('aria-pressed="true"', out["shown"])
+        self.assertIn("Đã nhớ logo nền tảng iQIYI: 79 khung có logo trên nền tối.", out["shown"])
+        self.assertEqual(out["keep"], [["decision", {"id": "e", "decision": "KEEP", "full_frame": False, "note": None}],
+                                       False])
+        # Undo restores BLUR and asks the server to remember again (it re-derives the region).
+        self.assertEqual(out["undo"][0], ["decision", flagged])
+        self.assertEqual(out["undo"][1:], ["BLUR", {"x": 374, "y": 203, "width": 541, "height": 108},
+                                           {"remembered": True}])
+        self.assertEqual(out["cleared"], [["clear", {"id": "e"}], False])
+        self.assertEqual(out["card"], [["decision", {"id": "p", "decision": "BLUR", "full_frame": False, "note": None,
+                                                     "remember_platform_logo": True}],
+                                       {"x": 470, "y": 179, "width": 317, "height": 168}])
+        self.assertNotIn("remember_platform_logo", out["trackWrite"][1])
+        self.assertEqual(out["alerts"], [])
+        self.assertIn("else if(act==='platform'){if(!platformRemembered(x))decide(x.id,'BLUR',false,null,false,true);}",
+                      self.page)
+        self.assertIn('body.export-locked [data-act="platform"]', self.page)
+        self.assertIn("remember_platform_logo=body.get(\"remember_platform_logo\") is True",
+                      Path(sys.modules["biliflow.review_workflow"].__file__).read_text(encoding="utf-8"))
 
     @unittest.skipUnless(shutil.which("node"), "node is not installed")
     def test_studio_suggestion_lines_in_the_browser_runtime(self):

@@ -68,6 +68,80 @@ SOURCE_CLEANUP_FINISH_STATES = frozenset({"RECYCLED", "FAILED"})
 # The latest row of a job in one of these states locks every action on the job:
 # the source is in the Recycle Bin, or the shell call has not answered yet.
 SOURCE_CLEANED_STATES = ("PENDING", "RECYCLED")
+# Batch 4, additive like the columns and table above (one 'source-archive'
+# backup). hidden_at: "Ẩn khỏi danh sách" for a CANCELLED job, cleared by any
+# state change away from CANCELLED.
+JOB_FLAG_COLUMNS = (("hidden_at", "TEXT"),)
+# "Kiểm tra lại Thùng rác": append-only reads of the bin for a cleanup or an
+# archived export that was moved but not verified. They never change that row.
+RECYCLE_CHECK_SCHEMA = (
+    """CREATE TABLE IF NOT EXISTS recycle_checks (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        kind TEXT NOT NULL CHECK(kind IN ('SOURCE_CLEANUP','ARCHIVE_EXPORT')),
+        subject_id INTEGER NOT NULL,
+        job_id INTEGER NOT NULL REFERENCES jobs(id),
+        path TEXT NOT NULL,
+        size_bytes INTEGER NOT NULL,
+        found INTEGER NOT NULL CHECK(found IN (0,1)),
+        recycle_record TEXT,
+        actor TEXT NOT NULL,
+        checked_at TEXT NOT NULL
+    )""",
+    "CREATE INDEX IF NOT EXISTS idx_recycle_checks_subject ON recycle_checks(kind, subject_id, id)",
+)
+RECYCLE_CHECK_KINDS = frozenset({"SOURCE_CLEANUP", "ARCHIVE_EXPORT"})
+# "Lưu trữ": one row per attempt to move a job's source into archive/sources/
+# (and, for an exported job, its export to the Recycle Bin), then its restore.
+SOURCE_ARCHIVE_SCHEMA = (
+    """CREATE TABLE IF NOT EXISTS source_archives (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        job_id INTEGER NOT NULL REFERENCES jobs(id),
+        kind TEXT NOT NULL CHECK(kind IN ('EXPORTED','SKIPPED')),
+        state TEXT NOT NULL CHECK(state IN ('PENDING','ARCHIVED','FAILED','RESTORING','RESTORED')),
+        phase TEXT NOT NULL DEFAULT 'PREPARING',
+        source_path TEXT NOT NULL,
+        archive_path TEXT NOT NULL,
+        manifest_path TEXT NOT NULL,
+        source_sha256 TEXT NOT NULL,
+        size_bytes INTEGER NOT NULL,
+        mtime_ns INTEGER NOT NULL,
+        queue_path TEXT NOT NULL,
+        revision INTEGER,
+        output_path TEXT,
+        output_sha256 TEXT,
+        output_bytes INTEGER,
+        output_manifest_path TEXT,
+        output_manifest_bytes INTEGER,
+        exported_at TEXT,
+        skipped_at TEXT,
+        source_verified INTEGER NOT NULL DEFAULT 0,
+        export_recycled INTEGER NOT NULL DEFAULT 0,
+        export_verified INTEGER NOT NULL DEFAULT 0,
+        export_record TEXT,
+        manifest_recycled INTEGER NOT NULL DEFAULT 0,
+        manifest_record TEXT,
+        error TEXT,
+        created_at TEXT NOT NULL,
+        archived_at TEXT,
+        restore_started_at TEXT,
+        restored_at TEXT,
+        restored_mtime_ns INTEGER
+    )""",
+    "CREATE INDEX IF NOT EXISTS idx_source_archives_job ON source_archives(job_id, id)",
+    "CREATE INDEX IF NOT EXISTS idx_source_archives_state ON source_archives(state)",
+)
+# The steps of one archive, in order; the startup reconcile reads the last one reached.
+SOURCE_ARCHIVE_PHASES = (
+    "PREPARING", "SOURCE_MOVED", "SOURCE_VERIFIED", "EXPORT_RECYCLING", "EXPORT_RECYCLED",
+    "MANIFEST_RECYCLING",
+)
+SOURCE_ARCHIVE_FINISH_STATES = frozenset({"ARCHIVED", "FAILED"})
+SOURCE_ARCHIVE_FLAGS = ("source_verified", "export_recycled", "export_verified", "manifest_recycled")
+# Facts an archive may record while it runs or when it settles.
+SOURCE_ARCHIVE_FACTS = frozenset({*SOURCE_ARCHIVE_FLAGS, "export_record", "manifest_record", "error"})
+# The latest archive row of a job in one of these states locks every action on
+# the job: the source is in archive/ or on its way there or back.
+SOURCE_ARCHIVED_STATES = ("PENDING", "ARCHIVED", "RESTORING")
 
 
 def now_iso() -> str:
@@ -235,13 +309,15 @@ class JobStore:
         return target
 
     def _ensure_additive_schema(self) -> None:
-        """Add the queue columns and the source_cleanups table to older databases.
+        """Add the queue columns, hidden_at and the cleanup/archive tables to older databases.
 
         At most one backup per open, taken before the first change: a
         database without the queue columns gets 'queue-order' (it also lacks
-        the table); one that has them but no source_cleanups table and at
-        least one job gets 'source-cleanup'. A new database has no job to
-        protect and gets none.
+        the rest); one that has them but no source_cleanups table and at
+        least one job gets 'source-cleanup'; one that has that table but not
+        hidden_at, source_archives or recycle_checks, and at least one job,
+        gets 'source-archive'. A new database has no job to protect and gets
+        none.
 
         The queue index is created only after the columns exist: an old
         database would otherwise fail on the CREATE INDEX before the ALTER
@@ -259,19 +335,22 @@ class JobStore:
             "SELECT EXISTS(SELECT 1 FROM jobs) AS value"
         ).fetchone()["value"])
         missing = [(name, kind) for name, kind in QUEUE_COLUMNS if name not in columns]
+        missing_flags = [(name, kind) for name, kind in JOB_FLAG_COLUMNS if name not in columns]
+        archive_missing = bool(missing_flags) or not {"source_archives", "recycle_checks"} <= tables
         if missing:
             self._backup("queue-order")
         elif "source_cleanups" not in tables and has_rows:
             self._backup("source-cleanup")
-        if missing:
-            for name, kind in missing:
-                try:
-                    self._connection.execute(
-                        f"ALTER TABLE jobs ADD COLUMN {name} {kind}"  # noqa: S608
-                    )
-                except sqlite3.OperationalError as error:
-                    if "duplicate column" not in str(error).casefold():
-                        raise
+        elif archive_missing and has_rows:
+            self._backup("source-archive")
+        for name, kind in [*missing, *missing_flags]:
+            try:
+                self._connection.execute(
+                    f"ALTER TABLE jobs ADD COLUMN {name} {kind}"  # noqa: S608
+                )
+            except sqlite3.OperationalError as error:
+                if "duplicate column" not in str(error).casefold():
+                    raise
         # Jobs queued by older code have no place yet: keep their old order.
         waiting = self._connection.execute(
             """SELECT id FROM jobs WHERE state='QUEUED' AND queue_seq IS NULL
@@ -290,7 +369,7 @@ class JobStore:
         self._connection.execute(
             "CREATE INDEX IF NOT EXISTS idx_jobs_queue ON jobs(state, priority, queue_seq, id)"
         )
-        for statement in SOURCE_CLEANUP_SCHEMA:
+        for statement in (*SOURCE_CLEANUP_SCHEMA, *SOURCE_ARCHIVE_SCHEMA, *RECYCLE_CHECK_SCHEMA):
             self._connection.execute(statement)
         self._connection.commit()
 
@@ -410,7 +489,7 @@ class JobStore:
             raise ValueError(f"Unsupported job fields: {sorted(unknown)}")
         stamp = now_iso()
         values: dict[str, Any] = {
-            "state": "QUEUED", "stop_mode": None, "error": None,
+            "state": "QUEUED", "stop_mode": None, "error": None, "hidden_at": None,
             **reset_fields, "updated_at": stamp,
         }
         with self._lock:
@@ -440,7 +519,7 @@ class JobStore:
         """
         with self._lock:
             cursor = self._connection.execute(
-                """UPDATE jobs SET state=?,current_stage=?,error=NULL,updated_at=?
+                """UPDATE jobs SET state=?,current_stage=?,error=NULL,hidden_at=NULL,updated_at=?
                 WHERE id=? AND state='QUEUED' AND stop_mode IS NULL""",
                 (state, stage, now_iso(), job_id),
             )
@@ -451,7 +530,7 @@ class JobStore:
         """Take a waiting job out of the queue; False when it already started."""
         with self._lock:
             cursor = self._connection.execute(
-                """UPDATE jobs SET state='PAUSED',stop_mode='PAUSED',updated_at=?
+                """UPDATE jobs SET state='PAUSED',stop_mode='PAUSED',hidden_at=NULL,updated_at=?
                 WHERE id=? AND state='QUEUED'""",
                 (now_iso(), job_id),
             )
@@ -517,17 +596,44 @@ class JobStore:
         if values.get("state") in QUEUE_RELEASE_STATES:
             values["queue_seq"] = None
             values["queued_at"] = None
+        hidden = ""
+        if values.get("state") == "CANCELLED":
+            # Only a job that already was cancelled keeps "Ẩn khỏi danh sách".
+            hidden = ",hidden_at=CASE WHEN state='CANCELLED' THEN hidden_at ELSE NULL END"
+        elif "state" in values:
+            values["hidden_at"] = None
         values["updated_at"] = now_iso()
         assignments = ",".join(f"{key}=?" for key in values)
         with self._lock:
             cursor = self._connection.execute(
-                f"UPDATE jobs SET {assignments} WHERE id=?{condition}",  # noqa: S608
+                f"UPDATE jobs SET {assignments}{hidden} WHERE id=?{condition}",  # noqa: S608
                 (*values.values(), job_id, *params),
             )
             self._connection.commit()
         if cursor.rowcount != 1:
             return None
         return self.get_job(job_id)
+
+    def set_job_hidden(self, job_id: int, hidden: bool) -> dict[str, Any] | None:
+        """"Ẩn khỏi danh sách" / "Hiện lại" for a cancelled job; None when nothing changed.
+
+        Hiding needs a CANCELLED job that is not hidden; showing needs a hidden
+        one. updated_at is kept, so the job keeps its place in the list.
+        """
+        self.get_job(job_id)
+        with self._lock:
+            if hidden:
+                cursor = self._connection.execute(
+                    """UPDATE jobs SET hidden_at=? WHERE id=? AND state='CANCELLED'
+                    AND hidden_at IS NULL""",
+                    (now_iso(), job_id),
+                )
+            else:
+                cursor = self._connection.execute(
+                    "UPDATE jobs SET hidden_at=NULL WHERE id=? AND hidden_at IS NOT NULL", (job_id,),
+                )
+            self._connection.commit()
+        return self.get_job(job_id) if cursor.rowcount == 1 else None
 
     def replace_stages(self, job_id: int, names: Iterable[str]) -> None:
         names = list(names)
@@ -932,6 +1038,256 @@ class JobStore:
                 raise
         return self._cleanup_row(row)
 
+    def get_source_cleanup(self, row_id: int) -> dict[str, Any] | None:
+        with self._lock:
+            row = self._connection.execute(
+                "SELECT * FROM source_cleanups WHERE id=?", (row_id,)
+            ).fetchone()
+        return self._cleanup_row(row)
+
+    # ------------------------------------------------------------------
+    # "Lưu trữ" / "Khôi phục bản xuất" (batch 4).
+
+    @staticmethod
+    def _archive_row(row: sqlite3.Row | None) -> dict[str, Any] | None:
+        if row is None:
+            return None
+        value = dict(row)
+        for name in SOURCE_ARCHIVE_FLAGS:
+            value[name] = bool(value[name])
+        return value
+
+    def add_source_archive(
+        self, *, job_id: int, kind: str, source_path: str, archive_path: str, manifest_path: str,
+        source_sha256: str, size_bytes: int, mtime_ns: int, queue_path: str,
+        revision: int | None = None, output_path: str | None = None,
+        output_sha256: str | None = None, output_bytes: int | None = None,
+        output_manifest_path: str | None = None, output_manifest_bytes: int | None = None,
+        exported_at: str | None = None, skipped_at: str | None = None,
+    ) -> int:
+        """Record an archive about to move the source (state PENDING, phase PREPARING)."""
+        if kind not in SOURCE_CLEANUP_KINDS:
+            raise ValueError(f"Unsupported source archive kind: {kind}")
+        with self._lock:
+            self.get_job(job_id)
+            try:
+                cursor = self._connection.execute(
+                    """INSERT INTO source_archives(
+                        job_id,kind,state,phase,source_path,archive_path,manifest_path,
+                        source_sha256,size_bytes,mtime_ns,queue_path,revision,output_path,
+                        output_sha256,output_bytes,output_manifest_path,output_manifest_bytes,
+                        exported_at,skipped_at,created_at
+                    ) VALUES (?,?,'PENDING','PREPARING',?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                    (
+                        job_id, kind, str(source_path), str(archive_path), str(manifest_path),
+                        str(source_sha256), int(size_bytes), int(mtime_ns), str(queue_path),
+                        revision, output_path, output_sha256, output_bytes,
+                        output_manifest_path, output_manifest_bytes, exported_at, skipped_at,
+                        now_iso(),
+                    ),
+                )
+                self._connection.commit()
+            except sqlite3.Error:
+                self._connection.rollback()
+                raise
+        return int(cursor.lastrowid)
+
+    @staticmethod
+    def _archive_facts(facts: dict[str, Any]) -> dict[str, Any]:
+        unknown = set(facts) - SOURCE_ARCHIVE_FACTS
+        if unknown:
+            raise ValueError(f"Unsupported source archive fields: {sorted(unknown)}")
+        return {
+            key: int(bool(value)) if key in SOURCE_ARCHIVE_FLAGS else value
+            for key, value in facts.items()
+        }
+
+    def _update_archive(
+        self, row_id: int, states: tuple[str, ...], values: dict[str, Any],
+    ) -> dict[str, Any] | None:
+        assignments = ",".join(f"{key}=?" for key in values)
+        marks = ",".join("?" * len(states))
+        with self._lock:
+            cursor = self._connection.execute(
+                f"UPDATE source_archives SET {assignments} WHERE id=? AND state IN ({marks})",  # noqa: S608
+                (*values.values(), row_id, *states),
+            )
+            self._connection.commit()
+            if cursor.rowcount != 1:
+                return None
+        return self.get_source_archive(row_id)
+
+    def set_source_archive_phase(self, row_id: int, phase: str, **facts: Any) -> bool:
+        """Record the step a PENDING archive reached; False when the row is not PENDING."""
+        if phase not in SOURCE_ARCHIVE_PHASES:
+            raise ValueError(f"Unsupported source archive phase: {phase}")
+        values = {"phase": phase, **self._archive_facts(facts)}
+        return self._update_archive(row_id, ("PENDING",), values) is not None
+
+    def finish_source_archive(
+        self, row_id: int, *, state: str, error: str | None = None, **facts: Any,
+    ) -> dict[str, Any] | None:
+        """Settle a PENDING archive as ARCHIVED or FAILED; None when it is not PENDING."""
+        if state not in SOURCE_ARCHIVE_FINISH_STATES:
+            raise ValueError(f"An archive can only finish as ARCHIVED or FAILED, not {state}")
+        values = {"state": state, "error": error, **self._archive_facts(facts)}
+        if state == "ARCHIVED":
+            values["archived_at"] = now_iso()
+        return self._update_archive(row_id, ("PENDING",), values)
+
+    def begin_archive_restore(self, row_id: int) -> dict[str, Any] | None:
+        """ARCHIVED -> RESTORING (the job stays locked); None when the row is not ARCHIVED."""
+        return self._update_archive(
+            row_id, ("ARCHIVED",), {"state": "RESTORING", "restore_started_at": now_iso()},
+        )
+
+    def abort_archive_restore(self, row_id: int, *, error: str) -> dict[str, Any] | None:
+        """RESTORING -> ARCHIVED with the reason; None when the row is not RESTORING."""
+        return self._update_archive(
+            row_id, ("RESTORING",), {"state": "ARCHIVED", "error": error, "restore_started_at": None},
+        )
+
+    def finish_archive_restore(
+        self, row_id: int, *, mtime_ns: int, job_state: str | None,
+    ) -> dict[str, Any] | None:
+        """The archived source is back in input/ with its SHA-256: unlock the job.
+
+        One transaction: the row becomes RESTORED, the job takes the new mtime
+        and, when ``job_state`` is given and the job is still COMPLETED, that
+        state. None when the row is not RESTORING (or unknown).
+        """
+        if job_state not in (None, "READY_TO_EXPORT", "WAITING_REVIEW"):
+            raise ValueError(f"A restored job cannot become {job_state}")
+        stamp = now_iso()
+        with self._lock:
+            try:
+                cursor = self._connection.execute(
+                    """UPDATE source_archives SET state='RESTORED',restored_at=?,restored_mtime_ns=?,
+                    error=NULL WHERE id=? AND state='RESTORING'""",
+                    (stamp, int(mtime_ns), row_id),
+                )
+                if cursor.rowcount != 1:
+                    self._connection.rollback()
+                    return None
+                row = self._connection.execute(
+                    "SELECT * FROM source_archives WHERE id=?", (row_id,)
+                ).fetchone()
+                self._connection.execute(
+                    "UPDATE jobs SET source_mtime_ns=?,updated_at=? WHERE id=?",
+                    (int(mtime_ns), stamp, row["job_id"]),
+                )
+                if job_state is not None:
+                    self._connection.execute(
+                        """UPDATE jobs SET state=?,stop_mode=NULL,error=NULL,hidden_at=NULL,
+                        queue_seq=NULL,queued_at=NULL WHERE id=? AND state='COMPLETED'""",
+                        (job_state, row["job_id"]),
+                    )
+                self._connection.commit()
+            except sqlite3.Error:
+                self._connection.rollback()
+                raise
+        return self._archive_row(row)
+
+    def get_source_archive(self, row_id: int) -> dict[str, Any] | None:
+        with self._lock:
+            row = self._connection.execute(
+                "SELECT * FROM source_archives WHERE id=?", (row_id,)
+            ).fetchone()
+        return self._archive_row(row)
+
+    def latest_source_archive(self, job_id: int) -> dict[str, Any] | None:
+        with self._lock:
+            row = self._connection.execute(
+                "SELECT * FROM source_archives WHERE job_id=? ORDER BY id DESC LIMIT 1",
+                (job_id,),
+            ).fetchone()
+        return self._archive_row(row)
+
+    def _latest_archive_rows(self, states: tuple[str, ...] | None = None) -> list[dict[str, Any]]:
+        query = """SELECT * FROM source_archives
+            WHERE id IN (SELECT MAX(id) FROM source_archives GROUP BY job_id)"""
+        params: tuple = ()
+        if states:
+            query += f" AND state IN ({','.join('?' * len(states))})"
+            params = tuple(states)
+        with self._lock:
+            rows = self._connection.execute(query + " ORDER BY id", params).fetchall()
+        return [self._archive_row(row) for row in rows]
+
+    def latest_source_archives(self) -> dict[int, dict[str, Any]]:
+        """The latest archive row of every job that has one, keyed by job id (one query)."""
+        return {int(row["job_id"]): row for row in self._latest_archive_rows()}
+
+    def pending_source_archives(self) -> list[dict[str, Any]]:
+        """Jobs whose latest archive row is PENDING or RESTORING (reconciled at startup)."""
+        return self._latest_archive_rows(("PENDING", "RESTORING"))
+
+    def source_archived(self, job_id: int) -> bool:
+        """True while the job's source is in archive/ or on its way there or back."""
+        row = self.latest_source_archive(job_id)
+        return row is not None and row["state"] in SOURCE_ARCHIVED_STATES
+
+    def source_lock(self, job_id: int) -> str | None:
+        """'cleaned', 'archived' or None: why the job's source must not be used now."""
+        if self.source_cleaned(job_id):
+            return "cleaned"
+        if self.source_archived(job_id):
+            return "archived"
+        return None
+
+    # ------------------------------------------------------------------
+    # "Kiểm tra lại Thùng rác": append-only.
+
+    def add_recycle_check(
+        self, *, kind: str, subject_id: int, job_id: int, path: str, size_bytes: int,
+        found: bool, recycle_record: str | None, actor: str,
+    ) -> int:
+        if kind not in RECYCLE_CHECK_KINDS:
+            raise ValueError(f"Unsupported recycle check kind: {kind}")
+        if not isinstance(found, bool):
+            raise ValueError("found must be True or False")
+        if not actor:
+            raise ValueError("A recycle check needs an actor")
+        with self._lock:
+            self.get_job(job_id)
+            try:
+                cursor = self._connection.execute(
+                    """INSERT INTO recycle_checks(kind,subject_id,job_id,path,size_bytes,found,
+                    recycle_record,actor,checked_at) VALUES (?,?,?,?,?,?,?,?,?)""",
+                    (kind, int(subject_id), job_id, str(path), int(size_bytes), int(found),
+                     recycle_record, str(actor), now_iso()),
+                )
+                self._connection.commit()
+            except sqlite3.Error:
+                self._connection.rollback()
+                raise
+        return int(cursor.lastrowid)
+
+    def recycle_checks(self, kind: str, subject_id: int) -> list[dict[str, Any]]:
+        with self._lock:
+            rows = self._connection.execute(
+                "SELECT * FROM recycle_checks WHERE kind=? AND subject_id=? ORDER BY id",
+                (kind, int(subject_id)),
+            ).fetchall()
+        return [{**dict(row), "found": bool(row["found"])} for row in rows]
+
+    def recycle_check_summary(self, kind: str) -> dict[int, dict[str, Any]]:
+        """{subject_id: {found, checked_at, record}}: the first found check, else the latest one."""
+        with self._lock:
+            rows = self._connection.execute(
+                "SELECT * FROM recycle_checks WHERE kind=? ORDER BY id", (kind,)
+            ).fetchall()
+        summary: dict[int, dict[str, Any]] = {}
+        for row in rows:
+            subject = int(row["subject_id"])
+            if summary.get(subject, {}).get("found"):
+                continue
+            summary[subject] = {
+                "found": bool(row["found"]), "checked_at": row["checked_at"],
+                "record": row["recycle_record"],
+            }
+        return summary
+
     def recover_interrupted(self) -> int:
         """Convert stale in-process states into resumable stage-level states."""
         stamp = now_iso()
@@ -950,7 +1306,7 @@ class JobStore:
                     )
                 self._connection.execute(
                     """UPDATE jobs SET state='INTERRUPTED_RECOVERABLE',stop_mode='PAUSED',
-                    error=?,updated_at=? WHERE id=?""",
+                    error=?,hidden_at=NULL,updated_at=? WHERE id=?""",
                     ("Recovered after an unclean Control Center shutdown", stamp, row["id"]),
                 )
             self._connection.commit()

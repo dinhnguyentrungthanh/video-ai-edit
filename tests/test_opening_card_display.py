@@ -19,6 +19,7 @@ import cv2
 import numpy as np
 
 from biliflow.brand_memory import compare_studio_logo, remember_studio_logo
+from biliflow.platform_cards import ENDING_REASON, ensure_forced_ending_card
 from biliflow.review_workflow import (
     _evidence_labels,
     _interactive_html,
@@ -89,7 +90,7 @@ class OpeningCardQueueTests(unittest.TestCase):
     def tearDown(self):
         self.temporary.cleanup()
 
-    def _visual_report(self, intervals, rejected=()):
+    def _visual_report(self, intervals, rejected=(), **extra):
         directory = self.root / "reports" / "job" / "visual-logo"
         (directory / "thumbnails").mkdir(parents=True)
         for index, interval in enumerate([*intervals, *rejected]):
@@ -101,7 +102,7 @@ class OpeningCardQueueTests(unittest.TestCase):
         path.write_text(json.dumps({
             "status": "REVIEW_REQUIRED", "scan_type": "visual_logo", "input": str(self.source),
             "duration_seconds": DURATION, "source_size": [1280, 534],
-            "intervals": intervals, "rejected_windows": list(rejected),
+            "intervals": intervals, "rejected_windows": list(rejected), **extra,
         }), encoding="utf-8")
         return path
 
@@ -229,6 +230,58 @@ class OpeningCardQueueTests(unittest.TestCase):
             _evidence_labels(["Persistent external logo / watermark", "a company logo", "</s>XEMBZ.NET"]),
             ["XEMBZ.NET", "Persistent external logo / watermark", "a company logo"],
         )
+
+    def test_forced_ending_card_when_tail_uncovered(self):
+        # Tập 17: the iQIYI outro starts 4.21 s before the end inside a rejected 5 s
+        # window, so no window of the scan became a card.
+        report = self._visual_report(
+            [], rejected=[
+                {"start_seconds": DURATION - 12.0, "end_seconds": DURATION - 7.0, "max_score": 0.2,
+                 "visual_logo_confirmation": {"state": "REJECTED", "answer": "NO"}},
+                {"start_seconds": DURATION - 7.0, "end_seconds": DURATION - 2.0, "max_score": 0.4,
+                 "visual_logo_confirmation": {"state": "REJECTED", "answer": "NO"}},
+                {"start_seconds": DURATION - 2.0, "end_seconds": DURATION, "max_score": 0.6,
+                 "visual_logo_confirmation": {"state": "REJECTED", "answer": "NO " + "x" * 200},
+                 "region_localization": {"frame_size": [1280, 534], "proposals": [{
+                     "blur_region_px": [518, 190, 154, 132], "sources": ["grounding_dino"],
+                     "labels": ["brand logo"], "region_classification": "unknown"}]}},
+            ],
+            scan_start_seconds=0.0, scan_duration_seconds=DURATION,
+        )
+        queue = self._build(report)
+        [card] = queue["items"]
+        self.assertEqual(card["candidate_type"], "ending_boundary")
+        self.assertEqual((card["start_seconds"], card["end_seconds"]), (DURATION - 6.0, DURATION))
+        self.assertEqual(card["labels"], ["Ending boundary review"])
+        self.assertIn("6 giây cuối video", card["reasons"][0])
+        self.assertIsNone(card["suggested_region_source_pixels"])
+        self.assertIsNone(card["suggested_decision"])
+        self.assertEqual(card["priority"], "context")
+        self.assertEqual(card["source_candidate_refs"], [])
+        self.assertEqual(
+            [(window["start_seconds"], window["answer"]) for window in card["model_evidence"]["tail_windows"]],
+            [(DURATION - 7.0, "NO"), (DURATION - 2.0, "NO " + "x" * 77)],
+        )
+        self.assertEqual(len(card["preview_images"]), 2, "no FFmpeg: the tail windows' thumbnails")
+        [box] = card["evidence_regions"]
+        self.assertEqual((box["x"], box["y"], box["width"], box["height"]), (518, 190, 154, 132))
+        self.assertTrue(queue["platform_logos"]["ending_card"])
+
+    def test_no_forced_ending_card_when_a_full_frame_card_covers_the_tail(self):
+        end_card = {
+            "start_seconds": DURATION - 10.0, "end_seconds": DURATION, "max_score": 0.95,
+            "candidate_type": "branded_end_card", "suggested_decision": "CUT",
+            "visual_logo_confirmation": {"state": "CONFIRMED", "answer": "YES",
+                                         "confirmation_source": "qwen_local"},
+        }
+        report = self._visual_report([end_card], scan_start_seconds=0.0, scan_duration_seconds=DURATION)
+        queue = self._build(report)
+        self.assertEqual([item["candidate_type"] for item in queue["items"]], ["branded_end_card"])
+        self.assertFalse(queue["platform_logos"]["ending_card"])
+        # A scan that stopped before the end never claims the last seconds were shown.
+        shutil.rmtree(self.root / "reports" / "job")
+        partial = self._visual_report([], scan_start_seconds=0.0, scan_duration_seconds=600.0)
+        self.assertEqual(self._build(partial)["items"], [])
 
     def test_promotion_after_a_no_answer_keeps_the_scene_answer(self):
         # visual_logo_scanner turns a REJECTED logo answer into UNCERTAIN when the
@@ -383,6 +436,98 @@ class OpeningCardPageRuntimeTests(unittest.TestCase):
         self.assertIn("AI trả lời KHÔNG thấy logo hay chữ quảng cáo trong 0:05–0:10.", rejected)
         self.assertNotIn("5 giây đầu", rejected)
         self.assertEqual(owned, "")
+
+    # ------------------------------------------- platform and ending cards (batch 4a, 2026-10-03)
+    PLATFORM_CARDS = (
+        "const box={x:470,y:179,width:317,height:168};"
+        "const iqiyi={id:'p',category:'visual_logo',candidate_type:'platform_logo',review_kind:'platform_logo',"
+        "start_seconds:8,end_seconds:13.52,suggested_region_source_pixels:box,platform_logo:{key:'iqiyi',name:'iQIYI',"
+        "snap:{method:'dark_run'},detections:[{kind:'ocr_text',text:'iOlYI',observed_seconds:10.5,label_seconds:9}]}};"
+        "const unnamed=Object.assign({},iqiyi,{platform_logo:undefined});"
+        "const remembered=Object.assign({},iqiyi,{platform_logo:{key:'iqiyi',name:'iQIYI',snap:{method:'hard_cuts'},"
+        "detections:[{kind:'platform_memory',similarity:0.996},{kind:'platform_memory',similarity:0.97}]}});"
+        "const model=Object.assign({},iqiyi,{platform_logo:{key:'iqiyi',name:'<i>iQIYI</i>',snap:{method:'dark_run'},"
+        "detections:[{kind:'vlm_label',text:'iQIYI',observed_seconds:2701}]}});"
+        "const ending={id:'e',category:'visual_logo',candidate_type:'ending_boundary',review_kind:'logo_overlay',"
+        "start_seconds:2697.68,end_seconds:2703.68,suggested_region_source_pixels:null,labels:['Ending boundary review'],"
+        "model_evidence:{vlm_confirmation:null,vlm_source:'forced_ending',region_sources:[],tail_windows:["
+        "{start_seconds:2690,end_seconds:2695,state:'rejected',answer:'No.'},"
+        "{start_seconds:2695,end_seconds:2700,state:'interval',answer:''},"
+        "{start_seconds:2700,end_seconds:2703.68,state:'interval',answer:'<b>Yes</b>, iQIYI'}]}};"
+        "const boxedEnding=Object.assign({},ending,{model_evidence:{vlm_source:'forced_ending',tail_windows:[]},"
+        "evidence_regions:[{x:374,y:203,width:541,height:108}]});"
+        "const linked=Object.assign({},ending,{suggested_decision:'KEEP',platform_logo_link:{card_id:'p',platform:'iQIYI',coverage:0.67}});"
+        "const duplicate={id:'d',category:'visual_logo',advisory:true,covered_by:'p',covered_by_label:'Logo nền tảng <iQIYI>'};"
+    )
+
+    def test_names_of_platform_and_ending_cards(self):
+        names = self.run_js(
+            ("isSafety", "catName", "sceneLogo", "hasPlayer", "readingLabel", "viText"),
+            "[catName(iqiyi),catName(unnamed),catName(ending),[iqiyi,ending].map(hasPlayer),"
+            "readingLabel(ending,'logo/watermark'),readingLabel(iqiyi,'x'),viText('Ending boundary review')]",
+            "const SAFETY={adult:['18+']};const KIND_NAMES={logo_overlay:'Logo',platform_logo:'Logo nền tảng'};"
+            + self.PLATFORM_CARDS,
+        )
+        self.assertEqual(names[:3], ["Logo nền tảng iQIYI", "Logo nền tảng", "Kiểm tra đoạn kết"])
+        # The ending card asks about the whole scene (player); a platform card has its red box.
+        self.assertEqual(names[3], [False, True])
+        self.assertEqual(names[4], "logo/watermark", "the scanner label is never shown as a reading")
+        self.assertEqual(names[5], "x", "a card without readings falls back")
+        self.assertEqual(names[6], "Kiểm tra đoạn kết")
+        self.assertIn("platform_logo:'Logo nền tảng'", self.page)
+
+    def test_platform_and_ending_verdict_lines(self):
+        ending, boxed, iqiyi, remembered, model, owned, other, linked, duplicate = self.run_js(
+            ("aiVerdictHtml", "endingVerdictHtml", "platformVerdictHtml", "memoryMatch", "memoryBrandName",
+             "boxesFromMemory", "readingLabel", "suggestionLine"),
+            "[aiVerdictHtml(ending),aiVerdictHtml(boxedEnding),platformVerdictHtml(iqiyi),"
+            "platformVerdictHtml(remembered),platformVerdictHtml(model),aiVerdictHtml(iqiyi),"
+            "platformVerdictHtml(ending),suggestionLine(linked),suggestionLine(duplicate)]",
+            "const actionName=(x,d)=>({KEEP:'Giữ nguyên',BLUR:'Làm mờ logo'}[d]||d);"
+            "const studioWithheldLine=()=>'',studioBlockedLine=()=>'';" + self.PLATFORM_CARDS,
+        )
+        # The page repeats the card's reason, word for word (6.0 s = FORCED_ENDING_SECONDS).
+        self.assertIn(ENDING_REASON.rstrip("."), ending)
+        self.assertIn("chọn Giữ nguyên nếu là nội dung phim, Cắt cảnh nếu là đoạn kết ngoài phim", ending)
+        self.assertIn("bấm “Đây là logo nền tảng — làm mờ &amp; nhớ”", ending)
+        self.assertIn("AI (Qwen) ở các cửa sổ cuối: 44:50–44:55 “No.”; 45:00–45:03 “&lt;b&gt;Yes&lt;/b&gt;, iQIYI”.",
+                      ending)
+        for wrong in ("Thẻ cũ", "5 giây đầu", "Khung vàng"):
+            self.assertNotIn(wrong, ending)
+        self.assertIn("Khung vàng là vùng AI định vị ở cuối video, chỉ để tham khảo.", boxed)
+        self.assertNotIn("AI (Qwen)", boxed)
+        self.assertEqual(iqiyi, '<div class="ai-verdict">OCR đọc “iOlYI” lúc 0:10 — logo nền tảng iQIYI; đề xuất '
+                                'Làm mờ vùng logo 0:08–0:13, không cắt cảnh — khung đỏ là vùng sẽ làm mờ.</div>')
+        self.assertIn("Khớp logo nền tảng iQIYI bạn đã nhớ (giống 100%)", remembered)
+        self.assertIn("Không thấy đoạn màn hình đen quanh logo", remembered)
+        self.assertIn("Mô hình logo đọc “iQIYI” — logo nền tảng &lt;i&gt;iQIYI&lt;/i&gt;", model)
+        self.assertEqual((owned, other), ("", ""), "a platform card has its own line; other cards get none")
+        self.assertIn("Đề xuất: Giữ nguyên", linked)
+        self.assertIn("Logo nền tảng iQIYI ở đoạn này đã có thẻ riêng làm mờ vùng logo — thẻ này chỉ hỏi về cả cảnh",
+                      linked)
+        self.assertIn("Trùng thẻ “Logo nền tảng &lt;iQIYI&gt;” ở danh sách chính", duplicate)
+        self.assertIn("Ứng viên phụ — không chặn xuất", duplicate)
+        side = _js_function(self.page, "adSide")
+        self.assertIn("${platformVerdictHtml(x)}${suggestionLine(x)}", side)
+        self.assertIn("${studioHtml(x)}${platformHtml(x)}${chosenLine(x)}", side)
+        for term in ("quảng bá", "promotional", "promotion", "advertisement", "branded intro"):
+            self.assertNotIn(term, ending + iqiyi + remembered)
+
+    def test_ending_verdict_reads_the_card_python_builds(self):
+        report = "reports/job/visual-logo/scan-localized.json"
+        payload = {
+            "scan_type": "visual_logo", "scan_start_seconds": 0.0, "scan_duration_seconds": 2703.778,
+            "intervals": [{"start_seconds": 2700.0, "end_seconds": 2703.778,
+                           "visual_logo_confirmation": {"state": "CONFIRMED", "answer": "Yes, iQIYI"}}],
+            "rejected_windows": [{"start_seconds": 2695.0, "end_seconds": 2700.0,
+                                  "visual_logo_confirmation": {"state": "REJECTED", "answer": "No."}}],
+        }
+        with TemporaryDirectory() as folder:
+            root = Path(folder).resolve()
+            card = ensure_forced_ending_card(root, [], {report: payload}, duration=2703.778,
+                                             queue_dir=root / "reports" / "job")
+        line = self.run_js(("endingVerdictHtml",), "endingVerdictHtml(card)", f"const card={json.dumps(card)};")
+        self.assertIn("AI (Qwen) ở các cửa sổ cuối: 44:55–45:00 “No.”; 45:00–45:03 “Yes, iQIYI”.", line)
 
     def test_verdict_stays_out_of_suggestions_and_queue_text(self):
         self.assertNotIn("aiVerdictHtml", _js_function(self.page, "suggestionLine"))

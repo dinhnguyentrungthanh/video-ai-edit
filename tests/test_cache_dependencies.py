@@ -155,11 +155,12 @@ class RepositoryCacheScopeTests(unittest.TestCase):
 
     # Control-plane modules edited by the dashboard/queue work (2026-10-02, batch 1;
     # 2026-10-03, batch 2 adds the shared export dialog; 2026-10-03, batch 3 adds
-    # source cleanup).
+    # source cleanup; 2026-10-03, batch 4 adds source archive).
     CONTROL_PLANE = (
         "control_center.py", "scheduler.py", "job_store.py", "job_import.py",
         "review_workflow.py", "export_dialog.py",
         "export_guards.py", "recycle_bin.py", "source_cleanup.py",
+        "source_archive.py", "source_archive_files.py", "source_archive_restore.py",
     )
 
     def test_control_plane_modules_are_in_no_scan_stage_key(self):
@@ -172,6 +173,19 @@ class RepositoryCacheScopeTests(unittest.TestCase):
                 # A fallback to every source file would make any edit invalidate the stage.
                 self.assertFalse(everything <= paths)
                 self.assertEqual({path.name for path in paths} & set(self.CONTROL_PLANE), set())
+
+    def test_platform_modules_stay_out_of_logo_and_safety_keys(self):
+        # Batch 4a (2026-10-03): only the text stage (textscan -> platform_names) changes
+        # key; the build-time platform probe, cards, memory and admin page stay out of all.
+        root = Path(__file__).resolve().parents[1]
+        build_time = {
+            "platform_logos.py", "platform_cards.py", "platform_memory.py", "logo_memory_admin.py",
+        }
+        for stage in sorted(CACHEABLE_STAGES):
+            with self.subTest(stage=stage):
+                names = {path.name for path in stage_source_paths(root, stage)}
+                self.assertEqual(names & build_time, set())
+                self.assertEqual("platform_names.py" in names, stage == "text")
 
 
 if __name__ == "__main__":

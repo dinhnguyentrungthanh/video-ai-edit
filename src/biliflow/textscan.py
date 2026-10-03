@@ -23,6 +23,7 @@ import numpy as np
 import psutil
 from PIL import Image, ImageDraw, ImageFont
 
+from biliflow.platform_names import match_platform_texts
 from biliflow.probe import duration_seconds, probe_video
 from biliflow.storage import require_capacity
 
@@ -418,6 +419,34 @@ def _promote_repeated_corner_overlays(
     ] + promoted
 
 
+def _annotate_platform_names(summaries: list[dict]) -> list[dict]:
+    """Mark tracks that read a video-platform name (iQIYI ident, WeTV mark)."""
+    annotated = []
+    for summary in summaries:
+        match = match_platform_texts(summary.get("sample_text") or [])
+        annotated.append({**summary, "platform_name": match} if match else summary)
+    return annotated
+
+
+def _limit_report_tracks(summaries: list[dict], max_report_tracks: int) -> list[dict]:
+    """Keep review candidates, platform-name tracks, then the earliest references.
+
+    Platform idents sit in the last seconds of an episode, exactly where a
+    plain earliest-first cut drops reference tracks.
+    """
+    review_candidates = [
+        summary for summary in summaries if summary.get("review_candidate", True)
+    ]
+    references = [
+        summary for summary in summaries if not summary.get("review_candidate", True)
+    ]
+    platform = [summary for summary in references if summary.get("platform_name")]
+    others = [summary for summary in references if not summary.get("platform_name")]
+    return review_candidates + platform + others[
+        :max(0, max_report_tracks - len(review_candidates) - len(platform))
+    ]
+
+
 def _annotate(image: Image.Image, track: dict) -> Image.Image:
     annotated = image.copy()
     draw = ImageDraw.Draw(annotated)
@@ -780,11 +809,13 @@ def scan_text(
             semantic_device = getattr(classifier, "device", device_name)
 
     summaries = _promote_repeated_corner_overlays(summaries, video_duration)
+    summaries = _annotate_platform_names(summaries)
 
     if not semantic_routing:
         summaries = [
             summary for summary in summaries
             if summary["persistent"] or summary["max_confidence"] >= 0.65
+            or summary.get("platform_name")
         ]
 
     priority_order = {"high": 0, "medium": 1, "low": 2}
@@ -803,12 +834,7 @@ def scan_text(
     review_candidates = [
         summary for summary in summaries if summary.get("review_candidate", True)
     ]
-    reference_tracks = [
-        summary for summary in summaries if not summary.get("review_candidate", True)
-    ]
-    summaries = review_candidates + reference_tracks[
-        :max(0, max_report_tracks - len(review_candidates))
-    ]
+    summaries = _limit_report_tracks(summaries, max_report_tracks)
     with performance.measure('preview_output'):
         for summary in summaries:
             track = tracks_by_id[summary["track_id"]]

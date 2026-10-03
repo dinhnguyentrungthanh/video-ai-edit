@@ -152,7 +152,10 @@ class RecycleFixture(unittest.TestCase):
         self.shell = FakeShell(self.sid_dir)
         self.co_initialize = Mock(return_value=True)
         self.co_uninitialize = Mock()
+        # The verification retry pauses are recorded, never slept.
+        self.sleeps = []
         self.patch_values({
+            "_sleep": self.sleeps.append,
             "INSTALL_ROOT": self.install,
             "TEST_RECYCLE_ROOT": self.install / "temp" / "recycle-bin-test",
             "_test_bin_enabled": lambda environ=None: False,
@@ -334,6 +337,9 @@ class PathRefusalTests(RecycleFixture):
             "device prefix": "\\\\?\\" + str(target),
             "nul": prefix + "a\0b.mp4",
             "260 characters": too_long,
+            # Security review (L3): a colon after the drive names an alternate data stream.
+            "alternate data stream": str(target) + ":hidden.mp4",
+            "colon in a folder": prefix + "a:b\\Tập 12.mp4",
         }
         for label, value in cases.items():
             with self.subTest(label):
@@ -644,6 +650,198 @@ class SendToRecycleBinTests(RecycleFixture):
         self.assertTrue(wait_until(lambda: not recycle_bin.operations_in_progress()))
 
 
+class VerificationRetryTests(RecycleFixture):
+    """Windows may write the $I record after SHFileOperationW returns (jobs 43, 47 on 2026-10-03)."""
+
+    def test_verification_retries_until_the_record_appears(self):
+        self.shell = FakeShell(self.sid_dir, record=False)
+        target = self.video()
+        size = target.stat().st_size
+        written = []
+
+        def record_arrives_late(seconds):
+            self.sleeps.append(seconds)
+            if len(self.sleeps) == 2:
+                (moved,) = self.sid_dir.glob("$R*")
+                info = self.sid_dir / ("$I" + moved.name[2:])
+                info.write_bytes(info_record_v2(target, size))
+                written.append(str(info))
+
+        self.patch_values({"_sleep": record_arrives_late})
+        result = self.send(target)
+        self.assertFalse(target.exists())
+        self.assertTrue(result.verified)
+        self.assertEqual(result.record_path, written[0])
+        self.assertEqual(self.sleeps, [0.05, 0.1])
+
+    def test_verification_gives_up_after_the_retry_schedule(self):
+        self.shell = FakeShell(self.sid_dir, record=False)
+        target = self.video()
+        lookups = []
+        real_find = recycle_bin.find_recycle_record
+
+        def counting_find(*args, **kwargs):
+            lookups.append(kwargs["since"])
+            return real_find(*args, **kwargs)
+
+        self.patch_values({"find_recycle_record": counting_find})
+        result = self.send(target)
+        self.assertFalse(target.exists())
+        self.assertFalse(result.verified)
+        self.assertIsNone(result.record_path)
+        self.assertEqual(recycle_bin.VERIFY_RETRY_DELAYS, (0.05, 0.1, 0.2, 0.4, 0.8, 1.6))
+        self.assertEqual(self.sleeps, list(recycle_bin.VERIFY_RETRY_DELAYS))
+        self.assertLessEqual(sum(self.sleeps), 3.2)
+        self.assertEqual(len(lookups), 7)
+        self.assertEqual(len(set(lookups)), 1)
+
+    def test_a_record_found_at_once_needs_no_pause(self):
+        result = self.send(self.video())
+        self.assertTrue(result.verified)
+        self.assertEqual(self.sleeps, [])
+
+    def test_a_lookup_error_counts_as_not_found_yet(self):
+        record = "E:\\$Recycle.Bin\\S-1-5-21-1000\\$IABC123.mp4"
+        answers = [OSError("bin folder busy"), ValueError("half-written $I"), record]
+
+        def finder(*args, **kwargs):
+            answer = answers.pop(0)
+            if isinstance(answer, Exception):
+                raise answer
+            return answer
+
+        with patch.object(recycle_bin, "find_recycle_record", side_effect=finder):
+            found = recycle_bin.find_recycle_record_patiently("E:\\", "E:\\a.mp4", 1, since=0.0)
+        self.assertEqual(found, record)
+        self.assertEqual(self.sleeps, [0.05, 0.1])
+        with patch.object(recycle_bin, "find_recycle_record", return_value=None) as never:
+            self.assertIsNone(
+                recycle_bin.find_recycle_record_patiently("E:\\", "E:\\a.mp4", 1, since=0.0, delays=(0.5,)),
+            )
+        self.assertEqual(never.call_count, 2)
+        self.assertEqual(self.sleeps, [0.05, 0.1, 0.5])
+
+
+class ExportRecyclerTests(RecycleFixture):
+    """Batch 4 "Lưu trữ": only the reviewed export of an archived job (and its manifest) may go."""
+
+    EXPORT = "Tập 12-1a2b3c4d-5e6f7a8b-reviewed.mp4"
+
+    def export(self, name=EXPORT, size=2048, folder=None):
+        return self.video(name, size=size, folder=folder or self.install / "output")
+
+    def send_export(self, path, **kwargs):
+        kwargs.setdefault("allowed_root", self.install / "output")
+        kwargs.setdefault("expected_size", path.stat().st_size)
+        return recycle_bin.send_export_to_recycle_bin(path, **kwargs)
+
+    def refused(self, path, expected, **kwargs):
+        with self.assertRaises(RecycleRefused) as caught:
+            self.send_export(path, **kwargs)
+        self.assertEqual(str(caught.exception), expected)
+        self.assertTrue(path.is_file())
+
+    def test_export_recycler_accepts_only_reviewed_exports_inside_output(self):
+        output = self.install / "output"
+        mp4 = self.export()
+        manifest = self.export(self.EXPORT + ".manifest.json", size=300)
+        result = self.send_export(mp4)
+        self.assertFalse(mp4.exists())
+        self.assertEqual((result.path, result.size_bytes, result.verified), (str(mp4), 2048, True))
+        self.assertEqual(result.record_path, self.shell.records[0])
+        self.assertTrue(self.send_export(manifest).verified)
+        self.assertFalse(manifest.exists())
+        self.assertEqual(len(self.shell.calls), 2)
+        # Nothing but <install>/output, and only "…-reviewed.mp4" or its ".manifest.json".
+        name_message = recycle_bin.EXPORT_NAME_MESSAGE
+        root_message = "Chỉ chuyển được bản xuất trong thư mục output của BiliFlow vào Thùng rác."
+        self.assertEqual(recycle_bin.EXPORT_ALLOWED_ROOT_MESSAGE, root_message)
+        for name in ("Tập 12.mp4", "x-reviewed.mp4.json", "x-reviewed.mkv", "x-reviewed.mp4.manifest.json.bak"):
+            with self.subTest(name=name):
+                self.refused(self.export(name), name_message)
+        self.refused(self.video("y-reviewed.mp4"), root_message, allowed_root=self.input)
+        for root in (self.install, self.base, output / "sub"):
+            with self.subTest(root=root):
+                self.refused(self.export("z-reviewed.mp4"), root_message, allowed_root=root)
+        # The path checks speak about the export, not about a source video.
+        outside = self.video("w-reviewed.mp4", folder=self.base / "elsewhere")
+        self.refused(outside, "Bản xuất nằm ngoài thư mục output; không chuyển vào Thùng rác.")
+        self.refused(self.export("v-reviewed.mp4"), "Bản xuất không còn đúng dung lượng đã kiểm tra.",
+                     expected_size=1)
+        real = os.path.realpath
+        linked = self.export("link-reviewed.mp4")
+        with patch("os.path.realpath", side_effect=lambda p, *a, **k: str(self.base / "x") if p == str(linked) else real(p, *a, **k)):
+            self.refused(linked, "Bản xuất là liên kết (symlink/junction); không chuyển vào Thùng rác.")
+        with patch.object(recycle_bin, "_query_bin", return_value=(MAX_BYTES - CAPACITY_MARGIN_BYTES, 9)):
+            with self.assertRaises(RecycleRefused) as caught:
+                self.send_export(self.export("full-reviewed.mp4"))
+        self.assertTrue(str(caught.exception).startswith("Không thể lưu trữ: Thùng rác của ổ "), caught.exception)
+        self.assertEqual(len(self.shell.calls), 2)
+        # Shell failures keep the export in output and say so.
+        for index, (values, expected) in enumerate((
+            ({"aborted": True}, "Windows đã hủy thao tác; bản xuất vẫn còn trong output."),
+            ({"rc": 2}, "Windows báo lỗi 0x2 khi chuyển vào Thùng rác; bản xuất vẫn còn trong output."),
+            ({}, "Windows không chuyển file; bản xuất vẫn còn trong output."),
+            ({"rc": 32}, SHARING_MESSAGE),
+        )):
+            with self.subTest(values=values):
+                self.shell = FakeShell(self.sid_dir, move=False, **values)
+                target = self.export(f"case-{index}-reviewed.mp4")
+                with self.assertRaises(RecycleFailed) as caught:
+                    self.send_export(target)
+                self.assertEqual(str(caught.exception), expected)
+                self.assertTrue(target.is_file())
+
+    def test_export_recycler_refuses_streams_and_subfolders(self):
+        # Security review (L3): "x.mp4:y-reviewed.mp4" is a stream of another file (lstat even
+        # reports the stream's own size), and an export is always directly in output/.
+        output = self.install / "output"
+        host = self.export("host.mp4", size=4096)
+        data = host.read_bytes()
+        stream = Path(str(host) + ":evil-reviewed.mp4")
+        with open(stream, "wb") as handle:
+            handle.write(b"s" * 64)
+        self.assertEqual(os.lstat(stream).st_size, 64)
+        with self.assertRaises(RecycleRefused) as caught:
+            self.send_export(stream, expected_size=64)
+        self.assertEqual(str(caught.exception), recycle_bin.EXPORT_WORDING.path)
+        self.assertEqual(recycle_bin.export_path_refusal(stream, output_root=output), recycle_bin.EXPORT_WORDING.path)
+        folder_message = "Bản xuất không nằm ngay trong thư mục output; không chuyển vào Thùng rác."
+        self.assertEqual(recycle_bin.EXPORT_FOLDER_MESSAGE, folder_message)
+        for relative in ("sub/x-reviewed.mp4", "sub/x-reviewed.mp4.manifest.json", "a/b/y-reviewed.mp4"):
+            with self.subTest(relative=relative):
+                self.refused(self.export(Path(relative).name, folder=output / Path(relative).parent),
+                             folder_message)
+        # The same rule when the archive checks a card (no size read, nothing touched).
+        self.assertEqual(recycle_bin.export_path_refusal(output / "c" / "z-reviewed.mp4", output_root=output),
+                         folder_message)
+        self.assertIsNone(recycle_bin.export_path_refusal(self.export(), output_root=output))
+        self.assertEqual(self.shell.calls, [])
+        self.assertEqual(host.read_bytes(), data)
+        with open(stream, "rb") as handle:
+            self.assertEqual(handle.read(), b"s" * 64)
+
+    def test_send_to_recycle_bin_still_refuses_output(self):
+        output = self.install / "output"
+        mp4 = self.export()
+        with self.assertRaises(RecycleRefused) as caught:
+            self.send(mp4, allowed_root=output)
+        self.assertEqual(str(caught.exception), ALLOWED_ROOT_MESSAGE)
+        # An export name inside input is still a source: input wording, no export rule.
+        source = self.video("Tập 13-reviewed.mp4")
+        with self.assertRaises(RecycleRefused) as caught:
+            self.send(source, expected_size=1)
+        self.assertEqual(str(caught.exception), SIZE_MESSAGE)
+        self.assertTrue(mp4.is_file())
+        self.assertTrue(source.is_file())
+        self.assertEqual(self.shell.calls, [])
+        # The source wording is unchanged for every source failure.
+        self.shell = FakeShell(self.sid_dir, move=False, aborted=True)
+        with self.assertRaises(RecycleFailed) as caught:
+            self.send(source)
+        self.assertEqual(str(caught.exception), ABORTED_MESSAGE)
+
+
 class InfoRecordTests(unittest.TestCase):
     def test_parses_version_2_and_version_1(self):
         path = "E:\\DungChung\\BiliFlow\\input\\Tập 12.mp4"
@@ -731,6 +929,20 @@ class FindRecycleRecordTests(unittest.TestCase):
         with patch("os.scandir", side_effect=scandir):
             self.assertEqual(self.find(), expected)
         self.assertEqual(len(refused), 1)
+
+    def test_records_written_after_until_are_ignored(self):
+        # Security review (L5): a later deletion of the same path and size must not answer for an
+        # earlier move; within [since, until] the newest record still wins.
+        volume = str(self.volume) + "\\"
+        older = self.record("OLDER2", age=600)
+        self.record("NEWER2", age=10)
+        since = time.time() - 3600
+        self.assertEqual(recycle_bin.find_recycle_record(volume, self.original, 1024, since=since,
+                                                         until=time.time() - 300), older)
+        self.assertIsNone(recycle_bin.find_recycle_record(volume, self.original, 1024, since=since,
+                                                          until=time.time() - 900))
+        self.assertNotEqual(recycle_bin.find_recycle_record(volume, self.original, 1024, since=since,
+                                                            until=None), older)
 
     def test_newest_match_wins_and_a_missing_bin_finds_nothing(self):
         self.record("OLDER1", age=30)

@@ -262,7 +262,7 @@ class ControlCenterJobFactsTests(ControlCenterDatabase):
         facts = control_center_job_facts(self.root, SHA.upper())
         self.assertEqual(facts, {
             "job": {"id": self.job_id, "state": "QUEUED", "current_stage": "render"},
-            "next_pending_stage": "render", "render_request": True, "cleaned": False,
+            "next_pending_stage": "render", "render_request": True, "cleaned": False, "archived": False,
         })
 
     def test_cleaned_follows_the_latest_cleanup_row(self):
@@ -272,6 +272,63 @@ class ControlCenterJobFactsTests(ControlCenterDatabase):
             with self.subTest(state=state):
                 self.add_cleanup(state)
                 self.assertIs(control_center_job_facts(self.root, SHA)["cleaned"], cleaned)
+
+    def add_archive(self, state):
+        """Append a source_archives row that ends in ``state``, through the real JobStore."""
+        store = JobStore(self.database)
+        try:
+            row_id = store.add_source_archive(
+                job_id=self.job_id, kind="SKIPPED", source_path=str(self.source),
+                archive_path=str(self.root / "archive" / "sources" / "video" / "video.mp4"),
+                manifest_path=str(self.root / "archive" / "sources" / "video" / "archive-manifest.json"),
+                source_sha256=SHA, size_bytes=5, mtime_ns=1, queue_path="reports/q.json",
+            )
+            if state != "PENDING":
+                store.finish_source_archive(row_id, state="FAILED" if state == "FAILED" else "ARCHIVED")
+            if state in ("RESTORING", "RESTORED"):
+                store.begin_archive_restore(row_id)
+            if state == "RESTORED":
+                store.finish_archive_restore(row_id, mtime_ns=2, job_state=None)
+            self.assertEqual(store.latest_source_archive(self.job_id)["state"], state)
+        finally:
+            store.close()
+
+    def test_archived_follows_the_latest_archive_row(self):
+        # Batch 4: "Lưu trữ" locks the job like a cleaned source, and so does review-ui.
+        self.assertIs(control_center_job_facts(self.root, SHA)["archived"], False)
+        for state, archived in (("PENDING", True), ("FAILED", False), ("ARCHIVED", True),
+                                ("RESTORING", True), ("RESTORED", False), ("ARCHIVED", True)):
+            with self.subTest(state=state):
+                self.add_archive(state)
+                facts = control_center_job_facts(self.root, SHA)
+                self.assertIs(facts["archived"], archived)
+                self.assertIs(facts["cleaned"], False)
+                self.assertEqual(
+                    standalone_edit_refusal(self.root, self.queue()),
+                    guards.SOURCE_ARCHIVED_REVIEW_REFUSAL if archived else None,
+                )
+        # A cleaned source is named first.
+        self.add_cleanup("RECYCLED")
+        self.assertEqual(standalone_edit_refusal(self.root, self.queue()), SOURCE_CLEANED_REVIEW_REFUSAL)
+        self.assertEqual(
+            guards.SOURCE_ARCHIVED_REVIEW_REFUSAL,
+            "Video gốc đang ở kho lưu trữ; bấm “Khôi phục bản xuất” trước khi đổi quyết định duyệt.",
+        )
+        self.assertEqual(export_source_refusal(self.source, cleaned=False, archived=True),
+                         guards.SOURCE_ARCHIVED_MESSAGE)
+        self.assertEqual(export_source_refusal(self.source, cleaned=True, archived=True), SOURCE_CLEANED_MESSAGE)
+
+    def test_a_database_without_the_archive_table_is_not_archived(self):
+        self.add_archive("ARCHIVED")
+        connection = sqlite3.connect(self.database)
+        try:
+            connection.execute("DROP TABLE source_archives")
+            connection.commit()
+        finally:
+            connection.close()
+        before = digest(self.database)
+        self.assertIs(control_center_job_facts(self.root, SHA)["archived"], False)
+        self.assertEqual(digest(self.database), before)
 
     def test_a_database_without_the_cleanup_table_is_not_cleaned(self):
         self.add_cleanup("RECYCLED")

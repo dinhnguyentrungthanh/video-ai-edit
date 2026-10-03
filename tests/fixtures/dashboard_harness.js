@@ -12,6 +12,8 @@ const options = [
 ];
 const server = {jobs: [], posts: [], actions: [], delays: [], clock: 0, postDelay: 0, refuseNext: false, refuseAction: null, seq: 2, paused: false,
   previewCalls: [], cleanupPosts: [], cleanupRefuse: null, cleanupResults: null, blocked: null, cleanupRunning: false, cleanupRow: 0};
+// Batch 4: Hủy / Ẩn / Hiện lại, "Kiểm tra lại Thùng rác", "Lưu trữ" and "Khôi phục bản xuất".
+Object.assign(server, {flagPosts: [], recheckPosts: [], recheckFound: false, archivePreviewCalls: [], archivePosts: [], archiveRefuse: null, archiveResults: null, restorePosts: [], restoreRefuse: null, archiveRow: 0});
 const TAB_KEYS = ['waiting', 'scan_queue', 'scanning', 'review', 'export', 'completed'];
 // #44 was clicked before #45 (queue_seq), although #45 was touched later.
 for (const id of [44, 45]) server.jobs.push({id, job_key: `ep-${id}`, source_path: `input/Tập ${id}.mp4`, state: 'QUEUED', updated_at: `2026-10-02T13:0${id - 40}:00`, priority: 100, queue_seq: id - 43, pending_stage: 'preflight', detector_groups: ['advertising'], content_style: 'live_action', profile: 'careful', progress: 0, ocr_recognition_batch_size: 1, fast_scan: true, active_queue_path: null});
@@ -42,6 +44,16 @@ async function fakeFetch(url, opt = {}) {
     return response(200, server.preview(ids));
   }
   if (url === '/api/source-cleanup' && opt.method === 'POST') return cleanupPost(JSON.parse(opt.body || '{}'));
+  const flag = /^\/api\/jobs\/(\d+)\/(cancel|hide|unhide)$/.exec(url);
+  if (flag && opt.method === 'POST') return flagAction(Number(flag[1]), flag[2]);
+  if (url === '/api/source-recycle-check' && opt.method === 'POST') return recheckPost(JSON.parse(opt.body || '{}'));
+  if (url.startsWith('/api/source-archive/preview?ids=')) {
+    const ids = url.slice('/api/source-archive/preview?ids='.length);
+    server.archivePreviewCalls.push(ids);
+    return response(200, server.archivePreview(ids));
+  }
+  if (url === '/api/source-archive' && opt.method === 'POST') return archivePost(JSON.parse(opt.body || '{}'));
+  if (url === '/api/source-archive/restore' && opt.method === 'POST') return restorePost(JSON.parse(opt.body || '{}'));
   const action = /^\/api\/jobs\/(\d+)\/(skip|unskip|review\/finalize)$/.exec(url);
   if (action && opt.method === 'POST') return jobAction(Number(action[1]), action[2], JSON.parse(opt.body || '{}'));
   const rerunMatch = /^\/api\/jobs\/(\d+)\/rerun$/.exec(url);
@@ -117,6 +129,86 @@ async function cleanupPost(body) {
   const moved = results.filter(r => r.status === 'RECYCLED' || r.status === 'UNVERIFIED');
   return response(200, {results, recycled_count: moved.length, recycled_bytes: moved.reduce((sum, r) => sum + r.size_bytes, 0), failed_count: results.filter(r => r.status === 'FAILED').length, pending: results.filter(r => r.status === 'PENDING').length});
 }
+// Hủy, Ẩn khỏi danh sách and Hiện lại (batch 4), with the server's 409 codes.
+async function flagAction(id, name) {
+  server.flagPosts.push({id, name});
+  if (server.postDelay) await sleep(server.postDelay);
+  const job = server.jobs.find(x => x.id === id);
+  server.clock += 1;
+  if (name === 'cancel') {
+    if (job.state === 'CANCELLED') return response(409, {error: `Video #${id} đã được hủy trước đó; không hủy thêm lần nữa.`, code: 'already_cancelled'});
+    if (job.state === 'COMPLETED') return response(409, {error: `Video #${id} đã hoàn tất; không có gì để hủy.`, code: 'not_cancellable'});
+    Object.assign(job, {state: 'CANCELLED', stop_mode: 'CANCELLED', pending_stage: null, queue_seq: null, hidden_at: null, updated_at: `2026-10-03T13:${String(server.clock).padStart(2, '0')}:00`});
+    return response(200, job);
+  }
+  if (name === 'hide') {
+    if (job.state !== 'CANCELLED') return response(409, {error: `Video #${id} chưa bị hủy; chỉ ẩn được video đã hủy.`, code: 'not_cancelled'});
+    if (job.hidden_at) return response(409, {error: `Video #${id} đã được ẩn khỏi danh sách.`, code: 'already_hidden'});
+    job.hidden_at = '2026-10-03T12:30:00+07:00';
+    return response(200, job);
+  }
+  if (!job.hidden_at) return response(409, {error: `Video #${id} không bị ẩn.`, code: 'not_hidden'});
+  job.hidden_at = null;
+  return response(200, job);
+}
+// "Kiểm tra lại Thùng rác": only the summary fields of the row change, as on the server.
+async function recheckPost(body) {
+  server.recheckPosts.push(body);
+  const cleanup = body.kind === 'source_cleanup';
+  const job = server.jobs.find(j => (cleanup ? j.source_cleanup : j.source_archive) && (cleanup ? j.source_cleanup : j.source_archive).id === body.id);
+  const found = !!server.recheckFound, stamp = '2026-10-03T13:30:00+07:00', what = cleanup ? 'video gốc' : 'bản xuất';
+  if (cleanup) Object.assign(job.source_cleanup, found ? {verified: true, verified_later_at: stamp, rechecked_at: stamp} : {rechecked_at: stamp});
+  else Object.assign(job.source_archive, found ? {export_verified: true, export_verified_later_at: stamp, export_rechecked_at: stamp} : {export_rechecked_at: stamp});
+  return response(200, {kind: body.kind, id: body.id, job_id: job.id, found, record: found ? 'E:\\$Recycle.Bin\\S-1\\$I4RHHWK.mp4' : null, checked_at: stamp,
+    message: found ? `Đã thấy ${what} trong Thùng rác của Windows.` : `Vẫn chưa thấy ${what} trong Thùng rác của Windows; hãy mở Thùng rác để kiểm tra. BiliFlow không thay đổi gì.`});
+}
+// The server side of "Lưu trữ" and "Khôi phục bản xuất" (batch 4), as far as the dashboard sees it.
+server.archivePreview = function (idsText) {
+  const eligible = [], ineligible = [];
+  for (const id of idsText.split(',').map(Number).sort((a, b) => a - b)) {
+    const job = server.jobs.find(j => j.id === id), a = job && job.archive;
+    if (job && a && a.eligible) eligible.push({job_id: id, name: fileName(job), file_name: fileName(job), kind: a.kind, size_bytes: a.size_bytes, archive_path: `archive/sources/${job.job_key}/${fileName(job)}`, output_name: a.output_name, output_bytes: a.output_bytes, manifest_bytes: a.manifest_bytes, exported_at: a.exported_at, skipped_at: a.skipped_at});
+    else ineligible.push({job_id: id, name: job ? fileName(job) : '', reason: job ? ((a && a.reason) || 'Chỉ lưu trữ được video đã xuất hoặc đã bỏ qua (mục “Hoàn tất”)') : `Không tìm thấy video #${id}`});
+  }
+  const exported = eligible.filter(x => x.kind === 'EXPORTED'), freed = exported.reduce((sum, x) => sum + x.output_bytes + (x.manifest_bytes || 0), 0), used = 11823971925;
+  return {preview_id: server.archivePreviewId || 'c'.repeat(64), eligible, ineligible, count: eligible.length, archive_bytes: eligible.reduce((sum, x) => sum + x.size_bytes, 0), freed_bytes: freed,
+    recycle_bin: exported.length ? {volume: 'E:', used_bytes: used, items: 7, max_bytes: 52157218816, after_bytes: used + freed} : null, blocked: server.archiveBlocked || null};
+};
+function archiveRow(job, state, extra = {}) {
+  server.archiveRow += 1;
+  const a = job.archive, exported = a.kind === 'EXPORTED';
+  return {id: server.archiveRow, state, kind: a.kind, size_bytes: a.size_bytes, file_name: fileName(job), source_path: job.source_path, archive_path: `archive/sources/${job.job_key}/${fileName(job)}`,
+    output_name: a.output_name, output_bytes: a.output_bytes, created_at: '2026-10-03T13:00:00+07:00', archived_at: '2026-10-03T13:00:09+07:00', restored_at: null,
+    export_recycled: exported, export_verified: exported, export_verified_at_archive: exported, export_verified_later_at: null, export_rechecked_at: null, warning: null, error: null, ...extra};
+}
+async function archivePost(body) {
+  server.archivePosts.push(body);
+  if (server.postDelay) await sleep(server.postDelay);
+  if (server.archiveRefuse) { const r = server.archiveRefuse; server.archiveRefuse = null; return response(r.status, {error: r.error, code: r.code, ...(r.preview ? {preview: r.preview} : {})}); }
+  const planned = server.archiveResults || body.job_ids.map(id => ({job_id: id, status: 'ARCHIVED'}));
+  server.archiveResults = null;
+  const results = planned.map(r => {
+    const job = server.jobs.find(j => j.id === r.job_id), a = job.archive, exported = a.kind === 'EXPORTED';
+    if (r.status === 'ARCHIVED' || r.status === 'UNVERIFIED') {
+      const verified = r.status === 'ARCHIVED' && exported;
+      Object.assign(job, {source_archive: archiveRow(job, 'ARCHIVED', {export_verified: verified, export_verified_at_archive: verified}), source_archived: true, source_present: false,
+        archive: {...a, eligible: false, reason: 'Video gốc đã được lưu trữ'}, cleanup: {...(job.cleanup || {}), eligible: false, reason: 'Video gốc đang ở kho lưu trữ'}});
+    } else if (r.status === 'FAILED') job.source_archive = archiveRow(job, 'FAILED', {error: r.message, archived_at: null});
+    return {job_id: r.job_id, name: fileName(job), status: r.status, message: r.message || 'Đã lưu trữ video gốc', size_bytes: a.size_bytes, output_bytes: exported ? a.output_bytes : 0};
+  });
+  const moved = results.filter(r => r.status === 'ARCHIVED' || r.status === 'UNVERIFIED');
+  return response(200, {results, archived_count: moved.length, freed_bytes: moved.reduce((sum, r) => sum + r.output_bytes, 0), failed_count: results.filter(r => r.status === 'FAILED').length, pending: results.filter(r => r.status === 'PENDING').length});
+}
+async function restorePost(body) {
+  server.restorePosts.push(body);
+  if (server.postDelay) await sleep(server.postDelay);
+  if (server.restoreRefuse) { const r = server.restoreRefuse; server.restoreRefuse = null; return response(r.status, {error: r.error, code: r.code}); }
+  const job = server.jobs.find(j => j.id === body.job_id), skipped = job.source_archive.kind === 'SKIPPED';
+  server.clock += 1;
+  Object.assign(job, {state: skipped ? 'SKIPPED' : 'READY_TO_EXPORT', source_archived: false, source_present: true, source_archive: {...job.source_archive, state: 'RESTORED', restored_at: '2026-10-03T14:00:00+07:00'},
+    archive: {...job.archive, eligible: skipped, reason: skipped ? null : 'Chỉ lưu trữ được video đã xuất hoặc đã bỏ qua (mục “Hoàn tất”)'}, updated_at: `2026-10-03T14:${String(server.clock).padStart(2, '0')}:00`});
+  return response(200, {job_id: job.id, status: 'RESTORED', state: job.state, message: `Đã đưa video gốc của #${job.id} về input (SHA-256 khớp).`});
+}
 class FakeElement {
   constructor(tagName, attrs = {}) { Object.assign(this, {tagName, textContent: '', className: '', value: '', checked: false, listeners: {}}, attrs); this._html = ''; }
   addEventListener(name, fn) { (this.listeners[name] = this.listeners[name] || []).push(fn); }
@@ -138,7 +230,10 @@ function parseControls(html) {
 }
 // <details class="export-panel|rerun-panel" data-job-id="…" [open]> as fake elements.
 function parsePanels(html) {
-  return [...html.matchAll(/<details class="(export-panel|rerun-panel)" data-job-id="(\d+)"\s*(open)?>/g)].map(m => new FakeElement('DETAILS', {className: m[1], dataset: {jobId: m[2]}, open: !!m[3]}));
+  const panels = [...html.matchAll(/<details class="(export-panel|rerun-panel)" data-job-id="(\d+)"\s*(open)?>/g)].map(m => new FakeElement('DETAILS', {className: m[1], dataset: {jobId: m[2]}, open: !!m[3]}));
+  // Batch 4: the closed-by-default folds "Đã hủy", "Đã ẩn" and "Đã lưu trữ".
+  const folds = [...html.matchAll(/<details class="phase-group phase-fold" data-fold="([a-z]+)"\s*(open)?/g)].map(m => new FakeElement('DETAILS', {className: 'phase-fold', dataset: {fold: m[1]}, open: !!m[2]}));
+  return [...panels, ...folds];
 }
 function makeStorage(map) {
   return {getItem: k => (map.has(k) ? map.get(k) : null), setItem: (k, v) => map.set(k, String(v)), removeItem: k => map.delete(k), key: i => [...map.keys()][i] ?? null, get length() { return map.size; }};
@@ -160,6 +255,7 @@ function boot(storageMap, log, extra = {}) {
       if (m) return (statics.jobs.controls || []).filter(x => x.detectorJob === m[1]);
       const panels = /^\.(export-panel|rerun-panel)\[data-job-id\]$/.exec(selector);
       if (panels) return (statics.jobs.panels || []).filter(x => x.className === panels[1]);
+      if (selector === '.phase-fold[data-fold]') return (statics.jobs.panels || []).filter(x => x.className === 'phase-fold');
       return [];
     },
     querySelector(selector) {
@@ -180,6 +276,13 @@ function boot(storageMap, log, extra = {}) {
   statics['cleanup-dialog'] = dialog;
   statics['cleanup-confirm'] = new FakeElement('BUTTON', {id: 'cleanup-confirm', disabled: true, textContent: 'Chuyển vào Thùng rác'});
   statics['cleanup-cancel'] = new FakeElement('BUTTON', {id: 'cleanup-cancel', disabled: false, textContent: 'Hủy', focus() { this.focused = (this.focused || 0) + 1; }});
+  // Batch 4: the archive <dialog> (static markup like the cleanup one).
+  const archiveDialog = new FakeElement('DIALOG', {id: 'archive-dialog', open: false});
+  archiveDialog.showModal = function () { this.open = true; this.shown = (this.shown || 0) + 1; };
+  archiveDialog.close = function () { this.open = false; this.dispatch('close'); };
+  statics['archive-dialog'] = archiveDialog;
+  statics['archive-confirm'] = new FakeElement('BUTTON', {id: 'archive-confirm', disabled: true, textContent: 'Lưu trữ'});
+  statics['archive-cancel'] = new FakeElement('BUTTON', {id: 'archive-cancel', disabled: false, textContent: 'Hủy', focus() { this.focused = (this.focused || 0) + 1; }});
   const sandbox = {
     document, fetch: fakeFetch, localStorage: makeStorage(storageMap), console,
     setTimeout, clearTimeout, setInterval: () => 0, clearInterval: () => {},
@@ -188,10 +291,19 @@ function boot(storageMap, log, extra = {}) {
     listeners: {}, addEventListener(name, fn) { (this.listeners[name] = this.listeners[name] || []).push(fn); },
   };
   sandbox.window = sandbox;
+  if (extra.scroll) {
+    // A page whose job list starts listOffset px below the top of the document.
+    const scroll = extra.scroll;
+    sandbox.scrollTo = options => { scroll.calls.push(options); scroll.y = options.top; };
+    Object.defineProperty(sandbox, 'scrollY', {get: () => scroll.y});
+    statics.jobs.getBoundingClientRect = () => ({top: scroll.listOffset - scroll.y});
+    statics['job-tabs'] = new FakeElement('NAV', {id: 'job-tabs', offsetHeight: scroll.barHeight, scrollLeft: 0, clientWidth: 600,
+      querySelector(selector) { return selector === '.job-tab.active' ? scroll.activeTab : null; }});
+  }
   const context = vm.createContext(sandbox);
   vm.runInContext(script, context);
   const run = code => vm.runInContext(code, context);
-  return {run, document, jobs: statics.jobs, dialog, notice: () => document.getElementById('notice').textContent, noticeIsError: () => document.getElementById('notice').className.includes('error')};
+  return {run, document, jobs: statics.jobs, dialog, archiveDialog, notice: () => document.getElementById('notice').textContent, noticeIsError: () => document.getElementById('notice').className.includes('error')};
 }
 function cards(page) {
   return page.jobs.innerHTML.split('<article class="job"').slice(1).map(chunk => {
@@ -207,7 +319,13 @@ function cards(page) {
     const cleanupButton = new RegExp(`<button class="warn" onclick="openCleanup\\(\\[${id}\\],this\\)"([^>]*)>`).exec(chunk);
     const sourceLine = /<div class="source-line tone-([a-z]+)">([^<]*)</.exec(chunk);
     return {id, badge, queue, scan: values[0], scanDetail: details[0], exportValue: values[3], exportDetail: details[3], hasStart: chunk.includes(`start(${id},`), startDisabled: chunk.includes(`start(${id},this)" disabled>Đang bắt đầu…`), title: /class="job-title">([^<]*)</.exec(chunk)[1], detectors, ocr: ocr ? Number(ocr[1]) : null,
-      bucket: attr(chunk, 'data-bucket'), hasSkip: chunk.includes(`onclick="skipJob(${id},`), hasUnskip: chunk.includes(`unskipJob(${id},`), hasCancel: chunk.includes(`act(${id},'cancel')`), hasRerun: chunk.includes('class="rerun-panel"'),
+      bucket: attr(chunk, 'data-bucket'), hasSkip: chunk.includes(`onclick="skipJob(${id},`), hasUnskip: chunk.includes(`unskipJob(${id},`), hasCancel: chunk.includes(`cancelJob(${id},`), hasRerun: chunk.includes('class="rerun-panel"'),
+      cancelButton: (m => m ? {disabled: /\sdisabled(\s|$)/.test(m[1]), text: m[2]} : null)(new RegExp(`<button class="danger" onclick="cancelJob\\(${id},this\\)"([^>]*)>([^<]*)<`).exec(chunk)),
+      hasHide: chunk.includes(`hideJob(${id},`), hideTitle: (m => m ? m[1] : null)(new RegExp(`onclick="hideJob\\(${id},this\\)"[^>]*title="([^"]*)"`).exec(chunk)),
+      recheck: (m => m ? {kind: m[1], row: Number(m[2]), disabled: /\sdisabled(\s|$)/.test(m[3]), text: m[4]} : null)(new RegExp(`onclick="recheckBin\\('([a-z_]+)',(\\d+),${id},this\\)"([^>]*)>([^<]*)<`).exec(chunk)),
+      archiveBadge: (/class="archive-badge"[^>]*>([^<]*)</.exec(chunk) || [null, null])[1], hasArchiveButton: chunk.includes(`openArchive([${id}]`),
+      restore: (m => m ? {disabled: /\sdisabled(\s|$)/.test(m[1]), text: m[2]} : null)(new RegExp(`onclick="restoreArchive\\(${id},this\\)"([^>]*)>([^<]*)<`).exec(chunk)),
+      pickLabel: (new RegExp(`data-cleanup-job="${id}"[^>]*>([^<]*)</label>`).exec(chunk) || [null, null])[1],
       hasExport: chunk.includes('class="export-panel"'), exportDisabled: exportButton ? /disabled/.test(exportButton[1]) : null, exportTitle: exportButton ? attr(exportButton[1], 'title') : null, exportReason: (/class="export-reason">([^<]*)</.exec(chunk) || [null, null])[1], exportError: (/class="export-error"[^>]*>([^<]*)</.exec(chunk) || [null, null])[1],
       hasCleanupPick: !!pick, cleanupChecked: pick ? /\schecked(\s|$)/.test(pick[1]) : null, hasCleanupButton: chunk.includes(`openCleanup([${id}]`),
       cleanupButtonDisabled: cleanupButton ? /\sdisabled(\s|$)/.test(cleanupButton[1]) : null, cleanupButtonTitle: cleanupButton ? attr(cleanupButton[1], 'title') : null,
@@ -219,6 +337,21 @@ function cards(page) {
 function headings(page) {
   return [...page.jobs.innerHTML.matchAll(/class="phase-heading">([^<]*) <span>(\d+)<\/span>/g)].map(m => [m[1], Number(m[2])]);
 }
+// Batch 4: the folds of the visible tab ({key, open, label, count, ids}) and the compact hidden rows.
+function folds(page) {
+  // Folds end their tab; a fold's cards contain <details> of their own, so a fold runs to the next fold.
+  const html = page.jobs.innerHTML;
+  const starts = [...html.matchAll(/<details class="phase-group phase-fold" data-fold="([a-z]+)"\s*(open)?\s*ontoggle="[^"]*"><summary class="phase-heading">([^<]*) <span>(\d+)<\/span><\/summary>/g)];
+  return starts.map((m, i) => {
+    const body = html.slice(m.index + m[0].length, i + 1 < starts.length ? starts[i + 1].index : html.length);
+    return {key: m[1], open: !!m[2], label: m[3], count: Number(m[4]), ids: [...body.matchAll(/class="job-title">#(\d+)|<div class="hidden-row" data-job-id="(\d+)"/g)].map(x => Number(x[1] || x[2]))};
+  });
+}
+function hiddenRows(page) {
+  return [...page.jobs.innerHTML.matchAll(/<div class="hidden-row" data-job-id="(\d+)"><span class="hidden-name">([^<]*)<\/span><span class="hidden-when">([^<]*)<\/span><button onclick="unhideJob\((\d+),this\)"([^>]*)>([^<]*)<\/button>/g)]
+    .map(m => ({id: Number(m[1]), name: m[2], when: m[3], disabled: /\sdisabled(\s|$)/.test(m[5]), text: m[6]}));
+}
+function foldElement(page, key) { return (page.jobs.panels || []).find(x => x.className === 'phase-fold' && x.dataset.fold === key); }
 // The tab bar: [key, label, count] in order, plus the active key.
 function tabBar(page) {
   const html = page.document.getElementById('job-tabs').innerHTML;
@@ -581,7 +714,210 @@ async function cleanupScenario() {
   out.limit = {count: selection(page).length, eligible: eligible.length, first50: JSON.stringify(selection(page)) === JSON.stringify(eligible.slice(0, 50)), notice: page.notice(), toolbar: toolbar(page)};
   console.log(JSON.stringify(out));
 }
+async function scrollScenario() {
+  // "Đang chờ xử lý" has 3 cards, "Hoàn tất" a long list, "Đang chạy xuất video" none.
+  server.jobs.length = 0;
+  for (let i = 0; i < 3; i++) server.jobs.push({...BASE, id: 10 + i, job_key: `ep-${10 + i}`, source_path: `input/${10 + i}.mp4`, state: 'NEEDS_METADATA', updated_at: `2026-10-03T10:0${i}:00`});
+  for (let i = 0; i < 30; i++) server.jobs.push({...BASE, id: 100 + i, job_key: `ep-${100 + i}`, source_path: `input/${100 + i}.mp4`, state: 'COMPLETED', progress: 1, updated_at: `2026-10-03T09:${String(i).padStart(2, '0')}:00`});
+  // The list starts 600 px down the page, under a 72 px header and a 56 px sticky tab bar: its top is at 472.
+  const scroll = {y: 0, calls: [], listOffset: 600, barHeight: 56, activeTab: {offsetLeft: 900, offsetWidth: 160}};
+  const log = {confirms: [], alerts: [], confirmAnswer: true};
+  const page = boot(new Map(), log, {header: {offsetHeight: 72}, scroll});
+  await sleep(30);
+  const out = {boot_calls: scroll.calls.length};
+  const step = (tab, y) => { scroll.y = y; scroll.calls.length = 0; page.run(`selectJobTab('${tab}')`); return {calls: scroll.calls.map(c => [c.top, c.behavior]), y: scroll.y}; };
+  // At the top of the page the list is below: scroll down to it.
+  out.below = step('completed', 0);
+  // Deep in the long list, another tab: scroll back up to the start of the list.
+  out.above = step('waiting', 2400);
+  // Already at the start of the list: nothing moves.
+  out.aligned = step('completed', 472);
+  out.near = step('waiting', 473);
+  // An empty tab, then a full one: the position is computed after the render.
+  out.empty = step('export', 1200);
+  out.full = step('completed', scroll.y);
+  // The tab bar scrolls sideways to show the active tab (it does not move the page).
+  const bar = page.document.getElementById('job-tabs');
+  out.bar_right = bar.scrollLeft;
+  bar.scrollLeft = 700; scroll.activeTab = {offsetLeft: 100, offsetWidth: 160};
+  step('waiting', 0);
+  out.bar_left = bar.scrollLeft;
+  // The 3 s poll never scrolls.
+  scroll.calls.length = 0; scroll.y = 2000;
+  await page.run('load()');
+  out.poll_calls = scroll.calls.length;
+  console.log(JSON.stringify(out));
+}
+async function cancelledScenario() {
+  server.jobs.length = 0;
+  const base = id => ({...BASE, id, job_key: `ep-${id}`, source_path: `input/Tập ${id}.mp4`, hidden_at: null});
+  server.jobs.push({...base(5), state: 'QUEUED', pending_stage: 'preflight', queue_seq: 1, updated_at: '2026-10-03T12:05:00'});
+  server.jobs.push({...base(6), state: 'PAUSED', stop_mode: 'PAUSED', updated_at: '2026-10-03T12:06:00'});
+  // Job 2 was cancelled last (newest first), job 3 earlier; job 4 is cancelled and hidden.
+  server.jobs.push({...base(2), state: 'CANCELLED', stop_mode: 'CANCELLED', updated_at: '2026-10-03T12:17:00'});
+  server.jobs.push({...base(3), state: 'CANCELLED', stop_mode: 'CANCELLED', updated_at: '2026-10-03T11:00:00', active_queue_path: 'reports/jobs/ep-3/review-queue.json'});
+  server.jobs.push({...base(4), state: 'CANCELLED', stop_mode: 'CANCELLED', updated_at: '2026-10-03T10:00:00', hidden_at: '2026-10-03T12:20:00+07:00'});
+  // A flag older code left on a job that is no longer cancelled: it is not hidden.
+  server.jobs.push({...base(8), state: 'FAILED', updated_at: '2026-10-03T09:30:00', hidden_at: '2026-10-03T08:00:00+07:00'});
+  server.jobs.push({...base(7), state: 'COMPLETED', progress: 1, updated_at: '2026-10-03T09:00:00'});
+  const log = {confirms: [], alerts: [], confirmAnswer: true};
+  const page = boot(new Map(), log);
+  await sleep(30);
+  const out = {};
+  const card = id => allCards(page).find(c => c.id === id);
+  out.bar = tabBar(page).tabs;
+  page.run("selectJobTab('waiting')");
+  out.headings = headings(page);
+  out.folds = folds(page);
+  out.hidden_rows = hiddenRows(page);
+  out.card2 = card(2); out.card6 = card(6); out.card8 = card(8);
+  // Hủy asks first; declining posts nothing.
+  log.confirmAnswer = false;
+  await page.run('cancelJob(6)');
+  out.declined = {posts: server.flagPosts.length, confirm: log.confirms[0], card: card(6).cancelButton};
+  // A double click asks once and posts once; the button says "Đang hủy…" meanwhile.
+  log.confirms.length = 0; log.confirmAnswer = true; server.postDelay = 80;
+  const button = {disabled: false, textContent: 'Hủy', isConnected: true};
+  const first = page.run('cancelJob')(6, button), second = page.run('cancelJob')(6, button);
+  await sleep(10);
+  out.busy = {disabled: button.disabled, text: button.textContent};
+  page.run('renderJobs(true)');
+  out.busy_card = (allCards(page).find(c => c.id === 6) || {}).cancelButton;
+  await Promise.all([first, second]);
+  server.postDelay = 0;
+  out.cancelled = {posts: server.flagPosts.slice(), confirms: log.confirms.length, notice: page.notice(), error: page.noticeIsError(), button: {disabled: button.disabled, text: button.textContent}, folds: folds(page)};
+  // Another tab cancelled #5 already: the stale card's Hủy gets 409, reloads and says so without an error.
+  Object.assign(server.jobs.find(j => j.id === 5), {state: 'CANCELLED', stop_mode: 'CANCELLED', pending_stage: null, queue_seq: null, updated_at: '2026-10-03T12:40:00'});
+  server.flagPosts.length = 0; log.confirms.length = 0;
+  await page.run('cancelJob(5)');
+  out.repeat = {posts: server.flagPosts.slice(), notice: page.notice(), error: page.noticeIsError(), folds: folds(page)};
+  // Ẩn khỏi danh sách: #3 leaves "Đã hủy" for "Đã ẩn"; the tab count drops.
+  server.flagPosts.length = 0;
+  await page.run('hideJob(3)');
+  out.hidden = {posts: server.flagPosts.slice(), notice: page.notice(), error: page.noticeIsError(), folds: folds(page), rows: hiddenRows(page), count: tabBar(page).tabs.find(t => t[0] === 'waiting')[2]};
+  // An opened fold stays open across polls; a closed one stays closed.
+  foldElement(page, 'hidden').open = true;
+  await page.run('load()');
+  out.kept_open = folds(page).map(f => [f.key, f.open]);
+  // Hiện lại: #4 goes back to "Đã hủy" (it keeps its place by its own time).
+  server.flagPosts.length = 0;
+  await page.run('unhideJob(4)');
+  out.unhidden = {posts: server.flagPosts.slice(), notice: page.notice(), folds: folds(page)};
+  // A refusal (another tab already showed it) is a notice, not an error, and reloads.
+  server.jobs.find(j => j.id === 4).hidden_at = null;
+  await page.run('unhideJob(2)');
+  out.refused = {notice: page.notice(), error: page.noticeIsError()};
+  // A tab holding only hidden jobs is not chosen by default and counts 0.
+  server.jobs.length = 0;
+  server.jobs.push({...base(20), state: 'CANCELLED', updated_at: '2026-10-03T10:00:00', hidden_at: '2026-10-03T12:20:00+07:00'});
+  server.jobs.push({...base(21), state: 'COMPLETED', progress: 1, updated_at: '2026-10-03T09:00:00'});
+  const fresh = boot(new Map(), log);
+  await sleep(30);
+  out.only_hidden = {default_tab: fresh.run('activeJobTab'), bar: tabBar(fresh).tabs.map(t => [t[0], t[2]])};
+  fresh.run("selectJobTab('waiting')");
+  out.only_hidden.folds = folds(fresh);
+  out.only_hidden.empty = fresh.jobs.innerHTML.includes('class="empty"');
+  console.log(JSON.stringify(out));
+}
+// Batch 4d: the archive toolbar, dialog, badge, fold, restore and bin re-check of "Hoàn tất".
+function archiveToolbar(page) {
+  const html = page.jobs.innerHTML, m = /<button id="archive-run"([^>]*)>([^<]*)</.exec(html);
+  return m ? {text: m[2], disabled: /\sdisabled(\s|$)/.test(m[1]), summary: (/id="archive-summary">([^<]*)</.exec(html) || [null, null])[1]} : null;
+}
+function archiveDialogState(page) {
+  const confirm = page.document.getElementById('archive-confirm'), cancel = page.document.getElementById('archive-cancel'), body = page.document.getElementById('archive-dialog-body').innerHTML;
+  return {open: page.archiveDialog.open, confirm: confirm.textContent, confirmDisabled: !!confirm.disabled, cancelDisabled: !!cancel.disabled,
+    rows: [...body.matchAll(/<td data-label="Lưu vào">([^<]*)</g)].map(m => m[1]), summary: (/class="cleanup-summary">([^<]*)</.exec(body) || [null, null])[1],
+    bin: (/class="cleanup-bin">([^<]*)</.exec(body) || [null, null])[1], alert: (/class="cleanup-alert" role="alert">([^<]*)</.exec(body) || [null, null])[1],
+    ineligible: [...body.matchAll(/<li>([^<]*)<\/li>/g)].map(m => m[1])};
+}
+async function archiveScenario() {
+  server.jobs.length = 0;
+  const done = {...BASE, state: 'COMPLETED', progress: 1, active_queue_path: 'q', source_present: true, source_cleaned: false, source_cleanup: null, source_archived: false, source_archive: null};
+  const cleanable = (size, output) => ({eligible: true, kind: output ? 'EXPORTED' : 'SKIPPED', reason: null, size_bytes: size, output_name: output, output_bytes: output ? 104857600 : null, exported_at: output ? '2026-10-02T15:00:00+07:00' : null, skipped_at: output ? null : '2026-10-02T14:00:00+07:00'});
+  const hint = (size, output, extra = {}) => ({...cleanable(size, output), manifest_bytes: output ? 2048 : null, ...extra});
+  const add = (id, extra) => server.jobs.push({...done, id, job_key: `ep-${id}`, source_path: `input/Tập ${id}.mp4`, source_size_bytes: 300000000 + id, updated_at: `2026-10-02T15:${id}:00`, ...extra});
+  const archived = (id, output) => ({source_present: false, source_archived: true, cleanup: {...cleanable(300000000 + id, output), eligible: false, reason: 'Video gốc đang ở kho lưu trữ'}, archive: hint(300000000 + id, output, {eligible: false, reason: 'Video gốc đã được lưu trữ'})});
+  add(70, {cleanup: cleanable(300000070, 'ep-70-reviewed.mp4'), archive: hint(300000070, 'ep-70-reviewed.mp4')});
+  add(71, {state: 'SKIPPED', skip: {skipped_at: '2026-10-02T14:00:00+07:00'}, cleanup: cleanable(300000071, null), archive: hint(300000071, null)});
+  add(72, {cleanup: cleanable(300000072, 'ep-72-reviewed.mp4'), archive: hint(300000072, 'ep-72-reviewed.mp4', {eligible: false, reason: 'Kho lưu trữ đã có file “Tập 72.mp4” của video này; BiliFlow không ghi đè'})});
+  // Archived: #73 exported (Windows did not confirm the export's bin record), #74 skipped, #75 still moving.
+  add(73, archived(73, 'ep-73-reviewed.mp4'));
+  add(74, {state: 'SKIPPED', skip: {skipped_at: '2026-10-02T13:00:00+07:00'}, ...archived(74, null)});
+  add(75, archived(75, 'ep-75-reviewed.mp4'));
+  server.archiveRow = 0;
+  for (const [id, state, extra] of [[73, 'ARCHIVED', {export_verified: false, export_verified_at_archive: false, archived_at: '2026-10-03T11:00:00+07:00'}],
+    [74, 'ARCHIVED', {archived_at: '2026-10-03T12:00:00+07:00'}], [75, 'PENDING', {archived_at: null, created_at: '2026-10-03T12:30:00+07:00'}]]) {
+    const job = server.jobs.find(j => j.id === id);
+    job.source_archive = archiveRow(job, state, extra);
+  }
+  const job = id => server.jobs.find(j => j.id === id);
+  const log = {confirms: [], alerts: [], confirmAnswer: true};
+  const page = boot(new Map(), log);
+  await sleep(30);
+  const out = {};
+  const view = c => ({pick: c.pickLabel, cleanup: c.hasCleanupButton, archive: c.hasArchiveButton, badge: c.archiveBadge, restore: c.restore, recheck: c.recheck, line: c.sourceLine, tone: c.sourceTone, rerun_disabled: c.rerunDisabled, unskip_disabled: c.unskipDisabled});
+  const byId = () => Object.fromEntries(cards(page).map(c => [c.id, view(c)]));
+  page.run("selectJobTab('completed')");
+  out.headings = headings(page);
+  out.folds = folds(page);
+  out.completed_count = tabBar(page).tabs.find(t => t[0] === 'completed')[2];
+  page.run('foldOpen.archived=true;renderJobs(true)');
+  out.cards = byId();
+  out.toolbar0 = archiveToolbar(page);
+  // One "Chọn" box feeds both buttons; #72 can be cleaned but not archived.
+  page.run('toggleCleanup(70,true);toggleCleanup(71,true);toggleCleanup(72,true);renderJobs(true)');
+  out.toolbar1 = {archive: archiveToolbar(page), cleanup: toolbar(page).run.text, selection: selection(page)};
+  await page.run('openSelectedArchive(null)');
+  out.preview = {calls: server.archivePreviewCalls.slice(), ...archiveDialogState(page)};
+  // A busy refusal keeps the dialog open with the server's text.
+  server.archiveRefuse = {status: 409, code: 'busy', error: 'Đang dọn, lưu trữ hoặc khôi phục video gốc; chờ lượt trước xong rồi thử lại.'};
+  await page.run('confirmArchive()');
+  out.busy = archiveDialogState(page);
+  // The list changed: the new preview (only #70) is shown.
+  server.archiveRefuse = {status: 409, code: 'preview_changed', error: 'Danh sách đã thay đổi, hãy xem lại.', preview: server.archivePreview('70')};
+  await page.run('confirmArchive()');
+  out.changed = archiveDialogState(page);
+  // Confirm: one POST; the dialog cannot be closed meanwhile.
+  server.postDelay = 60;
+  const posting = page.run('confirmArchive()');
+  out.posting = {...archiveDialogState(page), esc_prevented: page.archiveDialog.dispatch('cancel').defaultPrevented, wait_shown: page.document.getElementById('archive-wait').hidden === false};
+  page.run('closeArchiveDialog()');
+  out.posting.open_after_close_click = page.archiveDialog.open;
+  await posting;
+  server.postDelay = 0;
+  out.archived = {post: server.archivePosts[server.archivePosts.length - 1], posts: server.archivePosts.length, open: page.archiveDialog.open, selection: selection(page), notice: page.notice(), error: page.noticeIsError(), folds: folds(page).map(f => [f.key, f.ids]), card: byId()[70]};
+  // The card button of a skipped video: no export, nothing to the bin.
+  await page.run('openArchive([71],null)');
+  out.skipped_preview = archiveDialogState(page);
+  await page.run('confirmArchive()');
+  out.skipped = {notice: page.notice(), error: page.noticeIsError(), card: byId()[71]};
+  // "Kiểm tra lại Thùng rác" for the export of #73.
+  server.recheckFound = true;
+  await page.run(`recheckBin('archive_export',${job(73).source_archive.id},73,null)`);
+  out.recheck = {posts: server.recheckPosts.slice(), notice: page.notice(), error: page.noticeIsError(), card: byId()[73]};
+  // Restore #73: declined first, then confirmed; it leaves "Hoàn tất" for "Đang chờ duyệt".
+  log.confirmAnswer = false;
+  await page.run('restoreArchive(73,null)');
+  out.declined = {posts: server.restorePosts.length, confirm: log.confirms[log.confirms.length - 1]};
+  log.confirmAnswer = true;
+  await page.run('restoreArchive(73,null)');
+  out.restored = {posts: server.restorePosts.slice(), notice: page.notice(), error: page.noticeIsError(), tab: tabOf(page, 73), folds: folds(page).map(f => [f.key, f.ids])};
+  // A refused restore (a file already at the input path) is an error notice; #74 stays archived.
+  server.restoreRefuse = {status: 409, code: 'target_exists', error: 'Trong input đã có file “Tập 74.mp4”. BiliFlow không ghi đè: dời file đó ra khỏi input rồi bấm “Khôi phục bản xuất” lại.'};
+  await page.run('restoreArchive(74,null)');
+  out.refused = {notice: page.notice(), error: page.noticeIsError(), confirm: log.confirms[log.confirms.length - 1], card: byId()[74]};
+  // While a cleanup, archive, restore or re-check runs, the buttons wait.
+  server.cleanupRunning = true;
+  await page.run('load()');
+  out.running = {restore: byId()[74].restore, toolbar: archiveToolbar(page)};
+  server.cleanupRunning = false;
+  console.log(JSON.stringify(out));
+}
 (async () => {
+  if (process.argv[3] === 'archive') return archiveScenario();
+  if (process.argv[3] === 'scroll') return scrollScenario();
+  if (process.argv[3] === 'cancelled') return cancelledScenario();
   if (process.argv[3] === 'cleanup') return cleanupScenario();
   if (process.argv[3] === 'queue') return queueScenario();
   if (process.argv[3] === 'tabs') return tabsScenario();

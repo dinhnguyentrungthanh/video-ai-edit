@@ -166,9 +166,11 @@ class ControlCenterVisualAuditTests(unittest.TestCase):
         )
         self.assertIn("window.addEventListener('resize',syncHeaderHeight)", page)
         self.assertIn("if(h&&window.ResizeObserver)new ResizeObserver(syncHeaderHeight).observe(h)", page)
+        # Batch 4: a tab click scrolls to the top of its list, up or down, stuck or not.
         self.assertIn(
-            "function selectJobTab(tab){activeJobTab=tab;renderJobs(true);keepTabsInView();revealActiveTab()}", page,
+            "function selectJobTab(tab){activeJobTab=tab;renderJobs(true);scrollToJobList();revealActiveTab()}", page,
         )
+        self.assertNotIn("keepTabsInView", page)
         # The tab bar keeps its accessible name.
         self.assertIn('<nav id="job-tabs" class="job-tabs" aria-label="Trạng thái video">', page)
 
@@ -426,8 +428,9 @@ class ControlCenterVisualAuditTests(unittest.TestCase):
             written |= set(re.findall(r'PipelineStage\(\s*"[a-z_]+",\s*"([A-Z_]+)"', text))
         written |= {"SKIPPED", "COMPLETED", "CANCELLED", "PAUSED", "FAILED", "QUEUED",
                     "WAITING_REVIEW", "READY_TO_EXPORT", "INTERRUPTED_RECOVERABLE"}
-        # Stage rows and source_cleanups rows have their own states; these never reach jobs.state.
-        written -= {"PENDING", "RUNNING", "FAILED_RETRYABLE", "RECYCLED", "RESTORED"}
+        # Stage rows, source_cleanups and source_archives rows have their own states;
+        # these never reach jobs.state.
+        written -= {"PENDING", "RUNNING", "FAILED_RETRYABLE", "RECYCLED", "RESTORED", "ARCHIVED", "RESTORING"}
         self.assertLessEqual(written, fixture_states, written - fixture_states)
         self.assertIn("WEIRD", fixture_states)
         ids = [card[0] for card in out["cards"]]
@@ -525,7 +528,7 @@ class ControlCenterVisualAuditTests(unittest.TestCase):
             " · Windows chưa xác nhận bản ghi trong Thùng rác; hãy kiểm tra Thùng rác.",
             "Đang dọn video gốc…", "Đã khôi phục video gốc (SHA-256 khớp)",
             "Lần dọn trước không thành công: ", "Không còn video gốc trong input", "Chưa dọn được: ",
-            " Chọn để dọn</label>", ">Dọn video gốc</button>", "Đang dọn video gốc; chờ lượt hiện tại xong.",
+            " Chọn</label>", ">Dọn video gốc</button>", "Đang dọn video gốc; chờ lượt hiện tại xong.",
             "Chép lại video gốc vào input để chạy lại (đúng tên: ",
             'role="group" aria-label="Dọn video gốc"', "Dọn video gốc: ", " video dọn được · đã chọn ",
             "Chọn tất cả video dọn được", ">Bỏ chọn</button>", "Dọn video gốc đã chọn (",
@@ -823,6 +826,330 @@ class ControlCenterVisualAuditTests(unittest.TestCase):
         self.assertEqual((limit["count"], limit["eligible"], limit["first50"]), (50, 56, True))
         self.assertEqual(limit["notice"], "Mỗi lần dọn tối đa 50 video; đã chọn 50 video đầu tiên.")
         self.assertEqual(limit["toolbar"]["run"]["text"], "Dọn video gốc đã chọn (50)")
+
+    def test_dashboard_cancel_and_archive_markup_texts(self):
+        page = _dashboard_html()
+        script = page[page.index("<script>"):page.rindex("</script>")]
+        # Batch 4c: Hủy asks first and cannot be sent twice; no "Bỏ hủy"/reopen (lead decision L1).
+        self.assertIn(
+            "const cancellingJobs=new Set();const hidingJobs=new Set();const recheckingRows=new Set();"
+            "const foldOpen={cancelled:false,hidden:false,archived:false};", page,
+        )
+        self.assertIn(
+            "onclick=\"cancelJob(${id},this)\" ${cancellingJobs.has(id)?'disabled':''}>"
+            "${cancellingJobs.has(id)?'Đang hủy…':'Hủy'}</button>", page,
+        )
+        self.assertNotIn("act(${id},'cancel')", page)
+        for text in ("Bỏ hủy", "/reopen", "reopenJob"):
+            with self.subTest(absent=text):
+                self.assertNotIn(text, page)
+        self.assertIn(
+            "Hủy video #${j.id} ${videoName(j)}?\\n“Hủy” dừng hẳn việc quét hoặc lệnh xuất đang chờ/đang chạy "
+            "của video này. Video chuyển vào nhóm “Đã hủy” ở cuối mục “Đang chờ xử lý” (có thể “Ẩn khỏi danh "
+            "sách”); report, quyết định duyệt và video gốc giữ nguyên. Muốn làm lại: bấm “Chạy lại kiểm tra”, "
+            "hoặc mở “Duyệt cảnh” nếu video đã có danh sách duyệt.\\n• “Dừng sau bước”/“Dừng ngay” chỉ tạm "
+            "dừng; “Tiếp tục” chạy tiếp từ chỗ cũ.\\n• “Bỏ qua (không xuất)” dành cho video đã duyệt xong: "
+            "đánh dấu xong mà không xuất, chuyển sang “Hoàn tất”.", page,
+        )
+        for text in (
+            "Đang hủy…", "Đã hủy #${id}. Video nằm trong nhóm “Đã hủy” ở cuối mục “Đang chờ xử lý”.",
+            "if(err.code==='already_cancelled')notify(err.message)", "Không thể hủy #${id}: ",
+            # Hidden jobs: a closed fold with compact rows; only cancelled cards can be hidden.
+            "if(j.state==='CANCELLED')a.push(hideButton(j))",
+            'title="Chỉ ẩn khỏi danh sách; không xóa report, quyết định duyệt hay video gốc.">',
+            "'Ẩn khỏi danh sách'", "'Đang ẩn…'", "'Hiện lại'", "'Đang hiện lại…'", "Đã hủy${stamp?` · ẩn lúc ${stamp}`:''}",
+            "Đã ẩn #${id} khỏi danh sách. Mở “Đã ẩn” ở cuối mục “Đang chờ xử lý” để hiện lại.",
+            "Đã hiện lại #${id} trong nhóm “Đã hủy”.",
+            "function isHidden(j){return !!j&&j.state==='CANCELLED'&&!!j.hidden_at}",
+            "hidden=jobs.filter(isHidden);jobs.forEach(j=>{if(!isHidden(j))groups[jobTab(j)].push(j)})",
+            "['Đã hủy',items.filter(j=>j.state==='CANCELLED').sort(byRecent),'cancelled']",
+            "['Đã ẩn',hidden.slice().sort(byHidden),'hidden']",
+            '<details class="phase-group phase-fold" data-fold="${key}" ${foldOpen[key]?\'open\':\'\'} '
+            "ontoggle=\"foldOpen['${key}']=this.open\"><summary class=\"phase-heading\">",
+            "dropForeignDrafts();captureFoldState();captureRerunPanelDrafts();",
+            # "Kiểm tra lại Thùng rác" only reads the bin.
+            "if(cleanupRecheckable(j))a.push(recheckButton('source_cleanup',j.source_cleanup.id,id))",
+            'title="Chỉ đọc Thùng rác của Windows để tìm bản ghi; không chuyển hay xóa file nào.">',
+            "'Kiểm tra lại Thùng rác'", "'Đang kiểm tra…'", "post('/api/source-recycle-check',{kind,id:rowId})",
+            "Không kiểm tra lại được Thùng rác cho #${jobId}: ", "Đã thấy trong Thùng rác khi kiểm tra lại",
+            " Lần kiểm tra lại gần nhất${s?` (${s})`:''} vẫn chưa thấy.",
+        ):
+            with self.subTest(text=text):
+                self.assertIn(text, page)
+        for name in ("cancelJob", "setHidden", "hideJob", "unhideJob", "recheckBin", "foldSection",
+                     "captureFoldState", "hiddenRow", "scrollToJobList", "revealActiveTab"):
+            with self.subTest(function=name):
+                self.assertNotIn("storage", _dashboard_function(script, name).casefold())
+        style = page[page.index("<style>"):page.index("</style>")]
+        for rule in (".phase-fold>summary{cursor:pointer;list-style:none}", '.phase-fold>summary::before{content:"▸";',
+                     '.phase-fold[open]>summary::before{content:"▾"}', ".hidden-list{", ".hidden-row{",
+                     "@media(max-width:680px){.hidden-row button{flex:1 1 100%}}"):
+            with self.subTest(rule=rule):
+                self.assertIn(rule, style)
+
+    @unittest.skipUnless(shutil.which("node"), "node is not installed")
+    def test_dashboard_tab_switch_scrolls_to_the_list_in_node(self):
+        out = self.run_dashboard_harness("scroll")
+        # Booting and polling never scroll; the list top sits at 600 - 72 (header) - 56 (tab bar).
+        self.assertEqual(out["boot_calls"], 0)
+        self.assertEqual(out["poll_calls"], 0)
+        # Below or above the list (deep in a long tab), a tab click lands on the start of the list.
+        self.assertEqual(out["below"], {"calls": [[472, "auto"]], "y": 472})
+        self.assertEqual(out["above"], {"calls": [[472, "auto"]], "y": 472})
+        # Already there (±1 px): nothing moves.
+        self.assertEqual(out["aligned"], {"calls": [], "y": 472})
+        self.assertEqual(out["near"], {"calls": [], "y": 473})
+        # Computed after the render: an empty tab, then a full one, both land on the list.
+        self.assertEqual(out["empty"], {"calls": [[472, "auto"]], "y": 472})
+        self.assertEqual(out["full"], {"calls": [], "y": 472})
+        # The bar scrolls sideways to show the active tab, to the right and back to the left.
+        self.assertEqual(out["bar_right"], 900 + 160 - 600)
+        self.assertEqual(out["bar_left"], 100)
+
+    @unittest.skipUnless(shutil.which("node"), "node is not installed")
+    def test_dashboard_cancel_hide_and_unhide_in_node(self):
+        out = self.run_dashboard_harness("cancelled")
+        # Hidden #4 is left out of the counts; stale hidden_at on a FAILED job (#8) is ignored.
+        self.assertEqual([tab[2] for tab in out["bar"]], [4, 1, 0, 0, 0, 1])
+        self.assertEqual(out["headings"], [
+            ["Tạm dừng / lỗi / có thể tiếp tục", 2], ["Đã hủy", 2], ["Đã ẩn", 1],
+        ])
+        # Both folds start closed; cancelled cards newest first; hidden ones as compact rows.
+        self.assertEqual(out["folds"], [
+            {"key": "cancelled", "open": False, "label": "Đã hủy", "count": 2, "ids": [2, 3]},
+            {"key": "hidden", "open": False, "label": "Đã ẩn", "count": 1, "ids": [4]},
+        ])
+        [row] = out["hidden_rows"]
+        self.assertEqual((row["id"], row["name"], row["text"], row["disabled"]), (4, "#4 · Tập 4.mp4", "Hiện lại", False))
+        self.assertRegex(row["when"], r"^Đã hủy · ẩn lúc \d{2}:\d{2}:\d{2} \d{2}/\d{2}/\d{4}$")
+        # A cancelled card offers "Ẩn khỏi danh sách" and "Chạy lại kiểm tra", not Hủy.
+        cancelled = out["card2"]
+        self.assertEqual((cancelled["tab"], cancelled["badge"]), ("waiting", "Đã hủy"))
+        self.assertFalse(cancelled["hasCancel"])
+        self.assertTrue(cancelled["hasHide"])
+        self.assertEqual(cancelled["hideTitle"],
+                         "Chỉ ẩn khỏi danh sách; không xóa report, quyết định duyệt hay video gốc.")
+        self.assertTrue(cancelled["hasRerun"])
+        for key in ("card6", "card8"):
+            with self.subTest(card=key):
+                self.assertEqual(out[key]["cancelButton"], {"disabled": False, "text": "Hủy"})
+                self.assertFalse(out[key]["hasHide"])
+        # Declining the confirm posts nothing; the text is lead decision L3.
+        declined = out["declined"]
+        self.assertEqual(declined["posts"], 0)
+        self.assertEqual(declined["card"], {"disabled": False, "text": "Hủy"})
+        self.assertEqual(
+            declined["confirm"],
+            "Hủy video #6 Tập 6.mp4?\n“Hủy” dừng hẳn việc quét hoặc lệnh xuất đang chờ/đang chạy của video này. "
+            "Video chuyển vào nhóm “Đã hủy” ở cuối mục “Đang chờ xử lý” (có thể “Ẩn khỏi danh sách”); report, "
+            "quyết định duyệt và video gốc giữ nguyên. Muốn làm lại: bấm “Chạy lại kiểm tra”, hoặc mở “Duyệt cảnh” "
+            "nếu video đã có danh sách duyệt.\n• “Dừng sau bước”/“Dừng ngay” chỉ tạm dừng; “Tiếp tục” chạy tiếp từ "
+            "chỗ cũ.\n• “Bỏ qua (không xuất)” dành cho video đã duyệt xong: đánh dấu xong mà không xuất, chuyển "
+            "sang “Hoàn tất”.",
+        )
+        # A double click asks once and posts once; the button (and a re-render) show "Đang hủy…".
+        self.assertEqual(out["busy"], {"disabled": True, "text": "Đang hủy…"})
+        self.assertEqual(out["busy_card"], {"disabled": True, "text": "Đang hủy…"})
+        done = out["cancelled"]
+        self.assertEqual(done["posts"], [{"id": 6, "name": "cancel"}])
+        self.assertEqual(done["confirms"], 1)
+        self.assertEqual(done["notice"], "Đã hủy #6. Video nằm trong nhóm “Đã hủy” ở cuối mục “Đang chờ xử lý”.")
+        self.assertFalse(done["error"])
+        self.assertEqual(done["button"], {"disabled": False, "text": "Hủy"})
+        self.assertEqual([(f["key"], f["ids"]) for f in done["folds"]], [("cancelled", [6, 2, 3]), ("hidden", [4])])
+        # A stale tab: the server refuses a second cancel (409); the page reloads and says so calmly.
+        repeat = out["repeat"]
+        self.assertEqual(repeat["posts"], [{"id": 5, "name": "cancel"}])
+        self.assertEqual(repeat["notice"], "Video #5 đã được hủy trước đó; không hủy thêm lần nữa.")
+        self.assertFalse(repeat["error"])
+        self.assertEqual(repeat["folds"][0]["ids"], [6, 5, 2, 3])
+        # Ẩn khỏi danh sách: the card leaves "Đã hủy" and the tab count; its row can be shown again at once.
+        hidden = out["hidden"]
+        self.assertEqual(hidden["posts"], [{"id": 3, "name": "hide"}])
+        self.assertEqual(hidden["notice"],
+                         "Đã ẩn #3 khỏi danh sách. Mở “Đã ẩn” ở cuối mục “Đang chờ xử lý” để hiện lại.")
+        self.assertFalse(hidden["error"])
+        self.assertEqual([(f["key"], f["ids"]) for f in hidden["folds"]], [("cancelled", [6, 5, 2]), ("hidden", [3, 4])])
+        self.assertEqual([(r["id"], r["text"], r["disabled"]) for r in hidden["rows"]],
+                         [(3, "Hiện lại", False), (4, "Hiện lại", False)])
+        self.assertEqual(hidden["count"], 4)
+        # The fold the user opened stays open across polls; the other stays closed.
+        self.assertEqual(out["kept_open"], [["cancelled", False], ["hidden", True]])
+        unhidden = out["unhidden"]
+        self.assertEqual(unhidden["posts"], [{"id": 4, "name": "unhide"}])
+        self.assertEqual(unhidden["notice"], "Đã hiện lại #4 trong nhóm “Đã hủy”.")
+        self.assertEqual([(f["key"], f["open"], f["ids"]) for f in unhidden["folds"]],
+                         [("cancelled", False, [6, 5, 2, 4]), ("hidden", True, [3])])
+        self.assertEqual(out["refused"], {"notice": "Video #2 không bị ẩn.", "error": False})
+        # Only hidden jobs waiting: the tab counts 0, is not chosen by default, and still lists them.
+        only = out["only_hidden"]
+        self.assertEqual(only["default_tab"], "completed")
+        self.assertEqual(only["bar"], [["waiting", 0], ["scan_queue", 0], ["scanning", 0], ["review", 0],
+                                       ["export", 0], ["completed", 1]])
+        self.assertEqual(only["folds"], [{"key": "hidden", "open": False, "label": "Đã ẩn", "count": 1, "ids": [20]}])
+        self.assertFalse(only["empty"])
+
+    def test_dashboard_archive_markup_and_texts(self):
+        from biliflow.export_guards import SOURCE_ARCHIVED_MESSAGE
+
+        page = _dashboard_html()
+        script = page[page.index("<script>"):page.rindex("</script>")]
+        # Batch 4d: the archive <dialog> is static markup beside the cleanup one; its listeners are set at boot.
+        self.assertIn(
+            '<dialog id="archive-dialog" aria-labelledby="archive-title"><form class="cleanup-form" method="dialog" '
+            'onsubmit="return false"><h2 id="archive-title">Lưu trữ video gốc</h2><div id="archive-dialog-body" '
+            'class="cleanup-scroll"></div><div class="cleanup-actions"><button type="button" id="archive-cancel" '
+            'onclick="closeArchiveDialog()">Hủy</button><button type="button" class="warn" id="archive-confirm" '
+            'onclick="confirmArchive()" disabled>Lưu trữ</button></div></form></dialog>', page,
+        )
+        self.assertIn("watchArchiveDialog();watchCleanupDialog();(async()=>{", page)
+        self.assertIn(f"const SOURCE_ARCHIVED_MESSAGE='{SOURCE_ARCHIVED_MESSAGE}';", page)
+        self.assertNotIn("__SOURCE", page)
+        for text in (
+            # One "Chọn" box for both actions; the shared selection feeds both toolbar buttons.
+            " Chọn</label>", "if(cleanupEligible(j)||archiveEligible(j))a.push(pickControl(j));",
+            "if(archiveEligible(j))a.push(archiveControls(j));if(isArchived(j))a.push(archivedControls(j));",
+            "if(!cleanupEligible(j)&&!archiveEligible(j))cleanupSelection.delete(id)",
+            "Lưu trữ đã chọn (", " video lưu trữ được · đã chọn ", ">Lưu trữ</button>",
+            # An archived card: badge, fold, restore, locked rerun and "Mở lại để xuất".
+            "['Đã lưu trữ',items.filter(isArchived).sort(byArchived),'archived']", "'Đã lưu trữ'", "'Đang lưu trữ'",
+            "a.push(isArchived(j)?lockedRerun(j):isSourceCleaned(j)?cleanedRerun(j):",
+            "${esc(isArchived(j)?SOURCE_ARCHIVED_MESSAGE:SOURCE_CLEANED_MESSAGE)}\">Mở lại để xuất</button>",
+            "'Khôi phục bản xuất'", "'Đang khôi phục…'", "recheckButton('archive_export',a.id,id)",
+            "Đã lưu trữ · video gốc ", " trong kho lưu trữ", " đã vào Thùng rác", "Đang lưu trữ video gốc…",
+            "Đang đưa video gốc từ kho lưu trữ về input…", "Lần lưu trữ trước không thành công: ",
+            "Chưa lưu trữ được: ", "Đã thấy bản xuất trong Thùng rác khi kiểm tra lại",
+            # The dialog and its results.
+            "/api/source-archive/preview?ids=", "post('/api/source-archive',{job_ids:ids,preview_id:p.preview_id})",
+            "Không lấy được danh sách lưu trữ: ", "Không thể lưu trữ:", "Lưu trữ ${n} video",
+            "Đang kiểm tra SHA-256 và lưu trữ…", "Không lưu trữ được: ${e.message}", "Không lưu trữ được video gốc nào.",
+            "d.addEventListener('cancel',e=>{if(archivePosting)e.preventDefault()})",
+            # "Khôi phục bản xuất" asks first.
+            "Khôi phục bản xuất cho #${j.id} ${videoName(j)}?\\nVideo gốc được đưa từ kho lưu trữ về input "
+            "(kiểm tra SHA-256); ", "video về mục “Đang chờ duyệt” để xuất lại; bản xuất cũ vẫn ở Thùng rác tới khi "
+            "bạn dọn sạch.", "video vẫn ở mục “Hoàn tất” (đã bỏ qua).",
+            "post('/api/source-archive/restore',{job_id:id})", "Không khôi phục được #${id}: ",
+        ):
+            with self.subTest(text=text):
+                self.assertIn(text, page)
+        self.assertNotIn(" Chọn để dọn</label>", page)
+        for name in ("isArchived", "archiveEligible", "pickControl", "archiveControls", "archivedControls",
+                     "lockedRerun", "openSelectedArchive", "openArchive", "renderArchiveDialog", "archiveRow",
+                     "confirmArchive", "closeArchiveDialog", "watchArchiveDialog", "archiveResultText",
+                     "restoreArchive", "archiveCounts", "updateCleanupToolbar"):
+            with self.subTest(function=name):
+                self.assertNotIn("storage", _dashboard_function(script, name).casefold())
+        style = page[page.index("<style>"):page.index("</style>")]
+        dialog_rule = style[style.index("#archive-dialog{"):]
+        self.assertIn("background:#141923;color:#e8ecf4", dialog_rule[:dialog_rule.index("}")])
+        for rule in ("#archive-dialog::backdrop{", ".archive-badge{", ".archive-note{"):
+            with self.subTest(rule=rule):
+                self.assertIn(rule, style)
+
+    @unittest.skipUnless(shutil.which("node"), "node is not installed")
+    def test_dashboard_archive_restore_and_recheck_in_node(self):
+        out = self.run_dashboard_harness("archive")
+        stamp = re.compile(r"\d{2}:\d{2}:\d{2} \d{2}/\d{2}/\d{4}")
+        # "Hoàn tất": archived videos sit in a closed "Đã lưu trữ" fold (newest archive first) and still count.
+        self.assertEqual(out["headings"], [["Đã xuất video", 2], ["Đã bỏ qua (không xuất)", 1], ["Đã lưu trữ", 3]])
+        self.assertEqual(out["folds"], [{"key": "archived", "open": False, "label": "Đã lưu trữ", "count": 3,
+                                         "ids": [75, 74, 73]}])
+        self.assertEqual(out["completed_count"], 6)
+        cards = out["cards"]
+        for job_id in ("70", "71"):
+            self.assertEqual({key: cards[job_id][key] for key in ("pick", "cleanup", "archive", "badge", "line")},
+                             {"pick": " Chọn", "cleanup": True, "archive": True, "badge": None, "line": None})
+        self.assertEqual({key: cards["72"][key] for key in ("pick", "cleanup", "archive", "line", "tone")}, {
+            "pick": " Chọn", "cleanup": True, "archive": False, "tone": "waiting",
+            "line": "Chưa lưu trữ được: Kho lưu trữ đã có file “Tập 72.mp4” của video này; BiliFlow không ghi đè",
+        })
+        exported = cards["73"]
+        self.assertEqual({key: exported[key] for key in ("pick", "cleanup", "archive", "badge", "restore", "recheck",
+                                                         "tone", "rerun_disabled")}, {
+            "pick": None, "cleanup": False, "archive": False, "badge": "Đã lưu trữ",
+            "restore": {"disabled": False, "text": "Khôi phục bản xuất"},
+            "recheck": {"kind": "archive_export", "row": 1, "disabled": False, "text": "Kiểm tra lại Thùng rác"},
+            "tone": "waiting", "rerun_disabled": True,
+        })
+        self.assertEqual(stamp.sub("<t>", exported["line"]),
+                         "Đã lưu trữ · video gốc Tập 73.mp4 (286 MB) trong kho lưu trữ · bản xuất ep-73-reviewed.mp4 "
+                         "đã vào Thùng rác lúc <t> · Windows chưa xác nhận bản ghi của bản xuất trong Thùng rác; hãy "
+                         "kiểm tra Thùng rác.")
+        skipped = cards["74"]
+        self.assertEqual((skipped["badge"], skipped["unskip_disabled"], skipped["rerun_disabled"], skipped["recheck"],
+                          skipped["tone"], stamp.sub("<t>", skipped["line"])),
+                         ("Đã lưu trữ", True, True, None, "complete",
+                          "Đã lưu trữ · video gốc Tập 74.mp4 (286 MB) trong kho lưu trữ lúc <t>"))
+        self.assertEqual({key: cards["75"][key] for key in ("badge", "restore", "line", "tone", "rerun_disabled")},
+                         {"badge": "Đang lưu trữ", "restore": None, "line": "Đang lưu trữ video gốc…",
+                          "tone": "running", "rerun_disabled": True})
+        # The toolbar: archive counts only what can be archived; #72 is counted for "Dọn" only.
+        self.assertEqual((out["toolbar0"]["text"], out["toolbar0"]["disabled"]), ("Lưu trữ đã chọn (0)", True))
+        self.assertEqual(out["toolbar1"], {
+            "archive": {"text": "Lưu trữ đã chọn (2)", "disabled": False,
+                        "summary": "Lưu trữ: 2 video lưu trữ được · đã chọn 2 (572 MB). Video gốc vào kho lưu trữ "
+                                   "(thư mục archive), bản xuất vào Thùng rác."},
+            "cleanup": "Dọn video gốc đã chọn (3)", "selection": [70, 71, 72],
+        })
+        preview = out["preview"]
+        self.assertEqual((preview["calls"], preview["open"], preview["confirm"], preview["confirmDisabled"],
+                          preview["rows"], preview["alert"]),
+                         (["70,71"], True, "Lưu trữ 2 video", False,
+                          ["archive/sources/ep-70/Tập 70.mp4", "archive/sources/ep-71/Tập 71.mp4"], None))
+        self.assertEqual(preview["summary"], "Tổng cộng: 2 video · 572 MB video gốc vào kho lưu trữ · 100 MB bản xuất "
+                                             "vào Thùng rác (giải phóng khi bạn dọn sạch Thùng rác).")
+        self.assertTrue(preview["bin"].startswith("Thùng rác của ổ E: đang chứa "), preview["bin"])
+        # Refusals keep the dialog open: busy shows the server's text, a changed list shows the new preview.
+        self.assertEqual((out["busy"]["open"], out["busy"]["alert"], out["busy"]["confirm"]),
+                         (True, "Đang dọn, lưu trữ hoặc khôi phục video gốc; chờ lượt trước xong rồi thử lại.",
+                          "Lưu trữ 2 video"))
+        self.assertEqual((out["changed"]["alert"], out["changed"]["confirm"], out["changed"]["rows"]),
+                         ("Danh sách đã thay đổi, hãy xem lại.", "Lưu trữ 1 video", ["archive/sources/ep-70/Tập 70.mp4"]))
+        posting = out["posting"]
+        self.assertEqual((posting["confirm"], posting["confirmDisabled"], posting["cancelDisabled"],
+                          posting["esc_prevented"], posting["wait_shown"], posting["open_after_close_click"]),
+                         ("Đang kiểm tra SHA-256 và lưu trữ…", True, True, True, True, True))
+        archived = out["archived"]
+        self.assertEqual((archived["post"], archived["posts"], archived["open"], archived["selection"],
+                          archived["error"], archived["folds"]),
+                         ({"job_ids": [70], "preview_id": "c" * 64}, 3, False, [71, 72], False,
+                          [["archived", [70, 75, 74, 73]]]))
+        self.assertEqual(archived["notice"], "Đã lưu trữ 1 video gốc; bản xuất (100 MB) đã vào Thùng rác, dung lượng "
+                                             "được giải phóng khi bạn dọn sạch Thùng rác.")
+        self.assertEqual((archived["card"]["badge"], archived["card"]["pick"], archived["card"]["tone"]),
+                         ("Đã lưu trữ", None, "complete"))
+        # A skipped video: only the source moves, the bin is not involved.
+        self.assertEqual((out["skipped_preview"]["bin"], out["skipped_preview"]["summary"]),
+                         (None, "Tổng cộng: 1 video · 286 MB video gốc vào kho lưu trữ."))
+        self.assertEqual((out["skipped"]["notice"], out["skipped"]["error"], out["skipped"]["card"]["unskip_disabled"]),
+                         ("Đã lưu trữ 1 video gốc.", False, True))
+        # "Kiểm tra lại Thùng rác" for the export only reads the bin; the card follows.
+        recheck = out["recheck"]
+        self.assertEqual((recheck["posts"], recheck["notice"], recheck["error"], recheck["card"]["recheck"],
+                          recheck["card"]["tone"]),
+                         ([{"kind": "archive_export", "id": 1}], "Đã thấy bản xuất trong Thùng rác của Windows.", False,
+                          None, "complete"))
+        self.assertTrue(stamp.sub("<t>", recheck["card"]["line"]).endswith(
+            " · Đã thấy bản xuất trong Thùng rác khi kiểm tra lại lúc <t>."), recheck["card"]["line"])
+        # "Khôi phục bản xuất" asks first; declining posts nothing.
+        self.assertEqual(out["declined"], {"posts": 0, "confirm": (
+            "Khôi phục bản xuất cho #73 Tập 73.mp4?\nVideo gốc được đưa từ kho lưu trữ về input (kiểm tra SHA-256); "
+            "video về mục “Đang chờ duyệt” để xuất lại; bản xuất cũ vẫn ở Thùng rác tới khi bạn dọn sạch."
+        )})
+        self.assertEqual(out["restored"], {
+            "posts": [{"job_id": 73}], "notice": "Đã đưa video gốc của #73 về input (SHA-256 khớp).", "error": False,
+            "tab": "review", "folds": [["archived", [71, 70, 75, 74]]],
+        })
+        refused = out["refused"]
+        self.assertEqual((refused["notice"], refused["error"], refused["card"]["restore"], refused["card"]["badge"]), (
+            "Không khôi phục được #74: Trong input đã có file “Tập 74.mp4”. BiliFlow không ghi đè: dời file đó ra "
+            "khỏi input rồi bấm “Khôi phục bản xuất” lại.", True, {"disabled": False, "text": "Khôi phục bản xuất"},
+            "Đã lưu trữ",
+        ))
+        self.assertTrue(refused["confirm"].endswith("; video vẫn ở mục “Hoàn tất” (đã bỏ qua)."), refused["confirm"])
+        # While a source-file action runs, restore and archive wait.
+        self.assertEqual((out["running"]["restore"], out["running"]["toolbar"]["disabled"]),
+                         ({"disabled": True, "text": "Khôi phục bản xuất"}, True))
 
     def test_status_exposes_the_workers_queue_order(self):
         from biliflow.scheduler import JobScheduler
@@ -1238,6 +1565,29 @@ class ControlCenterHttpTests(unittest.TestCase):
         self.assertTrue(self.source.is_file())
         self.assertIsNone(self.store.latest_source_cleanup(self.job_id))
 
+    def test_every_response_forbids_framing_by_another_site(self):
+        # Security review (L4): pages, JSON, streamed media, refusals and the server's own errors
+        # all say SAMEORIGIN (a page of this Control Center may still frame another one).
+        cases = [
+            ("GET", "/", None, 200),
+            ("GET", f"/review/{self.job_id}", None, 200),
+            ("GET", "/logo-memory", None, 200),
+            ("GET", "/healthz", None, 200),
+            ("GET", f"/api/jobs/{self.job_id}/review/video?k={self.key(self.job_id)}", None, 200),
+            ("GET", "/no-such-page", None, 404),
+            ("GET", "/", "evil.example", 403),
+            ("POST", "/api/scheduler", None, 403),
+            ("PUT", "/", None, 501),
+        ]
+        for method, path, host, expected in cases:
+            with self.subTest(method=method, path=path, host=host):
+                body = b"{}" if method != "GET" else None
+                headers = {"Content-Type": "application/json"} if body else None
+                status, sent, _ = self.request(path, host=host, method=method, headers=headers, body=body)
+                self.assertEqual(status, expected)
+                self.assertEqual(sent.get("X-Frame-Options"), "SAMEORIGIN")
+                self.assertEqual(sent.get("Content-Security-Policy"), "frame-ancestors 'self'")
+
     def test_review_page_and_media_still_work_on_localhost(self):
         status, headers, body = self.request(f"/review/{self.job_id}")
         self.assertEqual(status, 200)
@@ -1260,11 +1610,12 @@ class ControlCenterHttpTests(unittest.TestCase):
     def test_export_route_reports_errors_and_render_progress(self):
         route = f"/api/jobs/{self.job_id}/review/export"
         # Batch 3 (B7, B8): the review page also learns whether the source was
-        # cleaned, and the latest cleanup row (none here).
+        # cleaned, and the latest cleanup row (none here); batch 4 adds the archive.
         self.assertEqual(
             json.loads(self.request(route)[2]),
             {"status": "WAITING_REVIEW", "output": None, "error": None, "render_progress": None,
-             "source_cleaned": False, "source_name": "movie.mp4", "source_cleanup": None},
+             "source_cleaned": False, "source_name": "movie.mp4", "source_cleanup": None,
+             "source_archived": False, "source_archive": None},
         )
         self.store.update_job(self.job_id, state="FAILED", error="boom", current_stage="render")
         value = json.loads(self.request(route)[2])
@@ -1473,6 +1824,59 @@ class ControlCenterHttpTests(unittest.TestCase):
                 )[0]
                 self.assertEqual(status, 200)
         self.assertEqual(seen, [True, False, False])
+
+    def test_platform_logo_flag_is_passed_only_when_explicitly_true(self):
+        # Batch 4a "Đây là logo nền tảng — làm mờ & nhớ" posts remember_platform_logo: true.
+        self.make_decidable()
+        seen = []
+
+        def capture(**kwargs):
+            seen.append(kwargs.get("remember_platform_logo"))
+            return json.loads((self.root / "reports/jobs/troy/review-queue.json").read_text(encoding="utf-8"))
+
+        with patch("biliflow.control_center.record_review_decision", side_effect=capture):
+            for flag in (True, "yes", None):
+                body = {"id": MEDIA_ITEM, "decision": "BLUR"}
+                if flag is not None:
+                    body["remember_platform_logo"] = flag
+                status = self.request(
+                    f"/api/jobs/{self.job_id}/review/decision", method="POST",
+                    headers={"X-BiliFlow-Token": "test-token", "Content-Type": "application/json"},
+                    body=json.dumps(body).encode(),
+                )[0]
+                self.assertEqual(status, 200)
+        self.assertEqual(seen, [True, False, False])
+
+    def test_logo_memory_routes_are_served_and_writes_need_the_token(self):
+        # "Bộ nhớ logo" (batch 4a): the page and the listing are plain GETs; a delete needs the
+        # session token and the memory sha the page loaded (409 otherwise, nothing written).
+        status, headers, body = self.request("/logo-memory")
+        self.assertEqual(status, 200)
+        self.assertIn("text/html", headers.get("Content-Type", ""))
+        self.assertIn("<title>Bộ nhớ logo", body.decode("utf-8"))
+        status, _, body = self.request("/api/logo-memory")
+        self.assertEqual(status, 200)
+        listing = json.loads(body)
+        self.assertEqual((listing["memory_sha256"], listing["records"]), (None, []))
+        memory = self.root / "state" / "studio-logo-memory.json"
+        memory.write_text(json.dumps({"schema_version": 2, "records": []}), encoding="utf-8")
+        before = memory.read_bytes()
+        request = {"key": "a" * 64 + ":review-x", "expected_sha256": "0" * 64}
+        status, _, body = self.request(
+            "/api/logo-memory/delete", method="POST",
+            headers={"Content-Type": "application/json"}, body=json.dumps(request).encode(),
+        )
+        self.assertEqual(status, 403)
+        self.assertEqual(json.loads(body)["error"], "Phiên Control Center không hợp lệ")
+        status, _, body = self.request(
+            "/api/logo-memory/delete", method="POST",
+            headers={"X-BiliFlow-Token": "test-token", "Content-Type": "application/json"},
+            body=json.dumps(request).encode(),
+        )
+        self.assertEqual(status, 409)
+        self.assertEqual(json.loads(body)["code"], "memory_changed")
+        self.assertEqual(memory.read_bytes(), before)
+        self.assertFalse((self.root / "state" / "backups").exists())
 
     def test_rapid_decisions_survive_concurrent_media_and_queue_reads(self):
         # Same race at full speed with the real writer: every decision is saved.

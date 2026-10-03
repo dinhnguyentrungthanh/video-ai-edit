@@ -9,6 +9,7 @@ from biliflow.review_workflow import (
     build_edit_plan,
     build_review_queue,
     corroborate_fixed_text_overlays,
+    full_frame_logo_ad_evidence,
     promote_fixed_text_overlays,
     record_review_decision,
 )
@@ -112,6 +113,19 @@ class PromoteFixedTextOverlayTests(unittest.TestCase):
             self.assertIsNone(overlay["suggested_decision"])
             self.assertEqual(overlay["fixed_text_overlay"]["ad_evidence"], [])
             self.assertIn("bạn tự quyết", overlay["reason"])
+
+    def test_platform_name_is_overlay_ad_evidence(self):
+        # A whole-film WeTV corner mark is a third-party watermark: BLUR it.
+        output = promote_fixed_text_overlays(_payload(_job40_tracks(watermark_text="WeTV")[:1]))
+        [overlay] = [track for track in output["tracks"] if track.get("fixed_text_overlay")]
+        self.assertEqual(overlay["suggested_decision"], "BLUR")
+        self.assertEqual(overlay["fixed_text_overlay"]["ad_evidence"],
+                         ["tên nền tảng video: Tencent Video (WeTV)"])
+        # The opening-ident CUT check never counts a platform name (that would re-arm CUT).
+        ident = {"start_seconds": 8.0, "end_seconds": 13.0, "source_candidate_refs": []}
+        payloads = {"text.json": _payload([_track(1, 9.0, 12.0, "iOlYI", [378, 156, 574, 230],
+                                                  zone="middle-center")])}
+        self.assertEqual(full_frame_logo_ad_evidence(ident, [], payloads), [])
 
     def test_text_read_in_a_minority_of_the_film_is_not_promoted(self):
         tracks = _job40_tracks(watermark_observations=200)[:1]  # 600 s of 2607 s

@@ -7,6 +7,8 @@ shell is called this module refuses:
 
 - any ``allowed_root`` other than ``<install>/input`` (plus
   ``<install>/temp/recycle-bin-test`` while ``BILIFLOW_TEST_RECYCLE_BIN=1``);
+  ``send_export_to_recycle_bin`` (batch 4 "Lưu trữ") instead accepts only
+  ``<install>/output`` and a ``…-reviewed.mp4`` or its ``.manifest.json``;
 - a path that is relative, a link or junction, outside that root, longer than
   259 characters, or not the size that was scanned;
 - a volume that is not a fixed disk, has no Recycle Bin settings, deletes
@@ -67,6 +69,10 @@ SHARING_RETURN_CODES = frozenset({5, 32, 0x78})
 ABORTED_RETURN_CODES = frozenset({0x75, 1223})
 INFO_RECORD_V1_PATH_BYTES = 520
 INFO_RECORD_MAX_CHARS = 32768
+# Windows may write the $I record a few milliseconds after SHFileOperationW
+# returns (2026-10-03: jobs 43 and 47 were reported unverified although their
+# records existed). After a move, look again after each pause: 3.15 s at most.
+VERIFY_RETRY_DELAYS = (0.05, 0.1, 0.2, 0.4, 0.8, 1.6)
 
 # Verbatim messages ({volume} = 'E:'; GB = bytes / 1073741824, one decimal, decimal comma).
 NOT_WINDOWS_MESSAGE = "Thùng rác chỉ dùng được trên Windows."
@@ -110,6 +116,15 @@ IN_PROGRESS_MESSAGE = (
     "Lần chuyển vào Thùng rác trước chưa xong (Windows có thể đang hỏi xác nhận). "
     "Kiểm tra cửa sổ Windows rồi thử lại."
 )
+# Batch 4 "Lưu trữ": the export of an archived job (send_export_to_recycle_bin).
+EXPORT_NAME_SUFFIXES = ("-reviewed.mp4", "-reviewed.mp4.manifest.json")
+EXPORT_ALLOWED_ROOT_MESSAGE = "Chỉ chuyển được bản xuất trong thư mục output của BiliFlow vào Thùng rác."
+EXPORT_NAME_MESSAGE = (
+    "Chỉ chuyển được bản xuất đã duyệt (tên kết thúc bằng “-reviewed.mp4”) và manifest của nó "
+    "vào Thùng rác."
+)
+EXPORT_CAPACITY_MESSAGE = CAPACITY_MESSAGE.replace("Không thể dọn:", "Không thể lưu trữ:")
+EXPORT_FOLDER_MESSAGE = "Bản xuất không nằm ngay trong thư mục output; không chuyển vào Thùng rác."
 
 _GUID_PATTERN = re.compile(r"\{[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}\}")
 
@@ -149,6 +164,39 @@ class RecycleResult:
     elapsed_seconds: float
 
 
+@dataclass(frozen=True)
+class Wording:
+    """What a refusal or a failed shell call says about the file (a source or an export)."""
+
+    outside: str
+    link: str
+    path: str
+    size: str
+    capacity: str
+    aborted: str
+    error_rc: str
+    not_moved: str
+
+
+SOURCE_WORDING = Wording(
+    OUTSIDE_MESSAGE, LINK_MESSAGE, PATH_MESSAGE, SIZE_MESSAGE, CAPACITY_MESSAGE,
+    ABORTED_MESSAGE, ERROR_RC_MESSAGE, NOT_MOVED_MESSAGE,
+)
+EXPORT_WORDING = Wording(
+    outside="Bản xuất nằm ngoài thư mục output; không chuyển vào Thùng rác.",
+    link="Bản xuất là liên kết (symlink/junction); không chuyển vào Thùng rác.",
+    path=(
+        "Đường dẫn bản xuất dài hơn 259 ký tự hoặc có ký tự Thùng rác không nhận; "
+        "không chuyển vào Thùng rác."
+    ),
+    size="Bản xuất không còn đúng dung lượng đã kiểm tra.",
+    capacity=EXPORT_CAPACITY_MESSAGE,
+    aborted="Windows đã hủy thao tác; bản xuất vẫn còn trong output.",
+    error_rc="Windows báo lỗi 0x{rc:X} khi chuyển vào Thùng rác; bản xuất vẫn còn trong output.",
+    not_moved="Windows không chuyển file; bản xuất vẫn còn trong output.",
+)
+
+
 LateResultCallback = Callable[[RecycleResult | None, BaseException | None], None]
 
 
@@ -158,6 +206,10 @@ LateResultCallback = Callable[[RecycleResult | None, BaseException | None], None
 
 def _is_windows() -> bool:
     return os.name == "nt"
+
+
+def _sleep(seconds: float) -> None:
+    time.sleep(seconds)
 
 
 def _test_bin_enabled(environ: Any = None) -> bool:
@@ -417,48 +469,70 @@ def _is_under(path: str, root: str) -> bool:
     return common == root and path != root
 
 
-def path_refusal(path: Any, *, allowed_root: Any) -> str | None:
+def path_refusal(path: Any, *, allowed_root: Any, wording: Wording = SOURCE_WORDING) -> str | None:
     """Why ``path`` must not go to the Recycle Bin, or None. Never reads the size."""
     raw = str(path)
     if not raw or not os.path.isabs(raw):
-        return OUTSIDE_MESSAGE
+        return wording.outside
     if (
         "\0" in raw or "*" in raw or "?" in raw
         or raw.startswith("\\\\?\\") or raw.startswith("//?/")
+        # A colon after the drive names an NTFS alternate data stream ("a.mp4:b"), never a file.
+        or ":" in os.path.splitdrive(raw)[1]
     ):
-        return PATH_MESSAGE
+        return wording.path
     absolute = os.path.abspath(raw)
     if len(absolute) > MAX_PATH_CHARS:
-        return PATH_MESSAGE
+        return wording.path
     root = _normcase(Path(allowed_root).resolve())
     if not _is_under(_normcase(absolute), root):
-        return OUTSIDE_MESSAGE
+        return wording.outside
     if _normcase(os.path.realpath(absolute)) != _normcase(absolute):
-        return LINK_MESSAGE
+        return wording.link
     try:
         info = os.lstat(absolute)
     except OSError:
-        return SIZE_MESSAGE
+        return wording.size
     if getattr(info, "st_file_attributes", 0) & FILE_ATTRIBUTE_REPARSE_POINT:
-        return LINK_MESSAGE
+        return wording.link
     if not stat.S_ISREG(info.st_mode):
-        return SIZE_MESSAGE
+        return wording.size
     return None
 
 
-def validate_target(path: Any, *, allowed_root: Any, expected_size: int) -> os.stat_result:
+def export_path_refusal(path: Any, *, output_root: Any) -> str | None:
+    """Why ``path`` is not an export BiliFlow may send to the bin, or None. Never reads the size.
+
+    Only a ``…-reviewed.mp4`` or its ``.manifest.json`` lying directly in
+    ``output_root`` (never in a subfolder, never a ``name:stream``), then every
+    ``path_refusal`` check worded for an export.
+    """
+    raw = str(path)
+    if not os.path.basename(raw).casefold().endswith(EXPORT_NAME_SUFFIXES):
+        return EXPORT_NAME_MESSAGE
+    if raw and os.path.isabs(raw):
+        absolute = _normcase(os.path.abspath(raw))
+        root = _normcase(Path(output_root).resolve())
+        if _is_under(absolute, root) and os.path.dirname(absolute) != root:
+            return EXPORT_FOLDER_MESSAGE
+    return path_refusal(raw, allowed_root=output_root, wording=EXPORT_WORDING)
+
+
+def validate_target(
+    path: Any, *, allowed_root: Any, expected_size: int, wording: Wording = SOURCE_WORDING,
+) -> os.stat_result:
     """The file's lstat when it may be recycled; RecycleRefused otherwise."""
     if not _is_windows():
         raise RecycleRefused(NOT_WINDOWS_MESSAGE)
-    refusal = path_refusal(path, allowed_root=allowed_root)
+    refusal = path_refusal(path, allowed_root=allowed_root, wording=wording)
     if refusal:
         raise RecycleRefused(refusal)
     try:
         info = os.lstat(os.path.abspath(str(path)))
     except OSError as error:
-        raise RecycleRefused(SIZE_MESSAGE) from error
+        raise RecycleRefused(wording.size) from error
     if isinstance(expected_size, bool) or int(info.st_size) != expected_size:
-        raise RecycleRefused(SIZE_MESSAGE)
+        raise RecycleRefused(wording.size)
     return info
 
 
@@ -511,18 +585,18 @@ def _gigabytes(value: int) -> str:
     return f"{value / GIBIBYTE:.1f}".replace(".", ",")
 
 
-def capacity_refusal(info: BinInfo, extra_bytes: int) -> str | None:
+def capacity_refusal(info: BinInfo, extra_bytes: int, *, message: str = CAPACITY_MESSAGE) -> str | None:
     """The CAPACITY text when ``extra_bytes`` more would overflow the bin, else None."""
     if info.used_bytes + int(extra_bytes) > info.max_bytes - CAPACITY_MARGIN_BYTES:
-        return CAPACITY_MESSAGE.format(
+        return message.format(
             volume=info.volume, used=_gigabytes(info.used_bytes),
             max=_gigabytes(info.max_bytes), extra=_gigabytes(int(extra_bytes)),
         )
     return None
 
 
-def check_capacity(info: BinInfo, extra_bytes: int) -> None:
-    refusal = capacity_refusal(info, extra_bytes)
+def check_capacity(info: BinInfo, extra_bytes: int, *, message: str = CAPACITY_MESSAGE) -> None:
+    refusal = capacity_refusal(info, extra_bytes, message=message)
     if refusal:
         raise RecycleRefused(refusal)
 
@@ -534,12 +608,14 @@ def check_capacity(info: BinInfo, extra_bytes: int) -> None:
 class _Operation:
     """One shell call. Mutable; every field is read and written under _PENDING_LOCK."""
 
-    def __init__(self, key: str, path: str, size: int, volume_root: str, started: float):
+    def __init__(self, key: str, path: str, size: int, volume_root: str, started: float,
+                 wording: Wording = SOURCE_WORDING):
         self.key = key
         self.path = path
         self.size = size
         self.volume_root = volume_root
         self.started = started
+        self.wording = wording
         self.monotonic_started = time.monotonic()
         self.done = False
         self.rc: int | None = None
@@ -571,19 +647,16 @@ def _conclude(operation: _Operation) -> RecycleResult:
         if rc in SHARING_RETURN_CODES:
             raise RecycleFailed(SHARING_MESSAGE)
         if operation.aborted or rc in ABORTED_RETURN_CODES:
-            raise RecycleFailed(ABORTED_MESSAGE)
+            raise RecycleFailed(operation.wording.aborted)
         if rc != 0:
-            raise RecycleFailed(ERROR_RC_MESSAGE.format(rc=rc))
-        raise RecycleFailed(NOT_MOVED_MESSAGE)
+            raise RecycleFailed(operation.wording.error_rc.format(rc=rc))
+        raise RecycleFailed(operation.wording.not_moved)
     # The file left its folder; whatever the return code said, look for the
     # bin record rather than report a failure for a file that is gone.
-    try:
-        record = find_recycle_record(
-            operation.volume_root, operation.path, operation.size,
-            since=operation.started - 5,
-        )
-    except (OSError, ValueError):
-        record = None
+    record = find_recycle_record_patiently(
+        operation.volume_root, operation.path, operation.size,
+        since=operation.started - 5,
+    )
     return RecycleResult(
         path=operation.path, size_bytes=operation.size, verified=record is not None,
         record_path=record, elapsed_seconds=round(time.monotonic() - operation.monotonic_started, 3),
@@ -642,11 +715,41 @@ def send_to_recycle_bin(
     allowed = _normcase(Path(allowed_root).resolve())
     if allowed not in {_normcase(Path(root).resolve()) for root in _allowed_roots()}:
         raise RecycleRefused(ALLOWED_ROOT_MESSAGE)
-    validate_target(path, allowed_root=allowed_root, expected_size=expected_size)
+    return _recycle(path, allowed_root=allowed_root, expected_size=expected_size, timeout=timeout,
+                    on_late_result=on_late_result, wording=SOURCE_WORDING)
+
+
+def send_export_to_recycle_bin(
+    path: Any, *, allowed_root: Any, expected_size: int,
+    timeout: float = DEFAULT_TIMEOUT_SECONDS,
+    on_late_result: LateResultCallback | None = None,
+) -> RecycleResult:
+    """send_to_recycle_bin for the export of an archived job (batch 4 "Lưu trữ").
+
+    Only inside ``<install>/output`` (no test root: there is no real-bin test
+    for exports) and only for a ``…-reviewed.mp4`` or its ``.manifest.json``
+    directly in it (``export_path_refusal``); the same checks, capacity rule,
+    shell call and results otherwise, worded for an export.
+    send_to_recycle_bin itself stays input-only.
+    """
+    allowed = _normcase(Path(allowed_root).resolve())
+    if allowed != _normcase((INSTALL_ROOT / "output").resolve()):
+        raise RecycleRefused(EXPORT_ALLOWED_ROOT_MESSAGE)
+    refusal = export_path_refusal(path, output_root=allowed_root)
+    if refusal:
+        raise RecycleRefused(refusal)
+    return _recycle(path, allowed_root=allowed_root, expected_size=expected_size, timeout=timeout,
+                    on_late_result=on_late_result, wording=EXPORT_WORDING)
+
+
+def _recycle(path: Any, *, allowed_root: Any, expected_size: int, timeout: float,
+             on_late_result: LateResultCallback | None, wording: Wording) -> RecycleResult:
+    """The checks and the guarded shell call shared by both public entry points."""
+    validate_target(path, allowed_root=allowed_root, expected_size=expected_size, wording=wording)
     target = os.path.abspath(str(path))
     info = volume_bin_info(target)
-    check_capacity(info, expected_size)
-    operation = _Operation(_key(target), target, int(expected_size), info.root, time.time())
+    check_capacity(info, expected_size, message=wording.capacity)
+    operation = _Operation(_key(target), target, int(expected_size), info.root, time.time(), wording)
     with _PENDING_LOCK:
         if _PENDING:
             raise RecycleRefused(IN_PROGRESS_MESSAGE)
@@ -705,12 +808,14 @@ def _comparable(path: str) -> str:
     return unicodedata.normalize("NFC", os.path.normcase(os.path.abspath(path)))
 
 
-def find_recycle_record(volume_root: Any, original: Any, size: int, *, since: float) -> str | None:
-    """The ``$I`` file recording ``original`` (same path and size, written at or after ``since``).
+def find_recycle_record(volume_root: Any, original: Any, size: int, *, since: float,
+                        until: float | None = None) -> str | None:
+    """The ``$I`` file recording ``original`` (same path and size, written between ``since`` and ``until``).
 
-    ``since`` is a POSIX timestamp in seconds. The ``$R`` twin must exist too:
-    an orphan ``$I`` does not prove where the file is. Folders that cannot be
-    read (S-1-5-18) are skipped.
+    ``since`` and ``until`` (None: no upper bound) are POSIX timestamps in
+    seconds, compared with the ``$I`` file's mtime; the newest match wins. The
+    ``$R`` twin must exist too: an orphan ``$I`` does not prove where the file
+    is. Folders that cannot be read (S-1-5-18) are skipped.
     """
     wanted = _comparable(str(original))
     extension = os.path.splitext(str(original))[1].casefold()
@@ -733,7 +838,7 @@ def find_recycle_record(volume_root: Any, original: Any, size: int, *, since: fl
                 continue
             try:
                 modified = entry.stat().st_mtime
-                if modified < since:
+                if modified < since or (until is not None and modified > until):
                     continue
                 with open(entry.path, "rb") as handle:
                     data = handle.read(65536)
@@ -747,3 +852,25 @@ def find_recycle_record(volume_root: Any, original: Any, size: int, *, since: fl
             if best is None or modified > best[0]:
                 best = (modified, entry.path)
     return None if best is None else best[1]
+
+
+def find_recycle_record_patiently(
+    volume_root: Any, original: Any, size: int, *, since: float,
+    delays: tuple[float, ...] | None = None,
+) -> str | None:
+    """find_recycle_record, looked up again after each pause while nothing is found.
+
+    ``delays`` defaults to VERIFY_RETRY_DELAYS. A lookup that raises OSError or
+    ValueError (a half-written ``$I``) counts as "not found yet".
+    """
+    schedule = VERIFY_RETRY_DELAYS if delays is None else tuple(delays)
+    for attempt, pause in enumerate((0.0, *schedule)):
+        if attempt:
+            _sleep(pause)
+        try:
+            record = find_recycle_record(volume_root, original, size, since=since)
+        except (OSError, ValueError):
+            record = None
+        if record is not None:
+            return record
+    return None

@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Any
 
 from biliflow.job_pipeline import safe_job_key
-from biliflow.job_store import SOURCE_CLEANED_STATES, JobStore, sha256_file
+from biliflow.job_store import SOURCE_ARCHIVED_STATES, SOURCE_CLEANED_STATES, JobStore, sha256_file
 from biliflow.probe import duration_seconds, probe_video
 from biliflow.review_workflow import review_export_paths
 
@@ -96,6 +96,12 @@ def import_existing_project(root: Path, store: JobStore) -> dict[str, int]:
         job_id: row for job_id, row in store.latest_source_cleanups().items()
         if row["state"] in SOURCE_CLEANED_STATES
     }
+    # Batch 4: jobs whose source is archived (or on its way there or back) are
+    # skipped the same way; only "Khôi phục bản xuất" brings their source back.
+    cleaned.update({
+        job_id: row for job_id, row in store.latest_source_archives().items()
+        if row["state"] in SOURCE_ARCHIVED_STATES
+    })
     cleaned_paths = {source_path_key(row["source_path"]) for row in cleaned.values()}
 
     imported = 0

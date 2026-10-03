@@ -14,13 +14,17 @@ from biliflow.job_import import VIDEO_EXTENSIONS, source_path_key
 from biliflow.codex_supervisor import run_local_queue_audit
 # A skipped video ("Bỏ qua (không xuất)") must be reopened before it can run
 # again; both refusals stay importable from biliflow.scheduler. A source moved
-# to the Recycle Bin by "Dọn video gốc" locks every action on its job.
+# to the Recycle Bin by "Dọn video gốc", or into archive/ by "Lưu trữ", locks
+# every action on its job.
 from biliflow.export_guards import (
     RESUMABLE_EXPORT_STATES,
     SKIPPED_REFUSAL,
     SKIPPED_STOP_REFUSAL,
+    SOURCE_ARCHIVED_MESSAGE,
+    SOURCE_ARCHIVED_STOP_REFUSAL,
     SOURCE_CLEANED_MESSAGE,
     SOURCE_CLEANED_STOP_REFUSAL,
+    ActionConflict,
 )
 from biliflow.job_pipeline import (
     DEFAULT_DETECTOR_GROUPS,
@@ -71,6 +75,11 @@ RESUME_SETTLED_REFUSAL = (
 )
 # A job with a recorded review result has nothing for Tiếp tục to continue.
 RESUME_SETTLED_STATES = frozenset({"WAITING_REVIEW", "READY_TO_EXPORT", "COMPLETED"})
+# Hủy has nothing to stop (ActionConflict, HTTP 409; no write, no event).
+# Format with job_id=... A cancelled job stays revivable (lead decision L1).
+CANCEL_REPEAT_REFUSAL = "Video #{job_id} đã được hủy trước đó; không hủy thêm lần nữa."
+CANCEL_COMPLETED_REFUSAL = "Video #{job_id} đã hoàn tất; không có gì để hủy."
+CANCEL_SETTLED_STATES = frozenset({"COMPLETED", "SKIPPED", "CANCELLED"})
 # RESUMABLE_EXPORT_STATES (imported above): the only states in which a pending
 # render is an export the user paused, that failed, or that a restart
 # interrupted, so Tiếp tục may run it. The standalone review UI refuses edits
@@ -257,7 +266,7 @@ class JobScheduler:
         """
         with self._start_lock:
             job = self.store.get_job(job_id)
-            self._refuse_cleaned(job_id)
+            self._refuse_locked(job_id)
             if job["state"] not in STARTABLE_STATES:
                 raise ValueError(
                     f"Video #{job_id} đang ở trạng thái {job['state']}, không còn chờ thiết lập; "
@@ -284,7 +293,7 @@ class JobScheduler:
         with self._start_lock:
             job = self.store.get_job(job_id)
             # Before anything is written (render:{id} and skip:{id} below).
-            self._refuse_cleaned(job_id)
+            self._refuse_locked(job_id)
             active = self.active
             if (active and active["job_id"] == job_id) or job["state"] in IN_PROCESS_STATES:
                 raise ValueError("Dừng job hiện tại trước khi chạy lại từ đầu")
@@ -345,7 +354,7 @@ class JobScheduler:
             job = self.store.get_job(job_id)
             if job["state"] == "SKIPPED":
                 raise ValueError(SKIPPED_REFUSAL)
-            self._refuse_cleaned(job_id)
+            self._refuse_locked(job_id)
             if job["content_style"] == "unknown":
                 raise ValueError("Choose animation, live_action, or mixed before starting")
             if self.is_busy(job_id) or job["state"] in IN_PROCESS_STATES:
@@ -384,18 +393,33 @@ class JobScheduler:
         if self.store.get_job(job_id)["state"] == "SKIPPED":
             raise ValueError(SKIPPED_STOP_REFUSAL)
 
-    def _refuse_cleaned(self, job_id: int, message: str = SOURCE_CLEANED_MESSAGE) -> None:
+    def _refuse_locked(self, job_id: int, *, stop: bool = False) -> None:
         # The source is in the Recycle Bin, or the shell call moving it there
-        # has not answered (latest source_cleanups row RECYCLED or PENDING).
-        # Only the watcher unlocks the job, once the same file is back.
-        # Called inside job_action_lock, before any write.
-        if self.store.source_cleaned(job_id):
-            raise ValueError(message)
+        # has not answered (latest source_cleanups row RECYCLED or PENDING):
+        # only the watcher unlocks the job, once the same file is back. Or it
+        # is in archive/ or on its way there or back (latest source_archives
+        # row PENDING, ARCHIVED or RESTORING): only "Khôi phục bản xuất"
+        # unlocks it. Called inside job_action_lock, before any write.
+        lock = self.store.source_lock(job_id)
+        if lock == "cleaned":
+            raise ValueError(SOURCE_CLEANED_STOP_REFUSAL if stop else SOURCE_CLEANED_MESSAGE)
+        if lock == "archived":
+            raise ValueError(SOURCE_ARCHIVED_STOP_REFUSAL if stop else SOURCE_ARCHIVED_MESSAGE)
+
+    @staticmethod
+    def _refuse_settled_cancel(job: dict[str, Any]) -> None:
+        """Hủy on a job that has nothing left to stop: skipped, cancelled or completed."""
+        if job["state"] == "SKIPPED":
+            raise ValueError(SKIPPED_STOP_REFUSAL)
+        if job["state"] == "CANCELLED":
+            raise ActionConflict("already_cancelled", CANCEL_REPEAT_REFUSAL.format(job_id=job["id"]))
+        if job["state"] == "COMPLETED":
+            raise ActionConflict("not_cancellable", CANCEL_COMPLETED_REFUSAL.format(job_id=job["id"]))
 
     def stop_after_stage(self, job_id: int) -> dict:
         with self.job_action_lock:
             self._refuse_skipped(job_id)
-            self._refuse_cleaned(job_id, SOURCE_CLEANED_STOP_REFUSAL)
+            self._refuse_locked(job_id, stop=True)
             # A job still waiting in the queue has no stage to finish: take it out
             # (PAUSED keeps its place for Tiếp tục) instead of leaving it stuck.
             if self.store.pause_if_queued(job_id):
@@ -408,7 +432,7 @@ class JobScheduler:
     def pause_now(self, job_id: int) -> dict:
         with self.job_action_lock:
             self._refuse_skipped(job_id)
-            self._refuse_cleaned(job_id, SOURCE_CLEANED_STOP_REFUSAL)
+            self._refuse_locked(job_id, stop=True)
             with self._lock:
                 active = self._active
             stages = self.store.stages(job_id)
@@ -426,10 +450,18 @@ class JobScheduler:
     def cancel(self, job_id: int) -> dict:
         with self.job_action_lock:
             self._refuse_skipped(job_id)
-            self._refuse_cleaned(job_id, SOURCE_CLEANED_STOP_REFUSAL)
+            self._refuse_locked(job_id, stop=True)
+            self._refuse_settled_cancel(self.store.get_job(job_id))
             with self._lock:
                 active = self._active
-            value = self.store.update_job(job_id, state="CANCELLED", stop_mode="CANCELLED")
+            # Conditional: a job the worker finished, or another tab cancelled,
+            # since the check above is refused instead of cancelled twice.
+            value = self.store.update_job_if(
+                job_id, exclude=CANCEL_SETTLED_STATES, state="CANCELLED", stop_mode="CANCELLED",
+            )
+            if value is None:
+                self._refuse_settled_cancel(self.store.get_job(job_id))
+                raise ActionConflict("not_cancellable", CANCEL_COMPLETED_REFUSAL.format(job_id=job_id))
             for stage in self.store.stages(job_id):
                 if stage["state"] == "RUNNING":
                     self.store.update_stage(job_id, stage["name"], state="CANCELLED", pid=None,
@@ -448,7 +480,7 @@ class JobScheduler:
             job = self.store.get_job(job_id)
             if job["state"] == "SKIPPED":
                 raise ValueError(SKIPPED_REFUSAL)
-            self._refuse_cleaned(job_id)
+            self._refuse_locked(job_id)
             if self.is_busy(job_id) or job["state"] in IN_PROCESS_STATES:
                 raise ValueError(
                     f"Video #{job_id} đang được xử lý; chờ bước hiện tại xong rồi hãy bấm Thử lại."
@@ -516,7 +548,7 @@ class JobScheduler:
             raise ValueError("Output maximum and target must both be set or both be unlimited")
         with self.job_action_lock:
             # Defensive: finalize refuses a cleaned source before it gets here.
-            self._refuse_cleaned(job_id)
+            self._refuse_locked(job_id)
             # Finalizing an export that is already waiting keeps its place.
             reseq = self.store.get_job(job_id)["state"] != "QUEUED"
             self.store.ensure_stage(job_id, "render")

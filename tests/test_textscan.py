@@ -3,7 +3,8 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 
 from biliflow.textscan import (
-    Track, _accept_detection, _iou, _promote_repeated_corner_overlays,
+    Track, _accept_detection, _annotate_platform_names, _iou,
+    _limit_report_tracks, _promote_repeated_corner_overlays,
     _sha256_file, _summarize_track,
     _text_continuity, _zone,
 )
@@ -80,6 +81,29 @@ class TextTrackingTests(unittest.TestCase):
         result = _promote_repeated_corner_overlays(tracks, 445.0)
         self.assertEqual(len(result), 1)
         self.assertEqual(result[0]["union_box"], [53, 79, 141, 108])
+
+    def test_platform_tracks_survive_report_truncation(self):
+        candidates = [
+            {"track_id": index, "review_candidate": True,
+             "sample_text": ["SHOP NOW"], "start_seconds": float(index)}
+            for index in range(1, 4)
+        ]
+        references = [
+            {"track_id": 10 + index, "review_candidate": False,
+             "sample_text": ["Một dòng chữ trong cảnh"], "start_seconds": 20.0 + index}
+            for index in range(10)
+        ]
+        ending = {"track_id": 99, "review_candidate": False,
+                  "sample_text": ["iOIYI"], "start_seconds": 2700.0}
+        summaries = _annotate_platform_names(candidates + references + [ending])
+        self.assertNotIn("platform_name", ending)
+        kept = _limit_report_tracks(summaries, 6)
+        self.assertEqual([track["track_id"] for track in kept], [1, 2, 3, 99, 10, 11])
+        self.assertEqual(kept[3]["platform_name"]["key"], "iqiyi")
+        self.assertEqual(kept[3]["platform_name"]["text"], "iOIYI")
+        self.assertNotIn("platform_name", kept[0])
+        crowded = _limit_report_tracks(summaries, 2)
+        self.assertEqual([track["track_id"] for track in crowded], [1, 2, 3, 99])
 
     def test_report_source_hash_uses_file_content(self):
         with TemporaryDirectory() as directory:

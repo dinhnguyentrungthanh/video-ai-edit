@@ -8,6 +8,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
+from biliflow.export_guards import ActionConflict, SOURCE_ARCHIVED_MESSAGE, SOURCE_ARCHIVED_STOP_REFUSAL
 from biliflow.job_pipeline import PipelineStage, StageCommand
 from biliflow.job_store import JobStore, sha256_file
 from biliflow.scheduler import (
@@ -1055,6 +1056,117 @@ class CleanedSourceLockTests(SchedulerFixture):
         self.assertIsNone(self.store.setting(f"render:{a}"))
         self.assertIsNone(self.store.setting(f"skip:{a}"))
         self.assertEqual(self.order(), [(a, "scan")])
+
+    def archive(self, job_id, state="ARCHIVED", kind="EXPORTED"):
+        job = self.store.get_job(job_id)
+        folder = self.root / "archive" / "sources" / job["job_key"]
+        row_id = self.store.add_source_archive(
+            job_id=job_id, kind=kind, source_path=job["source_path"],
+            archive_path=str(folder / f"{job['job_key']}.mp4"),
+            manifest_path=str(folder / "archive-manifest.json"),
+            source_sha256=job["source_sha256"], size_bytes=job["source_size_bytes"],
+            mtime_ns=job["source_mtime_ns"], queue_path=f"reports/jobs/{job['job_key']}/q.json",
+            output_path=f"output/{job_id}.mp4" if kind == "EXPORTED" else None,
+        )
+        if state in ("ARCHIVED", "RESTORING", "RESTORED"):
+            self.store.finish_source_archive(row_id, state="ARCHIVED")
+        if state in ("RESTORING", "RESTORED"):
+            self.store.begin_archive_restore(row_id)
+        if state == "RESTORED":
+            self.store.finish_archive_restore(row_id, mtime_ns=99, job_state=None)
+        return row_id
+
+    def test_archived_jobs_refuse_every_action(self):
+        other = self.job("other")
+        self.start(other)
+        archived = {
+            **dict.fromkeys(("start_job", "rerun", "resume", "retry", "queue_render"), SOURCE_ARCHIVED_MESSAGE),
+            **dict.fromkeys(("stop_after_stage", "pause_now", "cancel"), SOURCE_ARCHIVED_STOP_REFUSAL),
+        }
+        # The latest archive row PENDING, ARCHIVED or RESTORING locks the job.
+        for state in ("PENDING", "ARCHIVED", "RESTORING"):
+            with self.subTest(state=state):
+                job_id = self.exported(f"a-{state.lower()}")
+                self.archive(job_id, state)
+                self.assert_refused(job_id, archived)
+        # A skipped job keeps its skip refusals first, as with a cleaned source.
+        skipped = self.exported("skipped")
+        self.store.update_job(skipped, state="SKIPPED")
+        self.archive(skipped, kind="SKIPPED")
+        self.assert_refused(skipped, {
+            **archived, "resume": SKIPPED_REFUSAL, "retry": SKIPPED_REFUSAL,
+            "stop_after_stage": SKIPPED_STOP_REFUSAL, "pause_now": SKIPPED_STOP_REFUSAL,
+            "cancel": SKIPPED_STOP_REFUSAL,
+        })
+        self.assertEqual(self.order(), [(other, "scan")])
+        # A failed archive does not lock; a restored one unlocks.
+        failed = self.exported("failed")
+        row_id = self.archive(failed, "PENDING")
+        self.store.finish_source_archive(row_id, state="FAILED", error="x")
+        self.assertEqual(self.scheduler.rerun(failed)["state"], "QUEUED")
+        restored = self.exported("restored")
+        self.archive(restored, "RESTORED")
+        self.assertEqual(self.scheduler.rerun(restored)["state"], "QUEUED")
+
+
+class CancelGuardTests(SchedulerFixture):
+    """Hủy runs once: a repeat or a finished job is a conflict (HTTP 409), with no write and no event."""
+
+    def cancel_events(self, job_id):
+        return [event for event in self.store.events(job_id, limit=1000) if event["event_type"] == "JOB_CANCELLED"]
+
+    def snapshot(self, job_id):
+        return self.store.get_job(job_id), self.store.stages(job_id), len(self.store.events(job_id, limit=1000))
+
+    def test_cancel_repeat_is_a_conflict_without_a_second_event(self):
+        a = self.job("a")
+        self.start(a)
+        self.assertEqual(self.scheduler.cancel(a)["state"], "CANCELLED")
+        self.assertEqual(len(self.cancel_events(a)), 1)
+        before = self.snapshot(a)
+        with self.assertRaises(ActionConflict) as caught:
+            self.scheduler.cancel(a)
+        self.assertNotIsInstance(caught.exception, ValueError)
+        self.assertEqual((caught.exception.code, str(caught.exception)),
+                         ("already_cancelled", f"Video #{a} đã được hủy trước đó; không hủy thêm lần nữa."))
+        self.assertEqual(self.snapshot(a), before)
+        # Another tab cancels between the check and the write: the write is conditional.
+        b = self.job("b")
+        self.start(b)
+        real = self.store.update_job_if
+
+        def another_tab_wins(job_id, **kwargs):
+            self.store.update_job(job_id, state="CANCELLED", stop_mode="CANCELLED")
+            return real(job_id, **kwargs)
+
+        with patch.object(self.store, "update_job_if", side_effect=another_tab_wins):
+            with self.assertRaises(ActionConflict) as caught:
+                self.scheduler.cancel(b)
+        self.assertEqual(caught.exception.code, "already_cancelled")
+        self.assertEqual(self.cancel_events(b), [])
+        # L1: a cancelled job is not sticky; "Chạy lại kiểm tra" still queues it.
+        self.assertEqual(self.scheduler.rerun(a)["state"], "QUEUED")
+
+    def test_cancel_refuses_completed(self):
+        a = self.job("a")
+        self.store.update_job(a, state="COMPLETED", progress=1.0)
+        before = self.snapshot(a)
+        with self.assertRaises(ActionConflict) as caught:
+            self.scheduler.cancel(a)
+        self.assertEqual((caught.exception.code, str(caught.exception)),
+                         ("not_cancellable", f"Video #{a} đã hoàn tất; không có gì để hủy."))
+        self.assertEqual(self.snapshot(a), before)
+        # A skipped job keeps its own refusal (a ValueError, HTTP 400).
+        self.store.update_job(a, state="SKIPPED")
+        with self.assertRaises(ValueError) as caught:
+            self.scheduler.cancel(a)
+        self.assertEqual(str(caught.exception), SKIPPED_STOP_REFUSAL)
+        # Every other settled or waiting state can still be cancelled.
+        for state in ("WAITING_REVIEW", "READY_TO_EXPORT", "PAUSED", "FAILED", "NEEDS_METADATA"):
+            with self.subTest(state=state):
+                self.store.update_job(a, state=state)
+                self.assertEqual(self.scheduler.cancel(a)["state"], "CANCELLED")
+        self.assertEqual(len(self.cancel_events(a)), 5)
 
 
 class InputWatcherRestoreTests(unittest.TestCase):

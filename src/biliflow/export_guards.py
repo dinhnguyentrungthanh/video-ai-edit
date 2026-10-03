@@ -25,7 +25,12 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import quote
 
-from biliflow.job_store import IN_PROCESS_STATES, RENDER_REQUEST_STATES, SOURCE_CLEANED_STATES
+from biliflow.job_store import (
+    IN_PROCESS_STATES,
+    RENDER_REQUEST_STATES,
+    SOURCE_ARCHIVED_STATES,
+    SOURCE_CLEANED_STATES,
+)
 
 
 # Serializes review-queue reads (page polling, evidence, strip frames, video)
@@ -69,6 +74,32 @@ SOURCE_CLEANED_REVIEW_REFUSAL = (
     "đổi quyết định duyệt."
 )
 SOURCE_CLEANED_MEDIA_MESSAGE = "Video gốc đã được dọn vào Thùng rác"
+
+# A source moved into archive/sources/ by "Lưu trữ" (latest source_archives row
+# PENDING, ARCHIVED or RESTORING) locks every action on its job the same way,
+# until "Khôi phục bản xuất" brings it back.
+SOURCE_ARCHIVED_MESSAGE = (
+    "Video gốc đang ở kho lưu trữ. Bấm “Khôi phục bản xuất” để đưa video gốc về input trước."
+)
+SOURCE_ARCHIVED_STOP_REFUSAL = "Video gốc đang ở kho lưu trữ; không có gì để dừng hoặc hủy."
+SOURCE_ARCHIVED_REVIEW_REFUSAL = (
+    "Video gốc đang ở kho lưu trữ; bấm “Khôi phục bản xuất” trước khi đổi quyết định duyệt."
+)
+SOURCE_ARCHIVED_MEDIA_MESSAGE = "Video gốc đang ở kho lưu trữ"
+
+
+class ActionConflict(Exception):
+    """An action that conflicts with the job's current state: HTTP 409 ``{error, code}``.
+
+    Not a ValueError (HTTP 400), so a handler never mistakes it for bad input.
+    ``source_cleanup.CleanupConflict`` is a subclass.
+    """
+
+    def __init__(self, code: str, message: str, preview: dict[str, Any] | None = None):
+        super().__init__(message)
+        self.code = code
+        self.message = message
+        self.preview = preview
 
 # Standalone review UI (serve_review_ui) checks against the Control Center DB,
 # read-only; it fails closed for every video the Control Center owns.
@@ -181,10 +212,12 @@ def export_state_refusal(
     return None
 
 
-def export_source_refusal(source_path: Path, *, cleaned: bool) -> str | None:
+def export_source_refusal(source_path: Path, *, cleaned: bool, archived: bool = False) -> str | None:
     """Why the source video cannot be exported, or None (finalize checks 5-6)."""
     if cleaned:
         return SOURCE_CLEANED_MESSAGE
+    if archived:
+        return SOURCE_ARCHIVED_MESSAGE
     if not Path(source_path).is_file():
         return SOURCE_MISSING_MESSAGE
     return None
@@ -238,6 +271,16 @@ def control_center_job_facts(root: Path, source_sha256: str) -> dict[str, Any] |
                     (job_id,),
                 ).fetchone()
                 cleaned = latest is not None and latest[0] in SOURCE_CLEANED_STATES
+            # Batch 4: an archived source ("Lưu trữ") locks the job the same way.
+            archived = False
+            if connection.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='source_archives'"
+            ).fetchone() is not None:
+                latest = connection.execute(
+                    "SELECT state FROM source_archives WHERE job_id=? ORDER BY id DESC LIMIT 1",
+                    (job_id,),
+                ).fetchone()
+                archived = latest is not None and latest[0] in SOURCE_ARCHIVED_STATES
         finally:
             connection.close()
     except sqlite3.Error as error:
@@ -247,6 +290,7 @@ def control_center_job_facts(root: Path, source_sha256: str) -> dict[str, Any] |
         "next_pending_stage": None if pending is None else str(pending[0]),
         "render_request": render_request,
         "cleaned": cleaned,
+        "archived": archived,
     }
 
 
@@ -280,7 +324,8 @@ def standalone_edit_refusal(root: Path, queue: dict[str, Any]) -> str | None:
     """Why the standalone review UI must not change a decision of this queue, or None.
 
     Same rules as the Control Center review routes for an export in flight, a
-    cleaned source and a skipped video. The database read fails closed too.
+    cleaned or archived source and a skipped video. The database read fails
+    closed too.
     An export request that Tiếp tục or Thử lại would still run (a paused,
     failed or interrupted render) is refused as well: the Dashboard retires it
     when a decision changes, but this server has no scheduler, and the request
@@ -296,6 +341,8 @@ def standalone_edit_refusal(root: Path, queue: dict[str, Any]) -> str | None:
         return REVIEW_EDIT_IN_FLIGHT_MESSAGE
     if facts["cleaned"]:
         return SOURCE_CLEANED_REVIEW_REFUSAL
+    if facts.get("archived"):
+        return SOURCE_ARCHIVED_REVIEW_REFUSAL
     if job["state"] == "SKIPPED":
         return STANDALONE_SKIPPED_EDIT_REFUSAL
     return None

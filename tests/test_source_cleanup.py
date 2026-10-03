@@ -26,6 +26,7 @@ from biliflow.export_guards import (
     REVIEW_QUEUE_IO,
     SOURCE_CLEANED_MESSAGE,
     SOURCE_CLEANED_STOP_REFUSAL,
+    ActionConflict,
     review_summary,
 )
 from biliflow.job_store import JobStore, now_iso, sha256_file
@@ -39,12 +40,14 @@ from biliflow.recycle_bin import (
 from biliflow.review_workflow import approved_operations, review_export_paths
 from biliflow.scheduler import JobScheduler
 from biliflow.source_cleanup import (
+    SOURCE_FILE_LOCK,
     CleanupConflict,
     cleanup_hint,
     cleanup_row_summary,
     execute_cleanup,
     parse_job_ids,
     preview_cleanup,
+    recheck_recycle_record,
     reconcile_pending_cleanups,
 )
 
@@ -403,8 +406,22 @@ class ModuleContractTests(unittest.TestCase):
         self.assertEqual(cleanup_row_summary(row), {
             "id": 3, "state": "RECYCLED", "kind": "SKIPPED", "size_bytes": 10, "file_name": "Tập 1.mp4",
             "source_path": "E:\\x\\input\\Tập 1.mp4", "created_at": "a", "finished_at": "b",
-            "restored_at": None, "verified": True, "error": None,
+            "restored_at": None, "verified": True, "verified_at_cleanup": True,
+            "verified_later_at": None, "rechecked_at": None, "error": None,
         })
+        # Batch 4: a later "Kiểm tra lại Thùng rác" that found the record makes it verified;
+        # the row itself still says what the cleanup saw.
+        unverified = {**row, "verified": 0}
+        self.assertEqual(
+            {key: cleanup_row_summary(unverified, {"found": True, "checked_at": "c", "record": "r"})[key]
+             for key in ("verified", "verified_at_cleanup", "verified_later_at", "rechecked_at")},
+            {"verified": True, "verified_at_cleanup": False, "verified_later_at": "c", "rechecked_at": "c"},
+        )
+        self.assertEqual(
+            {key: cleanup_row_summary(unverified, {"found": False, "checked_at": "d", "record": None})[key]
+             for key in ("verified", "verified_at_cleanup", "verified_later_at", "rechecked_at")},
+            {"verified": False, "verified_at_cleanup": False, "verified_later_at": None, "rechecked_at": "d"},
+        )
 
 
 class EligibleCleanupTests(CleanupFixture):
@@ -1165,6 +1182,246 @@ class HintAndReconcileTests(CleanupFixture):
         self.assertEqual(reconcile_pending_cleanups(self.root, self.store, finder=finder), [rows[running]])
         self.assertEqual(self.store.latest_source_cleanup(running)["state"], "RECYCLED")
         self.assertEqual(reconcile_pending_cleanups(self.root, self.store, finder=finder), [])
+
+
+class RecycleRecheckTests(CleanupFixture):
+    """"Kiểm tra lại Thùng rác" (jobs 43, 47): reads the bin, appends a row, never edits the cleanup."""
+
+    RECORD = "E:\\$Recycle.Bin\\S-1-5-21-1000\\$I4RHHWK.mp4"
+
+    def unverified(self, name="a"):
+        job_id = self.make_exported_job(name)
+        self.recycler.modes[f"{name}.mp4"] = "unverified"
+        self.assertEqual(self.execute([job_id])["results"][0]["status"], "UNVERIFIED")
+        return job_id, self.store.latest_source_cleanup(job_id)
+
+    def recheck(self, subject_id, finder, kind="source_cleanup"):
+        return recheck_recycle_record(self.root, self.store, kind, subject_id, finder=finder)
+
+    def test_recheck_appends_a_row_and_never_changes_the_cleanup_row(self):
+        job_id, row = self.unverified()
+        calls = []
+
+        def missing(volume_root, original, size, *, since, until=None):
+            calls.append((volume_root, original, size, since))
+            return None
+
+        result = self.recheck(row["id"], missing)
+        self.assertEqual((result["found"], result["record"], result["id"], result["job_id"]),
+                         (False, None, row["id"], job_id))
+        self.assertEqual(result["message"], source_cleanup.RECHECK_MISSING_MESSAGE.format(what="video gốc"))
+        self.assertIsNotNone(result["checked_at"])
+        created = datetime.fromisoformat(row["created_at"]).timestamp()
+        self.assertEqual(calls[0][:3], (Path(row["source_path"]).anchor, row["source_path"], row["size_bytes"]))
+        self.assertAlmostEqual(calls[0][3], created - 5, places=3)
+        found = self.recheck(row["id"], lambda *args, **kwargs: self.RECORD)
+        self.assertEqual((found["found"], found["record"]), (True, self.RECORD))
+        self.assertEqual(found["message"], source_cleanup.RECHECK_FOUND_MESSAGE.format(what="video gốc"))
+        # The cleanup row is exactly what the cleanup recorded.
+        self.assertEqual(self.store.latest_source_cleanup(job_id), row)
+        checks = self.store.recycle_checks("SOURCE_CLEANUP", row["id"])
+        self.assertEqual([(item["found"], item["recycle_record"], item["actor"]) for item in checks],
+                         [(False, None, "control_center_user"), (True, self.RECORD, "control_center_user")])
+        self.assertEqual((checks[0]["path"], checks[0]["size_bytes"], checks[0]["job_id"]),
+                         (row["source_path"], row["size_bytes"], job_id))
+        still = self.events(job_id, "SOURCE_RECYCLE_STILL_UNVERIFIED")
+        verified = self.events(job_id, "SOURCE_RECYCLE_VERIFIED")
+        self.assertEqual((len(still), still[0]["level"], len(verified), verified[0]["level"]),
+                         (1, "WARNING", 1, "INFO"))
+        self.assertEqual(verified[0]["payload"], {
+            "kind": "SOURCE_CLEANUP", "subject_id": row["id"], "path": row["source_path"],
+            "size_bytes": row["size_bytes"], "recycle_record": self.RECORD, "check_id": checks[1]["id"],
+        })
+        summary = cleanup_row_summary(row, self.store.recycle_check_summary("SOURCE_CLEANUP")[row["id"]])
+        self.assertEqual((summary["verified"], summary["verified_at_cleanup"], summary["verified_later_at"]),
+                         (True, False, checks[1]["checked_at"]))
+        # Found once: nothing is left to check and nothing more is written.
+        with self.assertRaises(ActionConflict) as caught:
+            self.recheck(row["id"], missing)
+        self.assertEqual(caught.exception.code, "already_verified")
+        self.assertEqual(len(self.store.recycle_checks("SOURCE_CLEANUP", row["id"])), 2)
+        self.assertEqual(len(calls), 1)
+
+    def test_recheck_ignores_a_later_record_of_the_same_file(self):
+        # Security review (L5): the same path and size moved to the bin again later (by hand, by
+        # another job, after a re-export) must not verify this older move.
+        job_id, row = self.unverified()
+        finished = datetime.fromisoformat(row["finished_at"]).timestamp()
+        records, seen = [], []
+
+        def finder(volume_root, original, size, *, since, until=None):
+            seen.append((since, until))
+            hits = [entry for entry in records if entry[0] >= since and (until is None or entry[0] <= until)]
+            return max(hits)[1] if hits else None
+
+        later = "E:\\$Recycle.Bin\\S-1-5-21-1000\\$ILATER1.mp4"
+        records.append((finished + 3600, later))
+        result = self.recheck(row["id"], finder)
+        self.assertEqual((result["found"], result["record"]), (False, None))
+        slack = source_cleanup.RECHECK_UNTIL_SLACK_SECONDS
+        self.assertEqual(slack, 60)
+        self.assertAlmostEqual(seen[0][1], finished + slack, places=3)
+        # This move's own record (written up to a minute after the row settled) still verifies it.
+        records.append((finished + 30, self.RECORD))
+        result = self.recheck(row["id"], finder)
+        self.assertEqual((result["found"], result["record"]), (True, self.RECORD))
+        self.assertEqual(self.store.latest_source_cleanup(job_id), row)
+
+    def test_recheck_refusals(self):
+        job_id, row = self.unverified()
+
+        def never(*args, **kwargs):
+            raise AssertionError("the bin must not be read")
+
+        for kind, subject in (("SOURCE_CLEANUP", row["id"]), ("cleanup", row["id"]), (None, row["id"]),
+                              ("source_cleanup", 0), ("source_cleanup", "1"), ("source_cleanup", True),
+                              ("source_cleanup", None), ("source_cleanup", 2**31)):
+            with self.subTest(kind=kind, subject=subject), self.assertRaises(ValueError):
+                recheck_recycle_record(self.root, self.store, kind, subject, finder=never)
+        with self.assertRaises(ValueError) as caught:
+            self.recheck(9999, never)
+        self.assertEqual(str(caught.exception), "Không tìm thấy bản ghi #9999.")
+        with self.assertRaises(ValueError):
+            self.recheck(row["id"], never, kind="archive_export")
+        # Busy: another cleanup, archive, restore or re-check holds the one lock.
+        self.assertTrue(SOURCE_FILE_LOCK.acquire(blocking=False))
+        try:
+            with self.assertRaises(ActionConflict) as caught:
+                self.recheck(row["id"], never)
+        finally:
+            SOURCE_FILE_LOCK.release()
+        self.assertEqual((caught.exception.code, str(caught.exception)), ("busy", source_cleanup.SOURCE_BUSY_MESSAGE))
+        # An unreadable bin writes nothing.
+        with self.assertRaises(ActionConflict) as caught:
+            self.recheck(row["id"], lambda *args, **kwargs: (_ for _ in ()).throw(PermissionError("denied")))
+        self.assertEqual(caught.exception.code, "bin_unavailable")
+        self.assertEqual(self.store.recycle_checks("SOURCE_CLEANUP", row["id"]), [])
+        self.assertEqual(self.events(job_id, "SOURCE_RECYCLE_STILL_UNVERIFIED"), [])
+        # Verified at cleanup, failed, restored, or no longer the job's latest row: nothing to check.
+        verified_job = self.make_exported_job("verified")
+        self.execute([verified_job])
+        failed_job = self.make_exported_job("failed")
+        self.recycler.modes["failed.mp4"] = "fail"
+        self.execute([failed_job])
+        cases = {
+            "already_verified": self.store.latest_source_cleanup(verified_job)["id"],
+            "not_recheckable": self.store.latest_source_cleanup(failed_job)["id"],
+        }
+        for code, subject in cases.items():
+            with self.subTest(code=code), self.assertRaises(ActionConflict) as caught:
+                self.recheck(subject, never)
+            self.assertEqual(caught.exception.code, code)
+        self.store.mark_source_restored(row["id"], mtime_ns=5)
+        with self.assertRaises(ActionConflict) as caught:
+            self.recheck(row["id"], never)
+        self.assertEqual(caught.exception.code, "not_recheckable")
+        self.assertEqual(self.store.recycle_checks("SOURCE_CLEANUP", row["id"]), [])
+
+
+class ArchiveInteractionTests(CleanupFixture):
+    """Batch 4: "Lưu trữ" locks a job against "Dọn video gốc", and both share one lock."""
+
+    def add_archive(self, job_id):
+        job = self.store.get_job(job_id)
+        output = self.output_of(job_id)
+        target = self.root / "archive" / "sources" / job["job_key"] / self.source_of(job_id).name
+        return self.store.add_source_archive(
+            job_id=job_id, kind="EXPORTED", source_path=job["source_path"], archive_path=str(target),
+            manifest_path=str(target.parent / "archive-manifest.json"), source_sha256=job["source_sha256"],
+            size_bytes=job["source_size_bytes"], mtime_ns=job["source_mtime_ns"],
+            queue_path=job["active_queue_path"], revision=1,
+            output_path=output.relative_to(self.root).as_posix(), output_bytes=output.stat().st_size,
+            output_manifest_path=output.relative_to(self.root).as_posix() + ".manifest.json",
+            output_manifest_bytes=1,
+        )
+
+    def test_an_archived_job_cannot_be_cleaned(self):
+        job_id = self.make_exported_job("tap20")
+        job = self.store.get_job(job_id)
+        reason = "Video gốc đang ở kho lưu trữ"
+        row_id = self.add_archive(job_id)
+        # The latest archive row is the lock, wherever the file is (here it is still in input/).
+        for step in ("PENDING", "ARCHIVED", "RESTORING"):
+            with self.subTest(state=step):
+                if step == "ARCHIVED":
+                    self.store.set_source_archive_phase(row_id, "SOURCE_VERIFIED", source_verified=True)
+                    self.store.finish_source_archive(row_id, state="ARCHIVED")
+                elif step == "RESTORING":
+                    self.store.begin_archive_restore(row_id)
+                self.assertEqual(self.store.latest_source_archive(job_id)["state"], step)
+                self.assertEqual(self.store.source_lock(job_id), "archived")
+                self.assertEqual(self.reason(job_id), reason)
+                hint = cleanup_hint(self.root, self.store, self.scheduler, self.store.get_job(job_id),
+                                    latest_row=None)
+                self.assertEqual((hint["eligible"], hint["reason"]), (False, reason))
+                with self.assertRaises(ValueError):  # nothing eligible
+                    self.execute([job_id])
+        self.assertEqual((self.hashed, self.recycler.calls, self.all_rows()), ([], [], []))
+        # Restored: the job may be cleaned again (and a FAILED archive never locked it).
+        self.store.finish_archive_restore(row_id, mtime_ns=job["source_mtime_ns"], job_state=None)
+        self.assertIsNone(self.store.source_lock(job_id))
+        self.assertEqual(self.preview([job_id])["count"], 1)
+        failed = self.make_exported_job("tap21")
+        self.store.finish_source_archive(self.add_archive(failed), state="FAILED", error="x")
+        self.assertEqual(self.preview([failed])["count"], 1)
+        result = self.execute([job_id, failed])
+        self.assertEqual([entry["status"] for entry in result["results"]], ["RECYCLED", "RECYCLED"])
+
+    def test_cleanup_and_archive_share_one_lock(self):
+        from biliflow.source_archive import execute_archive, preview_archive
+        from biliflow.source_archive_restore import restore_archive
+
+        cleaned = self.make_exported_job("tap22")
+        skipped = self.make_skipped_job("tap23")
+        archive_id = preview_archive(self.root, self.store, self.scheduler, [skipped], bin_info=self.bin)["preview_id"]
+        release = threading.Event()
+        self.recycler.modes["tap22.mp4"] = release
+        cleanup_id = self.preview([cleaned])["preview_id"]
+        outcome = {}
+        worker = threading.Thread(target=lambda: outcome.update(cleanup=self.execute([cleaned], cleanup_id)))
+        worker.start()
+        try:
+            self.assertTrue(wait_until(lambda: len(self.recycler.calls) == 1))
+            for action in (
+                lambda: execute_archive(self.root, self.store, self.scheduler, [skipped], archive_id,
+                                        recycler=self.recycler, bin_info=self.bin, hasher=self.hasher),
+                lambda: restore_archive(self.root, self.store, self.scheduler, skipped),
+            ):
+                with self.assertRaises(ActionConflict) as caught:
+                    action()
+                self.assertEqual((caught.exception.code, str(caught.exception)),
+                                 ("busy", source_cleanup.SOURCE_BUSY_MESSAGE))
+        finally:
+            release.set()
+            worker.join(10)
+        self.assertEqual(outcome["cleanup"]["recycled_count"], 1)
+        # An archive holds the lock while it hashes: a cleanup is refused, never queued.
+        hashing, resume = threading.Event(), threading.Event()
+        other = self.make_exported_job("tap24")
+        other_id = self.preview([other])["preview_id"]
+
+        def slow_hasher(path):
+            hashing.set()
+            resume.wait(10)
+            return self.hasher(path)
+
+        archiver = threading.Thread(target=lambda: outcome.update(archive=execute_archive(
+            self.root, self.store, self.scheduler, [skipped], archive_id, recycler=self.recycler,
+            bin_info=self.bin, hasher=slow_hasher)))
+        archiver.start()
+        try:
+            self.assertTrue(hashing.wait(5))
+            self.assertTrue(source_cleanup.cleanup_running())
+            with self.assertRaises(CleanupConflict) as caught:
+                self.execute([other], other_id)
+            self.assertEqual(caught.exception.code, "busy")
+        finally:
+            resume.set()
+            archiver.join(10)
+        self.assertFalse(archiver.is_alive())
+        self.assertEqual(outcome["archive"]["archived_count"], 1)
+        self.assertEqual(self.store.source_lock(skipped), "archived")
+        self.assertEqual(self.execute([other], other_id)["recycled_count"], 1)
 
 
 if __name__ == "__main__":

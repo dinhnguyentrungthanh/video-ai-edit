@@ -393,6 +393,208 @@ class JobStoreTests(unittest.TestCase):
         self.store.reset_watched_file(self.root / "missing.mp4")
         self.assertEqual(self.store._connection.execute("SELECT COUNT(*) FROM watcher_files").fetchone()[0], 1)
 
+    def stale_hidden(self, job_id, state):
+        """What older code (which ignores hidden_at) can leave behind."""
+        self.store._connection.execute(
+            "UPDATE jobs SET state=?,hidden_at='2026-10-03T12:00:00+07:00' WHERE id=?", (state, job_id),
+        )
+        self.store._connection.commit()
+
+    def test_hidden_flag_only_for_cancelled_and_cleared_on_state_change(self):
+        job_id = self.job["id"]
+        self.assertIn("hidden_at", self.store.get_job(job_id))
+        self.assertIsNone(self.store.get_job(job_id)["hidden_at"])
+        # Only a cancelled job can be hidden; nothing else changes.
+        self.assertIsNone(self.store.set_job_hidden(job_id, True))
+        self.assertIsNone(self.store.get_job(job_id)["hidden_at"])
+        cancelled = self.store.update_job(job_id, state="CANCELLED", stop_mode="CANCELLED")
+        hidden = self.store.set_job_hidden(job_id, True)
+        self.assertIsNotNone(hidden["hidden_at"])
+        self.assertEqual(hidden["updated_at"], cancelled["updated_at"])
+        self.assertEqual(hidden["state"], "CANCELLED")
+        self.assertIsNone(self.store.set_job_hidden(job_id, True))
+        shown = self.store.set_job_hidden(job_id, False)
+        self.assertIsNone(shown["hidden_at"])
+        self.assertIsNone(self.store.set_job_hidden(job_id, False))
+        with self.assertRaises(KeyError):
+            self.store.set_job_hidden(9999, True)
+        # Staying cancelled keeps the flag; any other state clears it.
+        self.store.set_job_hidden(job_id, True)
+        self.assertIsNotNone(self.store.update_job(job_id, state="CANCELLED", stop_mode="CANCELLED")["hidden_at"])
+        self.assertIsNotNone(self.store.update_job(job_id, progress=0.5)["hidden_at"])
+        self.assertIsNone(self.store.update_job(job_id, state="WAITING_REVIEW")["hidden_at"])
+        self.store.update_job(job_id, state="CANCELLED")
+        self.store.set_job_hidden(job_id, True)
+        self.assertIsNone(self.store.mark_queued(job_id, reseq=True)["hidden_at"])
+        # Every other state writer clears a flag older code left behind.
+        self.store.replace_stages(job_id, ["text"])
+        self.stale_hidden(job_id, "QUEUED")
+        self.assertTrue(self.store.claim_queued(job_id, "SCANNING_TEXT", "text"))
+        self.assertIsNone(self.store.get_job(job_id)["hidden_at"])
+        self.stale_hidden(job_id, "QUEUED")
+        self.assertTrue(self.store.pause_if_queued(job_id))
+        self.assertIsNone(self.store.get_job(job_id)["hidden_at"])
+        self.stale_hidden(job_id, "SCANNING_TEXT")
+        self.assertEqual(self.store.recover_interrupted(), 1)
+        self.assertIsNone(self.store.get_job(job_id)["hidden_at"])
+        # A job cancelled again starts visible even if older code left the flag set.
+        self.stale_hidden(job_id, "PAUSED")
+        self.assertIsNone(self.store.update_job(job_id, state="CANCELLED")["hidden_at"])
+        self.assertIsNone(self.store.update_job_if(
+            job_id, exclude={"COMPLETED", "SKIPPED"}, state="CANCELLED")["hidden_at"])
+
+    def add_archive(self, job_id, **values):
+        folder = self.root / "archive" / "sources" / "video-12345678"
+        fields = {
+            "job_id": job_id, "kind": "EXPORTED", "source_path": str(self.source.resolve()),
+            "archive_path": str(folder / "video.mp4"), "manifest_path": str(folder / "archive-manifest.json"),
+            "source_sha256": "1" * 64, "size_bytes": 5, "mtime_ns": 11,
+            "queue_path": "reports/video-12345678/review_queue.json", "revision": 1,
+            "output_path": "output/video-reviewed.mp4", "output_sha256": "f" * 64, "output_bytes": 3,
+            "output_manifest_path": "output/video-reviewed.mp4.manifest.json", "output_manifest_bytes": 2,
+            "exported_at": "2026-10-03T09:00:00+07:00",
+        }
+        fields.update(values)
+        return self.store.add_source_archive(**fields)
+
+    def test_source_archive_lifecycle_and_one_transaction_restore(self):
+        job_id = self.job["id"]
+        self.store.update_job(job_id, state="COMPLETED")
+        self.assertIsNone(self.store.latest_source_archive(job_id))
+        self.assertEqual(self.store.latest_source_archives(), {})
+        self.assertFalse(self.store.source_archived(job_id))
+        row_id = self.add_archive(job_id)
+        row = self.store.latest_source_archive(job_id)
+        self.assertEqual(set(row), {
+            "id", "job_id", "kind", "state", "phase", "source_path", "archive_path", "manifest_path",
+            "source_sha256", "size_bytes", "mtime_ns", "queue_path", "revision", "output_path",
+            "output_sha256", "output_bytes", "output_manifest_path", "output_manifest_bytes",
+            "exported_at", "skipped_at", "source_verified", "export_recycled", "export_verified",
+            "export_record", "manifest_recycled", "manifest_record", "error", "created_at",
+            "archived_at", "restore_started_at", "restored_at", "restored_mtime_ns",
+        })
+        self.assertEqual((row["id"], row["state"], row["phase"], row["source_verified"]),
+                         (row_id, "PENDING", "PREPARING", False))
+        self.assertIs(type(row["export_recycled"]), bool)
+        # PENDING already locks the job: the source may be on its way.
+        self.assertTrue(self.store.source_archived(job_id))
+        self.assertEqual([item["id"] for item in self.store.pending_source_archives()], [row_id])
+        self.assertTrue(self.store.set_source_archive_phase(row_id, "SOURCE_MOVED"))
+        self.assertTrue(self.store.set_source_archive_phase(row_id, "SOURCE_VERIFIED", source_verified=True))
+        for phase, facts in (("DELETED", {}), ("EXPORT_RECYCLING", {"state": "ARCHIVED"})):
+            with self.assertRaises(ValueError):
+                self.store.set_source_archive_phase(row_id, phase, **facts)
+        self.assertEqual(self.store.get_source_archive(row_id)["phase"], "SOURCE_VERIFIED")
+        with self.assertRaises(ValueError):
+            self.store.finish_source_archive(row_id, state="RESTORED")
+        finished = self.store.finish_source_archive(
+            row_id, state="ARCHIVED", export_recycled=True, export_verified=True,
+            export_record="E:\\$Recycle.Bin\\S-1\\$IABC.mp4", manifest_recycled=True,
+        )
+        self.assertEqual((finished["state"], finished["export_recycled"], finished["export_verified"],
+                          finished["manifest_recycled"], finished["source_verified"]),
+                         ("ARCHIVED", True, True, True, True))
+        self.assertIsNotNone(finished["archived_at"])
+        # Only a PENDING row changes phase or finishes, once.
+        self.assertFalse(self.store.set_source_archive_phase(row_id, "MANIFEST_RECYCLING"))
+        self.assertIsNone(self.store.finish_source_archive(row_id, state="FAILED", error="late"))
+        self.assertTrue(self.store.source_archived(job_id))
+        self.assertEqual(self.store.pending_source_archives(), [])
+        # Restore: ARCHIVED -> RESTORING (still locked, reconciled at startup) -> back or RESTORED.
+        self.assertIsNone(self.store.finish_archive_restore(row_id, mtime_ns=1, job_state="READY_TO_EXPORT"))
+        restoring = self.store.begin_archive_restore(row_id)
+        self.assertEqual(restoring["state"], "RESTORING")
+        self.assertIsNotNone(restoring["restore_started_at"])
+        self.assertIsNone(self.store.begin_archive_restore(row_id))
+        self.assertTrue(self.store.source_archived(job_id))
+        self.assertEqual([item["id"] for item in self.store.pending_source_archives()], [row_id])
+        aborted = self.store.abort_archive_restore(row_id, error="SHA-256 khác")
+        self.assertEqual((aborted["state"], aborted["error"]), ("ARCHIVED", "SHA-256 khác"))
+        self.assertIsNone(self.store.abort_archive_restore(row_id, error="again"))
+        self.store.begin_archive_restore(row_id)
+        restored = self.store.finish_archive_restore(row_id, mtime_ns=123456789, job_state="READY_TO_EXPORT")
+        self.assertEqual((restored["state"], restored["restored_mtime_ns"]), ("RESTORED", 123456789))
+        self.assertIsNotNone(restored["restored_at"])
+        job = self.store.get_job(job_id)
+        self.assertEqual((job["state"], job["source_mtime_ns"]), ("READY_TO_EXPORT", 123456789))
+        self.assertFalse(self.store.source_archived(job_id))
+        self.assertEqual(self.store.latest_source_archives()[job_id]["id"], row_id)
+        # A skipped job keeps its state: the job update is conditional on COMPLETED.
+        other = self.add_job("other", "2")["id"]
+        self.store.update_job(other, state="SKIPPED")
+        skipped_id = self.add_archive(other, kind="SKIPPED", output_path=None, output_sha256=None,
+                                      output_bytes=None, output_manifest_path=None,
+                                      output_manifest_bytes=None, exported_at=None,
+                                      skipped_at="2026-10-03T08:00:00+07:00")
+        self.store.finish_source_archive(skipped_id, state="ARCHIVED")
+        self.store.begin_archive_restore(skipped_id)
+        self.store.finish_archive_restore(skipped_id, mtime_ns=77, job_state=None)
+        self.assertEqual((self.store.get_job(other)["state"], self.store.get_job(other)["source_mtime_ns"]),
+                         ("SKIPPED", 77))
+        # A failed attempt does not lock; bad values are refused.
+        failed_id = self.add_archive(other, kind="SKIPPED", output_path=None, exported_at=None,
+                                     skipped_at="2026-10-03T08:00:00+07:00")
+        self.store.finish_source_archive(failed_id, state="FAILED", error="Video gốc đang được mở")
+        self.assertFalse(self.store.source_archived(other))
+        with self.assertRaises(ValueError):
+            self.add_archive(job_id, kind="DELETED")
+        with self.assertRaises(KeyError):
+            self.add_archive(9999)
+
+    def test_source_lock(self):
+        job_id = self.job["id"]
+        other = self.add_job("other", "2")["id"]
+        self.assertIsNone(self.store.source_lock(job_id))
+        cleanup_id = self.add_cleanup(job_id)
+        self.assertEqual(self.store.source_lock(job_id), "cleaned")
+        self.store.finish_source_cleanup(cleanup_id, state="RECYCLED", verified=False)
+        self.assertEqual(self.store.source_lock(job_id), "cleaned")
+        self.store.mark_source_restored(cleanup_id, mtime_ns=5)
+        self.assertIsNone(self.store.source_lock(job_id))
+        archive_id = self.add_archive(job_id)
+        self.assertEqual(self.store.source_lock(job_id), "archived")
+        self.store.finish_source_archive(archive_id, state="FAILED", error="x")
+        self.assertIsNone(self.store.source_lock(job_id))
+        self.assertIsNone(self.store.source_lock(other))
+        self.store.finish_source_cleanup(self.add_cleanup(other), state="FAILED", error="x")
+        self.assertIsNone(self.store.source_lock(other))
+        self.assertEqual(self.store.get_source_cleanup(cleanup_id)["state"], "RESTORED")
+        self.assertIsNone(self.store.get_source_cleanup(9999))
+        self.assertIsNone(self.store.get_source_archive(9999))
+
+    def test_recycle_checks_append_only(self):
+        job_id = self.job["id"]
+        cleanup_id = self.add_cleanup(job_id)
+        self.store.finish_source_cleanup(cleanup_id, state="RECYCLED", verified=False)
+        before = self.store.latest_source_cleanup(job_id)
+        record = "E:\\$Recycle.Bin\\S-1-5-21-1000\\$I4RHHWK.mp4"
+        facts = {"kind": "SOURCE_CLEANUP", "subject_id": cleanup_id, "job_id": job_id,
+                 "path": before["source_path"], "size_bytes": 5, "actor": "dashboard"}
+        self.assertEqual(self.store.recycle_check_summary("SOURCE_CLEANUP"), {})
+        first = self.store.add_recycle_check(**facts, found=False, recycle_record=None)
+        self.assertEqual(self.store.recycle_check_summary("SOURCE_CLEANUP"),
+                         {cleanup_id: {"found": False, "checked_at": self.store.recycle_checks(
+                             "SOURCE_CLEANUP", cleanup_id)[0]["checked_at"], "record": None}})
+        second = self.store.add_recycle_check(**facts, found=True, recycle_record=record)
+        third = self.store.add_recycle_check(**facts, found=False, recycle_record=None)
+        rows = self.store.recycle_checks("SOURCE_CLEANUP", cleanup_id)
+        self.assertEqual([row["id"] for row in rows], [first, second, third])
+        self.assertEqual([row["found"] for row in rows], [False, True, False])
+        self.assertIs(type(rows[0]["found"]), bool)
+        # A found row wins over any later miss.
+        summary = self.store.recycle_check_summary("SOURCE_CLEANUP")[cleanup_id]
+        self.assertEqual((summary["found"], summary["record"], summary["checked_at"]),
+                         (True, record, rows[1]["checked_at"]))
+        self.assertEqual(self.store.recycle_check_summary("ARCHIVE_EXPORT"), {})
+        # The cleanup row itself never changes.
+        self.assertEqual(self.store.latest_source_cleanup(job_id), before)
+        for bad in ({"kind": "DELETED"}, {"found": 2}, {"actor": ""}):
+            with self.assertRaises(ValueError):
+                self.store.add_recycle_check(**{**facts, "found": False, "recycle_record": None, **bad})
+        with self.assertRaises(KeyError):
+            self.store.add_recycle_check(**{**facts, "job_id": 9999}, found=False, recycle_record=None)
+        self.assertEqual(len(self.store.recycle_checks("SOURCE_CLEANUP", cleanup_id)), 3)
+
     def test_render_request_is_an_unfinished_render_stage(self):
         job_id = self.job["id"]
         self.assertIsNone(self.store.render_request(job_id))
@@ -616,6 +818,121 @@ class QueueMigrationTests(unittest.TestCase):
             self.assertIn("source_cleanups", table_counts(database))
             self.assertFalse((state / "backups").exists())
 
+    ARCHIVE_NAMES = {
+        "source_archives", "idx_source_archives_job", "idx_source_archives_state",
+        "recycle_checks", "idx_recycle_checks_subject",
+    }
+
+    def make_cleanup_ready_database(self, path, *, with_job=True):
+        """A database written by the batch-3 code: source_cleanups, but no hidden_at or archive tables."""
+        self.make_queue_ready_database(path, with_job=with_job)
+        store = JobStore(path)  # brings source_cleanups back
+        try:
+            if with_job:
+                row_id = store.add_source_cleanup(
+                    job_id=1, kind="SKIPPED", source_path=str(path.parent / "old.mp4"),
+                    source_sha256="1" * 64, size_bytes=5, mtime_ns=1, skipped_at="2026-10-03T08:00:00+07:00",
+                )
+                store.finish_source_cleanup(row_id, state="RECYCLED", verified=False)
+        finally:
+            store.close()
+        for backup in (path.parent / "backups").glob("*.sqlite3") if (path.parent / "backups").exists() else []:
+            backup.unlink()
+        connection = sqlite3.connect(path)
+        try:
+            connection.execute("DROP TABLE source_archives")
+            connection.execute("DROP TABLE recycle_checks")
+            connection.execute("ALTER TABLE jobs DROP COLUMN hidden_at")
+            connection.commit()
+            names = {row[0] for row in connection.execute("SELECT name FROM sqlite_master")}
+            columns = {row[1] for row in connection.execute("PRAGMA table_info(jobs)")}
+        finally:
+            connection.close()
+        self.assertFalse(self.ARCHIVE_NAMES & names)
+        self.assertIn("source_cleanups", names)
+        self.assertNotIn("hidden_at", columns)
+
+    def test_cleanup_ready_database_gains_the_archive_schema_with_one_backup(self):
+        with TemporaryDirectory() as directory:
+            state = Path(directory) / "state"
+            state.mkdir()
+            database = state / "control-center.sqlite3"
+            self.make_cleanup_ready_database(database)
+            before = table_counts(database)
+            self.assertNotIn("source_archives", before)
+            self.assertEqual(before["source_cleanups"], 1)
+            store = JobStore(database)
+            try:
+                names = {row[0] for row in store._connection.execute("SELECT name FROM sqlite_master")}
+                self.assertTrue(self.ARCHIVE_NAMES <= names)
+                columns = {row["name"] for row in store._connection.execute("PRAGMA table_info(jobs)")}
+                self.assertIn("hidden_at", columns)
+                self.assertEqual(
+                    store._connection.execute("SELECT version FROM schema_info").fetchone()[0], SCHEMA_VERSION,
+                )
+                self.assertIsNone(store.get_job(1)["hidden_at"])
+                self.assertEqual(store.source_lock(1), "cleaned")
+                snapshot = store.list_jobs()
+            finally:
+                store.close()
+            after = table_counts(database)
+            self.assertEqual({table: after[table] for table in before}, before)
+            self.assertEqual((after["source_archives"], after["recycle_checks"]), (0, 0))
+            backups = sorted((state / "backups").iterdir())
+            self.assertEqual(len(backups), 1)
+            self.assertTrue(backups[0].name.startswith("control-center-before-source-archive-"))
+            self.assertTrue(backups[0].name.endswith(".sqlite3"))
+            # The backup is the database before the change: same rows, no new table or column.
+            self.assertEqual(table_counts(backups[0]), before)
+            backup = sqlite3.connect(backups[0])
+            try:
+                self.assertNotIn("hidden_at", {row[1] for row in backup.execute("PRAGMA table_info(jobs)")})
+            finally:
+                backup.close()
+
+            # Code from batch 3 still opens the migrated database and reads every job.
+            class OlderStore(JobStore):
+                def _ensure_additive_schema(self):
+                    pass
+
+            older = OlderStore(database)
+            try:
+                self.assertEqual([job["id"] for job in older.list_jobs()], [job["id"] for job in snapshot])
+                self.assertEqual(older.latest_source_cleanup(1)["state"], "RECYCLED")
+            finally:
+                older.close()
+            self.assertEqual(table_counts(database), after)
+
+    def test_second_open_takes_no_backup(self):
+        with TemporaryDirectory() as directory:
+            state = Path(directory) / "state"
+            state.mkdir()
+            database = state / "control-center.sqlite3"
+            self.make_cleanup_ready_database(database)
+            JobStore(database).close()
+            after = table_counts(database)
+            store = JobStore(database)
+            try:
+                snapshot = store.list_jobs()
+            finally:
+                store.close()
+            store = JobStore(database)
+            try:
+                self.assertEqual(store.list_jobs(), snapshot)
+            finally:
+                store.close()
+            self.assertEqual(len(list((state / "backups").iterdir())), 1)
+            self.assertEqual(table_counts(database), after)
+        # Without a job there is nothing to protect: no backup at all.
+        with TemporaryDirectory() as directory:
+            state = Path(directory) / "state"
+            state.mkdir()
+            database = state / "control-center.sqlite3"
+            self.make_cleanup_ready_database(database, with_job=False)
+            JobStore(database).close()
+            self.assertTrue({"source_archives", "recycle_checks"} <= set(table_counts(database)))
+            self.assertFalse((state / "backups").exists())
+
     @unittest.skipUnless(
         (DATA_ROOT / "state" / "control-center.sqlite3").is_file(),
         "no Control Center database under BILIFLOW_TEST_DATA_ROOT",
@@ -645,7 +962,8 @@ class QueueMigrationTests(unittest.TestCase):
             self.assertEqual(version, 1)
             after = table_counts(copy)
             self.assertEqual({table: after[table] for table in before}, before)
-            self.assertIn("source_cleanups", after)
+            self.assertTrue({"source_cleanups", "source_archives", "recycle_checks"} <= set(after))
+            self.assertTrue(all("hidden_at" in job for job in first))
             backups = list((state / "backups").glob("*.sqlite3")) if (state / "backups").exists() else []
             self.assertLessEqual(len(backups), 1)
             if "source_cleanups" not in before and before.get("jobs"):
@@ -653,6 +971,11 @@ class QueueMigrationTests(unittest.TestCase):
                 self.assertTrue(backups[0].name.startswith(
                     ("control-center-before-source-cleanup-", "control-center-before-queue-order-")
                 ))
+            elif "source_archives" not in before and before.get("jobs"):
+                # A batch-3 database (the live one on 2026-10-03) gets exactly one archive backup.
+                self.assertEqual(len(backups), 1)
+                self.assertTrue(backups[0].name.startswith("control-center-before-source-archive-"))
+                self.assertEqual(table_counts(backups[0]), before)
             store = JobStore(copy)
             try:
                 self.assertEqual(store.list_jobs(), first)

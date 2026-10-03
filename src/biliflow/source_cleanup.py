@@ -37,8 +37,14 @@ from pathlib import Path
 from typing import Any, Callable
 
 from biliflow import recycle_bin
-from biliflow.export_guards import REVIEW_QUEUE_IO, render_in_flight, review_summary, skip_refusal
-from biliflow.job_store import IN_PROCESS_STATES, now_iso, sha256_file
+from biliflow.export_guards import (
+    REVIEW_QUEUE_IO,
+    ActionConflict,
+    render_in_flight,
+    review_summary,
+    skip_refusal,
+)
+from biliflow.job_store import IN_PROCESS_STATES, SOURCE_ARCHIVED_STATES, now_iso, sha256_file
 from biliflow.review_workflow import approved_operations, review_export_paths
 
 
@@ -48,7 +54,10 @@ ELIGIBLE_STATES = frozenset({"COMPLETED", "SKIPPED"})
 KIND_BY_STATE = {"COMPLETED": "EXPORTED", "SKIPPED": "SKIPPED"}
 # The one execute lock (the Control Center has none of its own). Only ever
 # taken with acquire(blocking=False): a second click is refused, never queued.
+# Batch 4 shares it as SOURCE_FILE_LOCK: "Dọn video gốc", "Lưu trữ",
+# "Khôi phục bản xuất" and "Kiểm tra lại Thùng rác" never run at the same time.
 _EXECUTE_LOCK = threading.Lock()
+SOURCE_FILE_LOCK = _EXECUTE_LOCK
 _CACHE_LIMIT = 256
 _PREVIEW_ID = re.compile(r"[0-9a-f]{64}")
 
@@ -110,19 +119,38 @@ UNVERIFIED_MESSAGE = (
 UNEXPECTED_MESSAGE = "Lỗi không mong đợi: {error}"
 INTERRUPTED_MESSAGE = "Bị gián đoạn trước khi chuyển; video gốc vẫn còn."
 
+# Batch 4: an archived source cannot be cleaned (restore it first).
+REASON_ARCHIVED = "Video gốc đang ở kho lưu trữ"
+# Any action on source files while another one runs (archive, restore, re-check).
+SOURCE_BUSY_MESSAGE = (
+    "Đang dọn, lưu trữ hoặc khôi phục video gốc; chờ lượt trước xong rồi thử lại."
+)
+# "Kiểm tra lại Thùng rác" (format {what}: "video gốc" or "bản xuất").
+RECHECK_KINDS = {"source_cleanup": "SOURCE_CLEANUP", "archive_export": "ARCHIVE_EXPORT"}
+# A record of this row's own move is written before (or, by Windows, a moment after) the row
+# settled; one written later than this is a later move of the same path and size (by hand, by
+# another job, after a re-export): it never answers for this row.
+RECHECK_UNTIL_SLACK_SECONDS = 60
+RECHECK_KIND_MESSAGE = "Loại kiểm tra Thùng rác không hợp lệ."
+RECHECK_ID_MESSAGE = "Mã bản ghi không hợp lệ."
+RECHECK_UNKNOWN_MESSAGE = "Không tìm thấy bản ghi #{subject_id}."
+RECHECK_NOT_NEEDED_MESSAGE = "Bản ghi này không còn cần kiểm tra lại Thùng rác."
+RECHECK_ALREADY_MESSAGE = "Thùng rác đã có bản ghi của file này; không cần kiểm tra lại."
+RECHECK_UNREADABLE_MESSAGE = "Không đọc được Thùng rác; thử lại sau."
+RECHECK_FOUND_MESSAGE = "Đã thấy {what} trong Thùng rác của Windows."
+RECHECK_MISSING_MESSAGE = (
+    "Vẫn chưa thấy {what} trong Thùng rác của Windows; hãy mở Thùng rác để kiểm tra. "
+    "BiliFlow không thay đổi gì."
+)
+RECHECK_ACTOR = "control_center_user"
 
-class CleanupConflict(Exception):
+
+class CleanupConflict(ActionConflict):
     """The cleanup was not started (HTTP 409); deliberately not a ValueError.
 
     ``code`` is 'preview_changed', 'bin_capacity', 'bin_unavailable' or 'busy';
     ``preview`` is the fresh preview (None for 'busy').
     """
-
-    def __init__(self, code: str, message: str, preview: dict[str, Any] | None = None):
-        super().__init__(message)
-        self.code = code
-        self.message = message
-        self.preview = preview
 
 
 @dataclass(frozen=True)
@@ -439,12 +467,13 @@ def _skipped_facts(store: Any, job: dict[str, Any], facts: dict[str, Any]) -> di
 
 def assess_job(
     root: Any, store: Any, scheduler: Any, job: dict[str, Any], *,
-    latest_row: Any = _UNSET, fresh: bool = False,
+    latest_row: Any = _UNSET, archive_row: Any = _UNSET, fresh: bool = False,
 ) -> Assessment:
     """Whether ``job``'s source may go to the Recycle Bin now, and why not. Never hashes.
 
-    ``latest_row`` is the job's latest ``source_cleanups`` row (None for none);
-    omitted, it is read from the store. ``fresh=True`` re-reads the queue,
+    ``latest_row`` is the job's latest ``source_cleanups`` row and
+    ``archive_row`` its latest ``source_archives`` row (None for none);
+    omitted, each is read from the store. ``fresh=True`` re-reads the queue,
     manifest and plan instead of using the cache.
     """
     root = Path(root)
@@ -468,6 +497,8 @@ def assess_job(
     }
     if latest_row is _UNSET:
         latest_row = store.latest_source_cleanup(job_id)
+    if archive_row is _UNSET:
+        archive_row = store.latest_source_archive(job_id)
 
     def refused(reason: str) -> Assessment:
         return Assessment(eligible=False, reason=reason, **values)
@@ -477,6 +508,8 @@ def assess_job(
         return refused(REASON_PENDING)
     if row_state == "RECYCLED":
         return refused(REASON_RECYCLED)
+    if isinstance(archive_row, dict) and archive_row.get("state") in SOURCE_ARCHIVED_STATES:
+        return refused(REASON_ARCHIVED)
     if state not in ELIGIBLE_STATES:
         return refused(REASON_STATE)
     busy = bool(scheduler.is_busy(job_id))
@@ -528,11 +561,17 @@ def assess_job(
     return Assessment(eligible=True, reason=None, **values)
 
 
-def cleanup_hint(root: Any, store: Any, scheduler: Any, job: dict[str, Any], *, latest_row: Any) -> dict | None:
-    """The Dashboard hint of a "Hoàn tất" card (None for every other state). Never hashes."""
+def cleanup_hint(root: Any, store: Any, scheduler: Any, job: dict[str, Any], *, latest_row: Any,
+                 archive_row: Any = _UNSET, assessment: Assessment | None = None) -> dict | None:
+    """The Dashboard hint of a "Hoàn tất" card (None for every other state). Never hashes.
+
+    ``assessment`` is an assess_job result the caller already has (the
+    Control Center shares one between this hint and the archive hint).
+    """
     if job.get("state") not in ELIGIBLE_STATES:
         return None
-    assessment = assess_job(root, store, scheduler, job, latest_row=latest_row)
+    if assessment is None:
+        assessment = assess_job(root, store, scheduler, job, latest_row=latest_row, archive_row=archive_row)
     return {
         "eligible": assessment.eligible,
         "kind": assessment.kind,
@@ -545,8 +584,22 @@ def cleanup_hint(root: Any, store: Any, scheduler: Any, job: dict[str, Any], *, 
     }
 
 
-def cleanup_row_summary(row: dict[str, Any] | None) -> dict[str, Any] | None:
-    """A ``source_cleanups`` row for the Dashboard (status() and the review export payload)."""
+def check_fields(verified_at_move: bool, check: dict[str, Any] | None) -> dict[str, Any]:
+    """The effective verification of a move: what the move saw, or a later re-check that found it."""
+    found_later = bool(check and check.get("found"))
+    return {
+        "verified": bool(verified_at_move) or found_later,
+        "verified_at_cleanup": bool(verified_at_move),
+        "verified_later_at": check.get("checked_at") if found_later else None,
+        "rechecked_at": check.get("checked_at") if check else None,
+    }
+
+
+def cleanup_row_summary(row: dict[str, Any] | None, check: dict[str, Any] | None = None) -> dict[str, Any] | None:
+    """A ``source_cleanups`` row for the Dashboard (status() and the review export payload).
+
+    ``check`` is the row's entry of ``JobStore.recycle_check_summary('SOURCE_CLEANUP')``.
+    """
     if row is None:
         return None
     source_path = str(row.get("source_path") or "")
@@ -560,7 +613,7 @@ def cleanup_row_summary(row: dict[str, Any] | None) -> dict[str, Any] | None:
         "created_at": row.get("created_at"),
         "finished_at": row.get("finished_at"),
         "restored_at": row.get("restored_at"),
-        "verified": bool(row.get("verified")),
+        **check_fields(bool(row.get("verified")), check),
         "error": row.get("error"),
     }
 
@@ -582,6 +635,7 @@ def _preview(root: Path, store: Any, scheduler: Any, job_ids: list[int], *,
              bin_info: Callable[[Path], Any], fresh: bool) -> tuple[dict[str, Any], list[Assessment]]:
     ids = parse_job_ids(job_ids)
     latest = store.latest_source_cleanups()
+    archives = store.latest_source_archives()
     eligible: list[Assessment] = []
     ineligible: list[dict[str, Any]] = []
     for job_id in ids:
@@ -590,7 +644,8 @@ def _preview(root: Path, store: Any, scheduler: Any, job_ids: list[int], *,
         except KeyError:
             ineligible.append({"job_id": job_id, "name": "", "reason": UNKNOWN_JOB_MESSAGE.format(job_id=job_id)})
             continue
-        assessment = assess_job(root, store, scheduler, job, latest_row=latest.get(job_id), fresh=fresh)
+        assessment = assess_job(root, store, scheduler, job, latest_row=latest.get(job_id),
+                                archive_row=archives.get(job_id), fresh=fresh)
         if assessment.eligible:
             eligible.append(assessment)
         else:
@@ -732,9 +787,13 @@ def _late_callback(store: Any, row_id: int, job_id: int, context: dict[str, Any]
     return on_late_result
 
 
-def _precheck(root: Path, assessment: Assessment, job_sha: str,
-              hasher: Callable[[Path], str]) -> tuple[dict | None, str | None]:
-    """Hash the source (and output) with no lock held: (facts, None) or (None, reason)."""
+def precheck(root: Path, assessment: Any, job_sha: str,
+             hasher: Callable[[Path], str]) -> tuple[dict | None, str | None]:
+    """Hash the source (and output) with no lock held: (facts, None) or (None, reason).
+
+    ``assessment`` needs source_path, kind, output_path and output_sha256
+    (an Assessment, or source_archive's ArchiveAssessment).
+    """
     source = assessment.source_path
     try:
         before = os.stat(source)
@@ -808,7 +867,7 @@ def _clean_one(root: Path, store: Any, scheduler: Any, assessment: Assessment, *
     """One video through the three sections; returns (result, stop_the_rest)."""
     job_id = assessment.job_id
     job_sha = str(store.get_job(job_id).get("source_sha256") or "")
-    checked, reason = _precheck(root, assessment, job_sha, hasher)
+    checked, reason = precheck(root, assessment, job_sha, hasher)
     if reason is not None:
         store.add_event(
             job_id, "SOURCE_CLEANUP_FAILED", reason, level="WARNING",
@@ -971,8 +1030,106 @@ def reconcile_pending_cleanups(root: Any, store: Any, *, finder: Callable) -> li
     return settled
 
 
+# --------------------------------------------------------------------------
+# "Kiểm tra lại Thùng rác": read the bin again for a move that was not verified.
+
+
+def _recheck_subject(root: Path, store: Any, kind: str, subject_id: int) -> dict[str, Any]:
+    """What to look for: {job_id, path, size, since, until, what}; ValueError or ActionConflict otherwise.
+
+    Only a job's latest row qualifies, so no later row of that job exists; ``until``
+    (the row's own settle time plus RECHECK_UNTIL_SLACK_SECONDS) is earlier than any
+    later row's start and also shuts out a later move of the same path by hand or by
+    another job.
+    """
+    if kind == "SOURCE_CLEANUP":
+        row = store.get_source_cleanup(subject_id)
+    else:
+        row = store.get_source_archive(subject_id)
+    if row is None:
+        raise ValueError(RECHECK_UNKNOWN_MESSAGE.format(subject_id=subject_id))
+    job_id = int(row["job_id"])
+    since = _posix_seconds(row.get("created_at"))
+    if kind == "SOURCE_CLEANUP":
+        latest = store.latest_source_cleanup(job_id)
+        current = latest is not None and latest["id"] == row["id"] and row["state"] == "RECYCLED"
+        verified = bool(row.get("verified"))
+        path, size, what = str(row.get("source_path") or ""), row.get("size_bytes"), "video gốc"
+        settled = _posix_seconds(row.get("finished_at"))
+    else:
+        latest = store.latest_source_archive(job_id)
+        current = (
+            latest is not None and latest["id"] == row["id"] and row["state"] == "ARCHIVED"
+            and row.get("kind") == "EXPORTED" and bool(row.get("export_recycled"))
+            and bool(row.get("output_path"))
+        )
+        verified = bool(row.get("export_verified"))
+        output = str(row.get("output_path") or "")
+        path = str((root / output).resolve()) if output else ""
+        size, what = row.get("output_bytes"), "bản xuất"
+        settled = _posix_seconds(row.get("archived_at"))
+    if not current or since is None or not path or size is None:
+        raise ActionConflict("not_recheckable", RECHECK_NOT_NEEDED_MESSAGE)
+    if verified or store.recycle_check_summary(kind).get(int(row["id"]), {}).get("found"):
+        raise ActionConflict("already_verified", RECHECK_ALREADY_MESSAGE)
+    until = None if settled is None else settled + RECHECK_UNTIL_SLACK_SECONDS
+    return {"job_id": job_id, "path": path, "size": int(size), "since": since - 5, "until": until, "what": what}
+
+
+def recheck_recycle_record(root: Any, store: Any, kind: Any, subject_id: Any, *,
+                           finder: Callable) -> dict[str, Any]:
+    """Look in the Recycle Bin again for an unverified move and append what was seen.
+
+    ``kind`` is 'source_cleanup' (the latest RECYCLED cleanup row of a job,
+    verified 0) or 'archive_export' (the latest ARCHIVED archive row of an
+    exported job whose export was recycled, export_verified 0); ``finder`` is
+    ``recycle_bin.find_recycle_record``. Only appends a ``recycle_checks`` row
+    and a SOURCE_RECYCLE_VERIFIED or SOURCE_RECYCLE_STILL_UNVERIFIED event: the
+    cleanup or archive row is never changed. Raises ValueError for a bad
+    request and ActionConflict ('busy', 'not_recheckable', 'already_verified',
+    'bin_unavailable') when nothing was written.
+    """
+    root = Path(root)
+    if not isinstance(kind, str) or kind not in RECHECK_KINDS:
+        raise ValueError(RECHECK_KIND_MESSAGE)
+    if isinstance(subject_id, bool) or not isinstance(subject_id, int) or not 1 <= subject_id <= MAX_JOB_ID:
+        raise ValueError(RECHECK_ID_MESSAGE)
+    table_kind = RECHECK_KINDS[kind]
+    if not SOURCE_FILE_LOCK.acquire(blocking=False):
+        raise ActionConflict("busy", SOURCE_BUSY_MESSAGE)
+    try:
+        subject = _recheck_subject(root, store, table_kind, subject_id)
+        try:
+            record = finder(Path(subject["path"]).anchor, subject["path"], subject["size"],
+                            since=subject["since"], until=subject["until"])
+        except Exception as error:  # noqa: BLE001 - an unreadable bin writes nothing
+            raise ActionConflict("bin_unavailable", RECHECK_UNREADABLE_MESSAGE) from error
+        found = record is not None
+        record = None if record is None else str(record)
+        check_id = store.add_recycle_check(
+            kind=table_kind, subject_id=subject_id, job_id=subject["job_id"], path=subject["path"],
+            size_bytes=subject["size"], found=found, recycle_record=record, actor=RECHECK_ACTOR,
+        )
+        payload = {
+            "kind": table_kind, "subject_id": subject_id, "path": subject["path"],
+            "size_bytes": subject["size"], "recycle_record": record, "check_id": check_id,
+        }
+        message = (RECHECK_FOUND_MESSAGE if found else RECHECK_MISSING_MESSAGE).format(what=subject["what"])
+        store.add_event(
+            subject["job_id"], "SOURCE_RECYCLE_VERIFIED" if found else "SOURCE_RECYCLE_STILL_UNVERIFIED",
+            message, level="INFO" if found else "WARNING", payload=payload,
+        )
+        checked_at = store.recycle_checks(table_kind, subject_id)[-1]["checked_at"]
+    finally:
+        SOURCE_FILE_LOCK.release()
+    return {
+        "kind": kind, "id": subject_id, "job_id": subject["job_id"], "found": found,
+        "record": record, "checked_at": checked_at, "message": message,
+    }
+
+
 def cleanup_running() -> bool:
-    """A cleanup is executing, or a shell call has not answered yet."""
+    """A cleanup, archive, restore or re-check runs, or a shell call has not answered yet."""
     return _EXECUTE_LOCK.locked() or bool(recycle_bin.operations_in_progress())
 
 

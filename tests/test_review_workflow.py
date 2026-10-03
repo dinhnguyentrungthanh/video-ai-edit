@@ -27,6 +27,7 @@ from biliflow.job_store import JobStore
 from biliflow.review_workflow import (
     _guard_in_film_text,
     _guard_title_overlays,
+    _quarantine_uncorroborated_visual_regions,
     _in_film_text_references,
     _text_items,
     _interactive_html,
@@ -1971,6 +1972,93 @@ class ReviewWorkflowTests(unittest.TestCase):
         self.assertEqual(by_type["persistent_overlay"]["suggested_decision"], "BLUR")
         self.assertEqual(by_type["branded_end_card"]["suggested_decision"], "CUT")
 
+    def test_forced_opening_card_with_a_localized_box_stays_main_full_frame(self):
+        # Jobs 51/60 (2026-10-03): localization gave the forced opening window an
+        # OCR box ("</s>C"); the card became a region card and the quarantine
+        # moved it to the optional list, so the first 5 s were never shown.
+        report = self._report(
+            "forced-opening-box", "visual_logo",
+            [{
+                "start_seconds": 0, "end_seconds": 5, "max_score": 1.0,
+                "priority": "context", "candidate_type": "opening_boundary",
+                "predicted_label": "Opening boundary review",
+                "visual_logo_confirmation": {
+                    "state": "UNCERTAIN", "answer": "NO",
+                    "confirmation_source": "qwen_local",
+                    "promoted_from_rejected_boundary": True,
+                },
+                "region_localization": {"frame_size": [1280, 534], "proposals": [{
+                    "blur_region_px": [1168, 0, 53, 67], "sources": ["ocr"],
+                    "labels": ["</s>C"], "region_classification": "unknown",
+                }]},
+            }],
+        )
+        queue = build_review_queue(
+            project_root=self.root, report_paths=[report],
+            queue_path=self.root / "reports" / "forced-opening-review" / "queue.json",
+        )
+        [card] = [
+            item for item in queue["items"] if item["candidate_type"] == "opening_boundary"
+        ]
+        self.assertIsNone(card["suggested_region_source_pixels"])
+        self.assertIsNone(card["suggested_decision"])
+        self.assertEqual(card["review_kind"], "logo_overlay")
+        self.assertEqual(
+            [(box["x"], box["y"], box["width"], box["height"], box["sources"])
+             for box in card["evidence_regions"]],
+            [(1168, 0, 53, 67, ["ocr"])],
+        )
+        self.assertEqual(card["evidence_frame_size"], [1280, 534])
+        self.assertEqual(queue["advisory_items"], [])
+
+    def test_quarantine_and_revalidation_spare_forced_and_platform_cards(self):
+        region = _box(400, 156, 196, 74)
+        protected_kinds = ["opening_boundary", "ending_boundary", "platform_logo"]
+
+        def card(candidate_type, **extra):
+            item = _logo_read(
+                0, region, sources=("ocr",), candidate_type=candidate_type,
+                suggested_decision=None, region_classification="unknown",
+                migration_status="preserved_unresolved_from_previous_queue", **extra,
+            )
+            item["model_evidence"]["vlm_source"] = "qwen_local"
+            return item
+
+        kept, moved = _quarantine_uncorroborated_visual_regions(
+            [card(kind) for kind in protected_kinds] + [card(None)])
+        self.assertEqual([item["candidate_type"] for item in kept], protected_kinds)
+        self.assertEqual([item["candidate_type"] for item in moved], ["uncorroborated_logo_region"])
+        kept, moved = revalidate_preserved_review_items(
+            [card(kind) for kind in protected_kinds] + [card(None)])
+        self.assertEqual([item["candidate_type"] for item in kept], protected_kinds)
+        self.assertEqual([item["candidate_type"] for item in moved], ["stale_preserved_logo_region"])
+        references = [{
+            "start_seconds": 0, "end_seconds": 5, "region": region, "labels": ["iOlYI"],
+            "routing": "LIKELY_SCENE_TEXT", "ad_probability": 0.003,
+            "classification": "scene_text",
+        }]
+        guarded = _guard_in_film_text(
+            [card(kind) for kind in protected_kinds] + [card(None)], references)
+        self.assertEqual(
+            [item["candidate_type"] for item in guarded], protected_kinds + ["scene_text"])
+        titled = _guard_title_overlays(
+            [card(kind) for kind in protected_kinds] + [card(None)], references)
+        self.assertEqual(
+            [item["candidate_type"] for item in titled], protected_kinds + ["title_overlay"])
+        owner = _persistent_track(
+            "visual_logo", _box(380, 140, 240, 110), sources=("grounding", "ocr"), end=100,
+            suggested_decision="BLUR",
+        )
+        reconciled = reconcile_persistent_overlay_items(
+            [owner] + [card(kind) for kind in protected_kinds] + [card(None)],
+            source_duration=100,
+        )
+        self.assertEqual(
+            [item["candidate_type"] for item in reconciled],
+            ["persistent_overlay"] + protected_kinds,
+            "a forced or platform card is never absorbed as support",
+        )
+
     def test_visual_logo_prompt_echo_is_not_exposed_as_a_brand_label(self):
         report = self._report(
             "logo-echo", "visual_logo",
@@ -2847,8 +2935,8 @@ class ExportPanelTests(unittest.TestCase):
         render = _js_function(page, "renderExport")
         self.assertIn("$('#finalize').disabled=!ready||exportRequestInFlight;", render)
         self.assertIn(
-            "setText($('#export-status'),exportError||(cleaned?cleanedText:exportText[exportJob.status])"
-            "||pendingDescription())", render,
+            "setText($('#export-status'),exportError||(cleaned?cleanedText:archived?archivedText:"
+            "exportText[exportJob.status])||pendingDescription())", render,
         )
         # Polling updates only the notice; nothing in it reopens the panel.
         self.assertNotIn("open", _js_function(page, "updateExportNotice"))
@@ -2873,12 +2961,15 @@ class ExportPanelTests(unittest.TestCase):
                     if write in body:
                         self.assertLess(guard, body.index(write), write)
         render = _js_function(page, "renderExport")
-        # One lock for an export that waits or runs and for a source moved to the Recycle Bin.
-        self.assertIn("cleaned=!!exportJob.source_cleaned,locked=active||cleaned,", render)
+        # One lock for an export that waits or runs, a source moved to the Recycle Bin
+        # and a source moved to the archive (batch 4).
+        self.assertIn("cleaned=!!exportJob.source_cleaned,archived=!!exportJob.source_archived,"
+                      "locked=active||cleaned||archived,", render)
         self.assertIn("document.body.classList.toggle('export-locked',locked);", render)
         self.assertIn(
             "for(const b of document.querySelectorAll('.list-foot button')){b.disabled=locked;"
-            "b.title=locked?(cleaned?SOURCE_CLEANED_LOCK_MESSAGE:EXPORT_LOCK_MESSAGE):'';}", render,
+            "b.title=locked?(cleaned?SOURCE_CLEANED_LOCK_MESSAGE:archived?SOURCE_ARCHIVED_LOCK_MESSAGE:"
+            "EXPORT_LOCK_MESSAGE):'';}", render,
         )
         self.assertIn("body.export-locked .decide button", page)
 
@@ -2911,8 +3002,9 @@ class ExportPanelTests(unittest.TestCase):
     def test_skipped_video_cannot_be_exported_from_the_review_page(self):
         render = _js_function(self.page, "renderExport")
         self.assertIn(
-            "skippedExport=exportJob.status==='SKIPPED',cleaned=!!exportJob.source_cleaned,locked=active||cleaned,"
-            "ready=status==='READY_FOR_EDIT_PLAN'&&!active&&!skippedExport&&!cleaned;",
+            "skippedExport=exportJob.status==='SKIPPED',cleaned=!!exportJob.source_cleaned,"
+            "archived=!!exportJob.source_archived,locked=active||cleaned||archived,"
+            "ready=status==='READY_FOR_EDIT_PLAN'&&!active&&!skippedExport&&!cleaned&&!archived;",
             render,
         )
         self.assertIn(
@@ -3025,9 +3117,10 @@ class ExportPanelTests(unittest.TestCase):
             "Chép lại video gốc vào input để sửa quyết định hoặc xuất lại.';", self.page,
         )
         self.assertIn("function decisionsLocked(){return ['QUEUED','RENDERING'].includes(exportJob.status)"
-                      "||!!exportJob.source_cleaned;}", self.page)
+                      "||!!exportJob.source_cleaned||!!exportJob.source_archived;}", self.page)
         render = _js_function(self.page, "renderExport")
-        self.assertIn("active?'đang xuất…':cleaned?'đã dọn video gốc':skippedExport?'đã bỏ qua'", render)
+        self.assertIn("active?'đang xuất…':cleaned?'đã dọn video gốc':archived?'video gốc ở kho lưu trữ':"
+                      "skippedExport?'đã bỏ qua'", render)
         self.assertIn("formatStamp(exportJob.source_cleanup?.finished_at)", render)
 
     @unittest.skipUnless(shutil.which("node"), "node is not installed")
@@ -3047,6 +3140,64 @@ class ExportPanelTests(unittest.TestCase):
         ])
         focus = _js_function(self.page, "renderFocus")
         self.assertIn("`Đã duyệt đủ ${queue.items.length} mục chính. ${reviewDoneHint()}`", focus)
+
+    @unittest.skipUnless(shutil.which("node"), "node is not installed")
+    def test_the_review_page_is_read_only_while_the_source_is_archived_in_node(self):
+        # Batch 4 (A3): "Lưu trữ" moves the source to the archive; the review page
+        # becomes read-only like after "Dọn video gốc" until "Khôi phục bản xuất".
+        page = self.page
+        script = (
+            "let exportRequestInFlight=false,exportError='',resources=null,exportJob={status:'IDLE'};"
+            "let queue={status:'READY_FOR_EDIT_PLAN',items:[{decision:'KEEP',category:'text'}],advisory_items:[],"
+            "source:{duration_seconds:100}};const alerts=[];globalThis.alert=m=>alerts.push(m);"
+            "const mk=()=>({textContent:'',disabled:false,title:'',classList:{set:new Set(),"
+            "toggle(c,on){if(on)this.set.add(c);else this.set.delete(c)},contains(c){return this.set.has(c)}}});"
+            "const els={'#summary':mk(),'#resources':mk(),'#finalize':mk(),'#export-status':mk(),"
+            "'#export-summary':mk(),'#export-section':mk()};const $=s=>els[s];const foot=[mk(),mk()],body=mk();"
+            "globalThis.document={body,querySelectorAll:s=>s==='.list-foot button'?foot:[]};"
+            + re.search(r"const EXPORT_LOCK_MESSAGE='[^']*';", page).group(0)
+            + re.search(r"const SOURCE_CLEANED_LOCK_MESSAGE='[^']*';", page).group(0)
+            + re.search(r"const SOURCE_ARCHIVED_LOCK_MESSAGE='[^']*';", page).group(0)
+            + "".join(_js_function(page, name) for name in (
+                "formatStamp", "countsFrom", "trackCoversFullVideo", "pendingDescription", "setText", "setHtml",
+                "renderExport", "decisionsLocked", "refuseWhileExporting", "reviewDoneHint", "nextNote"))
+            + "const out={};const snap=()=>({finalize:els['#finalize'].disabled,"
+            "locked:body.classList.contains('export-locked'),foot:foot.map(b=>[b.disabled,b.title]),"
+            "status:els['#export-status'].textContent,summary:els['#export-summary'].textContent,"
+            "refused:refuseWhileExporting(),done:nextNote({pending:0})});"
+            "const archive={state:'ARCHIVED',archived_at:'2026-10-03T13:00:09+07:00'};"
+            "const jobs={exported:{status:'COMPLETED',output:'output/a.mp4',source_archived:true,source_archive:archive},"
+            "skipped:{status:'SKIPPED',source_archived:true,source_archive:Object.assign({},archive,{archived_at:null})},"
+            "restored:{status:'READY_TO_EXPORT',source_archived:false,source_archive:Object.assign({},archive,"
+            "{state:'RESTORED'})}};"
+            "for(const [key,job] of Object.entries(jobs)){exportJob=job;renderExport();out[key]=snap();}"
+            "out.alerts=alerts;console.log(JSON.stringify(out));"
+        )
+        result = subprocess.run([shutil.which("node"), "-e", script], capture_output=True, text=True,
+                                encoding="utf-8", timeout=60)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        out = json.loads(result.stdout.strip().splitlines()[-1])
+        archived_lock = ("Video gốc đang ở kho lưu trữ; trang duyệt chỉ để xem. Bấm “Khôi phục bản xuất” trên "
+                         "Dashboard để sửa quyết định hoặc xuất lại.")
+        hint = "Đã duyệt đủ mọi mục chính. Video gốc đang ở kho lưu trữ; bấm “Khôi phục bản xuất” trên Dashboard để xuất lại."
+        exported = out["exported"]
+        self.assertEqual((exported["finalize"], exported["locked"], exported["refused"]), (True, True, True))
+        self.assertEqual(exported["foot"], [[True, archived_lock]] * 2)
+        self.assertEqual(exported["summary"], "video gốc ở kho lưu trữ")
+        self.assertTrue(exported["status"].startswith("Hoàn tất: output/a.mp4. Video gốc đang ở kho lưu trữ từ "),
+                        exported["status"])
+        self.assertTrue(exported["status"].endswith(
+            ". Bấm “Khôi phục bản xuất” trên Dashboard để xuất lại hoặc sửa quyết định."), exported["status"])
+        self.assertEqual(exported["done"], hint)
+        skipped = out["skipped"]
+        self.assertEqual(skipped["status"], "Video gốc đang ở kho lưu trữ. Bấm “Khôi phục bản xuất” trên Dashboard "
+                                            "để xuất lại hoặc sửa quyết định.")
+        self.assertEqual((skipped["locked"], skipped["done"]), (True, hint))
+        restored = out["restored"]
+        self.assertEqual((restored["finalize"], restored["locked"], restored["refused"], restored["summary"]),
+                         (False, False, False, "sẵn sàng"))
+        self.assertEqual(restored["done"], "Đã duyệt đủ mọi mục chính. Bấm “Xuất video” ở trên để xuất.")
+        self.assertEqual(out["alerts"], [archived_lock, archived_lock])
 
     @unittest.skipUnless(shutil.which("node"), "node is not installed")
     def test_finalize_export_closes_reports_and_reopens_in_node(self):
