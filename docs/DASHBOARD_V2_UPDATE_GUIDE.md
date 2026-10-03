@@ -1,6 +1,6 @@
 # Dashboard V2 — hướng dẫn mapping, tích hợp và rollback
 
-Ngày: 2026-10-03. Đối chiếu với Control Center 0.7.24, commit `23aa1e4`.
+Ngày: 2026-10-03. Đối chiếu ban đầu với Control Center 0.7.24, commit `23aa1e4`; **đã đối chiếu lại với code hiện tại (`f6996bb`, gồm merge 2a37496/732b02b) ở mục 8**. Khi mục 8 khác phần cũ của guide thì theo mục 8.
 
 ## 1. Trạng thái bàn giao
 
@@ -215,7 +215,7 @@ Platform key hiện tại: iqiyi, youku, tencent_video, mango_tv, sohu, pptv.
 1. Chạy UI và API cùng origin. Không thêm CORS rộng, proxy sang máy khác hoặc nghe 0.0.0.0.
 2. Lấy /api/session; POST có Content-Type: application/json và X-BiliFlow-Token.
 3. 403: refresh token và thử lại **một lần** theo luồng hiện tại. Không lặp vô hạn.
-4. 409: giữ lý do / error.code, tải trạng thái hoặc preview mới rồi yêu cầu người dùng xác nhận lại. Không tự replay.
+4. 409: body là `{error, code, preview?}` (`code` ở **cấp trên cùng**, không nằm trong `error`; `preview` có khi preview đổi). Giữ lý do và `code`, tải trạng thái hoặc preview mới rồi yêu cầu người dùng xác nhận lại. Không tự replay.
 5. File preview trả eligible/ineligible/recycle_bin/blocked/preview_id: hiển thị toàn bộ danh sách và lý do loại, không chỉ tổng đếm.
 6. Khi có nhiều request polling, dùng sequence / abort để response cũ không ghi đè response mới.
 7. Không rebuild toàn bộ form đang nhập mỗi lần polling. Giữ draft theo job_key + source identity; xóa draft khi revision/nguồn đổi.
@@ -293,5 +293,64 @@ Node verify kiểm tra hợp đồng, schema fixture, export / source locks, val
 Browser kiểm tra tương tác của prototype. **Không chứng minh backend live đã được tích hợp hay thay đổi.**
 Không cần chạy model, full suite detector hoặc video thật để đánh giá thay đổi này.
 
-Các vấn đề backend được trao đổi ở bước review code trước đó vẫn thuộc công việc riêng;
-prototype V2 không tuyên bố sửa các lỗi export identity, finalize shortcut hay HTTP input validation.
+Các lỗi backend đã được trao đổi ở bước review code trước đó (export identity, finalize dùng lại file không có manifest, kiểm tra đầu vào HTTP)
+**đã được sửa trên `main`** (merge 2a37496 và 732b02b, ngày 2026-10-03). Prototype V2 không phải nơi sửa chúng; V2 chỉ hiển thị đúng lý do backend trả về
+(xem mục 8). Dữ liệu và quyết định xuất vẫn do backend quyết định, V2 không tự suy ra tên hay đường dẫn bản xuất.
+
+
+## 8. Đối chiếu với code hiện tại (Pha 1, cloud, 2026-10-03)
+
+Đọc từ `src/biliflow/control_center.py` (`do_GET`, `do_POST`, `status()`, `finalize()`), `logo_memory_admin.py`, `job_store.py`.
+Tự động kiểm tra bằng `tests/test_dashboard_v2_contract.py` (route và nhóm trạng thái). Không có thay đổi backend.
+
+### 8.1. Chênh lệch cần adapter xử lý
+
+| # | Điều thực tế trong code | Hệ quả cho V2 |
+| --- | --- | --- |
+| 1 | `GET /api/jobs` trả **hàng thô của store**, không có `queue_position`, `queue_kind`, `review_summary`, `cleanup`, `archive`, `source_present`, `source_cleanup`… Chỉ `GET /api/status` → `jobs[]` được bổ sung các trường này (`status()`, dòng 602–629). | Adapter lấy danh sách chính từ `/api/status`, không dùng `/api/jobs` để vẽ. `/api/jobs` chỉ để đối chiếu. |
+| 2 | 409 trả `{"error": str, "code": str, "preview"?: {...}}`; `code` cấp trên cùng. Logo memory 409 là `{"error", "code":"memory_changed"}`. | Đọc `body.code`, không phải `body.error.code`. |
+| 3 | `POST …/review/finalize` thành công trả `{status:"COMPLETED"\|"QUEUED", output, export_size_policy, plan?}`. `COMPLETED` nghĩa là backend **chứng minh được** bản xuất của lần duyệt này đã có (manifest), không render lại. `QUEUED` chỉ là đã xếp hàng. | Không đánh dấu hoàn tất theo `QUEUED`; luôn tải lại `/api/status` sau finalize. |
+| 4 | Finalize **400** khi đường dẫn xuất đã có file/liên kết mà manifest không chứng minh (`EXPORT_PATH_TAKEN_MESSAGE`, “… BiliFlow không ghi đè …”), hoặc queue chưa `READY_FOR_EDIT_PLAN`, hoặc nguồn bị khóa/thiếu, hoặc `size_mode` sai. | Hiện nguyên văn `error`, không tự thử lại, không đổi tên file. |
+| 5 | `do_POST` thứ tự: Host sai → 403; thiếu/sai token → 403 (body bị bỏ để socket không bị reset); body quá 64 KiB, Content-Length sai, JSON không phải object hoặc lồng quá sâu → 400; body ngừng gửi quá 20 s → **408** `{"error": …}` rồi đóng kết nối (client có thể chỉ thấy kết nối đóng, không có body); đường dẫn lạ → 404; `ActionConflict` → 409; `KeyError/TypeError/ValueError` → 400; còn lại → 500. | Adapter phân biệt: 403 (làm mới token đúng một lần), 408 và lỗi mạng (“kết nối bị ngắt”, **không** tự gửi lại lệnh ghi), 409, 400, 500, 404. |
+| 6 | `GET` lỗi: `KeyError/ValueError/FileNotFoundError` → 404; preview với danh sách id sai → 400; còn lại → 500. Host sai → 403. Riêng media: `k` sai → 403 (khóa media, **không phải** token phiên); logo frame ngoài thư mục → 403. | Không làm mới token khi **GET** trả 403. GET chỉ thử lại khi người dùng bấm. |
+| 7 | `render_progress` chỉ có khi `state === "RENDERING"`: `{state: "STARTING"\|"RENDERING"\|"VERIFYING", percent 0–100, speed_text?, eta_seconds?}`. `state === "VERIFYING"` cũng là trạng thái job hợp lệ. | Cả hai cách vẫn vào nhóm “xuất”; thẻ chính “Kiểm tra bản xuất” khi một trong hai là VERIFYING. |
+| 8 | `active` là `{job_id, stage, pid}` hoặc `null` (không phải mảng). `queue` là `{length, paused}`; thứ tự theo từng job nằm ở `jobs[].queue_position/queue_kind`. `queue_kind` chỉ `scan` hoặc `export`, và chỉ có khi job đang chờ chạy được. | Không dựng danh sách queue từ nơi khác. Kiểu lạ → nhóm “Chờ xử lý”. |
+| 9 | `resources`: `cpu_percent`, `memory{percent,used_bytes,total_bytes}`, `disk{percent,free_bytes,total_bytes}`, `gpu` = `null` hoặc `{memory_used_bytes,memory_total_bytes,utilization_percent,temperature_c}`. **Không có tên GPU.** | Hiển thị N/A khi `gpu` null; không bịa `gpu.name` (fixture demo có, live không). |
+| 10 | `GET /api/logo-memory` trả `{memory_sha256, records[], backups}`; mỗi record có `key, memory_class, decision, platform, labels, episode, frames, frame_urls, convertible, refusal_text…` (không có `name`/`color` như fixture). `frame_urls` đã mã hóa sẵn. | Adapter dựng tên hiển thị từ record; dùng `memory_sha256` của **lần tải gần nhất** làm `expected_sha256`; 409 `memory_changed` → tải lại. |
+| 11 | Review media: `evidence` cần `item`; `frame` cần `item`, `t`, `k`; `video` cần `k`. `k` lấy từ `GET /api/jobs/{id}/review/session` (cùng `token`). | V2 không dựng media URL tự do; chỉ mở `/review/{id}`. |
+| 12 | `POST /api/shutdown` trả **202** `{status:"STOPPING", mode}` rồi mới tắt; `/api/scheduler` trả `{paused}`; `/api/jobs/{id}/ai-audit` trả `{status:"QUEUED", visual_opt_in}`. | Không coi 202 là đã tắt; kiểm tra `/healthz` (guide mục 4). |
+| 13 | Job state thực tế (20 giá trị): DISCOVERED, NEEDS_METADATA, QUEUED, PREFLIGHT, SCANNING_SAFETY, SCANNING_TEXT, SCANNING_LOGO, LOCALIZING_REGIONS, BUILDING_REVIEW, AI_AUDITING, WAITING_REVIEW, READY_TO_EXPORT, RENDERING, VERIFYING, PAUSED, FAILED, INTERRUPTED_RECOVERABLE, CANCELLED, COMPLETED, SKIPPED. `review_summary` chỉ có ở WAITING_REVIEW/READY_TO_EXPORT/SKIPPED có `active_queue_path`. | Test kiểm tra mỗi state vào đúng một nhóm và trùng `jobTab` của dashboard cũ. |
+
+### 8.2. Mapping chức năng đã đối chiếu
+
+Tình trạng: **khớp** (endpoint, body và khóa đã khớp code), **một phần** (khớp nhưng thiếu tầng giao diện/adapter), **mô phỏng** (chỉ có trong demo).
+
+| Chức năng cũ | Vị trí V2 | Endpoint / payload thực tế | Khóa / xác nhận | Tình trạng |
+| --- | --- | --- | --- | --- |
+| Tổng quan, hàng đợi, tài nguyên | Tổng quan, Hàng đợi, sidebar | GET `/api/status` (jobs, queue, active, resources, storage, detector_options, source_cleanup_running, scheduler_paused) | — | khớp (mục 8.1 #1, #7–#9) |
+| Thiết lập & bắt đầu | Chi tiết → Thiết lập | POST `/api/jobs/{id}/start` `{content_style, profile, detectors[], ocr_recognition_batch_size, fast_scan}`; `detectors` không phải mảng → 400 | nguồn không bị khóa; ≥1 nhóm hợp lệ | khớp |
+| Tiếp tục / dừng sau bước / dừng ngay / thử lại / hủy | Chi tiết → Thao tác chính/khác | POST `…/resume`, `stop-after-stage`, `pause`, `retry`, `cancel` `{}` | backend kiểm tra state; hủy cần xác nhận UI | khớp |
+| Chạy lại | Thao tác khác | POST `…/rerun` `{detectors?, ocr_recognition_batch_size, fast_scan}` | không khi xuất đang chờ/chạy | khớp |
+| Ẩn / hiện lại job đã hủy | Nhóm gấp “Đã ẩn” | POST `…/hide`, `…/unhide` `{}` | chỉ CANCELLED | khớp |
+| Bỏ qua / mở lại | Thao tác khác | POST `…/skip`, `…/unskip` `{}` | `review_summary.skip_eligible` do backend | khớp |
+| Visual AI Audit | Thao tác khác | POST `…/ai-audit` `{visual: bool}` → `{status:"QUEUED", visual_opt_in}` | Visual cần đồng ý riêng từng video | khớp |
+| Duyệt cảnh | Nút Duyệt cảnh | điều hướng GET `/review/{id}` (trang cũ, giữ nguyên) | — | khớp (điều hướng); scene trong demo là **mô phỏng** |
+| Quyết định / xóa / bulk | Trang review cũ | POST `…/review/decision|clear|bulk-keep|bulk-accept` (do trang review gửi) | `ensure_review_editable` | không làm trong V2 |
+| Xuất video | Dòng video / Chi tiết | POST `…/review/finalize` `{size_mode, max_output_gb?}` → 200 `{status, output, export_size_policy}` hoặc 400/409 (mục 8.1 #3–#4) | READY_TO_EXPORT, queue READY_FOR_EDIT_PLAN, không còn cảnh chờ, nguồn không khóa, không có lệnh xuất | khớp |
+| Dọn video gốc | Hoàn tất → Dọn | GET `/api/source-cleanup/preview?ids=` → `{preview_id, eligible[], ineligible[], recycle_bin, blocked}`; POST `/api/source-cleanup` `{job_ids[], preview_id}` | tối đa 50, preview mới; 409 `preview_changed/bin_unavailable/bin_capacity/busy` | khớp; **thao tác thật chỉ người dùng bấm** (AGENTS.md) |
+| Lưu trữ / Khôi phục | Hoàn tất → Lưu trữ; Đã lưu trữ | GET `/api/source-archive/preview?ids=`; POST `/api/source-archive` `{job_ids, preview_id}`; POST `/api/source-archive/restore` `{job_id}` | như trên; restore khi đường dẫn input trống và hash khớp | khớp; chỉ người dùng bấm |
+| Kiểm tra lại Thùng rác | Chi tiết video chưa xác minh | POST `/api/source-recycle-check` `{kind:"source_cleanup"\|"archive_export", id: <id của row>}` | `source_cleanup_running` | khớp |
+| Bộ nhớ logo | Trang Bộ nhớ logo | GET `/api/logo-memory`, GET `…/frame?key=&i=`, POST `…/class` `{key, memory_class, platform?, expected_sha256}`, POST `…/delete` `{key, expected_sha256}` | 409 `memory_changed` → tải lại | khớp (schema ở mục 8.1 #10); demo dùng fixture khác schema |
+| AI Supervisor | Cài đặt | GET `/api/ai`; POST `/api/ai/config` `{enabled, model, reasoning_effort}`, `/api/ai/check`, `/api/ai/login` | allowlist model ở backend | khớp |
+| Tạm dừng hàng đợi / tắt | Header, Cài đặt | POST `/api/scheduler` `{paused}`; POST `/api/shutdown` `{mode}` | 202 chưa chứng minh đã tắt | khớp |
+| Tải video | Trang Tải video | **không có endpoint** | — | **mô phỏng**, không có downloader |
+| Tình huống kiểm thử, đăng nhập/tắt/bộ nhớ giả | Cài đặt → Tình huống | — | — | **mô phỏng**, bỏ khỏi bản live |
+
+### 8.3. Quy tắc adapter đã chốt (theo code hiện tại)
+
+- Lệnh ghi **không** tự lặp lại. Ngoại lệ duy nhất: POST nhận 403 → `GET /api/session` lấy token mới rồi gửi lại **đúng một lần**; lần 403 thứ hai hiện lỗi.
+- 408, lỗi mạng, 5xx: hiện lỗi, **không** gửi lại (lệnh có thể đã chạy); yêu cầu tải lại trạng thái.
+- 409: hiện `error` + `code`; nếu có `preview` thì dùng làm preview mới; không replay.
+- 400: hiện nguyên văn `error`.
+- GET chỉ thử lại khi người dùng bấm; 403 của GET không làm mới token.
+- Mọi request đi qua một adapter duy nhất; token chỉ ở bộ nhớ, không ghi URL, localStorage hay log.
