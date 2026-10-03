@@ -8,9 +8,9 @@ This is the short, authoritative starting point for a new Codex account or chat.
 
 - Project root: `E:\DungChung\BiliFlow`
 - Active branch: `main`. On 2026-10-03 the user asked to merge `improve/scan-performance-metrics` (everything since `7f5a9fb`: the scan-performance work, detector/review fixes and dashboard batches 1-4) into `main` and run it there. `main` was fast-forwarded to the branch tip (the commit that carries this note) and the working tree, which the Control Center runs from, was switched to `main` with no file change. The branch is kept.
-- Pushed at the user's request on 2026-10-03: `origin/main` (GitHub `dinhnguyentrungthanh/video-ai-edit`) moved `9155cd7..23aa1e4`, in sync with local `main`. Push again only when the user asks.
-- Open branch `fix/export-identity-http` (from `main` 23aa1e4) in the worktree `temp/wt-export-fix`: export identity from the render, reuse only a proven export, HTTP request limits (see Current work). It is committed on the branch (not merged), and the Control Center still runs `main`.
-- Latest code milestones: dashboard batch 3 `d90c8f3` and batch 4 `6a8a59c` (docs `bb29219`); 1130 tests OK. Earlier on the branch: `2c72280` reduces CPU RGB-distance overhead with bit-exact output; 278/278 tests. Six source excerpts show 20.50% lower CPU routing time, not whole-video scan time. Actual cold-routing/VLM-input checks also pass. Prior `6231f58` fixes lossy visual-logo cache; `bf5bc35` adds opt-in OCR controls with serial default. Prefetch stays OFF. See `docs/SCAN_PERFORMANCE.md`.
+- Pushed at the user's request on 2026-10-03: `origin/main` (GitHub `dinhnguyentrungthanh/video-ai-edit`) moved `9155cd7..23aa1e4`. Local `main` has moved on since (the merge below); push again only when the user asks.
+- Merged at the user's request on 2026-10-03 at about 21:40, with no job running: branch `fix/export-identity-http` (worktree `temp/wt-export-fix`) was fast-forwarded into `main`. It brings export identity from the render, reuse of only a proven export, HTTP request limits and the short-export rate cap (see Current work). Not pushed: `origin/main` is still 23aa1e4. The running Control Center keeps the code it started with until it is restarted (ask the user first).
+- Latest code milestones: `fix/export-identity-http` (2a37496 export identity, proven-export reuse and HTTP limits; 732b02b short-export rate cap), 1197 tests OK. Before it: dashboard batch 3 `d90c8f3` and batch 4 `6a8a59c` (docs `bb29219`); 1130 tests OK. Earlier on the branch: `2c72280` reduces CPU RGB-distance overhead with bit-exact output; 278/278 tests. Six source excerpts show 20.50% lower CPU routing time, not whole-video scan time. Actual cold-routing/VLM-input checks also pass. Prior `6231f58` fixes lossy visual-logo cache; `bf5bc35` adds opt-in OCR controls with serial default. Prefetch stays OFF. See `docs/SCAN_PERFORMANCE.md`.
 - Runtime source version: `src/biliflow/__init__.py` reports `0.7.24`
 - Packaging metadata in `pyproject.toml` still reports `0.7.19`; use the runtime source version for dashboard diagnosis and align the package metadata during a later release housekeeping change.
 - Confirm working-tree state with Git.
@@ -26,7 +26,7 @@ Since 2026-10-03 local `main` also holds everything from `improve/scan-performan
 
 Always confirm this section with `git status` and `git log` because it becomes stale after new work.
 
-## Current work — 2026-10-03 export identity, proven-export reuse, HTTP request limits (branch `fix/export-identity-http`, committed on the branch, not integrated)
+## Current work — 2026-10-03 export identity, proven-export reuse, HTTP request limits, short-export rate cap (branch `fix/export-identity-http`, merged into `main`; Control Center restart pending)
 
 - Request (user, 2026-10-03): plan, fix and test three review findings on a new branch from `main` (not on `main`).
   - (1) Export identity from the render operations, with a legacy fallback.
@@ -62,7 +62,9 @@ Always confirm this section with `git status` and `git log` because it becomes s
   - Real FFmpeg check: `temp/ui-plan/export-fix/shortclip_check.py`, 20/20.
   - Full suite: 1197 OK (skipped=25).
   - Noted, not changed: a custom limit larger than the free disk space is refused before rendering, and short exports are marked H.264 level 6.2, the same as before the fix.
-- Next: committed on the branch at the user's request (2026-10-03); the user decides on integration. Running it needs the Control Center tree on this code and a Control Center restart (ask first). The main tree has another session's uncommitted Dashboard V2 work (`dashboard_v2/`, `docs/DASHBOARD_V2_UPDATE_GUIDE.md`, and notes in CHANGELOG/PROJECT_STATUS/SESSION_HANDOFF), so integrating needs care with those files.
+- Merged into `main` at the user's request (2026-10-03, about 21:40; fast-forward, no job running, not pushed).
+  - The main tree's uncommitted Dashboard V2 work from another session was kept as uncommitted changes: `dashboard_v2/`, `docs/DASHBOARD_V2_UPDATE_GUIDE.md`, and its notes in CHANGELOG, PROJECT_STATUS and SESSION_HANDOFF.
+- Next: a Control Center restart, so that it runs this code. Ask the user first, and restart only with no job running. Until then, do not start a new scan or export: stages run as separate processes and would load the new code under the old Control Center.
 
 ## Current work — 2026-10-03 dashboard batch 4: platform logos → BLUR, logo memory page, archive/restore, UI fixes (committed 6a8a59c; integrated into the main tree ~17:05; the user restarted the Control Center on it at 18:01:50)
 

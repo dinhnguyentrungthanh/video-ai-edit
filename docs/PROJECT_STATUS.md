@@ -1,4 +1,4 @@
-## Export identity, proven-export reuse, HTTP request limits (2026-10-03) — branch `fix/export-identity-http`, committed on the branch, not integrated
+## Export identity, proven-export reuse, HTTP request limits, short-export rate cap (2026-10-03) — branch `fix/export-identity-http`, merged into `main`; needs a Control Center restart
 
 - Why: a code review found three problems.
   - Export identity: changing only the blur edge mode or the detected intervals kept the export name, and finalize reused the old export.
@@ -38,7 +38,8 @@
     - code review (read-only agent): approve. It compared 4,524 cases, and every command FFmpeg accepted before is identical; its 1 LOW and 2 INFO were addressed;
     - real FFmpeg 20/20 (`shortclip_check.py`): 6 s, 20 s, and 10 minutes at 100 GB were refused before and are proven after; a 30 s clip is byte-identical with and without the cap;
     - full suite 1197 OK (skipped=25).
-- Next: the user decides when to run it (merge into `main`, or switch the Control Center tree to the branch, then restart the Control Center).
+- Merged into `main` (fast-forward from 23aa1e4) at the user's request on 2026-10-03 at about 21:40, with no job running; not pushed.
+- Next: restart the Control Center so it runs this code (ask the user first; only with no job running).
 
 ## Dashboard batch 4 (2026-10-03): platform logos → BLUR, logo memory page, archive/restore, UI fixes — committed 6a8a59c, integrated; the user restarted the Control Center on it at 18:01:50
 
