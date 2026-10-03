@@ -120,7 +120,7 @@ Merge ngày 2026-10-03 (2a37496, 732b02b) đến sau khi guide được viết, 
   - stream video không bị cắt.
 - **Mã lỗi của `do_POST`:**
   - 403: phiên hoặc token không hợp lệ;
-  - 409: `ActionConflict`, có `error.code`;
+  - 409: `ActionConflict`; body là `{error, code, preview?}`, `code` nằm ở cấp ngoài cùng, **không** phải `error.code` (đính chính sau Pha 1, xem guide mục 8.1 #2);
   - 400: dữ liệu sai (`KeyError` / `TypeError` / `ValueError`);
   - 500: lỗi khác.
 - **Quy tắc thử lại của adapter:**
@@ -250,7 +250,8 @@ git worktree remove ../bf-base
 
 | Ngày | Commit | Việc đã làm | Test đã chạy | Còn lại |
 | --- | --- | --- | --- | --- |
-| 2026-10-03 | (commit docs này) | Điền hash commit vào nhật ký | — | Như dòng dưới |
+| 2026-10-03 | (commit docs này, sau 4c76a34) | Đính chính tài liệu cho khớp code: mục 5 của kế hoạch (409 `code` ở cấp ngoài, không phải `error.code`); guide mục 4 và mục 2 (danh sách job lấy từ `/api/status`, không từ `/api/jobs`) | Chỉ sửa docs, không chạy test | Như dòng dưới |
+| 2026-10-03 | 4c76a34 | Điền hash commit vào nhật ký | — | Như dòng dưới |
 | 2026-10-03 | 86af3ad | Route `/dashboard-v2/` trong `control_center.py` (+53 dòng: whitelist 12 asset, CSP riêng, 301 khi thiếu `/`), `tests/test_dashboard_v2_route.py`, fixture hash trang cũ; tóm tắt phiên, câu hỏi mục 8 | test_dashboard_v2_route 9 OK; D5: các test Control Center như Pha 0; D6 không đổi; Chromium trên handler thật OK | Pha 4 (máy thật): toàn bộ cột Máy thật, nhóm E |
 | 2026-10-03 | 4cb9c40 | Tách DemoStore, viết ControlCenterAdapter + live store, `live.html`, gate `verify-adapter.cjs`, `browser-check.cjs` (API giả), `tests/test_dashboard_v2_frontend.py`; sửa 2 lỗi do browser-check tìm ra (focus drawer, `gpu` null) | verify.cjs 28/28; verify-adapter 15/15; browser-check 14/14; test_dashboard_v2_frontend + contract 9 OK | Pha 3 (route `/dashboard-v2/`). Lần push đầu của pha 0–1 bị 403 (quyền GitHub); push lại cùng pha 2 thành công |
 | 2026-10-03 | ff1ccdb | Pha 0: chạy nền A1–A4. Pha 1: đối chiếu route/schema/state với code, thêm `tests/test_dashboard_v2_contract.py`, guide mục 8, sửa guide mục 4 và 7 | verify.cjs 25/25; node --check; test_dashboard_v2_contract 6 OK; test_export_identity 28 OK; test_control_center 52/53 (1 lỗi thiếu PowerShell); A4 không đổi | Pha 2 (frontend), Pha 3 (route) |

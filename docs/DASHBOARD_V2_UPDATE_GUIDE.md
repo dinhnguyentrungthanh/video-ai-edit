@@ -93,7 +93,7 @@ Các ô tổng quan **đếm video**, riêng ghi chú “cảnh cần quyết đ
 ### Cập nhật khi chuyển từ quét sang xuất
 
 - Trong prototype, mỗi lần `state.jobs` hoặc `state.active` đổi và `render()` chạy, các ô tổng quan/danh sách/thẻ tiến trình được tính lại. Tình huống **Đang kiểm tra bản xuất** trong Cài đặt đã được kiểm tra: quét giảm về 0, xuất tăng lên 1, thẻ chính đổi thành ĐANG XUẤT VIDEO với bước Kiểm tra bản xuất.
-- Prototype không theo dõi worker thật. Khi tích hợp, adapter phải nhận snapshot mới từ GET `/api/status` và `/api/jobs` theo cơ chế refresh hiện có, cập nhật cả jobs và active rồi render từ cùng snapshot. Không tăng/giảm bộ đếm thủ công hoặc giữ tên bước quét cũ khi active job chuyển sang render/verify.
+- Prototype không theo dõi worker thật. Khi tích hợp, adapter phải nhận snapshot mới từ GET `/api/status` (danh sách job lấy từ `jobs[]` của nó; `/api/jobs` thiếu trường, xem mục 8.1 #1) theo cơ chế refresh hiện có, cập nhật cả jobs và active rồi render từ cùng snapshot. Không tăng/giảm bộ đếm thủ công hoặc giữ tên bước quét cũ khi active job chuyển sang render/verify.
 - Luồng đúng: quét → chờ duyệt → sẵn sàng xuất → chờ xuất → đang xuất/kiểm tra → hoàn tất. Chuyển sang xuất cần lệnh người dùng; không tự bỏ qua bước duyệt hoặc tự xuất sau khi tải.
 
 ### Mapping các chức năng đã có
@@ -176,7 +176,7 @@ Demo dùng boolean `render_request` để thử khóa. Adapter không được t
 | Method / đường dẫn | Vai trò / điều kiện |
 | --- | --- |
 | GET /api/session | Lấy token cho phiên; không ghi token vào URL, log hay localStorage |
-| GET /api/status, /api/jobs | Tổng quan và danh sách |
+| GET /api/status, /api/jobs | Tổng quan và danh sách. **Đính chính (mục 8.1 #1):** chỉ `/api/status` → `jobs[]` có đủ trường hàng đợi, review, dọn/lưu trữ; `/api/jobs` là hàng thô, không dùng để vẽ |
 | GET /api/jobs/{id} | job, stages, revisions, artifacts, events |
 | GET /healthz | Kiểm tra backend còn chạy sau lệnh tắt |
 | GET /api/ai | Kết nối / cấu hình / trạng thái phiên AI |
