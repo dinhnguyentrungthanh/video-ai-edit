@@ -1,0 +1,297 @@
+# Dashboard V2 — hướng dẫn mapping, tích hợp và rollback
+
+Ngày: 2026-10-03. Đối chiếu với Control Center 0.7.24, commit `23aa1e4`.
+
+## 1. Trạng thái bàn giao
+
+**Hiện tại là prototype độc lập, có tương tác bằng dữ liệu mẫu. Chưa tích hợp vào Control Center.**
+
+- Mã demo: `E:\DungChung\BiliFlow\dashboard_v2\`.
+- Demo: `http://127.0.0.1:8794/`. Dashboard thật vẫn ở cổng riêng `8765`.
+- `index.html` khóa kết nối bằng `connect-src 'none'`; JS không có fetch, XHR, WebSocket hay bridge đến API thật.
+- `serve.py` chỉ phục vụ danh sách asset cho phép. POST trả 405; đường dẫn API / file ngoài demo trả 404.
+- Dữ liệu được tạo trong `mock-data.js`, giữ trong bộ nhớ tab. Reload đặt lại. Không đọc input, report, queue, state hay bộ nhớ logo thật.
+- Các hình SVG tự tạo và cảnh review chỉ là minh họa. Không chạy model, giải mã video, xuất preview hoặc render thật.
+- Chỉ mở demo để đánh giá thiết kế ở giai đoạn này. Việc tích hợp là bước sau, cần người dùng yêu cầu.
+
+### Điều chỉnh theo phản hồi giao diện
+
+- Nền sáng, điểm nhấn xanh dương, chữ/nút lớn hơn. `theme.css` phải được phục vụ và tải sau `styles.css`; server demo đã thêm file này vào danh sách cho phép.
+- Chi tiết ưu tiên tiến độ và tối đa hai thao tác chính. **Thao tác khác** chứa toàn bộ thao tác còn lại từ `BFContracts.operations`; không bỏ endpoint, đổi payload hoặc nới điều kiện khóa. Xuất đứng trước Duyệt cảnh ở video sẵn sàng xuất.
+- **Kết quả kiểm tra & xuất video** chứa audit/xuất; **Video gốc & thông tin kỹ thuật** chứa đường dẫn và SHA-256. Tên hiển thị của bước/profile/nội dung được dịch, giá trị backend giữ nguyên.
+- Nền phía sau Chi tiết giữ độ trong suốt khi rê chuột. CSS phải áp dụng cả `.drawer-backdrop:hover:not(:disabled)` để tránh rule hover của button làm nền thành màu đặc. Phím Tab bỏ qua nút nằm trong mục đang gấp.
+- Khi kiểm thử tích hợp: mở Đang xử lý và rê chuột lên nền; mở Thao tác khác và kiểm tra xác nhận Hủy; kiểm tra Xuất/Duyệt vẫn có đủ điều kiện khóa; kiểm tra màn hình 375 px có thẻ tiến độ/tài nguyên xếp dọc và bảng chi tiết không tràn ngang.
+- Kết quả prototype sau điều chỉnh: 9 kiểm tra Browser, 18 kiểm tra contract, source production 64/64 hash không đổi. Evidence nằm ở `temp/dashboard-v2-evidence/light-*`.
+
+### Tệp và trách nhiệm
+
+| Tệp | Trách nhiệm | Khi tích hợp |
+| --- | --- | --- |
+| `index.html` | Khung trang, sidebar, modal, CSP demo | Phục vụ từ route riêng; sửa CSP có chủ đích |
+| `styles.css` | Bố cục, responsive, focus | Giữ độc lập với CSS dashboard và review cũ |
+| `theme.css` | Theme sáng/tối, cỡ chữ, màu trạng thái, bố cục chi tiết rút gọn | Tải **sau** styles.css trên route V2; không nạp vào dashboard/review cũ |
+| `contracts.js` | Danh mục endpoint, nhóm trạng thái, payload quét / xuất, điều kiện UI | Đối chiếu lại với backend tại thời điểm tích hợp |
+| `mock-data.js` | Fixture tổng hợp | Không đưa vào build kết nối dữ liệu thật |
+| `download-demo.js` | Hai nguồn mẫu, kiểm tra batch, state machine lượt tải và giới hạn đồng thời | Chỉ là UI; không thể coi là adapter tải thật hoặc chứng nhận tên miền được hỗ trợ |
+| `app.js` | Các view và logic thay đổi fixture | Tách lớp dữ liệu demo khỏi presenter; thay bằng adapter đã kiểm thử |
+| `serve.py`, `Start-Demo.cmd` | Server demo static | Không dùng làm proxy hoặc server production |
+| `verify.cjs` | Kiểm tra hợp đồng, khóa quan trọng và không có transport | Giữ như gate cho prototype; bổ sung gate adapter riêng |
+
+## 2. Mapping giao diện
+
+### Tổng quan và nhóm danh sách
+
+Các ô tổng quan **đếm video**, riêng ghi chú “cảnh cần quyết định” mới đếm cảnh. Mỗi video có một trạng thái; các ô đang chạy không cộng video đang chờ đến lượt. Bấm ô xóa từ khóa tìm kiếm cũ, lọc đúng tập được đếm và hiển thị nhãn “Đang lọc”. Bấm tab danh sách hoặc “Xem tất cả” để thoát bộ lọc này.
+
+| Ô tổng quan | Trạng thái được đếm / lọc | Bộ lọc UI |
+| --- | --- | --- |
+| Đang quét cảnh | Các trạng thái quét/chuẩn bị/khoanh vùng/tạo review/AI audit từ `BFContracts.tab(job) === 'scanning'` | `scan_active` |
+| Chờ bạn duyệt | WAITING_REVIEW | `review_pending` |
+| Sẵn sàng xuất | READY_TO_EXPORT; nút xuất vẫn phải qua các gate source/queue/render hiện có | `review_ready` |
+| Đang xuất video | RENDERING hoặc VERIFYING | `export_active` |
+| Hoàn tất | COMPLETED hoặc SKIPPED; ghi chú phân biệt đã xuất và bỏ qua | `completed` hiện có |
+
+- `QUEUED` + `queue_kind=scan/export` chỉ vào số **chờ quét/chờ xuất**, không vào hai ô đang chạy. Unknown queue kind không được đoán là scan hoặc export.
+- Danh sách vẫn giữ nguyên sáu bucket backend và tab Tất cả. Chỉ đổi nhãn `review` thành **Cần duyệt / đã duyệt** (gộp WAITING_REVIEW và READY_TO_EXPORT), `export` thành **Chờ / đang xuất** (gộp queued export và đang render/verify), để số tổng hợp không bị hiểu nhầm là số đang chạy.
+- Bốn ID UI mới chỉ lọc trên frontend qua `BFContracts.overviewMatch`; không phải state backend hay endpoint mới. Không gửi chúng trong payload quét/xuất.
+- Thẻ tiến trình chính ghi **ĐANG QUÉT CẢNH** hoặc **ĐANG XUẤT VIDEO**, tên bước thật; VERIFYING hiện “Kiểm tra bản xuất”, không bị gộp vào quét cảnh.
+
+### Chuyển sáng/tối
+
+- Nút ở topbar đặt `data-theme=light/dark` trên phần tử html; cả hai chế độ dùng cùng DOM và cùng điều kiện thao tác. Chế độ tối giữ cỡ chữ/khoảng cách của bản sáng.
+- `app.js` chỉ lưu sở thích giao diện ở key `biliflow-v2-theme` trong localStorage. Không lưu dữ liệu video, quyết định review hoặc token vào key này. Nếu trình duyệt chặn storage, nút vẫn hoạt động trong tab; tải lại trở về sáng.
+- Tải lại nhớ theme; đặt lại dữ liệu mẫu chỉ reset fixture. Khi tích hợp, giữ key tách biệt và thứ tự stylesheet. Không gọi API hay khởi động worker khi chuyển theme.
+- Kiểm tra cả topbar, danh sách, bảng chi tiết, backdrop hover và hộp xác nhận trong hai theme; màn hình 375 px phải bấm được nút mà không tràn ngang.
+
+### Trang Tải video — yêu cầu mới, chỉ làm mẫu
+
+- Route `#downloads`, mục **Tải video** trong sidebar. Form gồm nguồn tải, textarea nhiều link (mỗi dòng một link cùng nguồn), nút thêm và nút thử 3 video mẫu. Danh sách bên cạnh có bộ đếm, bộ lọc và tiến độ riêng từng video; có thể thêm nguồn khác khi lượt trước vẫn đang chạy. Thư mục đích dự kiến `E:\DungChung\BiliFlow\input\`.
+- Hai lựa chọn theo yêu cầu người dùng: YouTube và Phimmoi (mẫu). `phimmoi.example` là địa chỉ minh họa, **không phải tên miền Phimmoi thật**. Thêm tùy chọn trong combobox không có nghĩa hệ thống hỗ trợ tải trang đó.
+- `downloadQueue` và `downloadDraft` giữ riêng trong bộ nhớ tab. Mỗi lượt có `id`, `domain`, `url`, `name`, `state`, `progress`, `totalBytes`, `logs`, `error`. QUEUED → DOWNLOADING → VERIFYING → COMPLETED; tạm dừng riêng → PAUSED; hủy → CANCELLED; giả lập lỗi → FAILED; thử lại giữ ID, đặt tiến độ về 0 và xếp cuối hàng đợi. Resume riêng chỉ bật khi có slot. `download-demo.js` chứa state machine thuần, `app.js` dùng timer mô phỏng 1 giây, 320 MB/lượt. Không gửi HTTP, tạo MP4, thêm job quét hay đổi hàng đợi GPU.
+- Tải đồng thời chọn 1/2/3 (mặc định 2), độc lập với quy tắc một GPU của quét/xuất. Hạ giới hạn không ngắt các lượt đang chạy, chỉ hạn chế lượt mới. Tạm dừng tất cả giữ tiến độ và ngừng nhận lượt mới; tiếp tục khôi phục. Giới hạn demo 20 link/lần, 100 lượt/tab; batch có link sai/trùng bị từ chối toàn bộ, không thêm một phần. Log đang mở, vị trí cuộn và ô nhập được giữ qua cập nhật tiến độ. Dữ liệu giữ khi đổi trang; reload hoặc Đặt lại dữ liệu mẫu xóa danh sách.
+- Kiểm tra frontend: HTTPS, host đúng nguồn đã chọn (YouTube có alias youtu.be), link video cụ thể, không tài khoản/cổng tùy chỉnh. Đây chỉ là validation form; **không thay thế kiểm tra URL ở backend** khi có tải thật.
+- Trang này là bổ sung mới, **chưa có mapping đến API tải video hiện tại được xác nhận**. Không thêm endpoint tưởng tượng vào `BFContracts.endpoints`, không trỏ nút tải thử vào API thật.
+- Khi người dùng yêu cầu tích hợp tải thật: xác định downloader/giấy phép/nguồn được hỗ trợ và tên miền thật trước; bỏ timer mô phỏng. Chốt contract tạo tác vụ + đọc tiến độ + dừng + lỗi với adapter riêng, gồm ID ổn định, trạng thái, downloaded/total bytes và đường dẫn kết quả. Ghi `.part` dưới ổ E; chỉ công bố file hoàn chỉnh vào input sau khi kiểm tra, không ghi đè file có sẵn. Watcher nhập video mới theo cơ chế hiện có; quét/duyệt/xuất vẫn cần các bước và xác nhận hiện có.
+- Backend tải thật phải kiểm tra lại host, redirect, địa chỉ nội bộ và phạm vi đường dẫn đầu ra; không truyền URL người dùng qua câu lệnh shell ghép chuỗi. Những yêu cầu này là gate cho bước tích hợp, chưa phải chức năng của prototype.
+
+#### Adapter command / PowerShell trong bước tích hợp sau
+
+1. Browser chỉ tạo yêu cầu tải có cấu trúc. Backend dùng ID tác vụ ổn định để quản lý từng tiến trình. Không đưa ô terminal hoặc cho người dùng nhập câu lệnh trực tiếp trong UI. Đây là thiết kế tương lai, chưa có endpoint downloader đã xác nhận.
+2. Backend chạy executable/script được cấu hình với danh sách đối số; giữ URL là một đối số dữ liệu, không ghép thành `cmd /c`, `Invoke-Expression` hoặc chuỗi `-Command`. Nếu dùng script PowerShell, script có tham số rõ ràng và được gọi ẩn, không bật cửa sổ terminal cho mỗi video.
+3. Ưu tiên output tiến độ JSON Lines có `task_id`, `attempt_id`, `sequence`, `stage`, `downloaded_bytes`, `total_bytes`, `speed_bytes_per_second`, `eta_seconds`, `message`, `exit_code`. Nếu downloader chỉ có stdout/stderr dạng text, adapter backend phân tích thành schema này; UI không phụ thuộc định dạng dòng lệnh. Dữ liệu log chỉ hiển thị dạng text và phải che cookie/token/header bí mật.
+4. Khi chưa biết total bytes, dùng thanh tiến độ không xác định và hiển thị số bytes đã tải; không bịa % hoặc ETA. Tiến độ tải phải tách với bước kiểm tra tệp. Chỉ COMPLETED khi tiến trình trả thành công và tệp được kiểm tra/công bố vào input; 100% tải không đồng nghĩa video đã vào input. Lỗi hiển thị theo từng lượt, không ngắt cả danh sách.
+5. Contract backend cần snapshot danh sách và event tiến độ có thứ tự, retry/cancel idempotent, trạng thái persist trên E, phục hồi sau reload/backend restart và kết quả tải có đường dẫn E đã kiểm tra. Bỏ event cũ từ attempt trước khi retry; giữ ID và phiên thử để tránh tiến trình cũ ghi đè tiến độ mới.
+6. Nút hủy thật dùng CANCELLING cho đến khi backend xác nhận cả cây tiến trình đã dừng, rồi mới CANCELLED; không chỉ đổi badge ở frontend. Tạm dừng/resume chỉ bật khi downloader hỗ trợ và backend xác nhận. Nếu không hỗ trợ, dùng dừng nhận lượt mới/hủy/thử lại và giải thích rõ; không giả lập khả năng resume của công cụ thật.
+7. Giới hạn concurrent download cần do backend thực thi, tách worker quét/xuất, giới hạn tài nguyên thực tế và giữ FIFO. Tệp `.part`, log, state đều trên E; không ghi đè video đã có. Chỉ đưa tệp hoàn chỉnh vào input sau kiểm tra. Không tự bắt đầu quét hoặc xuất từ event tải hoàn tất; giữ các gate người dùng hiện có.
+
+### Cập nhật khi chuyển từ quét sang xuất
+
+- Trong prototype, mỗi lần `state.jobs` hoặc `state.active` đổi và `render()` chạy, các ô tổng quan/danh sách/thẻ tiến trình được tính lại. Tình huống **Đang kiểm tra bản xuất** trong Cài đặt đã được kiểm tra: quét giảm về 0, xuất tăng lên 1, thẻ chính đổi thành ĐANG XUẤT VIDEO với bước Kiểm tra bản xuất.
+- Prototype không theo dõi worker thật. Khi tích hợp, adapter phải nhận snapshot mới từ GET `/api/status` và `/api/jobs` theo cơ chế refresh hiện có, cập nhật cả jobs và active rồi render từ cùng snapshot. Không tăng/giảm bộ đếm thủ công hoặc giữ tên bước quét cũ khi active job chuyển sang render/verify.
+- Luồng đúng: quét → chờ duyệt → sẵn sàng xuất → chờ xuất → đang xuất/kiểm tra → hoàn tất. Chuyển sang xuất cần lệnh người dùng; không tự bỏ qua bước duyệt hoặc tự xuất sau khi tải.
+
+### Mapping các chức năng đã có
+
+| Dashboard / chức năng hiện có | Vị trí V2 | Nguồn khi tích hợp |
+| --- | --- | --- |
+| Worker và CPU / RAM / GPU / ổ đĩa | Tổng quan → tiến trình & tài nguyên, sidebar ổ E | GET `/api/status` |
+| Sáu tab theo giai đoạn | Bộ lọc trên danh sách, thêm Tất cả | `jobTab` hiện có → `BFContracts.tab` |
+| Đếm job, hàng đợi FIFO, vị trí quét / xuất | KPI, badge lượt, trang Hàng đợi | `queue_position`, `queue_kind`, `queue.length` |
+| Thông tin job / trạng thái / lỗi | Danh sách và bảng Chi tiết | `jobs[]`; GET `/api/jobs/{id}` cho lịch sử sâu |
+| Thiết lập nội dung, profile, detector, OCR, tăng tốc | Thiết lập & bắt đầu trong Chi tiết / dòng video | POST start |
+| Tiếp tục, dừng sau bước, dừng ngay, retry, hủy | Chi tiết → Thao tác chính / Thao tác khác | Các endpoint job tương ứng; giữ nguyên điều kiện khóa và xác nhận |
+| Chạy lại theo phạm vi trong revision mới | Chi tiết → Thao tác khác → Chạy lại kiểm tra | POST rerun |
+| Duyệt cảnh | Nút Duyệt cảnh | Mở **trang review hiện có** `/review/{id}` |
+| Cấu trúc cục bộ và Visual AI Audit | Chi tiết → Kết quả kiểm tra & xuất video | `structure_audit`, `ai_audit`; mục gấp không thay đổi kết quả |
+| Audit JSON / Visual AI | Chi tiết → Thao tác khác → Visual AI Audit → chọn dữ liệu | POST ai-audit; Visual cần opt-in |
+| Xuất từ dashboard và từ review | Dòng video / Chi tiết → Xuất video | Cùng POST review/finalize và chính sách dung lượng |
+| Bỏ qua, mở lại | Chi tiết → Thao tác khác → Bỏ qua / Mở lại để xuất | POST skip / unskip |
+| Đã hủy, đã ẩn, hiện lại | Nhóm gấp cuối danh sách | `hidden_at`, POST hide / unhide |
+| Dọn một / nhiều nguồn | Hoàn tất → chọn tối đa 50 → Dọn video gốc; Chi tiết | Preview mới rồi POST cleanup |
+| Lưu trữ một / nhiều video | Hoàn tất → Lưu trữ; Chi tiết | Preview mới rồi POST archive |
+| Khôi phục bản xuất | Nhóm Đã lưu trữ → Chi tiết | POST source-archive/restore |
+| Kiểm tra lại Thùng rác | Chi tiết video chưa xác minh | POST source-recycle-check, **id của row**, không phải job |
+| Bộ nhớ logo: xem khung hình / đổi loại / xóa | Trang Bộ nhớ logo | API logo-memory |
+| Cấu hình / kết nối / đăng nhập AI | Cài đặt → AI Supervisor | API ai |
+| Tạm dừng scheduler, tắt sau bước / ngay | Header và Cài đặt | API scheduler / shutdown |
+
+### Trang review
+
+Prototype chỉ mô phỏng KEEP, BLUR, CUT, NEEDS_MORE_CONTEXT, xóa quyết định và hai thao tác hàng loạt.
+**Không thay thế** trình phát, timeline, chỉnh vùng / thời gian, note, nhớ logo, nguồn evidence và khóa queue trong trang review hiện tại.
+Khi tích hợp, Duyệt cảnh phải điều hướng đến `/review/{id}` của đúng job. Giữ đầy đủ chức năng trang đó.
+Đừng chuyển quyết định từ scene mẫu sang queue thật.
+
+## 3. Hợp đồng dữ liệu
+
+| Trường backend | Cách dùng |
+| --- | --- |
+| `id`, `job_key`, `source_sha256` | Định danh job và draft; không nhận diện bằng tên phim |
+| `source_path`, `source_size_bytes`, `duration_seconds` | Tên file / đường dẫn / dung lượng / thời lượng |
+| `active_revision`, `active_queue_path` | Revision hiện tại, review có sẵn hay chưa |
+| `state`, `current_stage`, `progress` | Trạng thái và tiến độ quét; progress nằm trong 0–1 |
+| `queue_kind`, `queue_position` | Loại scan / export và thứ tự backend; không tự suy ra từ tên stage |
+| `render_progress.state`, `render_progress.percent` | Tiến độ bản xuất, percent nằm trong 0–100; VERIFYING vẫn đang kiểm tra |
+| `review_summary.status` | READY_FOR_EDIT_PLAN mới đủ điều kiện duyệt để xuất |
+| `review_summary.main_items`, `pending`, `decisions` | Đếm cảnh chính; unresolved = cảnh chính trừ KEEP + BLUR + CUT |
+| `review_summary.advisory_items` | Ứng viên phụ, không cộng vào cảnh chính cần quyết định |
+| `review_summary.skip_eligible` | Backend chứng nhận bỏ qua; không tính theo số card đang nhìn thấy |
+| `review_summary.export_size_policy` | Điền lựa chọn xuất đã lưu, giống `exportPolicyChoice` hiện có |
+| `source_present`, `source_cleaned`, `source_archived` | Khóa thao tác khi nguồn thiếu, đã dọn hoặc đang lưu trữ |
+| `source_cleanup`, `source_archive` | Trạng thái nguồn và kiểm tra Thùng rác; dùng row `id` khi recheck |
+| `cleanup.eligible/reason`, `archive.eligible/reason` | Backend chứng nhận điều kiện file; trạng thái COMPLETED chưa đủ |
+| `source_cleanup_running` | Khóa chung dọn / lưu trữ / khôi phục / recheck |
+| `structure_audit`, `ai_audit`, `error` | Giữ kết quả và lý do lỗi; `outdated_rule` cần ghi “quy tắc cũ” |
+| `resources.memory.*`, `resources.disk.*`, `resources.gpu.*` | API dùng byte; GPU có thể null, phải hiển thị N/A |
+| `detector_options` | ID / tên / mô tả nhóm từ backend, không hardcode danh mục mới ở production |
+
+Các trường `name`, `duration` (chuỗi), `palette` trong fixture phục vụ trình bày demo.
+Adapter thật phải derive tên từ `source_path`, định dạng `duration_seconds` và lấy poster qua media hợp lệ.
+Fixture có `gpu.name` để minh họa; API hiện tại không cung cấp tên GPU. Không giả định trường này luôn có.
+Demo dùng boolean `render_request` để thử khóa. Adapter không được tự invent render request thật; dùng trạng thái / thông tin backend và xử lý từ chối 409.
+
+### Nhóm trạng thái phải giữ
+
+- completed: COMPLETED, SKIPPED.
+- export: RENDERING, VERIFYING, QUEUED với queue_kind=export.
+- scan_queue: QUEUED với queue_kind=scan.
+- review: WAITING_REVIEW, READY_TO_EXPORT.
+- scanning: PREFLIGHT, SCANNING_SAFETY, SCANNING_TEXT, SCANNING_LOGO, LOCALIZING_REGIONS, BUILDING_REVIEW, AI_AUDITING và SCANNING_*.
+- waiting: còn lại, kể cả QUEUED không biết loại. Không đoán nó là scan.
+- Chỉ CANCELLED với hidden_at mới vào nhóm Đã ẩn; loại ra khỏi đếm các tab.
+- Lưu trữ / dọn là trạng thái nguồn bổ sung. Không invent job state ARCHIVED / RECYCLED.
+
+## 4. Endpoint và payload phải giữ nguyên
+
+`contracts.js → endpoints` là danh mục máy đọc được để đối chiếu đường dẫn. Danh mục này **không thực hiện HTTP**.
+
+### Đọc dữ liệu
+
+| Method / đường dẫn | Vai trò / điều kiện |
+| --- | --- |
+| GET /api/session | Lấy token cho phiên; không ghi token vào URL, log hay localStorage |
+| GET /api/status, /api/jobs | Tổng quan và danh sách |
+| GET /api/jobs/{id} | job, stages, revisions, artifacts, events |
+| GET /healthz | Kiểm tra backend còn chạy sau lệnh tắt |
+| GET /api/ai | Kết nối / cấu hình / trạng thái phiên AI |
+| GET /review/{id} | Trang review hiện có |
+| GET /api/jobs/{id}/review/queue, session, resources, export | Tài nguyên review; giữ schema và quyền hiện tại |
+| GET /api/jobs/{id}/review/evidence, frame, video | Giữ query hiện có, media_key HMAC theo job; không dùng token phiên làm khóa media |
+| GET /media/{path} | Chỉ dùng URL media được server cung cấp và cho phép |
+| GET /logo-memory, /api/logo-memory | Trang cũ / danh sách bộ nhớ và memory_sha256 |
+| GET /api/logo-memory/frame?key=…&i=… | Khung hình của record; encode key đúng cách |
+| GET /api/source-cleanup/preview?ids=1,2 | Preview read-only mới ngay trước mỗi lần dọn |
+| GET /api/source-archive/preview?ids=1,2 | Preview read-only mới ngay trước mỗi lần lưu trữ |
+
+### Thay đổi trạng thái
+
+| POST đường dẫn | JSON body | Lưu ý |
+| --- | --- | --- |
+| /api/jobs/{id}/start | {content_style, profile, detectors, ocr_recognition_batch_size, fast_scan} | Ít nhất một detector; animation/live_action/mixed; careful/fast |
+| /api/jobs/{id}/rerun | {detectors, ocr_recognition_batch_size, fast_scan} | Revision mới, giữ report và quyết định cũ |
+| /api/jobs/{id}/resume, pause, stop-after-stage, cancel, retry, skip, unskip, hide, unhide | {} | Tên endpoint không đổi; backend kiểm tra state |
+| /api/jobs/{id}/ai-audit | {visual: boolean} | false = JSON; true cần đồng ý gửi tối đa 36 thumbnail, không video/audio |
+| /api/jobs/{id}/review/finalize | {size_mode:"default"} hoặc {size_mode:"custom",max_output_gb:number} hoặc {size_mode:"unlimited"} | Mặc định 3,5 GB; custom 0,05–1.000 GB; kiểm tra quyết định và source |
+| /api/jobs/{id}/review/decision | {id,decision,note?,full_frame?,remember_studio_logo?,remember_platform_logo?} | Giữ contract của review hiện có; người dùng phải duyệt |
+| /api/jobs/{id}/review/clear | {id} | Xóa quyết định |
+| /api/jobs/{id}/review/bulk-keep, bulk-accept | {filter} | Bộ lọc phải là giá trị trang review hiện có dùng; cần xác nhận |
+| /api/scheduler | {paused:boolean} | Giữ thứ tự FIFO |
+| /api/shutdown | {mode:"after_stage"} hoặc {mode:"immediate"} | Nhận 202/STOPPING chưa chứng minh backend đã tắt |
+| /api/ai/config | {enabled,model,reasoning_effort} | Allowlist hiện có: gpt-5.6-luna/terra/sol, low/medium/high |
+| /api/ai/check, /api/ai/login | {} | Dùng luồng ChatGPT hiện có, không thêm API trả phí |
+| /api/source-cleanup | {job_ids:[…],preview_id} | Tối đa 50, preview vừa duyệt; chỉ người dùng thực hiện trên file thật |
+| /api/source-archive | {job_ids:[…],preview_id} | Tương tự cleanup; giữ SHA-256, rollback và khóa backend |
+| /api/source-archive/restore | {job_id} | Chỉ ARCHIVED; đường dẫn input phải trống và hash khớp |
+| /api/source-recycle-check | {kind:"source_cleanup" hoặc "archive_export",id:rowId} | id của bản ghi dọn/lưu trữ, không phải job id |
+| /api/logo-memory/class | {key,memory_class,platform?,expected_sha256} | platform_logo hoặc studio_logo; hash toàn bộ memory được đọc trước đó |
+| /api/logo-memory/delete | {key,expected_sha256} | Backend sao lưu memory và ảnh trước; không xóa frame trực tiếp |
+
+Detector ID hiện tại: advertising, adult, gore, violence. OCR batch: 1 mặc định, 8 thử nghiệm.
+Profile fast giảm mật độ; fast_scan tăng tốc xử lý mà giữ mật độ. Không gộp hai tùy chọn.
+Platform key hiện tại: iqiyi, youku, tencent_video, mango_tv, sohu, pptv.
+
+### Transport khi viết adapter thật
+
+1. Chạy UI và API cùng origin. Không thêm CORS rộng, proxy sang máy khác hoặc nghe 0.0.0.0.
+2. Lấy /api/session; POST có Content-Type: application/json và X-BiliFlow-Token.
+3. 403: refresh token và thử lại **một lần** theo luồng hiện tại. Không lặp vô hạn.
+4. 409: giữ lý do / error.code, tải trạng thái hoặc preview mới rồi yêu cầu người dùng xác nhận lại. Không tự replay.
+5. File preview trả eligible/ineligible/recycle_bin/blocked/preview_id: hiển thị toàn bộ danh sách và lý do loại, không chỉ tổng đếm.
+6. Khi có nhiều request polling, dùng sequence / abort để response cũ không ghi đè response mới.
+7. Không rebuild toàn bộ form đang nhập mỗi lần polling. Giữ draft theo job_key + source identity; xóa draft khi revision/nguồn đổi.
+8. Escape dữ liệu hiển thị, encode query, kiểm tra ID số nguyên dương. Không dùng path hoặc HTML từ server như mã thực thi.
+9. Không gọi API ghi để thăm dò khả năng hoặc kiểm tra giao diện.
+
+## 5. Các khóa bắt buộc
+
+- NEEDS_MORE_CONTEXT không phải quyết định cuối; pending và trạng thái chưa ready chặn xuất.
+- Bulk keep/accept chỉ áp dụng mục chưa có quyết định, không ghi đè KEEP/BLUR/CUT/NEEDS_MORE_CONTEXT đã được duyệt. Cần xem thêm phải giải quyết riêng.
+- Lệnh xuất đang chạy hoặc còn được yêu cầu khóa sửa quyết định, rerun và gửi export trùng. Backend là nguồn thẩm quyền.
+- Không đánh dấu COMPLETED chỉ vì nhận QUEUED, hay tiến độ render 100%; VERIFYING vẫn là kiểm tra.
+- Skip chỉ khi backend xác nhận queue không có cảnh chính hoặc mọi cảnh chính KEEP.
+- Cleanup / archive chỉ khi backend xác nhận bản xuất đúng revision, quyết định và manifest, hoặc skip record còn khớp.
+- Nguồn cleaned/archived/PENDING/RESTORING bị khóa. Restore thành công không có nghĩa đã xuất lại thành công.
+- Không tự chỉnh source_cleanups/source_archives/recycle_checks, watcher hoặc SQLite để mở khóa.
+- Không xác nhận bin capacity bằng fixture; adapter dùng preview backend và từ chối khi capacity không biết / vượt limit − 64 MiB.
+- File actions có thể thành công một phần; hiển thị từng result. Không tự xóa selection của mục thất bại.
+- Recheck chỉ append kết quả xác minh, không sửa lịch sử dọn/lưu trữ.
+- Xóa/đổi logo có expected_sha256; memory_changed phải tải lại trước khi duyệt lại.
+- Audit cần đồng ý Visual riêng từng video. Không gửi source/audio, không tự áp dụng đề xuất AI.
+
+## 6. Trình tự tích hợp sau khi người dùng yêu cầu
+
+### A. Chuẩn bị
+
+1. Đọc AGENTS.md và handoff mới nhất; xác minh Git và version đang chạy. Contract này có thể cũ nếu backend vừa thay đổi.
+2. Tạo nhánh làm việc theo hướng dẫn repository; không tự merge, commit hoặc push.
+3. Lưu hash / bản sao mã frontend cần thay trong temp trên E. Không sửa dữ liệu thật.
+4. Kiểm tra worker / queue qua GET, thống nhất thời điểm restart nếu cần. Không tự tắt worker đang làm video.
+
+### B. Tạo adapter, giữ route cũ
+
+1. Tách state / mutation của app.js thành DemoStore; các hàm render chỉ nhận normalized snapshot.
+2. Viết ControlCenterAdapter có loadStatus/loadJob/loadAI/loadMemory và dispatch request. Chỉ adapter được làm HTTP.
+3. Adapter lấy schema thật ở mục 3, không mang fixture, preview_id giả hoặc state simulation vào bản live.
+4. Phục vụ V2 tại route opt-in riêng, ví dụ /dashboard-v2; giữ / và /review/{id} như hiện tại.
+5. Whitelist asset route; không mở thư mục project hoặc thư mục state/report qua static directory listing.
+6. CSP bản live cần connect-src 'self' thay cho 'none' chỉ ở route live, đồng thời giữ frame-ancestors, token và same-origin.
+7. Duyệt cảnh mở trang review hiện có. Không nhúng modal scene mẫu vào thao tác thật.
+8. Tái sử dụng export_dialog.py cho chính sách, validation, xác nhận và exportPolicyChoice; không tạo gate preview mới ngoài workflow hiện tại.
+9. Tải poster / media qua URL backend hợp lệ, lazy load ảnh cần nhìn. Không dựng full preview chỉ để trang overview.
+10. Xóa scenario selector, mock login/shutdown/memory/file operations khỏi build live.
+
+### C. Các gate kiểm tra
+
+- [ ] Prototype verify.cjs qua; các JS qua node --check.
+- [ ] Adapter contract tests cho endpoint / body / token, response stale, 403 một retry, 409 không replay.
+- [ ] Mọi state vào đúng một trong sáu tab; queue scan/export dùng thứ tự backend.
+- [ ] Draft detector/OCR/metadata và export policy không mất khi polling hoặc mở/đóng Chi tiết.
+- [ ] Quét chỉ logo vẫn ghi ba nhóm chưa kiểm tra; default mới vẫn đủ bốn nhóm.
+- [ ] NEEDS_MORE_CONTEXT, source missing/cleaned/archived và export in flight đều khóa đúng.
+- [ ] Hủy dialog không POST; double click confirm chỉ gửi một POST; lỗi mở lại dialog có lý do.
+- [ ] Dọn/lưu trữ thử trên fixture trong temp với fake recycler; tuyệt đối không trên video thật.
+- [ ] Preview stale, bin unknown/full, lock busy, per-file partial results, restore refused đều hiển thị đúng.
+- [ ] Memory hash conflict, studio KEEP / platform BLUR và audit opt-in đúng.
+- [ ] Desktop 1280, mobile 375; search, sticky filters, modal, drawer, Tab/Escape và không tràn ngang.
+- [ ] Source Python hashes / cache stage identity không đổi bởi thay frontend. Nếu sửa control_center để thêm route, xác minh cache dependency không đổi.
+- [ ] Chạy focused tests của các module thật có sửa; full suite nếu sửa scheduler/review/renderer/detector theo AGENTS.md.
+- [ ] Người dùng xem route V2 và yêu cầu chuyển mặc định trước khi đổi /.
+
+### D. Chuyển mặc định và rollback
+
+1. Chỉ đổi route / sau khi người dùng duyệt và gates qua; giữ route /dashboard-classic hoặc cờ chọn UI.
+2. Restart Control Center theo luồng hiện có ở thời điểm đã thống nhất, không sửa SQLite hay reset job.
+3. Kiểm tra read-only: version, số job, queue positions, revision và nguồn; mở một review đúng job.
+4. Nếu có lỗi UI: đưa route mặc định về classic / tắt cờ V2, giữ dữ liệu và backend nguyên trạng.
+5. Không rollback bằng cách restore database cũ sau khi người dùng đã duyệt thêm; không xóa report/decisions.
+6. Không coi bỏ V2 là lý do chạy lại scan hoặc invalidating detector cache.
+
+## 7. Kiểm tra demo và giới hạn bằng chứng
+
+Các bằng chứng kiểm thử / ảnh / log server nằm ở `temp/dashboard-v2-evidence/` trên E.
+Node verify kiểm tra hợp đồng, schema fixture, export / source locks, validation và không có network transport.
+Browser kiểm tra tương tác của prototype. **Không chứng minh backend live đã được tích hợp hay thay đổi.**
+Không cần chạy model, full suite detector hoặc video thật để đánh giá thay đổi này.
+
+Các vấn đề backend được trao đổi ở bước review code trước đó vẫn thuộc công việc riêng;
+prototype V2 không tuyên bố sửa các lỗi export identity, finalize shortcut hay HTTP input validation.

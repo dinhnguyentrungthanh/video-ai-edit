@@ -1,0 +1,437 @@
+/* Standalone demo: every request descriptor is consumed in memory. */
+(function () {
+'use strict';
+const C=window.BFContracts, Mock=window.BFMock;
+let state=Mock.create(), view='overview', filter='all', query='', sort='recent', page=1, selected=new Set(), currentJob=null;
+let drawerFocus=null, modalFocus=null, modalCommit=null, modalBusy=false, toastTimer, previewVersion=1, conflictUsed=false, reviewJob=null, scanFormJob=null;
+const sceneCache=new Map(), scanDrafts=new Map();
+const D=window.BFDownload;
+let downloadDraft={domain:D.domains[0].id,url:'',error:''},downloadQueue=D.createQueue(),downloadFilter='all',downloadTimer=null;
+const $=s=>document.querySelector(s), esc=value=>String(value??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const icons={
+overview:'<rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/>',
+videos:'<rect x="3" y="5" width="18" height="14" rx="3"/><path d="m10 9 5 3-5 3z"/>',
+queue:'<path d="M8 6h13M8 12h13M8 18h13"/><circle cx="3" cy="6" r="1"/><circle cx="3" cy="12" r="1"/><circle cx="3" cy="18" r="1"/>',
+logos:'<path d="m12 3 8 4v6c0 5-8 9-8 9s-8-4-8-9V7z"/><path d="m8 12 3 3 5-6"/>',
+settings:'<path d="M12 3v3m0 12v3M3 12h3m12 0h3M5.5 5.5l2 2m9 9 2 2m-13 0 2-2m9-9 2-2"/><circle cx="12" cy="12" r="6"/><circle cx="12" cy="12" r="2"/>',
+check:'<path d="m5 12 4 4L19 6"/>',scan:'<path d="M8 3H3v5m13-5h5v5M3 16v5h5m8 0h5v-5M6 12h12"/>',
+export:'<path d="M12 16V3m-5 5 5-5 5 5M4 14v6h16v-6"/>',review:'<path d="M5 4h14v17H5zM9 8h6M9 12h6M9 16h3"/>',
+search:'<circle cx="10" cy="10" r="6"/><path d="m15 15 5 5"/>',arrow:'<path d="M5 12h14m-5-5 5 5-5 5"/>',
+folder:'<path d="M3 7V4h6l2 3h10v13H3z"/>'
+};
+icons.moon='<path d="M20 15.5A9 9 0 0 1 8.5 4a9 9 0 1 0 11.5 11.5Z"/>';
+icons.sun='<circle cx="12" cy="12" r="4"/><path d="M12 2v2m0 16v2M2 12h2m16 0h2M5 5l1.5 1.5m11 11L19 19M5 19l1.5-1.5m11-11L19 5"/>';
+icons.downloads='<path d="M12 3v12m-5-5 5 5 5-5M4 16v5h16v-5"/>';
+let theme='light';
+try{if(localStorage.getItem('biliflow-v2-theme')==='dark')theme='dark';}catch(_){/* A blocked preference store does not block the UI. */}
+function applyTheme(){
+  document.documentElement.dataset.theme=theme;
+  const next=theme==='light'?'tối':'sáng',toggle=$('#theme-toggle');
+  toggle.innerHTML=icon(theme==='light'?'moon':'sun')+'<span>'+(theme==='light'?'Tối':'Sáng')+'</span>';
+  toggle.setAttribute('aria-label','Chuyển sang chế độ '+next);toggle.title='Chuyển sang chế độ '+next;
+}
+applyTheme();
+function icon(id){return '<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">'+(icons[id]||icons.videos)+'</svg>';}
+function getJob(id){return state.jobs.find(j=>j.id===Number(id));}
+function percent(v){return Math.min(100,Math.max(0,Math.round(100*(Number(v)||0))));}
+function renderPercent(j){return Math.min(100,Math.max(0,Number(j.render_progress?.percent)||0));}
+function bytes(n){return (n/1e9).toLocaleString('vi-VN',{maximumFractionDigits:2})+' GB';}
+function fmtTime(n){return Math.floor(n/60).toString().padStart(2,'0')+':'+Math.floor(n%60).toString().padStart(2,'0');}
+function reviewRemaining(j){return C.reviewStats(j).remaining;}
+function ctx(){return {aiReady:state.ai.ready,fileBusy:state.source_cleanup_running};}
+function ops(j){return C.operations(j,ctx()).map(a=>state.offline&&a.id!=='review'?{...a,enabled:false,reason:'Mất kết nối. Dữ liệu đang hiển thị là bản đã tải trước đó.'}:a);}
+function stageLabel(stage){return ({visual_logo:'Nhận diện logo & watermark',advertising:'Kiểm tra logo & quảng cáo',adult:'Kiểm tra nội dung 18+',gore:'Kiểm tra máu me',violence:'Kiểm tra bạo lực',ocr:'Đọc chữ trong khung hình',VERIFYING:'Kiểm tra bản xuất'})[stage]||C.labels[stage]||'Đang phân tích cảnh';}
+function drawerActions(j){
+  const actions=ops(j),primary=C.primary(j);
+  const featured=primary==='detail'?['stopAfter']:primary==='finalize'?['finalize','review']:[primary];
+  const main=featured.map(id=>actions.find(a=>a.id===id)).filter(Boolean),other=actions.filter(a=>!featured.includes(a.id));
+  return '<h3>Thao tác chính</h3>'+(main.length?'<div class="drawer-primary-actions">'+main.map(a=>btn(j,a,'')).join('')+'</div>':'<p class="muted">Xem trạng thái và kết quả kiểm tra bên dưới.</p>')+(other.length?'<details class="more-actions"><summary>Thao tác khác</summary><div class="action-grid">'+other.map(a=>btn(j,a)).join('')+'</div></details>':'');
+}
+function drawerFocusable(el){
+  for(let parent=el.parentElement;parent&&!parent.classList.contains('drawer');parent=parent.parentElement){
+    if(parent.tagName==='DETAILS'&&!parent.open&&el!==parent.querySelector(':scope > summary'))return false;
+  }
+  return el.getClientRects().length>0;
+}
+function badge(j){
+  const t=C.tab(j),tone=j.state==='FAILED'?'red':j.state==='WAITING_REVIEW'?'amber':['scanning','export'].includes(t)?'blue':['COMPLETED','READY_TO_EXPORT'].includes(j.state)?'':'grey';
+  const text=j.state==='QUEUED'?j.queue_kind==='export'?'Chờ xuất':j.queue_kind==='scan'?'Chờ quét':'Đang chờ':j.state==='RENDERING'&&j.render_progress?.state==='VERIFYING'?'Kiểm tra bản xuất':C.labels[j.state]||j.state;
+  return '<span class="badge '+tone+'"><span class="live-dot" style="background:currentColor"></span>'+esc(text)+'</span>';
+}
+function btn(j,a,extra){return '<button '+(a.enabled?'':'disabled')+' class="'+(a.id==='finalize'||a.id==='start'?'primary':a.id==='cancel'?'danger':'secondary')+' '+(extra||'small')+'" data-action="job" data-id="'+j.id+'" data-op="'+a.id+'" title="'+esc(a.reason||a.label)+'">'+esc(a.label)+'</button>';}
+function nav(){
+  const labels={overview:'Tổng quan',downloads:'Tải video',videos:'Video của bạn',queue:'Hàng đợi',logos:'Bộ nhớ logo',settings:'Cài đặt'};
+  $('#navigation').innerHTML=Object.entries(labels).map(([id,label])=>'<a class="nav-link '+(view===id?'active':'')+'" href="#'+id+'" '+(view===id?'aria-current="page"':'')+' aria-label="'+label+'" title="'+label+'">'+icon(id)+'<span>'+label+'</span>'+(id==='videos'?'<span class="nav-count">'+state.jobs.filter(j=>!C.hidden(j)).length+'</span>':'')+'</a>').join('');
+  $('#breadcrumb').textContent=labels[view];
+}
+function scenarioOptions(){return [['normal','Hoạt động bình thường'],['rendering','Đang kiểm tra bản xuất'],['offline','Mất kết nối'],['bin_full','Thùng rác gần đầy'],['busy','Đang quản lý video gốc'],['conflict','Xung đột dữ liệu 409']].map(([id,label])=>'<option value="'+id+'" '+(state.scenario===id?'selected':'')+'>'+label+'</option>').join('');}
+function heading(title,subtitle,actions){return '<div class="page-heading"><div><h1>'+title+'</h1><p>'+subtitle+'</p></div><div class="heading-actions">'+(actions||'<span class="live-status"><span class="live-dot"></span> '+(state.scheduler_paused?'Hàng đợi tạm dừng':'Một GPU · xử lý tuần tự')+'</span><button class="secondary small" data-action="scheduler" '+(state.offline?'disabled':'')+'>'+(state.scheduler_paused?'Tiếp tục hàng đợi':'Tạm dừng hàng đợi')+'</button>')+'</div></div>';}
+function visibleJobs(){return state.jobs.filter(j=>!C.hidden(j));}
+function kpis(){
+  const js=visibleJobs(),need=js.filter(j=>j.state==='WAITING_REVIEW').length,remaining=js.reduce((n,j)=>n+(j.state==='WAITING_REVIEW'?reviewRemaining(j):0),0);
+  const count=group=>js.filter(j=>C.overviewMatch(j,group)).length;
+  const values=[['scan','Đang quét cảnh',count('scan_active'),'Nhận diện nội dung, tạo cảnh duyệt','blue','scan_active'],['review','Chờ bạn duyệt',need,remaining+' cảnh cần quyết định của bạn','warning','review_pending'],['export','Sẵn sàng xuất',count('review_ready'),'Đã duyệt xong, chưa gửi lệnh xuất','','review_ready'],['export','Đang xuất video',count('export_active'),'Tạo video hoặc kiểm tra bản xuất','blue','export_active'],['check','Hoàn tất',js.filter(j=>['COMPLETED','SKIPPED'].includes(j.state)).length,js.filter(j=>j.state==='COMPLETED').length+' đã xuất · '+js.filter(j=>j.state==='SKIPPED').length+' bỏ qua','','completed']];
+  return '<div class="kpi-grid">'+values.map(([ico,label,n,note,tone,target])=>'<button class="kpi '+tone+'" data-action="summary-filter" data-filter="'+target+'" aria-pressed="'+(filter===target)+'"><div class="kpi-top"><span>'+label+'</span><span class="kpi-icon">'+icon(ico)+'</span></div><div class="kpi-number">'+n+'<small>video</small></div><div class="kpi-note">'+note+'</div></button>').join('')+'</div><p class="overview-legend">Các ô đếm theo video đang ở từng bước. Đang chờ đến lượt: <strong>'+js.filter(j=>j.state==='QUEUED'&&j.queue_kind==='scan').length+' chờ quét</strong> · <strong>'+js.filter(j=>j.state==='QUEUED'&&j.queue_kind==='export').length+' chờ xuất</strong>.</p>';
+}
+function hero(){
+  const j=getJob(state.active?.job_id),r=state.resources,exporting=j&&C.tab(j)==='export';
+  const verifying=exporting&&(j.state==='VERIFYING'||j.render_progress?.state==='VERIFYING');
+  const progress=exporting?renderPercent(j):percent(j?.progress);
+  const step=j?(exporting?verifying?'Kiểm tra bản xuất':'Đang tạo video đã duyệt':stageLabel(j.current_stage||j.state)):'Không có bước đang chạy';
+  const waiting=visibleJobs().filter(x=>x.state==='QUEUED');
+  const queueNote=waiting.filter(x=>x.queue_kind==='scan').length+' chờ quét · '+waiting.filter(x=>x.queue_kind==='export').length+' chờ xuất';
+  return '<div class="hero-grid"><section class="active-card"><div class="eyebrow"><span class="live-dot"></span>'+(j?exporting?'ĐANG XUẤT VIDEO':'ĐANG QUÉT CẢNH':'WORKER ĐANG CHỜ')+'</div><h2>'+esc(j?.name||'Sẵn sàng cho video tiếp theo')+'</h2><p>'+esc(j?({animation:'Hoạt hình',live_action:'Phim người thật',mixed:'Nội dung hỗn hợp'})[j.content_style]+' · '+j.duration+' · '+(exporting?'Xuất theo các cảnh đã duyệt':j.detector_groups.length+' nhóm kiểm tra'):'Video trong hàng đợi sẽ giữ nguyên thứ tự bấm.')+'</p><div class="hero-status"><span>'+esc(step)+'</span><strong>'+progress+'%</strong></div><div class="meter"><i style="width:'+progress+'%"></i></div><div class="active-foot"><span>'+esc((j?'#'+j.id+' · ':'')+queueNote)+'</span>'+(j?'<button class="small" data-action="detail" data-id="'+j.id+'">Xem tiến trình '+icon('arrow')+'</button>':'')+'</div></section><section class="resources-card"><div class="section-top"><h2>Tài nguyên máy</h2><span class="live-dot"></span></div>'+[['cpu','CPU',r.cpu_percent],['ram','RAM',r.memory.percent],['gpu','GPU',r.gpu.utilization_percent]].map(([cls,label,n])=>'<div class="resource-row '+cls+'"><span>'+label+'</span><div class="meter"><i style="width:'+n+'%"></i></div><strong>'+n+'%</strong></div>').join('')+'<div class="resource-info"><span>'+esc(r.gpu.name)+'</span><span>VRAM 4,2 / 6 GB</span></div></section></div>';
+}
+function scope(j){return '<div class="scope-chips">'+Object.entries(C.detectors).map(([id,label])=>'<span class="scope-chip '+(j.detector_groups.includes(id)?'':'off')+'" title="'+esc(j.detector_groups.includes(id)?label+' đã chọn':label+' chưa kiểm tra')+'">'+({advertising:'Logo',adult:'18+',gore:'Máu me',violence:'Bạo lực'})[id]+'</span>').join('')+'</div>';}
+function row(j){
+  const main=ops(j).find(a=>a.id===C.primary(j)),remaining=reviewRemaining(j),p=j.state==='RENDERING'?renderPercent(j):percent(j.progress),eligible=C.eligible(j,'cleanup')||C.eligible(j,'archive');
+  const isExport=C.tab(j)==='export',progText=j.state==='VERIFYING'||j.render_progress?.state==='VERIFYING'?'Kiểm tra':isExport&&j.state==='QUEUED'?'Chờ xuất':p+'%';
+  const note=C.archived(j)?'Đã lưu trữ video gốc':C.cleaned(j)?'Video gốc trong Thùng rác':j.state==='WAITING_REVIEW'?remaining+' cảnh cần duyệt':j.queue_position?'Lượt #'+j.queue_position:'Revision '+j.active_revision;
+  return '<article class="job-row" data-job="'+j.id+'"><div class="video-cell">'+(filter==='completed'&&eligible?'<input class="select-job" type="checkbox" aria-label="Chọn video '+j.id+'" data-select="'+j.id+'" '+(selected.has(j.id)?'checked':'')+(state.source_cleanup_running||state.offline?' disabled':'')+'>':'')+'<img class="poster" src="assets/poster-'+j.palette+'.svg" alt="" loading="lazy"><div class="video-text"><button class="video-title" data-action="detail" data-id="'+j.id+'" title="'+esc(j.name)+'">'+esc(j.name)+'</button><div class="video-meta"><span>#'+j.id+'</span><span>·</span><span>'+j.duration+'</span><span>·</span><span>'+bytes(j.source_size_bytes)+'</span></div></div></div><div class="status-cell">'+badge(j)+'<span class="cell-sub">'+esc(note)+'</span></div><div class="scope-cell">'+scope(j)+'</div><div class="progress-cell"><div class="row-progress"><span>'+progText+'</span><div class="meter"><i style="width:'+p+'%"></i></div></div></div><div class="row-actions">'+(main?btn(j,{...main,label:main.id==='start'?'Thiết lập':main.id==='restore'?'Khôi phục':main.label},''): '<button class="secondary small" data-action="detail" data-id="'+j.id+'">Chi tiết</button>')+'<button class="icon-button" data-action="detail" data-id="'+j.id+'" aria-label="Thao tác video '+j.id+'" title="Thao tác video">⋯</button></div></article>';
+}
+function allFiltered(){
+  const needle=query.normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase();
+  return state.jobs.filter(j=>C.overviewLabels[filter]?C.overviewMatch(j,filter):(C.hidden(j)?filter==='all'||filter==='waiting':filter==='all'||C.tab(j)===filter)).filter(j=>(j.name+' '+j.id+' '+j.source_path).normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase().includes(needle)).sort((a,b)=>sort==='queue'?(a.queue_position||1e6)-(b.queue_position||1e6)||a.id-b.id:sort==='name'?a.name.localeCompare(b.name,'vi'):b.updated_at.localeCompare(a.updated_at)||a.id-b.id);
+}
+function listBody(){
+  const all=allFiltered(),folds=[['Đã hủy',all.filter(j=>j.state==='CANCELLED'&&!C.hidden(j))],['Đã ẩn',all.filter(C.hidden)],['Đã lưu trữ',all.filter(j=>C.archived(j))]];
+  const regular=all.filter(j=>j.state!=='CANCELLED'&&!C.archived(j)),pages=Math.max(1,Math.ceil(regular.length/8));page=Math.min(page,pages);
+  const ids=[...selected].filter(id=>C.eligible(getJob(id),'cleanup')||C.eligible(getJob(id),'archive'));selected=new Set(ids);
+  const toolbar=filter==='completed'?'<div class="bulk-toolbar"><span>'+selected.size+' video đã chọn</span><button class="small secondary" data-action="select-all">Chọn tối đa 50</button><button class="small secondary" data-action="deselect">Bỏ chọn</button><button class="small" data-action="bulk-cleanup" '+(!ids.some(id=>C.eligible(getJob(id),'cleanup'))||state.source_cleanup_running||state.offline?'disabled':'')+'>Dọn video gốc</button><button class="small" data-action="bulk-archive" '+(!ids.some(id=>C.eligible(getJob(id),'archive'))||state.source_cleanup_running||state.offline?'disabled':'')+'>Lưu trữ</button></div>':'';
+  return toolbar+'<div class="jobs-head"><span>VIDEO</span><span>TRẠNG THÁI</span><span>PHẠM VI QUÉT</span><span>TIẾN ĐỘ</span><span style="text-align:right">THAO TÁC</span></div>'+regular.slice((page-1)*8,page*8).map(row).join('')+(all.length?'':'<div class="empty">'+icon('folder')+'<strong>Không có video phù hợp</strong>Thử đổi bộ lọc hoặc từ khóa tìm kiếm.</div>')+folds.filter(x=>x[1].length).map(([label,items])=>'<details class="fold"><summary>'+label+' ('+items.length+')</summary>'+items.map(row).join('')+'</details>').join('')+'<div class="list-footer"><span>'+all.length+' video phù hợp · '+visibleJobs().length+' video trong không gian</span><div class="pages"><button data-action="prev" '+(page===1?'disabled':'')+' aria-label="Trang trước">‹</button><span>'+page+' / '+pages+'</span><button data-action="next" '+(page===pages?'disabled':'')+' aria-label="Trang sau">›</button></div></div>';
+}
+function list(){
+  const visible=visibleJobs();
+  return '<section class="list-section" id="video-list"><div class="list-title"><h2>Video của bạn</h2><small>'+visible.length+'</small><span class="list-subtitle">Từ input đến bản xuất, trong một không gian</span></div><div class="list-tools">'+(C.overviewLabels[filter]?'<div class="focused-filter"><span>Đang lọc: <strong>'+esc(C.overviewLabels[filter])+'</strong> · cùng nhóm với ô tổng quan bạn vừa chọn</span><button class="small secondary" data-action="filter" data-filter="all">Xem tất cả</button></div>':'')+'<div class="filter-tabs" role="group" aria-label="Lọc theo giai đoạn">'+C.tabs.map(([id,label])=>'<button class="filter-tab '+(filter===id?'active':'')+'" data-action="filter" data-filter="'+id+'" aria-pressed="'+(filter===id)+'">'+label+'<span>'+(id==='all'?visible.length:visible.filter(j=>C.tab(j)===id).length)+'</span></button>').join('')+'</div><div class="search-sort"><label class="search-wrap">'+icon('search')+'<input id="search" placeholder="Tìm tên video hoặc mã job…" aria-label="Tìm video" value="'+esc(query)+'"></label><select id="sort" aria-label="Sắp xếp video">'+[['recent','Mới cập nhật'],['queue','Thứ tự hàng đợi'],['name','Tên video A–Z']].map(([id,label])=>'<option value="'+id+'" '+(sort===id?'selected':'')+'>'+label+'</option>').join('')+'</select></div></div><div id="list-body">'+listBody()+'</div></section>';
+}
+function queueView(){
+  const jobs=state.jobs.filter(j=>j.state==='QUEUED').sort((a,b)=>a.queue_position-b.queue_position);
+  return heading('Hàng đợi','Quét cảnh và xuất video dùng chung một hàng đợi, theo thứ tự bạn bấm.')+'<div class="notice">Một GPU xử lý tuần tự. Tạm dừng hàng đợi giữ nguyên vị trí; tiếp tục hoặc thử lại cũng giữ vị trí đã có.</div>'+jobs.map(j=>'<div class="queue-row"><span class="queue-rank">'+j.queue_position+'</span><div><strong>'+esc(j.name)+'</strong><p>#'+j.id+' · '+(j.queue_kind==='export'?'Xuất video':'Quét cảnh')+' · '+(state.scheduler_paused?'Đang tạm dừng hàng đợi':'Chờ worker sẵn sàng')+'</p></div><button class="secondary small" data-action="detail" data-id="'+j.id+'">Chi tiết '+icon('arrow')+'</button></div>').join('')+(jobs.length?'':'<div class="empty"><strong>Hàng đợi đang trống</strong>Thiết lập video mới hoặc xuất video đã duyệt.</div>');
+}
+function logosView(){
+  return heading('Bộ nhớ logo','Xem và quản lý logo đã nhớ. Các lần duyệt trước vẫn được giữ.','<span class="badge">'+state.logos.length+' bản ghi mẫu</span>')+'<div class="notice">Logo nền tảng → đề xuất làm mờ vùng logo. Logo hãng phim → đề xuất giữ nguyên. Bạn duyệt quyết định cuối cùng cho từng video.</div><div class="memory-grid">'+state.logos.map(l=>'<article class="memory-card"><div class="memory-art">'+esc(l.memory_class==='platform_logo'?l.name.split(' · ')[0]:'STUDIO')+'</div><div class="panel"><h3>'+esc(l.name)+'</h3><span class="badge '+(l.memory_class==='studio_logo'?'blue':'')+'">'+(l.memory_class==='studio_logo'?'Hãng phim · KEEP':'Nền tảng · BLUR')+'</span><div class="mini-frames">'+[0,1,2,3].map((_,i)=>'<img src="assets/poster-'+l.color+'.svg" alt="Ảnh minh họa mẫu '+(i+1)+'">').join('')+'</div><p>'+l.frames+' khung hình mẫu · thay đổi được sao lưu trước</p><div class="action-grid"><button class="secondary small" data-action="logo-class" data-key="'+esc(l.key)+'" '+(state.offline?'disabled':'')+'>Đổi loại</button><button class="danger small" data-action="logo-delete" data-key="'+esc(l.key)+'" '+(state.offline?'disabled':'')+'>Xóa khỏi bộ nhớ</button></div></div></article>').join('')+'</div>';
+}
+function downloadBusy(){return downloadQueue.items.some(t=>D.active(t)||t.state==='QUEUED');}
+function downloadProgress(){
+  const q=downloadQueue,s=D.stats(q),matches=t=>downloadFilter==='all'||downloadFilter==='active'&&D.active(t)||downloadFilter==='queued'&&t.state==='QUEUED'||downloadFilter==='completed'&&t.state==='COMPLETED'||downloadFilter==='failed'&&t.state==='FAILED';
+  const items=q.items.filter(matches),counts={all:q.items.length,active:s.active,queued:s.queued,completed:s.completed,failed:s.failed};
+  return '<div class="download-counts">'+[['active',q.paused?'Tạm dừng chung':'Đang tải / kiểm tra'],['queued','Chờ tải'],['completed','Hoàn tất'],['failed','Lỗi']].map(([key,label])=>'<div><strong>'+counts[key]+'</strong><span>'+label+'</span></div>').join('')+'</div><div class="download-queue-tools"><label>Tải đồng thời <select id="download-parallel" aria-label="Số lượt tải đồng thời">'+[1,2,3].map(n=>'<option value="'+n+'" '+(q.parallel===n?'selected':'')+'>'+n+' video</option>').join('')+'</select></label><button class="secondary small" data-action="download-toggle" '+(!q.items.some(t=>D.active(t)||t.state==='QUEUED')?'disabled':'')+'>'+(q.paused?'Tiếp tục tất cả':'Tạm dừng tất cả')+'</button></div>'+(q.paused?'<p class="download-paused">Đã tạm dừng toàn bộ tiến độ tải mẫu.</p>':'')+'<div class="download-filters" aria-label="Lọc lượt tải">'+[['all','Tất cả'],['active',q.paused?'Dừng chung':'Đang tải'],['queued','Chờ tải'],['completed','Hoàn tất'],['failed','Lỗi']].map(([key,label])=>'<button class="filter-tab '+(downloadFilter===key?'active':'')+'" data-action="download-filter" data-filter="'+key+'" aria-pressed="'+(downloadFilter===key)+'">'+label+' <span>'+counts[key]+'</span></button>').join('')+'</div><div class="download-list">'+(items.length?items.map(downloadRow).join(''):'<div class="download-empty">'+icon('downloads')+'<h3>'+(q.items.length?'Chưa có lượt tải trong nhóm này':'Sẵn sàng tải nhiều video')+'</h3><p>Mỗi video có tiến độ riêng.<br>Bạn có thể thêm link trong khi đang tải.</p></div>')+'</div><p class="download-list-foot">'+q.items.length+' lượt tải mẫu · '+s.paused+' tạm dừng riêng · '+q.items.filter(t=>t.state==='CANCELLED').length+' đã hủy</p>';
+}
+function downloadRow(t){
+  const q=downloadQueue,active=D.active(t),paused=t.state==='PAUSED',done=t.state==='COMPLETED',failed=t.state==='FAILED';
+  const label=q.paused&&active?'Tạm dừng tất cả':({QUEUED:'Chờ tải',DOWNLOADING:'Đang tải',VERIFYING:'Kiểm tra tệp',COMPLETED:'Hoàn tất',PAUSED:'Tạm dừng',FAILED:'Lỗi tải',CANCELLED:'Đã hủy'})[t.state];
+  const control=(op,label,disabled=false)=>'<button class="secondary small" data-action="download-item" data-id="'+t.id+'" data-op="'+op+'" aria-label="'+label+' lượt '+t.id+'" '+(disabled?'disabled':'')+'>'+label+'</button>';
+  const place=t.state==='QUEUED'?q.items.filter(x=>x.state==='QUEUED').findIndex(x=>x.id===t.id)+1:null;
+  return '<article class="download-item" data-download-id="'+t.id+'"><div class="download-item-top"><div class="download-item-name"><span class="download-item-number">'+t.id+'</span><h3>'+esc(t.name)+'</h3></div><span class="badge '+(failed?'red':done?'':active?'blue':'grey')+'">'+label+'</span></div><p class="download-source">'+esc(t.url)+'</p><div class="download-item-progress"><span>'+(place?'Lượt chờ #'+place:done?'Mô phỏng hoàn tất':t.state==='VERIFYING'?'Kiểm tra trước khi vào input':Math.round(t.progress*3.2)+' / 320 MB mẫu')+'</span><strong>'+t.progress+'%</strong></div><div class="meter download-meter" role="progressbar" aria-label="Tiến độ lượt '+t.id+'" aria-valuemin="0" aria-valuemax="100" aria-valuenow="'+t.progress+'"><i style="width:'+t.progress+'%"></i></div>'+(failed?'<p class="download-item-error">'+esc(t.error)+'</p>':'')+'<div class="download-item-actions">'+(active?control('pause','Tạm dừng',q.paused):paused?control('resume','Tiếp tục',q.paused||q.items.filter(D.active).length>=q.parallel):'')+(['QUEUED','DOWNLOADING','VERIFYING','PAUSED'].includes(t.state)?control('cancel','Hủy'):['FAILED','CANCELLED'].includes(t.state)?control('retry','Thử lại'):'')+'</div><details class="download-log" data-log-id="'+t.id+'"><summary>Nhật ký lượt tải</summary><ol>'+t.logs.map(line=>'<li>'+esc(line)+'</li>').join('')+'</ol>'+(active?control('fail','Giả lập lỗi'):'')+'</details></article>';
+}
+function downloadsView(){
+  const site=D.domains.find(d=>d.id===downloadDraft.domain),sample=downloadDraft.domain==='phimmoi.example'?'https://phimmoi.example/phim/video-demo':'https://www.youtube.com/watch?v=video-demo';
+  return heading('Tải video','Thêm nhiều liên kết, theo dõi riêng từng video.','<span class="badge blue">Demo giao diện</span>')+'<div class="download-layout"><section class="panel download-form"><div class="download-panel-title">'+icon('downloads')+'<h2>Thêm video</h2></div><p class="muted">Mỗi dòng một link cùng nguồn. Có thể thêm lượt mới trong khi các video khác đang tải.</p><label class="field"><span>Tên miền / nguồn tải</span><select id="download-domain">'+D.domains.map(d=>'<option value="'+esc(d.id)+'" '+(downloadDraft.domain===d.id?'selected':'')+'>'+esc(d.label)+'</option>').join('')+'</select></label><label class="field"><span>Liên kết video</span><textarea id="download-url" rows="5" aria-label="Liên kết video" autocomplete="off" spellcheck="false" placeholder="Mỗi dòng một link https://…" maxlength="41000" aria-describedby="download-hint download-error">'+esc(downloadDraft.url)+'</textarea><small id="download-hint">Link mẫu '+esc(site?.label||'')+': <span class="mono">'+esc(sample)+'</span></small></label><p id="download-error" class="modal-error" role="alert" '+(downloadDraft.error?'':'hidden')+'>'+esc(downloadDraft.error)+'</p><button class="primary download-start" data-action="download-start" '+(state.offline?'disabled':'')+'>'+icon('downloads')+' Thêm vào danh sách tải</button><button class="secondary download-sample" data-action="download-sample" '+(state.offline?'disabled':'')+'>Thử với 3 video mẫu</button><div class="download-destination"><span>Thư mục lưu dự kiến</span><strong class="mono">E:\\DungChung\\BiliFlow\\input\\</strong></div><div class="download-demo-note"><strong>Bản mẫu để bạn thử giao diện</strong><p>Tiến độ và nhật ký được mô phỏng. Chưa chạy command/PowerShell, tải tệp thật hoặc tự quét cảnh.</p></div></section><section class="panel download-progress-panel" aria-labelledby="download-progress-title"><div class="section-top"><h2 id="download-progress-title">Danh sách & tiến độ tải</h2><span class="badge grey">Mô phỏng</span></div><div id="download-progress">'+downloadProgress()+'</div></section></div>';
+}
+function refreshDownload(){
+  if(view!=='downloads')return;const root=$('#download-progress');if(!root)return;
+  const open=[...root.querySelectorAll('details[open]')].map(el=>el.dataset.logId),focus=document.activeElement;
+  const id=focus?.dataset.id,op=focus?.dataset.op,action=focus?.dataset.action,parallel=focus?.id==='download-parallel';
+  const scroll=root.querySelector('.download-list')?.scrollTop||0,next=document.createElement('div');next.innerHTML=downloadProgress();
+  for(const selector of ['.download-counts','.download-filters','.download-list','.download-list-foot'])root.querySelector(selector).innerHTML=next.querySelector(selector).innerHTML;
+  const toggle=root.querySelector('[data-action="download-toggle"]'),nextToggle=next.querySelector('[data-action="download-toggle"]');toggle.textContent=nextToggle.textContent;toggle.disabled=nextToggle.disabled;
+  const paused=root.querySelector('.download-paused');if(paused)paused.remove();if(downloadQueue.paused)root.querySelector('.download-queue-tools').insertAdjacentHTML('afterend',next.querySelector('.download-paused').outerHTML);
+  root.querySelector('.download-list').scrollTop=scroll;open.forEach(id=>{const el=root.querySelector('[data-log-id="'+id+'"]');if(el)el.open=true;});
+  const target=parallel?$('#download-parallel'):id&&op?root.querySelector('[data-id="'+id+'"][data-op="'+op+'"]'):action==='download-toggle'?root.querySelector('[data-action="download-toggle"]'):action==='download-filter'?root.querySelector('[data-action="download-filter"][data-filter="'+focus.dataset.filter+'"]'):null;
+  if(target&&!target.disabled)target.focus({preventScroll:true});else if(id){const fallback=root.querySelector('[data-download-id="'+id+'"] summary');if(fallback)fallback.focus({preventScroll:true});}
+}
+function ensureDownloadTimer(){
+  if(downloadTimer||!downloadBusy()||downloadQueue.paused)return;
+  downloadTimer=setInterval(()=>{D.tick(downloadQueue);refreshDownload();if(!downloadBusy()||downloadQueue.paused){clearInterval(downloadTimer);downloadTimer=null;}},1000);
+}
+function startDownload(){
+  if(state.offline)return;
+  downloadDraft.domain=$('#download-domain').value;downloadDraft.url=$('#download-url').value;
+  try{
+    const count=D.enqueue(downloadQueue,downloadDraft.domain,downloadDraft.url);downloadDraft.error='';downloadDraft.url='';$('#download-error').hidden=true;$('#download-url').value='';$('#download-url').removeAttribute('aria-invalid');downloadFilter='all';refreshDownload();ensureDownloadTimer();toast('Đã thêm '+count+' lượt tải mẫu.');
+  }catch(error){downloadDraft.error=error.message;$('#download-error').textContent=error.message;$('#download-error').hidden=false;$('#download-url').setAttribute('aria-invalid','true');$('#download-url').focus();}
+}
+function settingsView(){
+  const ai=state.ai;
+  return heading('Cài đặt không gian','Thiết lập AI Supervisor và xem trạng thái hệ thống.','<span class="badge">'+(ai.ready?'AI đã kết nối':'AI chưa sẵn sàng')+'</span>')+'<div class="settings-grid"><section class="panel"><h2>AI Supervisor</h2><p class="muted" style="font-size:11px">Kiểm tra tùy chọn bằng tài khoản ChatGPT. Mọi gợi ý vẫn cần bạn duyệt.</p><label class="check-line"><input id="ai-enabled" type="checkbox" '+(ai.config.enabled?'checked':'')+'><span>Bật AI Supervisor<small>JSON audit và Visual AI Audit dùng chung phiên.</small></span></label><label class="field"><span>Model</span><select id="ai-model">'+['gpt-5.6-luna','gpt-5.6-terra','gpt-5.6-sol'].map(m=>'<option '+(ai.config.model===m?'selected':'')+'>'+m+'</option>').join('')+'</select></label><label class="field"><span>Mức suy luận</span><select id="ai-effort">'+['low','medium','high'].map(m=>'<option '+(ai.config.reasoning_effort===m?'selected':'')+'>'+m+'</option>').join('')+'</select></label><div class="action-grid"><button class="primary" data-action="ai-save" '+(state.offline?'disabled':'')+'>Lưu cấu hình</button><button class="secondary" data-action="ai-check" '+(state.offline?'disabled':'')+'>Kiểm tra kết nối</button><button class="secondary" data-action="ai-login" '+(state.offline?'disabled':'')+'>Đăng nhập ChatGPT</button></div><small>'+esc(ai.message)+' · dữ liệu mẫu</small></section><section class="panel"><h2>Hệ thống cục bộ</h2><div class="key-value"><span>Phiên bản</span><span>'+state.version+' · hợp đồng hiện tại</span></div><div class="key-value"><span>Dữ liệu</span><span>E:\\DungChung\\BiliFlow</span></div><div class="key-value"><span>Worker</span><span>1 GPU · hàng đợi FIFO</span></div><div class="key-value"><span>Xuất mặc định</span><span>Tối đa 3,5 GB</span></div><p class="muted" style="font-size:11px">Đóng tab trình duyệt không dừng Control Center.</p><div class="action-grid"><button class="secondary" data-action="shutdown" data-mode="after_stage" '+(state.offline?'disabled':'')+'>Tắt sau bước hiện tại</button><button class="danger" data-action="shutdown" data-mode="immediate" '+(state.offline?'disabled':'')+'>Tắt ngay</button></div><div class="detail-section"><h3>Tình huống kiểm thử demo</h3><label class="field"><span>Trạng thái mô phỏng</span><select id="scenario">'+scenarioOptions()+'</select><small>Chỉ thay đổi dữ liệu mẫu của bản demo này.</small></label><button class="secondary small" data-action="reset">Đặt lại dữ liệu mẫu</button></div></section></div><section class="panel" style="margin-top:18px"><h2>Lịch sử thao tác mẫu</h2><ol class="log-list">'+state.requests.slice(-8).reverse().map(r=>'<li>'+esc(r.method+' '+r.path)+'<small> · '+esc(r.operation)+'</small></li>').join('')+'</ol>'+(state.requests.length?'':'<p class="muted" style="font-size:11px">Chưa có thao tác. Bạn có thể thử duyệt, xuất hoặc lưu trữ một video mẫu.</p>')+'</section>';
+}
+function render(){
+  nav();
+  const notice=state.offline?'<div class="notice" role="alert">Mất kết nối hệ thống · đang hiển thị dữ liệu đã tải. Thao tác thay đổi được khóa đến khi kết nối lại.</div>':state.source_cleanup_running?'<div class="notice">Một thao tác với video gốc đang chạy. Đợi hoàn tất trước khi dọn, lưu trữ hoặc khôi phục.</div>':'';
+  $('#main').innerHTML=notice+(view==='downloads'?downloadsView():view==='queue'?queueView():view==='logos'?logosView():view==='settings'?settingsView():heading(view==='overview'?'Trung tâm xử lý':'Video của bạn',view==='overview'?'Theo dõi tiến trình, duyệt cảnh và hoàn tất video của bạn.':'Tìm nhanh video và tiếp tục công việc ở đúng bước.')+(view==='overview'?kpis()+hero():'')+list());
+}
+function refreshList(){if($('#list-body'))$('#list-body').innerHTML=listBody();}
+function changeFilter(f,fromSummary){filter=f;page=1;if(fromSummary)query='';if(!['overview','videos'].includes(view)){view='videos';location.hash='videos';}render();$('#video-list')?.scrollIntoView({block:'start',behavior:'instant'});}
+function openDrawer(id){
+  const j=getJob(id);if(!j)return;currentJob=j.id;drawerFocus=document.activeElement;
+  const review=j.review_summary,structure=j.structure_audit,ai=j.ai_audit;
+  const exporting=C.tab(j)==='export',progress=exporting?renderPercent(j):percent(j.progress);
+  const running=['scanning','export'].includes(C.tab(j))&&j.state!=='QUEUED';
+  const progressText=exporting?stageLabel(j.render_progress?.state||j.state):stageLabel(j.current_stage||j.state);
+  const progressNote=j.state==='QUEUED'?'Video đang chờ đến lượt xử lý.':j.state==='WAITING_REVIEW'?reviewRemaining(j)+' cảnh cần quyết định của bạn trước khi xuất.':j.state==='READY_TO_EXPORT'?'Các cảnh đã được duyệt. Bạn có thể xuất video.':running?'Bạn có thể tiếp tục sử dụng dashboard trong lúc video được xử lý.':C.phase(j);
+  const checkTiles=[
+    ['Kiểm tra cấu trúc',structure?.result||'Chưa kiểm tra',structure?.outdated_rule?'Kết quả theo quy tắc cũ':structure?.summary||'Có sau khi tạo danh sách cảnh duyệt'],
+    ['Kiểm tra bằng AI',ai?.state||'Chưa chạy',ai?.summary||'Kiểm tra tùy chọn'],
+    ['Xuất video',exporting?(j.render_progress?.state==='VERIFYING'?'Đang kiểm tra':C.labels[j.state]):j.state==='COMPLETED'?'Đã hoàn tất':'Chưa xuất',j.queue_kind==='export'&&j.queue_position?'Lượt #'+j.queue_position:review?reviewRemaining(j)+' cảnh chưa quyết định cuối':'Cần quét xong']
+  ];
+  $('#drawer-root').innerHTML=
+    '<button class="drawer-backdrop" data-action="close-drawer" aria-label="Đóng chi tiết video" tabindex="-1"></button>'+
+    '<aside class="drawer" role="dialog" aria-modal="true" aria-labelledby="drawer-title">'+
+      '<div class="drawer-head"><div><small>VIDEO #'+j.id+' · PHIÊN '+j.active_revision+'</small><h2 id="drawer-title">'+esc(j.name)+'</h2></div><button class="icon-button" data-action="close-drawer" aria-label="Đóng chi tiết">×</button></div>'+
+      '<div class="drawer-body">'+
+        '<img class="drawer-poster" src="assets/poster-'+j.palette+'.svg" alt="Hình minh họa video mẫu">'+
+        '<div class="drawer-heading">'+badge(j)+'<span class="muted">'+j.duration+' · '+bytes(j.source_size_bytes)+'</span></div>'+
+        (j.error?'<p class="notice" role="alert">'+esc(j.error)+'</p>':'')+
+        '<section class="progress-summary" aria-label="Tiến trình video">'+
+          '<div class="eyebrow">'+(running?'BƯỚC ĐANG CHẠY':'TRẠNG THÁI HIỆN TẠI')+'</div>'+
+          '<div class="hero-status"><span>'+esc(running?progressText:C.phase(j))+'</span>'+(running?'<strong>'+progress+'%</strong>':'')+'</div>'+
+          (running?'<div class="meter" role="progressbar" aria-label="Tiến độ video" aria-valuemin="0" aria-valuemax="100" aria-valuenow="'+progress+'"><i style="width:'+progress+'%"></i></div>':'')+
+          '<p>'+esc(progressNote)+'</p>'+
+        '</section>'+
+        drawerActions(j)+
+        '<section class="detail-section"><h3>Phạm vi kiểm tra</h3>'+scope(j)+'<p class="muted">'+(j.detector_groups.length<4?'Chỉ các nhóm đã chọn được kiểm tra. Video này chưa chọn đủ bốn nhóm.':'Đã chọn đầy đủ bốn nhóm kiểm tra.')+'</p>'+
+          '<div class="key-value"><span>Loại nội dung</span><span>'+esc(({animation:'Hoạt hình',live_action:'Phim người thật',mixed:'Nội dung hỗn hợp'})[j.content_style]||'Chưa thiết lập')+'</span></div>'+
+          '<div class="key-value"><span>Chế độ quét</span><span>'+esc(({careful:'Tỉ mỉ',fast:'Nhanh'})[j.profile]||'Chưa thiết lập')+' · OCR '+(j.ocr_recognition_batch_size===8?'tăng tốc thử nghiệm':'chuẩn')+'</span></div>'+
+          '<div class="key-value"><span>Tăng tốc</span><span>'+(j.fast_scan?'Bật · giữ mật độ quét':'Tắt')+'</span></div>'+
+        '</section>'+
+        '<details class="detail-section audit-details"><summary>Kết quả kiểm tra & xuất video</summary><div class="detail-grid">'+checkTiles.map(([title,value,note])=>'<div class="detail-tile"><small>'+title+'</small><strong>'+esc(value)+'</strong><p>'+esc(note)+'</p></div>').join('')+'</div></details>'+
+        '<details class="detail-section technical"><summary>Video gốc & thông tin kỹ thuật</summary>'+
+          '<p class="muted">'+(C.archived(j)?'Đang lưu trữ. Khôi phục sẽ trả video gốc về input để xuất lại.':C.cleaned(j)?'Đã vào Thùng rác. Khôi phục đúng tên, đường dẫn và SHA-256 trước khi xử lý lại.':'Có trong input · report và quyết định duyệt được giữ.')+'</p>'+
+          '<div class="key-value"><span>Job key</span><span class="mono">'+esc(j.job_key)+'</span></div>'+
+          '<div class="key-value"><span>Nguồn</span><span class="mono">'+esc(j.source_path)+'</span></div>'+
+          '<div class="key-value"><span>SHA-256 mẫu</span><span class="mono">'+esc(j.source_sha256)+'</span></div>'+
+          '<div class="key-value"><span>Bản xuất</span><span class="mono">'+esc(j.output_path||'Chưa có')+'</span></div>'+
+          '<div class="key-value"><span>Hàng đợi</span><span>'+esc(j.queue_position?'Lượt #'+j.queue_position+' · '+(j.queue_kind==='export'?'Xuất video':'Quét cảnh'):'Không chờ worker')+'</span></div>'+
+        '</details>'+
+      '</div>'+
+    '</aside>';
+  document.body.style.overflow='hidden';$('.drawer [data-action="close-drawer"]').focus();
+}
+function closeDrawer(){ $('#drawer-root').innerHTML='';currentJob=null;document.body.style.overflow='';if(drawerFocus?.isConnected)drawerFocus.focus();}
+function showModal(title,body,commit,label){
+  scanFormJob=null;
+  modalFocus=document.activeElement;modalCommit=commit;modalBusy=false;
+  $('#modal-content').innerHTML='<div class="modal-head"><div><h2 id="modal-title">'+esc(title)+'</h2><small>Bản demo · chỉ thay đổi dữ liệu mẫu</small></div><button class="icon-button" data-action="close-modal" aria-label="Đóng hộp thoại">×</button></div><div class="modal-body">'+body+'<div class="modal-error" id="modal-error" role="alert" hidden></div></div><div class="modal-foot"><button class="secondary" data-action="close-modal" autofocus>'+(commit?'Hủy':'Đóng')+'</button>'+(commit?'<button class="primary" id="confirm-action" data-action="confirm">'+esc(label||'Xác nhận')+'</button>':'')+'</div>';
+  if(!$('#modal').open)$('#modal').showModal();
+}
+function closeModal(){if(modalBusy)return;$('#modal').close();modalCommit=null;if(modalFocus?.isConnected)modalFocus.focus();}
+function toast(message,error){clearTimeout(toastTimer);$('#toast').textContent=message;$('#toast').className=error?'error':'';$('#toast').hidden=false;toastTimer=setTimeout(()=>$('#toast').hidden=true,5500);}
+function queueJob(j,kind,preserve){
+  const place=preserve&&j.queue_position?j.queue_position:Math.max(0,...state.jobs.filter(x=>x.state==='QUEUED').map(x=>x.queue_position||0))+1;
+  j.state='QUEUED';j.queue_kind=kind;j.queue_position=place;delete j.error;j.render_request=kind==='export';
+}
+function normalizeQueue(){
+  state.jobs.filter(j=>j.state==='QUEUED').sort((a,b)=>a.queue_position-b.queue_position||a.id-b.id).forEach((j,i)=>j.queue_position=i+1);
+  state.queue.length=state.jobs.filter(j=>j.state==='QUEUED').length;
+  if(!state.jobs.some(j=>j.id===state.active?.job_id&&['scanning','export'].includes(C.tab(j))&&j.state!=='QUEUED'))state.active=null;
+}
+function mutate(operation,j,body){
+  if(state.offline)throw new Error('Mất kết nối. Chưa gửi thao tác.');
+  if(state.scenario==='conflict'&&!conflictUsed){conflictUsed=true;throw new Error('409: Dữ liệu vừa thay đổi. Đóng hộp thoại và mở lại để kiểm tra; không tự gửi lại thao tác.');}
+  const gated=j&&ops(j).find(a=>a.id===operation);
+  if(j&&gated&&!gated.enabled)throw new Error(gated.reason);
+  if(j&&!gated&&!['decision','clear','bulkKeep','bulkAccept'].includes(operation))throw new Error('Trạng thái video không còn cho phép thao tác này.');
+  if(operation==='start'||operation==='rerun')C.validateScan(body,operation==='start');
+  if(operation==='finalize')C.exportSelection(body.size_mode,body.max_output_gb);
+  const descriptor=C.request(operation,j,body);
+  state.requests.push(descriptor);
+  if(j){
+    if(operation==='start'||operation==='rerun'){
+      j.detector_groups=[...body.detectors];j.ocr_recognition_batch_size=body.ocr_recognition_batch_size;j.fast_scan=body.fast_scan;
+      if(operation==='start'){j.content_style=body.content_style;j.profile=body.profile;}else{j.active_revision++;sceneCache.delete(j.id);j.active_queue_path=null;j.review_summary=null;}
+      j.hidden_at=null;queueJob(j,'scan',false);
+    }else if(operation==='resume'||operation==='retry')queueJob(j,j.render_request?'export':'scan',true);
+    else if(operation==='pause')j.state='PAUSED';
+    else if(operation==='stopAfter')j.stop_after_stage=true;
+    else if(operation==='cancel'){j.state='CANCELLED';j.render_request=false;j.queue_position=null;j.hidden_at=null;}
+    else if(operation==='skip'){j.state='SKIPPED';j.cleanup={eligible:true};j.archive={eligible:true};j.render_request=false;}
+    else if(operation==='unskip'){j.state='READY_TO_EXPORT';j.cleanup={eligible:false};j.archive={eligible:false};}
+    else if(operation==='hide')j.hidden_at=new Date().toISOString();
+    else if(operation==='unhide')j.hidden_at=null;
+    else if(operation==='finalize')queueJob(j,'export',false);
+    else if(operation==='audit')j.ai_audit={state:'QUEUED',message:body.visual?'Visual AI Audit mẫu đã xếp hàng':'JSON audit mẫu đã xếp hàng'};
+    else if(operation==='restore'){const skipped=j.state==='SKIPPED';j.source_archived=false;j.source_present=true;j.source_archive={...j.source_archive,state:'RESTORED'};j.state=skipped?'SKIPPED':j.review_summary?.status==='READY_FOR_EDIT_PLAN'?'READY_TO_EXPORT':'WAITING_REVIEW';}
+    else if(operation==='recheck'){if(body.kind==='source_cleanup')j.source_cleanup.verified=true;else j.source_archive.export_verified=true;}
+    j.updated_at=new Date().toISOString();
+  }else if(operation==='scheduler'){state.scheduler_paused=body.paused;state.queue.paused=body.paused;}
+  else if(operation==='aiConfig'){state.ai.config={...body};state.ai.ready=body.enabled;}
+  else if(operation==='aiCheck'){state.ai.ready=state.ai.config.enabled;state.ai.message=state.ai.ready?'Kết nối mẫu sẵn sàng':'AI đang tắt';}
+  else if(operation==='aiLogin')state.ai.message='Đăng nhập được mô phỏng; không mở tài khoản thật.';
+  else if(operation==='shutdown'){state.offline=true;state.active=null;}
+  previewVersion++;normalizeQueue();render();if(currentJob)openDrawer(currentJob);
+  return descriptor;
+}
+function simpleConfirm(j,a){
+  const text={cancel:'Hủy xử lý video này? Video gốc, report và quyết định duyệt vẫn được giữ. Dừng chỉ tạm dừng; Bỏ qua đánh dấu xong mà không xuất.',
+    skip:'Đánh dấu video hoàn tất mà không xuất? Video gốc và report vẫn được giữ.',
+    unskip:'Mở lại video để xuất? Video sẽ quay về mục Chờ duyệt.',
+    pause:'Dừng ngay bước hiện tại? Bạn có thể tiếp tục sau.',
+    stopAfter:'Dừng sau khi bước hiện tại hoàn tất?',
+    hide:'Ẩn video đã hủy khỏi danh sách chính? Có thể hiện lại trong nhóm Đã ẩn.',
+    unhide:'Hiện lại video trong nhóm Đã hủy?',
+    restore:'Trả video gốc từ archive về đúng đường dẫn input sau khi kiểm SHA-256? Với video đã xuất, bạn cần xuất lại; video đã bỏ qua vẫn giữ trạng thái bỏ qua.',
+    retry:'Thử lại bước lỗi của video này?',resume:'Tiếp tục xử lý video, giữ vị trí hàng đợi đã có?',
+    recheck:'Đọc lại Thùng rác và ghi kết quả kiểm tra? Các bản ghi dọn/lưu trữ cũ được giữ nguyên.'};
+  showModal(a.label,'<p>'+esc(text[a.id]||a.label+'?')+'</p><p><strong>#'+j.id+' · '+esc(j.name)+'</strong></p>',()=>{
+    let body={};if(a.id==='recheck')body=j.source_cleanup?.state==='RECYCLED'?{kind:'source_cleanup',id:j.source_cleanup.id}:{kind:'archive_export',id:j.source_archive.id};
+    mutate(a.id,j,body);toast('Đã mô phỏng: '+a.label+' · #'+j.id);return true;
+  },a.label);
+}
+function scanForm(j,rerun){
+  const draft=scanDrafts.get(j.job_key)||{detectors:j.detector_groups.length?[...j.detector_groups]:Object.keys(C.detectors),ocr_recognition_batch_size:j.ocr_recognition_batch_size,fast_scan:j.fast_scan,content_style:j.content_style,profile:j.profile};
+  showModal(rerun?'Chạy lại kiểm tra':'Thiết lập video','#'+j.id+' · '+esc(j.name)+'<div class="scope-options">'+Object.entries(C.detectors).map(([id,label])=>'<label class="scope-option"><input type="checkbox" name="detector" value="'+id+'" '+(draft.detectors.includes(id)?'checked':'')+'>'+label+'</label>').join('')+'</div>'+(rerun?'':'<div class="form-columns"><label class="field"><span>Loại nội dung</span><select id="scan-style">'+[['animation','Hoạt hình'],['live_action','Phim thực tế'],['mixed','Hỗn hợp']].map(([id,label])=>'<option value="'+id+'" '+(draft.content_style===id?'selected':'')+'>'+label+'</option>').join('')+'</select></label><label class="field"><span>Chế độ quét</span><select id="scan-profile"><option value="careful" '+(draft.profile==='careful'?'selected':'')+'>Tỉ mỉ</option><option value="fast" '+(draft.profile==='fast'?'selected':'')+'>Nhanh · giảm mật độ quét</option></select></label></div>')+'<label class="field"><span>OCR quảng cáo / logo</span><select id="scan-ocr"><option value="1" '+(draft.ocr_recognition_batch_size===1?'selected':'')+'>Chuẩn (mặc định)</option><option value="8" '+(draft.ocr_recognition_batch_size===8?'selected':'')+'>Tăng tốc · thử nghiệm</option></select></label><label class="check-line"><input id="scan-fast" type="checkbox" '+(draft.fast_scan?'checked':'')+'><span>Tăng tốc xử lý<small>Giữ mật độ quét. Đây là tùy chọn riêng với chế độ Nhanh ở trên.</small></span></label><p>'+(rerun?'Tạo revision mới; report và quyết định cũ được giữ.':'Xác nhận phạm vi đã chọn trước khi xếp video vào hàng đợi.')+'</p>',()=>{
+    const data={detectors:[...document.querySelectorAll('input[name="detector"]:checked')].map(x=>x.value),ocr_recognition_batch_size:Number($('#scan-ocr').value),fast_scan:$('#scan-fast').checked};
+    if(!rerun){data.content_style=$('#scan-style').value;data.profile=$('#scan-profile').value;}
+    C.validateScan(data,!rerun);scanDrafts.set(j.job_key,{...draft,...data});
+    showModal('Xác nhận phạm vi kiểm tra','<p><strong>#'+j.id+' · '+esc(j.name)+'</strong></p><p>Nhóm đã chọn: '+data.detectors.map(id=>esc(C.detectors[id])).join(', ')+'</p><p>Nhóm chưa kiểm tra: '+(Object.keys(C.detectors).filter(id=>!data.detectors.includes(id)).map(id=>esc(C.detectors[id])).join(', ')||'Không có')+'</p><p>'+ (rerun?'Lượt mới sẽ có revision riêng.':'Video sẽ được xếp theo thứ tự bạn bấm.')+'</p>',()=>{mutate(rerun?'rerun':'start',j,data);scanDrafts.delete(j.job_key);toast('Đã xếp video mẫu #'+j.id+' vào hàng đợi quét.');return true;},rerun?'Xác nhận chạy lại':'Xác nhận bắt đầu');
+    return false;
+  },'Kiểm tra lựa chọn');
+  scanFormJob=j.id;
+}
+function exportModal(j){
+  showModal('Xuất video đã duyệt','<p><strong>#'+j.id+' · '+esc(j.name)+'</strong></p><p>'+ (C.reviewStats(j).total)+' cảnh đã có quyết định cuối cùng. Xuất khóa các lựa chọn hiện tại.</p><label class="field"><span>Giới hạn dung lượng bản xuất</span><select id="export-mode"><option value="default">Tối đa 3,5 GB (mặc định)</option><option value="custom">Giới hạn tùy chỉnh</option><option value="unlimited">Không giới hạn dung lượng</option></select></label><label class="field" id="custom-size" hidden><span>Dung lượng tối đa (GB)</span><input id="export-gb" type="number" min="0.05" max="1000" step="0.1" value="3.5"></label><p>Video được xếp vào hàng đợi xuất. Trạng thái hoàn tất chỉ xuất hiện sau khi xuất và kiểm tra xong.</p>',()=>{
+    const selection=C.exportSelection($('#export-mode').value,$('#export-gb').value);mutate('finalize',j,selection);toast('Đã xếp video mẫu #'+j.id+' vào hàng đợi xuất.');return true;
+  },'Xác nhận xuất video');
+  const policy=j.review_summary?.export_size_policy||{},mode=['default','custom','unlimited'].includes(policy.mode)?policy.mode:'default';
+  $('#export-mode').value=mode;$('#export-gb').value=policy.maximum_output_gb||3.5;$('#custom-size').hidden=mode!=='custom';
+}
+function filePreview(kind,ids){
+  const chosen=ids.map(getJob).filter(j=>C.eligible(j,kind)).slice(0,50),version=previewVersion,previewId='demo-preview-'+version,capacity=state.scenario==='bin_full'?49.99:7.2,total=chosen.reduce((n,j)=>n+(kind==='archive'&&j.state==='SKIPPED'?0:j.source_size_bytes),0);
+  const descriptor=C.request(kind==='cleanup'?'cleanupPreview':'archivePreview',null,{});
+  descriptor.path+='?ids='+chosen.map(j=>j.id).join(',');state.requests.push(descriptor);
+  const blocked=capacity+total/1e9>50-64*1024*1024/1e9||state.source_cleanup_running||state.offline||!chosen.length;
+  const text=kind==='cleanup'?'Video gốc sẽ vào Thùng rác Windows. Report, quyết định duyệt, bộ nhớ logo và bản xuất được giữ. Chỉ giải phóng dung lượng khi bạn dọn sạch Thùng rác.':'Video gốc được chuyển vào archive trên cùng ổ và kiểm SHA-256. Bản xuất và manifest của video đã xuất vào Thùng rác; video bỏ qua chỉ lưu trữ nguồn. Khôi phục trả nguồn về input để xuất lại.';
+  showModal(kind==='cleanup'?'Dọn video gốc':'Lưu trữ video','<p>'+text+'</p><ul class="confirm-list">'+chosen.map(j=>'<li><strong>#'+j.id+' · '+esc(j.name)+'</strong><small>'+esc(j.source_path)+' · '+bytes(j.source_size_bytes)+'</small><small>'+(kind==='archive'?'Nơi lưu: archive/sources/'+esc(j.job_key)+'/':'Bản xuất: '+esc(j.output_path||'Đã bỏ qua · không xuất'))+'</small></li>').join('')+'</ul><div class="bin-preview">Thùng rác ổ E · '+capacity.toLocaleString('vi-VN')+' / 50 GB<br>Sau thao tác: '+(capacity+total/1e9).toLocaleString('vi-VN',{maximumFractionDigits:2})+' GB · dự phòng 64 MiB</div>'+(blocked?'<div class="notice">Thao tác bị khóa: lựa chọn không hợp lệ, hệ thống đang bận hoặc Thùng rác không đủ chỗ.</div>':''),blocked?null:()=>{
+    if(version!==previewVersion)throw new Error('Danh sách đã thay đổi. Đóng hộp thoại rồi mở lại để duyệt danh sách mới.');
+    if(state.offline||state.source_cleanup_running)throw new Error('Hệ thống không sẵn sàng. Không thực hiện thao tác.');
+    if(chosen.some(j=>!C.eligible(j,kind)))throw new Error('Video không còn đủ điều kiện.');
+    if(state.scenario==='conflict'&&!conflictUsed){conflictUsed=true;throw new Error('409 preview_changed: Không tự gửi lại. Mở lại danh sách và xác nhận lần nữa.');}
+    state.requests.push(C.request(kind,null,{job_ids:chosen.map(j=>j.id),preview_id:previewId}));
+    chosen.forEach(j=>{if(kind==='cleanup'){j.source_cleaned=true;j.source_present=false;j.source_cleanup={id:1000+j.id,state:'RECYCLED',verified:true};}else{j.source_archived=true;j.source_present=false;j.source_archive={id:2000+j.id,state:'ARCHIVED',kind:j.state==='SKIPPED'?'SKIPPED':'EXPORTED',export_recycled:j.state!=='SKIPPED',export_verified:true};}selected.delete(j.id);});
+    previewVersion++;render();if(currentJob)openDrawer(currentJob);toast('Đã mô phỏng '+(kind==='cleanup'?'dọn':'lưu trữ')+' '+chosen.length+' video.');return true;
+  },kind==='cleanup'?'Chuyển '+chosen.length+' video vào Thùng rác':'Lưu trữ '+chosen.length+' video');
+}
+function auditModal(j){
+  showModal('Kiểm tra bằng AI Supervisor','<p><strong>#'+j.id+' · '+esc(j.name)+'</strong></p><label class="field"><span>Dữ liệu gửi kiểm tra</span><select id="audit-kind"><option value="json">JSON / báo cáo, không gửi ảnh</option><option value="visual">Visual AI Audit · có ảnh thumbnail</option></select></label><p>Chọn Visual AI Audit nghĩa là bạn đồng ý gửi tối đa 36 thumbnail của video này qua tài khoản ChatGPT. Video và âm thanh gốc không được gửi. AI chỉ đề xuất; bạn duyệt mọi quyết định.</p>',()=>{mutate('audit',j,{visual:$('#audit-kind').value==='visual'});toast('Đã xếp AI audit mẫu cho #'+j.id);return true;},'Xác nhận kiểm tra');
+}
+function sceneList(j){if(!sceneCache.has(j.id)){const scenes=Mock.scenes(j);if(!j.review_summary?.skip_eligible&&C.reviewStats(j).resolved>0&&scenes.length)scenes[0].decision='BLUR';sceneCache.set(j.id,scenes);}return sceneCache.get(j.id);}
+function readonlyReview(j){return C.locked(j)||C.inFlight(j)||j.state==='SKIPPED';}
+function reviewMarkup(j){
+  const scenes=sceneList(j),readonly=readonlyReview(j);
+  return '<p>Ảnh và cảnh minh họa của prototype. Khi tích hợp, nút Duyệt cảnh mở trang review hiện có của video.</p>'+(readonly?'<div class="notice">Chỉ xem · video gốc bị khóa, đã bỏ qua hoặc có lệnh xuất đang chờ/chạy.</div>':'')+'<div class="review-heading"><span>'+scenes.filter(s=>!['KEEP','BLUR','CUT'].includes(s.decision)).length+' / '+scenes.length+' cảnh cần quyết định cuối</span><button class="small secondary" data-action="bulk-review" data-op="bulkKeep" '+(readonly||state.offline?'disabled':'')+'>Giữ tất cả</button><button class="small secondary" data-action="bulk-review" data-op="bulkAccept" '+(readonly||state.offline?'disabled':'')+'>Dùng đề xuất</button></div><div class="review-scenes">'+scenes.map(s=>'<article class="scene"><div class="scene-art">'+(s.region?'<span class="watermark '+(s.decision==='BLUR'?'blurred':'')+'">LOGO MẪU</span>':'')+'<span class="retained">TÊN PHIM</span><span>'+ (s.decision==='CUT'?'Cảnh mẫu đã chọn cắt':'Khung hình minh họa')+'</span></div><div class="scene-content"><h3>'+esc(s.title)+'</h3><small>'+fmtTime(s.start)+'–'+fmtTime(s.end)+' · '+esc(s.group)+(s.region?' · vùng logo góc trái':'')+'</small><div class="scene-actions">'+[['KEEP','Giữ'],['BLUR','Làm mờ'],['CUT','Cắt'],['NEEDS_MORE_CONTEXT','Cần xem thêm']].map(([d,l])=>'<button '+(s.decision===d?'class="selected"':'')+' data-action="scene-decision" data-scene="'+s.id+'" data-decision="'+d+'" '+(readonly||state.offline?'disabled':'')+'>'+l+'</button>').join('')+'<button data-action="scene-clear" data-scene="'+s.id+'" '+(readonly||state.offline?'disabled':'')+'>Xóa quyết định</button></div></div></article>').join('')+'</div>';
+}
+function reviewModal(j){reviewJob=j.id;showModal('Duyệt cảnh · #'+j.id,reviewMarkup(j),null);}
+function updateReview(j){
+  const scenes=sceneList(j),resolved=scenes.filter(s=>['KEEP','BLUR','CUT'].includes(s.decision)).length,more=scenes.filter(s=>s.decision==='NEEDS_MORE_CONTEXT').length;
+  const decisions={};scenes.filter(s=>s.decision).forEach(s=>decisions[s.decision]=(decisions[s.decision]||0)+1);
+  j.review_summary={...j.review_summary,main_items:scenes.length,pending:scenes.filter(s=>!s.decision).length,decisions,status:resolved===scenes.length?'READY_FOR_EDIT_PLAN':'WAITING_REVIEW',skip_eligible:scenes.every(s=>s.decision==='KEEP')};
+  j.state=resolved===scenes.length?'READY_TO_EXPORT':'WAITING_REVIEW';previewVersion++;render();if(currentJob)openDrawer(currentJob);
+}
+function updateReviewBody(j){$('.modal-body').innerHTML=reviewMarkup(j)+'<div class="modal-error" id="modal-error" role="alert" hidden></div>';}
+function decideScene(id,decision,clear){
+  const j=getJob(reviewJob);if(!j||readonlyReview(j)||state.offline)return;
+  const scene=sceneList(j).find(s=>s.id===id);if(!scene)return;
+  state.requests.push(C.request(clear?'clear':'decision',j,clear?{id}:{id,decision}));scene.decision=clear?null:decision;updateReview(j);updateReviewBody(j);
+}
+function logoAction(key,remove){
+  const l=state.logos.find(x=>x.key===key);if(!l)return;const sha=state.memory_sha256;
+  const target=l.memory_class==='studio_logo'?'platform_logo':'studio_logo';
+  showModal(remove?'Xóa khỏi bộ nhớ logo':'Đổi loại logo','<p><strong>'+esc(l.name)+'</strong></p><p>'+(remove?'Bản ghi được xóa khỏi bộ nhớ; bộ nhớ và ảnh khung hình được sao lưu. Các thẻ đã duyệt không thay đổi.':'Chuyển thành '+(target==='platform_logo'?'logo nền tảng với đề xuất BLUR':'logo hãng phim với đề xuất KEEP')+'. Thay đổi có hiệu lực ở lần quét sau.')+'</p>'+(target==='platform_logo'&&!remove?'<label class="field"><span>Nền tảng</span><select id="logo-platform"><option value="iqiyi">iQIYI</option><option value="youku">Youku</option><option value="tencent_video">Tencent / WeTV</option><option value="mango_tv">Mango TV</option><option value="sohu">Sohu</option><option value="pptv">PPTV</option></select></label>':''),()=>{
+    if(state.offline)throw new Error('Mất kết nối. Chưa gửi thao tác.');
+    if(sha!==state.memory_sha256||state.scenario==='conflict'&&!conflictUsed){conflictUsed=true;throw new Error('409 memory_changed: Bộ nhớ vừa thay đổi. Tải lại danh sách và xác nhận lần nữa.');}
+    const body={key,expected_sha256:sha};if(!remove){body.memory_class=target;if(target==='platform_logo')body.platform=$('#logo-platform').value;}
+    state.requests.push(C.request(remove?'logoDelete':'logoClass',null,body));
+    if(remove)state.logos=state.logos.filter(x=>x.key!==key);else{l.memory_class=target;l.platform=body.platform;}
+    state.memory_sha256=(parseInt(state.memory_sha256.slice(-6),16)+1).toString(16).padStart(64,'0');render();toast('Đã cập nhật bộ nhớ logo mẫu.');return true;
+  },remove?'Xác nhận xóa khỏi bộ nhớ':'Xác nhận đổi loại');
+}
+function jobAction(id,operation){
+  const j=getJob(id),a=j&&ops(j).find(x=>x.id===operation);if(!a||!a.enabled)return;
+  if(operation==='review')reviewModal(j);
+  else if(operation==='start'||operation==='rerun')scanForm(j,operation==='rerun');
+  else if(operation==='finalize')exportModal(j);
+  else if(operation==='audit')auditModal(j);
+  else if(operation==='cleanup'||operation==='archive')filePreview(operation,[j.id]);
+  else simpleConfirm(j,a);
+}
+function scenario(name){
+  state.scenario=name;state.offline=name==='offline';state.source_cleanup_running=name==='busy';conflictUsed=false;
+  const j=getJob(102);
+  if(name==='rendering'){j.state='RENDERING';j.render_progress={state:'VERIFYING',percent:98};state.active={job_id:102,stage:'render',pid:12345};}
+  else if(j.state==='RENDERING'){j.state='SCANNING_LOGO';delete j.render_progress;state.active={job_id:102,stage:'visual_logo',pid:12345};}
+  previewVersion++;render();
+}
+document.addEventListener('click',async event=>{
+  const el=event.target.closest('[data-action]');if(!el||el.disabled)return;
+  const action=el.dataset.action;
+  if(action==='detail')openDrawer(el.dataset.id);
+  else if(action==='download-start')startDownload();
+  else if(action==='download-item'){D.action(downloadQueue,el.dataset.id,el.dataset.op);refreshDownload();ensureDownloadTimer();}
+  else if(action==='download-filter'){downloadFilter=el.dataset.filter;refreshDownload();}
+  else if(action==='download-toggle'){D.togglePause(downloadQueue);if(downloadQueue.paused){clearInterval(downloadTimer);downloadTimer=null;}refreshDownload();ensureDownloadTimer();}
+  else if(action==='download-sample'){
+    const base=downloadDraft.domain==='phimmoi.example'?'https://phimmoi.example/phim/video-demo-':'https://www.youtube.com/watch?v=video-demo-';
+    $('#download-url').value=[1,2,3].map(n=>base+(downloadQueue.serial+n)).join('\n');startDownload();
+  }
+  else if(action==='theme'){theme=theme==='light'?'dark':'light';try{localStorage.setItem('biliflow-v2-theme',theme);}catch(_){}applyTheme();}
+  else if(action==='close-drawer')closeDrawer();
+  else if(action==='close-modal')closeModal();
+  else if(action==='filter')changeFilter(el.dataset.filter);
+  else if(action==='summary-filter')changeFilter(el.dataset.filter,true);
+  else if(action==='prev'){page--;refreshList();}
+  else if(action==='next'){page++;refreshList();}
+  else if(action==='job')jobAction(el.dataset.id,el.dataset.op);
+  else if(action==='scheduler')showModal(state.scheduler_paused?'Tiếp tục hàng đợi':'Tạm dừng hàng đợi','<p>Giữ nguyên thứ tự quét và xuất. Bước đang chạy được giữ riêng; bạn có thể dừng nó trong Chi tiết video.</p>',()=>{mutate('scheduler',null,{paused:!state.scheduler_paused});toast('Đã thay đổi hàng đợi mẫu.');return true;});
+  else if(action==='select-all'){selected=new Set(allFiltered().filter(j=>C.eligible(j,'cleanup')).slice(0,50).map(j=>j.id));refreshList();}
+  else if(action==='deselect'){selected.clear();refreshList();}
+  else if(action==='bulk-cleanup'||action==='bulk-archive')filePreview(action==='bulk-cleanup'?'cleanup':'archive',[...selected]);
+  else if(action==='logo-class'||action==='logo-delete')logoAction(el.dataset.key,action==='logo-delete');
+  else if(action==='scene-decision'||action==='scene-clear')decideScene(el.dataset.scene,el.dataset.decision,action==='scene-clear');
+  else if(action==='bulk-review'){
+    const j=getJob(reviewJob);if(!j||readonlyReview(j)||state.offline)return;const op=el.dataset.op;
+    const pending=sceneList(j).filter(s=>!s.decision);
+    if(!pending.length){toast('Không có cảnh chưa duyệt. Các quyết định Cần xem thêm phải được duyệt riêng.',true);return;}
+    showModal(op==='bulkKeep'?'Giữ các cảnh chưa duyệt':'Dùng đề xuất chưa duyệt','<p>Xác nhận áp dụng cho '+pending.length+' cảnh chưa duyệt trong bộ lọc? Các quyết định đã có, kể cả Cần xem thêm, được giữ.</p>',()=>{state.requests.push(C.request(op,j,{filter:'all'}));pending.forEach(s=>s.decision=op==='bulkKeep'?'KEEP':s.region?'BLUR':'KEEP');updateReview(j);toast('Đã mô phỏng quyết định cho các cảnh chưa duyệt.');return true;});
+  }
+  else if(action==='shutdown')showModal('Tắt BiliFlow','<p>'+ (el.dataset.mode==='immediate'?'Dừng bước hiện tại và tắt Control Center?':'Tắt Control Center sau khi bước hiện tại hoàn tất?')+'</p><p>Đóng tab không dừng backend. Ở demo, thao tác này mô phỏng mất kết nối.</p>',()=>{mutate('shutdown',null,{mode:el.dataset.mode});toast('Đã mô phỏng lệnh tắt; backend thật vẫn hoạt động.');return true;},'Xác nhận tắt');
+  else if(action==='ai-save'){const data={enabled:$('#ai-enabled').checked,model:$('#ai-model').value,reasoning_effort:$('#ai-effort').value};try{mutate('aiConfig',null,data);toast('Đã lưu cấu hình AI mẫu.');}catch(e){toast(e.message,true);}}
+  else if(action==='ai-check'){try{mutate('aiCheck',null,{});toast(state.ai.message);}catch(e){toast(e.message,true);}}
+  else if(action==='ai-login')showModal('Đăng nhập ChatGPT','<p>Trong bản tích hợp, thao tác này mở luồng đăng nhập hiện có. Demo chỉ mô phỏng trạng thái.</p>',()=>{mutate('aiLogin',null,{});toast('Đã mô phỏng đăng nhập.');return true;});
+  else if(action==='help')showModal('Làm việc với BiliFlow V2','<ol class="help-steps"><li><strong>Thiết lập video:</strong> chọn nhóm kiểm tra, loại nội dung và chế độ quét.</li><li><strong>Duyệt cảnh:</strong> quyết định Giữ, Làm mờ, Cắt hoặc Cần xem thêm. Cần xem thêm vẫn chặn xuất.</li><li><strong>Xuất hoặc bỏ qua:</strong> xuất khi mọi cảnh đã quyết định cuối; bỏ qua khi không cần chỉnh sửa.</li><li><strong>Quản lý video gốc:</strong> dọn vào Thùng rác hoặc lưu trữ sau khi kiểm tra bản xuất.</li></ol><p>Mọi dữ liệu là mẫu. Tải lại trang đặt lại trạng thái. Bản demo không kết nối API thật.</p>',null);
+  else if(action==='reset'){clearInterval(downloadTimer);downloadTimer=null;downloadDraft={domain:D.domains[0].id,url:'',error:''};downloadQueue=D.createQueue();downloadFilter='all';state=Mock.create();sceneCache.clear();scanDrafts.clear();selected.clear();previewVersion++;conflictUsed=false;filter='all';query='';page=1;closeDrawer();render();toast('Đã đặt lại dữ liệu mẫu.');}
+  else if(action==='confirm'&&modalCommit&&!modalBusy){
+    const callback=modalCommit;modalBusy=true;el.disabled=true;
+    try{const done=await callback();modalBusy=false;if(done!==false)closeModal();}
+    catch(e){modalBusy=false;if($('#modal-error')){$('#modal-error').hidden=false;$('#modal-error').textContent=e.message;}el.disabled=false;}
+    finally{modalBusy=false;if(el.isConnected)el.disabled=false;}
+  }
+});
+document.addEventListener('change',event=>{
+  const el=event.target;
+  if(scanFormJob && (el.name==='detector'||['scan-ocr','scan-fast','scan-style','scan-profile'].includes(el.id))){
+    const j=getJob(scanFormJob),old=scanDrafts.get(j.job_key)||{};
+    scanDrafts.set(j.job_key,{...old,detectors:[...document.querySelectorAll('input[name="detector"]:checked')].map(x=>x.value),ocr_recognition_batch_size:Number($('#scan-ocr').value),fast_scan:$('#scan-fast').checked,content_style:$('#scan-style')?.value||j.content_style,profile:$('#scan-profile')?.value||j.profile});
+  }
+  if(el.id==='sort'){sort=el.value;page=1;refreshList();}
+  else if(el.id==='download-domain'){downloadDraft.domain=el.value;downloadDraft.error='';render();}
+  else if(el.id==='download-parallel'){D.setParallel(downloadQueue,el.value);refreshDownload();ensureDownloadTimer();}
+  else if(el.id==='scenario')scenario(el.value);
+  else if(el.id==='export-mode')$('#custom-size').hidden=el.value!=='custom';
+  else if(el.matches('[data-select]')){const id=Number(el.dataset.select);if(el.checked&&selected.size>=50){el.checked=false;toast('Mỗi lần chọn tối đa 50 video.',true);return;}el.checked?selected.add(id):selected.delete(id);refreshList();}
+});
+document.addEventListener('input',event=>{if(event.target.id==='search'){query=event.target.value;page=1;refreshList();}else if(event.target.id==='download-url'){downloadDraft.url=event.target.value;downloadDraft.error='';$('#download-error').hidden=true;event.target.removeAttribute('aria-invalid');}});
+$('#modal').addEventListener('cancel',event=>{if(modalBusy)event.preventDefault();});
+document.addEventListener('keydown',event=>{
+  if($('#modal').open)return;
+  if(currentJob&&event.key==='Escape')closeDrawer();
+  if(currentJob&&event.key==='Tab'){
+    const items=[...document.querySelectorAll('.drawer button:not(:disabled),.drawer summary,.drawer a,.drawer input,.drawer select')].filter(drawerFocusable);
+    const first=items[0],last=items[items.length-1];
+    if(event.shiftKey&&document.activeElement===first){event.preventDefault();last?.focus();}
+    else if(!event.shiftKey&&document.activeElement===last){event.preventDefault();first?.focus();}
+  }
+});
+function route(){const hash=location.hash.slice(1);view=['overview','downloads','videos','queue','logos','settings'].includes(hash)?hash:'overview';closeDrawer();render();window.scrollTo(0,0);}
+window.addEventListener('hashchange',route);
+route();
+})();
