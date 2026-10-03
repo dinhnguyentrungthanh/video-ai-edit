@@ -1,6 +1,11 @@
 # BiliFlow Dashboard V2
 
-Bản demo độc lập, sử dụng dữ liệu mẫu trong bộ nhớ. Không kết nối Control Center thật.
+Có hai trang dùng chung giao diện (`app.js`):
+
+- **Demo** (`index.html`): dữ liệu mẫu trong bộ nhớ (`mock-data.js` + `demo-store.js`), CSP `connect-src 'none'`, không kết nối Control Center.
+- **Xem thử live** (`live.html`): `adapter.js` đọc/ghi Control Center cùng origin, CSP `connect-src 'self'`. Control Center phục vụ trang này ở `/dashboard-v2/` (Pha 3). Dashboard cũ ở `/` giữ nguyên. **Chưa được kiểm tra trên máy thật**; xem `docs/DASHBOARD_V2_CLOUD_PLAN.md`.
+
+Trang **Tải video** ở cả hai bản đều là mô phỏng: không downloader, không gọi mạng.
 
 ## Mở demo
 
@@ -34,13 +39,26 @@ Mọi trạng thái thử nghiệm được giữ trong bộ nhớ của tab; t�
 | --- | --- |
 | `index.html`, `styles.css`, `theme.css` | Khung trang, bố cục và hai theme; theme.css tải sau styles.css |
 | `contracts.js` | Trạng thái, điều kiện thao tác, danh mục đường dẫn API để đối chiếu |
-| `mock-data.js` | Fixture tổng hợp, dùng các trường của API hiện tại |
+| `mock-data.js` | Fixture tổng hợp, dùng các trường của API hiện tại (chỉ bản demo) |
+| `demo-store.js` | DemoStore: trạng thái mẫu trong bộ nhớ, cùng giao diện với live store (chỉ bản demo) |
+| `adapter.js` | ControlCenterAdapter: nơi **duy nhất** gọi HTTP; token, 403 làm mới một lần, không lặp lệnh ghi, chống response cũ; live store và chuẩn hóa snapshot (chỉ bản live) |
+| `live.html` | Trang live cho `/dashboard-v2/`; cùng phần body với `index.html` |
 | `download-demo.js` | Hai nguồn mẫu, kiểm tra batch và state machine hàng đợi tải; không có transport hoặc downloader |
-| `app.js` | Giao diện và thao tác mô phỏng trong bộ nhớ |
+| `app.js` | Giao diện; chỉ đọc snapshot của store và gọi `store.dispatch` |
 | `serve.py` | Server static hạn chế phạm vi, cổng riêng |
-| `verify.cjs` | Kiểm tra hợp đồng và các điều kiện khóa quan trọng |
+| `verify.cjs` | Kiểm tra hợp đồng, điều kiện khóa, demo không có transport |
+| `verify-adapter.cjs` | Test adapter bằng transport giả (endpoint/body, 403/408/409/400/500, double click, response cũ) |
+| `browser-check.cjs` | Tùy chọn: Chromium headless qua Playwright, với API giả lập trong tiến trình (draft, khóa, Tab/Escape, 1280/375) |
 
-Chạy kiểm tra bằng `node dashboard_v2/verify.cjs` từ thư mục project.
+Chạy kiểm tra từ thư mục project:
+
+```
+node dashboard_v2/verify.cjs
+node dashboard_v2/verify-adapter.cjs
+node dashboard_v2/browser-check.cjs   # cần Playwright; không có thì in SKIP
+```
+
+`tests/test_dashboard_v2_frontend.py` gọi hai gate đầu trong bộ unittest.
 Không chạy scan, export, cleanup hay archive trên dữ liệu thật để kiểm tra demo.
 
 Hướng dẫn mapping, tích hợp, kiểm thử và rollback:

@@ -1,0 +1,233 @@
+'use strict';
+/* Adapter gate: ControlCenterAdapter against a fake transport (no network, no server).
+ * Run: node dashboard_v2/verify-adapter.cjs */
+const assert = require('node:assert/strict');
+const C = require('./contracts.js');
+const A = require('./adapter.js');
+
+const TOKEN = 'tok-1';
+const job = (id, state, extra = {}) => ({id, state, ...extra});
+
+/* Fake transport: records every call; `script` answers by "METHOD path" (array = one answer per call). */
+function fake(script = {}) {
+  const calls = [];
+  let token = TOKEN;
+  const transport = async (method, path, options) => {
+    calls.push({method, path, headers: {...options.headers}, body: options.body === undefined ? undefined : JSON.parse(options.body)});
+    const key = method + ' ' + path;
+    if (key === 'GET /api/session' && !script[key]) return {status: 200, body: {token}};
+    let answer = script[key];
+    if (Array.isArray(answer)) answer = answer.length > 1 ? answer.shift() : answer[0];
+    if (typeof answer === 'function') answer = await answer(options);
+    if (answer instanceof Error) throw answer;
+    return answer || {status: 200, body: {}};
+  };
+  return {calls, transport, setToken: t => { token = t; }, posts: () => calls.filter(c => c.method === 'POST'), sessions: () => calls.filter(c => c.path === '/api/session')};
+}
+const adapterWith = f => A.create({contracts: C, transport: f.transport});
+
+let passed = 0;
+const tests = [];
+const test = (name, fn) => tests.push([name, fn]);
+
+test('POST gets the token from GET /api/session and sends JSON + X-BiliFlow-Token', async () => {
+  const f = fake(), a = adapterWith(f);
+  await a.dispatch('scheduler', null, {paused: true});
+  assert.equal(f.sessions().length, 1);
+  const [post] = f.posts();
+  assert.equal(post.path, '/api/scheduler');
+  assert.equal(post.headers['Content-Type'], 'application/json');
+  assert.equal(post.headers['X-BiliFlow-Token'], TOKEN);
+  assert.deepEqual(post.body, {paused: true});
+  assert.ok(!f.calls.some(c => c.path.includes(TOKEN)), 'token never in a URL');
+  await a.dispatch('scheduler', null, {paused: false});
+  assert.equal(f.sessions().length, 1, 'token reused');
+});
+
+test('Every operation of guide section 4 uses its real path and body', async () => {
+  const f = fake(), a = adapterWith(f);
+  const j = job(7, 'READY_TO_EXPORT');
+  const cases = [
+    ['start', j, {content_style: 'animation', profile: 'careful', detectors: ['advertising'], ocr_recognition_batch_size: 1, fast_scan: false}, '/api/jobs/7/start'],
+    ['rerun', j, {detectors: ['gore'], ocr_recognition_batch_size: 8, fast_scan: true}, '/api/jobs/7/rerun'],
+    ['resume', j, {}, '/api/jobs/7/resume'], ['pause', j, {}, '/api/jobs/7/pause'],
+    ['stopAfter', j, {}, '/api/jobs/7/stop-after-stage'], ['cancel', j, {}, '/api/jobs/7/cancel'],
+    ['retry', j, {}, '/api/jobs/7/retry'], ['skip', j, {}, '/api/jobs/7/skip'], ['unskip', j, {}, '/api/jobs/7/unskip'],
+    ['hide', j, {}, '/api/jobs/7/hide'], ['unhide', j, {}, '/api/jobs/7/unhide'],
+    ['audit', j, {visual: true}, '/api/jobs/7/ai-audit'],
+    ['finalize', j, {size_mode: 'default'}, '/api/jobs/7/review/finalize'],
+    ['finalize', job(8, 'READY_TO_EXPORT'), {size_mode: 'custom', max_output_gb: 2.5}, '/api/jobs/8/review/finalize'],
+    ['finalize', job(9, 'READY_TO_EXPORT'), {size_mode: 'unlimited'}, '/api/jobs/9/review/finalize'],
+    ['scheduler', null, {paused: true}, '/api/scheduler'],
+    ['shutdown', null, {mode: 'after_stage'}, '/api/shutdown'],
+    ['aiConfig', null, {enabled: true, model: 'gpt-5.6-luna', reasoning_effort: 'low'}, '/api/ai/config'],
+    ['aiCheck', null, {}, '/api/ai/check'], ['aiLogin', null, {}, '/api/ai/login'],
+    ['cleanup', null, {job_ids: [1, 2], preview_id: 'p1'}, '/api/source-cleanup'],
+    ['archive', null, {job_ids: [3], preview_id: 'p2'}, '/api/source-archive'],
+    ['restore', null, {job_id: 4}, '/api/source-archive/restore'],
+    ['recheck', null, {kind: 'source_cleanup', id: 901}, '/api/source-recycle-check'],
+    ['logoClass', null, {key: 'k', memory_class: 'platform_logo', platform: 'iqiyi', expected_sha256: 'a'.repeat(64)}, '/api/logo-memory/class'],
+    ['logoDelete', null, {key: 'k', expected_sha256: 'a'.repeat(64)}, '/api/logo-memory/delete'],
+  ];
+  for (const [op, target, body] of cases) await a.dispatch(op, target, body);
+  const posts = f.posts();
+  assert.equal(posts.length, cases.length);
+  cases.forEach(([op, , body, path], i) => {
+    assert.equal(posts[i].path, path, op);
+    assert.deepEqual(posts[i].body, body, op);
+  });
+});
+
+test('Invalid job id or unknown operation never reaches the transport', async () => {
+  const f = fake(), a = adapterWith(f);
+  await assert.rejects(() => a.dispatch('start', job(0, 'DISCOVERED'), {}));
+  await assert.rejects(() => a.dispatch('start', null, {}));
+  await assert.rejects(() => a.dispatch('nope', job(1, 'X'), {}));
+  await assert.rejects(() => a.dispatch('status', null, {}), /POST/);
+  assert.equal(f.posts().length, 0);
+});
+
+test('403 refreshes the token once and resends exactly once', async () => {
+  const f = fake({'POST /api/jobs/7/cancel': [{status: 403, body: {error: 'Phiên Control Center không hợp lệ'}}, {status: 200, body: {state: 'CANCELLED'}}]});
+  const a = adapterWith(f);
+  await a.refreshToken();
+  f.setToken('tok-2');
+  const result = await a.dispatch('cancel', job(7, 'QUEUED'), {});
+  assert.equal(result.status, 200);
+  const posts = f.posts();
+  assert.equal(posts.length, 2);
+  assert.equal(posts[0].headers['X-BiliFlow-Token'], TOKEN);
+  assert.equal(posts[1].headers['X-BiliFlow-Token'], 'tok-2');
+  assert.equal(f.sessions().length, 2);
+});
+
+test('A second 403 is shown, never a third POST', async () => {
+  const f = fake({'POST /api/jobs/7/cancel': {status: 403, body: {error: 'Phiên Control Center không hợp lệ'}}});
+  const a = adapterWith(f);
+  await assert.rejects(() => a.dispatch('cancel', job(7, 'QUEUED'), {}), e => e.status === 403 && /không hợp lệ/.test(e.message));
+  assert.equal(f.posts().length, 2);
+  assert.equal(f.sessions().length, 2);
+});
+
+test('409 keeps code (top level) and preview, and is never replayed', async () => {
+  const preview = {preview_id: 'p2', eligible: [], ineligible: [{job_id: 1, name: 'a', reason: 'r'}], recycle_bin: null, blocked: 'x'};
+  const f = fake({'POST /api/source-cleanup': {status: 409, body: {error: 'Danh sách đã thay đổi', code: 'preview_changed', preview}}});
+  const a = adapterWith(f);
+  await assert.rejects(() => a.dispatch('cleanup', null, {job_ids: [1], preview_id: 'p1'}), e => {
+    assert.equal(e.status, 409); assert.equal(e.code, 'preview_changed'); assert.deepEqual(e.preview, preview);
+    assert.match(e.message, /Danh sách đã thay đổi/); return true;
+  });
+  assert.equal(f.posts().length, 1);
+});
+
+test('400 (finalize refusing a file without a manifest) shows the reason verbatim, no retry', async () => {
+  const reason = 'Thư mục output đã có file “Tập 1-reviewed.mp4” nhưng không có manifest chứng minh; BiliFlow không ghi đè';
+  const f = fake({'POST /api/jobs/7/review/finalize': {status: 400, body: {error: reason}}});
+  const a = adapterWith(f);
+  await assert.rejects(() => a.dispatch('finalize', job(7, 'READY_TO_EXPORT'), {size_mode: 'default'}), e => e.status === 400 && e.message === reason);
+  assert.equal(f.posts().length, 1);
+});
+
+test('408, 500 and a dropped connection are shown and never resent', async () => {
+  for (const [answer, status] of [[{status: 408, body: {error: 'Request timed out'}}, 408], [{status: 500, body: {error: 'boom'}}, 500], [new TypeError('Failed to fetch'), 0], [{status: 408, body: null}, 408]]) {
+    const f = fake({'POST /api/jobs/7/retry': answer});
+    const a = adapterWith(f);
+    await assert.rejects(() => a.dispatch('retry', job(7, 'FAILED'), {}), e => {
+      assert.equal(e.status, status); assert.ok(e.message.length > 0); return true;
+    });
+    assert.equal(f.posts().length, 1, 'status ' + status);
+  }
+});
+
+test('A GET answered 403 does not refresh the token and is not retried', async () => {
+  const f = fake({'GET /api/status': {status: 403, body: {error: 'Địa chỉ truy cập không hợp lệ'}}});
+  const a = adapterWith(f);
+  await assert.rejects(() => a.loadStatus(), e => e.status === 403);
+  assert.equal(f.sessions().length, 0);
+  assert.equal(f.calls.length, 1);
+});
+
+test('An older /api/status answer never replaces a newer one', async () => {
+  let release;
+  const slow = new Promise(r => { release = r; });
+  const f = fake({'GET /api/status': [() => slow.then(() => ({status: 200, body: {n: 1}})), {status: 200, body: {n: 2}}]});
+  const a = adapterWith(f);
+  const first = a.loadStatus(), second = a.loadStatus();
+  assert.deepEqual(await second, {n: 2});
+  release();
+  assert.equal(await first, null);
+});
+
+test('A double click sends one POST; a later click sends again', async () => {
+  let release;
+  const gate = new Promise(r => { release = r; });
+  const f = fake({'POST /api/jobs/7/review/finalize': () => gate.then(() => ({status: 200, body: {status: 'QUEUED'}}))});
+  const a = adapterWith(f);
+  const j = job(7, 'READY_TO_EXPORT');
+  const p1 = a.dispatch('finalize', j, {size_mode: 'default'}), p2 = a.dispatch('finalize', j, {size_mode: 'default'});
+  release();
+  await Promise.all([p1, p2]);
+  assert.equal(f.posts().length, 1);
+  await a.dispatch('finalize', j, {size_mode: 'default'});
+  assert.equal(f.posts().length, 2);
+});
+
+test('Previews are GET only, with encoded ids and the 1-50 limit', async () => {
+  const f = fake({'GET /api/source-archive/preview?ids=3%2C4': {status: 200, body: {preview_id: 'x', eligible: []}}});
+  const a = adapterWith(f);
+  assert.equal((await a.preview('archive', [3, 4])).preview_id, 'x');
+  await assert.rejects(() => a.preview('cleanup', []));
+  await assert.rejects(() => a.preview('cleanup', Array.from({length: 51}, (_, i) => i + 1)));
+  await assert.rejects(() => a.preview('cleanup', [1, -2]));
+  await assert.rejects(() => a.preview('cleanup', ['1;DROP']));
+  assert.equal(f.posts().length, 0);
+});
+
+test('Snapshot normalization keeps backend values and derives only display fields', () => {
+  const status = {version: '0.7.24', jobs: [
+    {id: 5, state: 'RENDERING', source_path: 'E:\\DungChung\\BiliFlow\\input\\Tập 5.mp4', duration_seconds: 3725, detector_groups: ['adult'], active_revision: 2, current_stage: 'render', render_progress: {state: 'VERIFYING', percent: 100}},
+    {id: 6, state: 'PAUSED', source_path: '/x/y.mkv', current_stage: 'render'},
+    {id: 7, state: 'COMPLETED', source_path: 'a.mp4', cleanup: {eligible: true, output_name: 'a-reviewed.mp4'}},
+  ], active: {job_id: 5, stage: 'render', pid: 1}, queue: {length: 0, paused: false},
+  resources: {cpu_percent: 3, memory: {percent: 4, used_bytes: 1, total_bytes: 2}, disk: {percent: 5, free_bytes: 6, total_bytes: 7}, gpu: null}, source_cleanup_running: false};
+  const s = A.normalizeSnapshot(status, null, {memory_sha256: 'b'.repeat(64), records: [{key: 'k1', labels: ['iQIYI'], memory_class: 'platform_logo', frames: 2, frame_urls: ['/api/logo-memory/frame?key=k1&i=0']}]});
+  const [a, b, c] = s.jobs;
+  assert.equal(a.name, 'Tập 5'); assert.equal(a.duration, '1:02:05'); assert.equal(a.render_progress.state, 'VERIFYING');
+  assert.equal(C.tab(a), 'export'); assert.equal(a.output_path, null);
+  assert.equal(b.name, 'y'); assert.equal(b.render_request, true); assert.deepEqual(b.detector_groups, []);
+  assert.equal(c.output_path, 'a-reviewed.mp4');
+  assert.equal(s.resources.gpu, null); assert.equal(s.logos[0].name, 'iQIYI'); assert.equal(s.memory_sha256, 'b'.repeat(64));
+  assert.equal(s.ai.ready, false, 'AI is not ready until /api/ai says so');
+  assert.equal(s.mode, 'live'); assert.deepEqual(s.requests, []);
+});
+
+test('Live store: an action reloads /api/status; a failure leaves offline state with the last data', async () => {
+  const f = fake({'GET /api/status': [{status: 200, body: {jobs: [{id: 1, state: 'QUEUED', source_path: 'a.mp4'}]}}, {status: 200, body: {jobs: [{id: 1, state: 'PAUSED', source_path: 'a.mp4'}]}}, new TypeError('down')],
+    'GET /api/ai': {status: 200, body: {ready: true, config: {enabled: true}, message: 'ok'}}});
+  const store = A.createLiveStore(adapterWith(f));
+  const seen = [];
+  store.subscribe(s => seen.push(s.jobs.map(j => j.state).join()));
+  await store.refresh();
+  await store.dispatch('pause', {id: 1}, {});
+  assert.deepEqual(seen.slice(-2), ['QUEUED', 'PAUSED']);
+  await store.refresh();
+  assert.equal(store.snapshot().offline, true);
+  assert.equal(store.snapshot().jobs[0].state, 'PAUSED');
+  assert.equal(f.posts().length, 1);
+});
+
+test('Live store: a refused file action is not followed by any other write', async () => {
+  const f = fake({'POST /api/source-archive': {status: 409, body: {error: 'Bận', code: 'busy'}}, 'GET /api/status': {status: 200, body: {jobs: []}}});
+  const store = A.createLiveStore(adapterWith(f));
+  await assert.rejects(() => store.fileAction('archive', [3], 'p'), e => e.status === 409 && e.code === 'busy');
+  assert.equal(f.posts().length, 1);
+});
+
+(async () => {
+  for (const [name, fn] of tests) {
+    await fn();
+    passed++;
+    process.stdout.write('OK ' + name + '\n');
+  }
+  process.stdout.write(JSON.stringify({passed, failed: 0}) + '\n');
+})().catch(error => { console.error(error); process.exitCode = 1; });

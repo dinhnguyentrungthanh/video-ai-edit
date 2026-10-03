@@ -6,7 +6,8 @@ const vm = require('node:vm');
 const C = require('./contracts.js');
 const D = require('./download-demo.js');
 let checks=0;
-function check(name,fn){fn();checks++;process.stdout.write('OK '+name+'\n');}
+const pending=[];
+function check(name,fn){const r=fn();const done=()=>{checks++;process.stdout.write('OK '+name+'\n');};if(r&&typeof r.then==='function')pending.push(r.then(done));else done();}
 const job=(state,extra={})=>({id:42,state,source_present:true,review_summary:{status:'READY_FOR_EDIT_PLAN',main_items:2,pending:0,decisions:{KEEP:1,BLUR:1}},...extra});
 const has=(j,id,ctx={aiReady:true})=>C.operations(j,ctx).find(a=>a.id===id);
 check('Every known state maps to one of the original six buckets',()=>{
@@ -145,10 +146,32 @@ check('Fixtures do not load production files and expose backend review keys',()=
 check('Prototype has no network transport and enforces connect-src none',()=>{
   const html=fs.readFileSync(path.join(__dirname,'index.html'),'utf8');
   assert.ok(html.includes("connect-src 'none'"));
-  for(const file of ['contracts.js','mock-data.js','download-demo.js','app.js']){
+  for(const file of ['contracts.js','mock-data.js','demo-store.js','download-demo.js','app.js']){
     const text=fs.readFileSync(path.join(__dirname,file),'utf8');
     assert.ok(!/\bfetch\s*\(|XMLHttpRequest|WebSocket|sendBeacon|EventSource/.test(text),file+' must not connect');
   }
   assert.ok(!/https?:\/\//.test(html),'No remote assets');
 });
-process.stdout.write(JSON.stringify({passed:checks,failed:0})+'\n');
+check('Demo page never loads the adapter; the live page loads no fixture',()=>{
+  const demo=fs.readFileSync(path.join(__dirname,'index.html'),'utf8'),live=fs.readFileSync(path.join(__dirname,'live.html'),'utf8');
+  assert.ok(!demo.includes('adapter.js')&&demo.includes('demo-store.js')&&demo.includes('mock-data.js'));
+  assert.ok(live.includes('data-mode="live"')&&live.includes("connect-src 'self'")&&!live.includes("connect-src 'none'"));
+  assert.ok(live.includes('adapter.js')&&!live.includes('mock-data.js')&&!live.includes('demo-store.js'));
+  assert.ok(!/https?:\/\//.test(live),'No remote assets');
+  const body=t=>t.slice(t.indexOf('<body>')).replace('DỮ LIỆU MẪU','CONTROL CENTER');
+  assert.equal(body(live),body(demo),'live.html and index.html share the same body');
+});
+check('Only adapter.js may use fetch',()=>{
+  for(const file of fs.readdirSync(__dirname).filter(f=>/\.js$/.test(f)&&f!=='adapter.js')){
+    const text=fs.readFileSync(path.join(__dirname,file),'utf8');
+    assert.ok(!/\bfetch\s*\(|XMLHttpRequest|WebSocket|sendBeacon|EventSource/.test(text),file+' must not connect');
+  }
+});
+check('Demo store keeps the in-memory contract (409 once, no network)',()=>{
+  const ctx={window:{BFContracts:C},structuredClone};
+  vm.runInNewContext(fs.readFileSync(path.join(__dirname,'mock-data.js'),'utf8'),ctx);
+  const S=require('./demo-store.js').create(C,ctx.window.BFMock);
+  const before=S.snapshot().requests.length;S.scenario('conflict');
+  return S.dispatch('scheduler',null,{paused:true}).then(()=>assert.fail('409 expected'),e=>{assert.equal(e.status,409);assert.equal(S.snapshot().requests.length,before);});
+});
+Promise.all(pending).then(()=>process.stdout.write(JSON.stringify({passed:checks,failed:0})+'\n'),error=>{console.error(error);process.exitCode=1;});

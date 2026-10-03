@@ -1,10 +1,17 @@
-/* Standalone demo: every request descriptor is consumed in memory. */
+/* Presenter. Data comes from one store: BFDemoStore (index.html, fixtures in memory)
+ * or the live store of BFAdapter (live.html at /dashboard-v2). Only adapter.js talks HTTP. */
 (function () {
 'use strict';
 const C=window.BFContracts, Mock=window.BFMock;
-let state=Mock.create(), view='overview', filter='all', query='', sort='recent', page=1, selected=new Set(), currentJob=null;
-let drawerFocus=null, modalFocus=null, modalCommit=null, modalBusy=false, toastTimer, previewVersion=1, conflictUsed=false, reviewJob=null, scanFormJob=null;
-const sceneCache=new Map(), scanDrafts=new Map();
+const LIVE=document.documentElement.dataset.mode==='live';
+const store=LIVE?window.BFAdapter.createLiveStore(window.BFAdapter.create({contracts:C})):window.BFDemoStore.create(C,Mock);
+let state=store.snapshot(), view='overview', filter='all', query='', sort='recent', page=1, selected=new Set(), currentJob=null;
+let drawerFocus=null, modalFocus=null, modalCommit=null, modalBusy=false, toastTimer, reviewJob=null, scanFormJob=null;
+const sceneCache=new Map(), scanDrafts=new Map(), exportDrafts=new Map();
+let aiDirty=false; /* unsaved AI settings: polling does not rebuild that form */
+/* A draft belongs to one revision of one source; a new revision or source drops it. */
+const draftKey=j=>j.job_key+'|'+(j.source_sha256||'')+'|'+j.active_revision;
+const sent=label=>(LIVE?'Đã gửi: ':'Đã mô phỏng: ')+label;
 const D=window.BFDownload;
 let downloadDraft={domain:D.domains[0].id,url:'',error:''},downloadQueue=D.createQueue(),downloadFilter='all',downloadTimer=null;
 const $=s=>document.querySelector(s), esc=value=>String(value??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
@@ -80,7 +87,7 @@ function hero(){
   const step=j?(exporting?verifying?'Kiểm tra bản xuất':'Đang tạo video đã duyệt':stageLabel(j.current_stage||j.state)):'Không có bước đang chạy';
   const waiting=visibleJobs().filter(x=>x.state==='QUEUED');
   const queueNote=waiting.filter(x=>x.queue_kind==='scan').length+' chờ quét · '+waiting.filter(x=>x.queue_kind==='export').length+' chờ xuất';
-  return '<div class="hero-grid"><section class="active-card"><div class="eyebrow"><span class="live-dot"></span>'+(j?exporting?'ĐANG XUẤT VIDEO':'ĐANG QUÉT CẢNH':'WORKER ĐANG CHỜ')+'</div><h2>'+esc(j?.name||'Sẵn sàng cho video tiếp theo')+'</h2><p>'+esc(j?({animation:'Hoạt hình',live_action:'Phim người thật',mixed:'Nội dung hỗn hợp'})[j.content_style]+' · '+j.duration+' · '+(exporting?'Xuất theo các cảnh đã duyệt':j.detector_groups.length+' nhóm kiểm tra'):'Video trong hàng đợi sẽ giữ nguyên thứ tự bấm.')+'</p><div class="hero-status"><span>'+esc(step)+'</span><strong>'+progress+'%</strong></div><div class="meter"><i style="width:'+progress+'%"></i></div><div class="active-foot"><span>'+esc((j?'#'+j.id+' · ':'')+queueNote)+'</span>'+(j?'<button class="small" data-action="detail" data-id="'+j.id+'">Xem tiến trình '+icon('arrow')+'</button>':'')+'</div></section><section class="resources-card"><div class="section-top"><h2>Tài nguyên máy</h2><span class="live-dot"></span></div>'+[['cpu','CPU',r.cpu_percent],['ram','RAM',r.memory.percent],['gpu','GPU',r.gpu.utilization_percent]].map(([cls,label,n])=>'<div class="resource-row '+cls+'"><span>'+label+'</span><div class="meter"><i style="width:'+n+'%"></i></div><strong>'+n+'%</strong></div>').join('')+'<div class="resource-info"><span>'+esc(r.gpu.name)+'</span><span>VRAM 4,2 / 6 GB</span></div></section></div>';
+  return '<div class="hero-grid"><section class="active-card"><div class="eyebrow"><span class="live-dot"></span>'+(j?exporting?'ĐANG XUẤT VIDEO':'ĐANG QUÉT CẢNH':'WORKER ĐANG CHỜ')+'</div><h2>'+esc(j?.name||'Sẵn sàng cho video tiếp theo')+'</h2><p>'+esc(j?({animation:'Hoạt hình',live_action:'Phim người thật',mixed:'Nội dung hỗn hợp'})[j.content_style]+' · '+j.duration+' · '+(exporting?'Xuất theo các cảnh đã duyệt':j.detector_groups.length+' nhóm kiểm tra'):'Video trong hàng đợi sẽ giữ nguyên thứ tự bấm.')+'</p><div class="hero-status"><span>'+esc(step)+'</span><strong>'+progress+'%</strong></div><div class="meter"><i style="width:'+progress+'%"></i></div><div class="active-foot"><span>'+esc((j?'#'+j.id+' · ':'')+queueNote)+'</span>'+(j?'<button class="small" data-action="detail" data-id="'+j.id+'">Xem tiến trình '+icon('arrow')+'</button>':'')+'</div></section><section class="resources-card"><div class="section-top"><h2>Tài nguyên máy</h2><span class="live-dot"></span></div>'+[['cpu','CPU',r.cpu_percent],['ram','RAM',r.memory.percent],['gpu','GPU',r.gpu?r.gpu.utilization_percent:null]].map(([cls,label,n])=>'<div class="resource-row '+cls+'"><span>'+label+'</span><div class="meter"><i style="width:'+(Number(n)||0)+'%"></i></div><strong>'+(n==null?'N/A':Math.round(n)+'%')+'</strong></div>').join('')+'<div class="resource-info"><span>'+esc(r.gpu?(r.gpu.name||'GPU'):'GPU · N/A')+'</span><span>'+(r.gpu&&Number.isFinite(r.gpu.memory_total_bytes)?'VRAM '+bytes(r.gpu.memory_used_bytes||0)+' / '+bytes(r.gpu.memory_total_bytes):'VRAM N/A')+'</span></div></section></div>';
 }
 function scope(j){return '<div class="scope-chips">'+Object.entries(C.detectors).map(([id,label])=>'<span class="scope-chip '+(j.detector_groups.includes(id)?'':'off')+'" title="'+esc(j.detector_groups.includes(id)?label+' đã chọn':label+' chưa kiểm tra')+'">'+({advertising:'Logo',adult:'18+',gore:'Máu me',violence:'Bạo lực'})[id]+'</span>').join('')+'</div>';}
 function row(j){
@@ -108,8 +115,14 @@ function queueView(){
   const jobs=state.jobs.filter(j=>j.state==='QUEUED').sort((a,b)=>a.queue_position-b.queue_position);
   return heading('Hàng đợi','Quét cảnh và xuất video dùng chung một hàng đợi, theo thứ tự bạn bấm.')+'<div class="notice">Một GPU xử lý tuần tự. Tạm dừng hàng đợi giữ nguyên vị trí; tiếp tục hoặc thử lại cũng giữ vị trí đã có.</div>'+jobs.map(j=>'<div class="queue-row"><span class="queue-rank">'+j.queue_position+'</span><div><strong>'+esc(j.name)+'</strong><p>#'+j.id+' · '+(j.queue_kind==='export'?'Xuất video':'Quét cảnh')+' · '+(state.scheduler_paused?'Đang tạm dừng hàng đợi':'Chờ worker sẵn sàng')+'</p></div><button class="secondary small" data-action="detail" data-id="'+j.id+'">Chi tiết '+icon('arrow')+'</button></div>').join('')+(jobs.length?'':'<div class="empty"><strong>Hàng đợi đang trống</strong>Thiết lập video mới hoặc xuất video đã duyệt.</div>');
 }
+/* Live: only frame URLs the server listed for this record (same origin, logo-memory frame route). */
+function logoFrames(l){
+  if(!LIVE)return [0,1,2,3].map((_,i)=>'<img src="assets/poster-'+l.color+'.svg" alt="Ảnh minh họa mẫu '+(i+1)+'">').join('');
+  const urls=(Array.isArray(l.frame_urls)?l.frame_urls:[]).filter(u=>typeof u==='string'&&u.startsWith('/api/logo-memory/frame?')).slice(0,4);
+  return urls.length?urls.map((u,i)=>'<img loading="lazy" src="'+esc(u)+'" alt="Khung hình '+(i+1)+' của logo">').join(''):'<span class="muted">Không có khung hình</span>';
+}
 function logosView(){
-  return heading('Bộ nhớ logo','Xem và quản lý logo đã nhớ. Các lần duyệt trước vẫn được giữ.','<span class="badge">'+state.logos.length+' bản ghi mẫu</span>')+'<div class="notice">Logo nền tảng → đề xuất làm mờ vùng logo. Logo hãng phim → đề xuất giữ nguyên. Bạn duyệt quyết định cuối cùng cho từng video.</div><div class="memory-grid">'+state.logos.map(l=>'<article class="memory-card"><div class="memory-art">'+esc(l.memory_class==='platform_logo'?l.name.split(' · ')[0]:'STUDIO')+'</div><div class="panel"><h3>'+esc(l.name)+'</h3><span class="badge '+(l.memory_class==='studio_logo'?'blue':'')+'">'+(l.memory_class==='studio_logo'?'Hãng phim · KEEP':'Nền tảng · BLUR')+'</span><div class="mini-frames">'+[0,1,2,3].map((_,i)=>'<img src="assets/poster-'+l.color+'.svg" alt="Ảnh minh họa mẫu '+(i+1)+'">').join('')+'</div><p>'+l.frames+' khung hình mẫu · thay đổi được sao lưu trước</p><div class="action-grid"><button class="secondary small" data-action="logo-class" data-key="'+esc(l.key)+'" '+(state.offline?'disabled':'')+'>Đổi loại</button><button class="danger small" data-action="logo-delete" data-key="'+esc(l.key)+'" '+(state.offline?'disabled':'')+'>Xóa khỏi bộ nhớ</button></div></div></article>').join('')+'</div>';
+  return heading('Bộ nhớ logo','Xem và quản lý logo đã nhớ. Các lần duyệt trước vẫn được giữ.','<span class="badge">'+state.logos.length+(LIVE?' bản ghi':' bản ghi mẫu')+'</span>')+'<div class="notice">Logo nền tảng → đề xuất làm mờ vùng logo. Logo hãng phim → đề xuất giữ nguyên. Bạn duyệt quyết định cuối cùng cho từng video.</div><div class="memory-grid">'+state.logos.map(l=>'<article class="memory-card"><div class="memory-art">'+esc(l.memory_class==='platform_logo'?l.name.split(' · ')[0]:'STUDIO')+'</div><div class="panel"><h3>'+esc(l.name)+'</h3><span class="badge '+(l.memory_class==='studio_logo'?'blue':'')+'">'+(l.memory_class==='studio_logo'?'Hãng phim · KEEP':'Nền tảng · BLUR')+'</span><div class="mini-frames">'+logoFrames(l)+'</div><p>'+l.frames+(LIVE?' khung hình':' khung hình mẫu')+' · thay đổi được sao lưu trước</p>'+(LIVE&&l.refusal_text?'<p class="muted">'+esc(l.refusal_text)+'</p>':'')+'<div class="action-grid"><button class="secondary small" data-action="logo-class" data-key="'+esc(l.key)+'" '+(state.offline||LIVE&&l.convertible===false?'disabled':'')+' title="'+esc(LIVE&&l.convertible===false?l.refusal_text||'Không đổi được loại':'Đổi loại')+'">Đổi loại</button><button class="danger small" data-action="logo-delete" data-key="'+esc(l.key)+'" '+(state.offline?'disabled':'')+'>Xóa khỏi bộ nhớ</button></div></div></article>').join('')+'</div>';
 }
 function downloadBusy(){return downloadQueue.items.some(t=>D.active(t)||t.state==='QUEUED');}
 function downloadProgress(){
@@ -126,7 +139,7 @@ function downloadRow(t){
 }
 function downloadsView(){
   const site=D.domains.find(d=>d.id===downloadDraft.domain),sample=downloadDraft.domain==='phimmoi.example'?'https://phimmoi.example/phim/video-demo':'https://www.youtube.com/watch?v=video-demo';
-  return heading('Tải video','Thêm nhiều liên kết, theo dõi riêng từng video.','<span class="badge blue">Demo giao diện</span>')+'<div class="download-layout"><section class="panel download-form"><div class="download-panel-title">'+icon('downloads')+'<h2>Thêm video</h2></div><p class="muted">Mỗi dòng một link cùng nguồn. Có thể thêm lượt mới trong khi các video khác đang tải.</p><label class="field"><span>Tên miền / nguồn tải</span><select id="download-domain">'+D.domains.map(d=>'<option value="'+esc(d.id)+'" '+(downloadDraft.domain===d.id?'selected':'')+'>'+esc(d.label)+'</option>').join('')+'</select></label><label class="field"><span>Liên kết video</span><textarea id="download-url" rows="5" aria-label="Liên kết video" autocomplete="off" spellcheck="false" placeholder="Mỗi dòng một link https://…" maxlength="41000" aria-describedby="download-hint download-error">'+esc(downloadDraft.url)+'</textarea><small id="download-hint">Link mẫu '+esc(site?.label||'')+': <span class="mono">'+esc(sample)+'</span></small></label><p id="download-error" class="modal-error" role="alert" '+(downloadDraft.error?'':'hidden')+'>'+esc(downloadDraft.error)+'</p><button class="primary download-start" data-action="download-start" '+(state.offline?'disabled':'')+'>'+icon('downloads')+' Thêm vào danh sách tải</button><button class="secondary download-sample" data-action="download-sample" '+(state.offline?'disabled':'')+'>Thử với 3 video mẫu</button><div class="download-destination"><span>Thư mục lưu dự kiến</span><strong class="mono">E:\\DungChung\\BiliFlow\\input\\</strong></div><div class="download-demo-note"><strong>Bản mẫu để bạn thử giao diện</strong><p>Tiến độ và nhật ký được mô phỏng. Chưa chạy command/PowerShell, tải tệp thật hoặc tự quét cảnh.</p></div></section><section class="panel download-progress-panel" aria-labelledby="download-progress-title"><div class="section-top"><h2 id="download-progress-title">Danh sách & tiến độ tải</h2><span class="badge grey">Mô phỏng</span></div><div id="download-progress">'+downloadProgress()+'</div></section></div>';
+  return heading('Tải video','Thêm nhiều liên kết, theo dõi riêng từng video.','<span class="badge blue">'+(LIVE?'MÔ PHỎNG':'Demo giao diện')+'</span>')+(LIVE?'<div class="notice" role="note" id="download-simulation"><strong>Trang này là mô phỏng.</strong> Chưa có downloader hay API tải thật: không tải video, không gọi mạng, không ghi vào input. Tiến độ bên dưới chỉ là dữ liệu giả trong tab.</div>':'')+'<div class="download-layout"><section class="panel download-form"><div class="download-panel-title">'+icon('downloads')+'<h2>Thêm video</h2></div><p class="muted">Mỗi dòng một link cùng nguồn. Có thể thêm lượt mới trong khi các video khác đang tải.</p><label class="field"><span>Tên miền / nguồn tải</span><select id="download-domain">'+D.domains.map(d=>'<option value="'+esc(d.id)+'" '+(downloadDraft.domain===d.id?'selected':'')+'>'+esc(d.label)+'</option>').join('')+'</select></label><label class="field"><span>Liên kết video</span><textarea id="download-url" rows="5" aria-label="Liên kết video" autocomplete="off" spellcheck="false" placeholder="Mỗi dòng một link https://…" maxlength="41000" aria-describedby="download-hint download-error">'+esc(downloadDraft.url)+'</textarea><small id="download-hint">Link mẫu '+esc(site?.label||'')+': <span class="mono">'+esc(sample)+'</span></small></label><p id="download-error" class="modal-error" role="alert" '+(downloadDraft.error?'':'hidden')+'>'+esc(downloadDraft.error)+'</p><button class="primary download-start" data-action="download-start" '+(state.offline?'disabled':'')+'>'+icon('downloads')+' Thêm vào danh sách tải</button><button class="secondary download-sample" data-action="download-sample" '+(state.offline?'disabled':'')+'>Thử với 3 video mẫu</button><div class="download-destination"><span>Thư mục lưu dự kiến</span><strong class="mono">E:\\DungChung\\BiliFlow\\input\\</strong></div><div class="download-demo-note"><strong>Bản mẫu để bạn thử giao diện</strong><p>Tiến độ và nhật ký được mô phỏng. Chưa chạy command/PowerShell, tải tệp thật hoặc tự quét cảnh.</p></div></section><section class="panel download-progress-panel" aria-labelledby="download-progress-title"><div class="section-top"><h2 id="download-progress-title">Danh sách & tiến độ tải</h2><span class="badge grey">Mô phỏng</span></div><div id="download-progress">'+downloadProgress()+'</div></section></div>';
 }
 function refreshDownload(){
   if(view!=='downloads')return;const root=$('#download-progress');if(!root)return;
@@ -153,7 +166,7 @@ function startDownload(){
 }
 function settingsView(){
   const ai=state.ai;
-  return heading('Cài đặt không gian','Thiết lập AI Supervisor và xem trạng thái hệ thống.','<span class="badge">'+(ai.ready?'AI đã kết nối':'AI chưa sẵn sàng')+'</span>')+'<div class="settings-grid"><section class="panel"><h2>AI Supervisor</h2><p class="muted" style="font-size:11px">Kiểm tra tùy chọn bằng tài khoản ChatGPT. Mọi gợi ý vẫn cần bạn duyệt.</p><label class="check-line"><input id="ai-enabled" type="checkbox" '+(ai.config.enabled?'checked':'')+'><span>Bật AI Supervisor<small>JSON audit và Visual AI Audit dùng chung phiên.</small></span></label><label class="field"><span>Model</span><select id="ai-model">'+['gpt-5.6-luna','gpt-5.6-terra','gpt-5.6-sol'].map(m=>'<option '+(ai.config.model===m?'selected':'')+'>'+m+'</option>').join('')+'</select></label><label class="field"><span>Mức suy luận</span><select id="ai-effort">'+['low','medium','high'].map(m=>'<option '+(ai.config.reasoning_effort===m?'selected':'')+'>'+m+'</option>').join('')+'</select></label><div class="action-grid"><button class="primary" data-action="ai-save" '+(state.offline?'disabled':'')+'>Lưu cấu hình</button><button class="secondary" data-action="ai-check" '+(state.offline?'disabled':'')+'>Kiểm tra kết nối</button><button class="secondary" data-action="ai-login" '+(state.offline?'disabled':'')+'>Đăng nhập ChatGPT</button></div><small>'+esc(ai.message)+' · dữ liệu mẫu</small></section><section class="panel"><h2>Hệ thống cục bộ</h2><div class="key-value"><span>Phiên bản</span><span>'+state.version+' · hợp đồng hiện tại</span></div><div class="key-value"><span>Dữ liệu</span><span>E:\\DungChung\\BiliFlow</span></div><div class="key-value"><span>Worker</span><span>1 GPU · hàng đợi FIFO</span></div><div class="key-value"><span>Xuất mặc định</span><span>Tối đa 3,5 GB</span></div><p class="muted" style="font-size:11px">Đóng tab trình duyệt không dừng Control Center.</p><div class="action-grid"><button class="secondary" data-action="shutdown" data-mode="after_stage" '+(state.offline?'disabled':'')+'>Tắt sau bước hiện tại</button><button class="danger" data-action="shutdown" data-mode="immediate" '+(state.offline?'disabled':'')+'>Tắt ngay</button></div><div class="detail-section"><h3>Tình huống kiểm thử demo</h3><label class="field"><span>Trạng thái mô phỏng</span><select id="scenario">'+scenarioOptions()+'</select><small>Chỉ thay đổi dữ liệu mẫu của bản demo này.</small></label><button class="secondary small" data-action="reset">Đặt lại dữ liệu mẫu</button></div></section></div><section class="panel" style="margin-top:18px"><h2>Lịch sử thao tác mẫu</h2><ol class="log-list">'+state.requests.slice(-8).reverse().map(r=>'<li>'+esc(r.method+' '+r.path)+'<small> · '+esc(r.operation)+'</small></li>').join('')+'</ol>'+(state.requests.length?'':'<p class="muted" style="font-size:11px">Chưa có thao tác. Bạn có thể thử duyệt, xuất hoặc lưu trữ một video mẫu.</p>')+'</section>';
+  return heading('Cài đặt không gian','Thiết lập AI Supervisor và xem trạng thái hệ thống.','<span class="badge">'+(ai.ready?'AI đã kết nối':'AI chưa sẵn sàng')+'</span>')+'<div class="settings-grid"><section class="panel"><h2>AI Supervisor</h2><p class="muted" style="font-size:11px">Kiểm tra tùy chọn bằng tài khoản ChatGPT. Mọi gợi ý vẫn cần bạn duyệt.</p><label class="check-line"><input id="ai-enabled" type="checkbox" '+(ai.config.enabled?'checked':'')+'><span>Bật AI Supervisor<small>JSON audit và Visual AI Audit dùng chung phiên.</small></span></label><label class="field"><span>Model</span><select id="ai-model">'+(Array.isArray(ai.models)&&ai.models.length?ai.models:['gpt-5.6-luna','gpt-5.6-terra','gpt-5.6-sol']).map(m=>'<option '+(ai.config.model===m?'selected':'')+'>'+m+'</option>').join('')+'</select></label><label class="field"><span>Mức suy luận</span><select id="ai-effort">'+(Array.isArray(ai.efforts)&&ai.efforts.length?ai.efforts:['low','medium','high']).map(m=>'<option '+(ai.config.reasoning_effort===m?'selected':'')+'>'+m+'</option>').join('')+'</select></label><div class="action-grid"><button class="primary" data-action="ai-save" '+(state.offline?'disabled':'')+'>Lưu cấu hình</button><button class="secondary" data-action="ai-check" '+(state.offline?'disabled':'')+'>Kiểm tra kết nối</button><button class="secondary" data-action="ai-login" '+(state.offline?'disabled':'')+'>Đăng nhập ChatGPT</button></div><small>'+esc(ai.message)+(LIVE?'':' · dữ liệu mẫu')+'</small></section><section class="panel"><h2>Hệ thống cục bộ</h2><div class="key-value"><span>Phiên bản</span><span>'+state.version+' · hợp đồng hiện tại</span></div><div class="key-value"><span>Dữ liệu</span><span>E:\\DungChung\\BiliFlow</span></div><div class="key-value"><span>Worker</span><span>1 GPU · hàng đợi FIFO</span></div><div class="key-value"><span>Xuất mặc định</span><span>Tối đa 3,5 GB</span></div><p class="muted" style="font-size:11px">Đóng tab trình duyệt không dừng Control Center.</p><div class="action-grid"><button class="secondary" data-action="shutdown" data-mode="after_stage" '+(state.offline?'disabled':'')+'>Tắt sau bước hiện tại</button><button class="danger" data-action="shutdown" data-mode="immediate" '+(state.offline?'disabled':'')+'>Tắt ngay</button></div>'+(LIVE?'':'<div class="detail-section"><h3>Tình huống kiểm thử demo</h3><label class="field"><span>Trạng thái mô phỏng</span><select id="scenario">'+scenarioOptions()+'</select><small>Chỉ thay đổi dữ liệu mẫu của bản demo này.</small></label><button class="secondary small" data-action="reset">Đặt lại dữ liệu mẫu</button></div>')+'</section></div>'+(LIVE?'':'<section class="panel" style="margin-top:18px"><h2>Lịch sử thao tác mẫu</h2><ol class="log-list">'+state.requests.slice(-8).reverse().map(r=>'<li>'+esc(r.method+' '+r.path)+'<small> · '+esc(r.operation)+'</small></li>').join('')+'</ol>'+(state.requests.length?'':'<p class="muted" style="font-size:11px">Chưa có thao tác. Bạn có thể thử duyệt, xuất hoặc lưu trữ một video mẫu.</p>')+'</section>');
 }
 function render(){
   nav();
@@ -162,8 +175,17 @@ function render(){
 }
 function refreshList(){if($('#list-body'))$('#list-body').innerHTML=listBody();}
 function changeFilter(f,fromSummary){filter=f;page=1;if(fromSummary)query='';if(!['overview','videos'].includes(view)){view='videos';location.hash='videos';}render();$('#video-list')?.scrollIntoView({block:'start',behavior:'instant'});}
-function openDrawer(id){
-  const j=getJob(id);if(!j)return;currentJob=j.id;drawerFocus=document.activeElement;
+function refreshDrawer(){
+  const root=$('#drawer-root'),body=root.querySelector('.drawer-body');if(!currentJob||!body)return;
+  const open=[...root.querySelectorAll('details')].map(d=>d.open),scroll=body.scrollTop,focus=document.activeElement;
+  const key=focus&&root.contains(focus)?[focus.dataset.action,focus.dataset.op,focus.tagName,[...root.querySelectorAll(focus.tagName)].indexOf(focus)]:null;
+  openDrawer(currentJob,true);
+  root.querySelectorAll('details').forEach((d,i)=>{if(i<open.length)d.open=open[i];});
+  const next=root.querySelector('.drawer-body');if(next)next.scrollTop=scroll;
+  if(key){const same=[...root.querySelectorAll(key[2])],target=key[0]?same.find(el=>el.dataset.action===key[0]&&el.dataset.op===key[1]&&!el.disabled):same[key[3]];if(target)target.focus({preventScroll:true});}
+}
+function openDrawer(id,refresh){
+  const j=getJob(id);if(!j){if(refresh)closeDrawer();return;}currentJob=j.id;if(!refresh)drawerFocus=document.activeElement;
   const review=j.review_summary,structure=j.structure_audit,ai=j.ai_audit;
   const exporting=C.tab(j)==='export',progress=exporting?renderPercent(j):percent(j.progress);
   const running=['scanning','export'].includes(C.tab(j))&&j.state!=='QUEUED';
@@ -179,7 +201,7 @@ function openDrawer(id){
     '<aside class="drawer" role="dialog" aria-modal="true" aria-labelledby="drawer-title">'+
       '<div class="drawer-head"><div><small>VIDEO #'+j.id+' · PHIÊN '+j.active_revision+'</small><h2 id="drawer-title">'+esc(j.name)+'</h2></div><button class="icon-button" data-action="close-drawer" aria-label="Đóng chi tiết">×</button></div>'+
       '<div class="drawer-body">'+
-        '<img class="drawer-poster" src="assets/poster-'+j.palette+'.svg" alt="Hình minh họa video mẫu">'+
+        '<img class="drawer-poster" src="assets/poster-'+j.palette+'.svg" alt="'+(LIVE?'Hình minh họa':'Hình minh họa video mẫu')+'">'+
         '<div class="drawer-heading">'+badge(j)+'<span class="muted">'+j.duration+' · '+bytes(j.source_size_bytes)+'</span></div>'+
         (j.error?'<p class="notice" role="alert">'+esc(j.error)+'</p>':'')+
         '<section class="progress-summary" aria-label="Tiến trình video">'+
@@ -205,61 +227,27 @@ function openDrawer(id){
         '</details>'+
       '</div>'+
     '</aside>';
-  document.body.style.overflow='hidden';$('.drawer [data-action="close-drawer"]').focus();
+  document.body.style.overflow='hidden';if(!refresh)$('.drawer [data-action="close-drawer"]').focus();
 }
 function closeDrawer(){ $('#drawer-root').innerHTML='';currentJob=null;document.body.style.overflow='';if(drawerFocus?.isConnected)drawerFocus.focus();}
 function showModal(title,body,commit,label){
-  scanFormJob=null;
+  scanFormJob=null;exportFormJob=null;
   modalFocus=document.activeElement;modalCommit=commit;modalBusy=false;
-  $('#modal-content').innerHTML='<div class="modal-head"><div><h2 id="modal-title">'+esc(title)+'</h2><small>Bản demo · chỉ thay đổi dữ liệu mẫu</small></div><button class="icon-button" data-action="close-modal" aria-label="Đóng hộp thoại">×</button></div><div class="modal-body">'+body+'<div class="modal-error" id="modal-error" role="alert" hidden></div></div><div class="modal-foot"><button class="secondary" data-action="close-modal" autofocus>'+(commit?'Hủy':'Đóng')+'</button>'+(commit?'<button class="primary" id="confirm-action" data-action="confirm">'+esc(label||'Xác nhận')+'</button>':'')+'</div>';
+  $('#modal-content').innerHTML='<div class="modal-head"><div><h2 id="modal-title">'+esc(title)+'</h2><small>'+(LIVE?'Gửi đến Control Center trên máy này':'Bản demo · chỉ thay đổi dữ liệu mẫu')+'</small></div><button class="icon-button" data-action="close-modal" aria-label="Đóng hộp thoại">×</button></div><div class="modal-body">'+body+'<div class="modal-error" id="modal-error" role="alert" hidden></div></div><div class="modal-foot"><button class="secondary" data-action="close-modal" autofocus>'+(commit?'Hủy':'Đóng')+'</button>'+(commit?'<button class="primary" id="confirm-action" data-action="confirm">'+esc(label||'Xác nhận')+'</button>':'')+'</div>';
   if(!$('#modal').open)$('#modal').showModal();
 }
 function closeModal(){if(modalBusy)return;$('#modal').close();modalCommit=null;if(modalFocus?.isConnected)modalFocus.focus();}
 function toast(message,error){clearTimeout(toastTimer);$('#toast').textContent=message;$('#toast').className=error?'error':'';$('#toast').hidden=false;toastTimer=setTimeout(()=>$('#toast').hidden=true,5500);}
-function queueJob(j,kind,preserve){
-  const place=preserve&&j.queue_position?j.queue_position:Math.max(0,...state.jobs.filter(x=>x.state==='QUEUED').map(x=>x.queue_position||0))+1;
-  j.state='QUEUED';j.queue_kind=kind;j.queue_position=place;delete j.error;j.render_request=kind==='export';
-}
-function normalizeQueue(){
-  state.jobs.filter(j=>j.state==='QUEUED').sort((a,b)=>a.queue_position-b.queue_position||a.id-b.id).forEach((j,i)=>j.queue_position=i+1);
-  state.queue.length=state.jobs.filter(j=>j.state==='QUEUED').length;
-  if(!state.jobs.some(j=>j.id===state.active?.job_id&&['scanning','export'].includes(C.tab(j))&&j.state!=='QUEUED'))state.active=null;
-}
-function mutate(operation,j,body){
+async function mutate(operation,j,body){
   if(state.offline)throw new Error('Mất kết nối. Chưa gửi thao tác.');
-  if(state.scenario==='conflict'&&!conflictUsed){conflictUsed=true;throw new Error('409: Dữ liệu vừa thay đổi. Đóng hộp thoại và mở lại để kiểm tra; không tự gửi lại thao tác.');}
   const gated=j&&ops(j).find(a=>a.id===operation);
   if(j&&gated&&!gated.enabled)throw new Error(gated.reason);
   if(j&&!gated&&!['decision','clear','bulkKeep','bulkAccept'].includes(operation))throw new Error('Trạng thái video không còn cho phép thao tác này.');
   if(operation==='start'||operation==='rerun')C.validateScan(body,operation==='start');
   if(operation==='finalize')C.exportSelection(body.size_mode,body.max_output_gb);
-  const descriptor=C.request(operation,j,body);
-  state.requests.push(descriptor);
-  if(j){
-    if(operation==='start'||operation==='rerun'){
-      j.detector_groups=[...body.detectors];j.ocr_recognition_batch_size=body.ocr_recognition_batch_size;j.fast_scan=body.fast_scan;
-      if(operation==='start'){j.content_style=body.content_style;j.profile=body.profile;}else{j.active_revision++;sceneCache.delete(j.id);j.active_queue_path=null;j.review_summary=null;}
-      j.hidden_at=null;queueJob(j,'scan',false);
-    }else if(operation==='resume'||operation==='retry')queueJob(j,j.render_request?'export':'scan',true);
-    else if(operation==='pause')j.state='PAUSED';
-    else if(operation==='stopAfter')j.stop_after_stage=true;
-    else if(operation==='cancel'){j.state='CANCELLED';j.render_request=false;j.queue_position=null;j.hidden_at=null;}
-    else if(operation==='skip'){j.state='SKIPPED';j.cleanup={eligible:true};j.archive={eligible:true};j.render_request=false;}
-    else if(operation==='unskip'){j.state='READY_TO_EXPORT';j.cleanup={eligible:false};j.archive={eligible:false};}
-    else if(operation==='hide')j.hidden_at=new Date().toISOString();
-    else if(operation==='unhide')j.hidden_at=null;
-    else if(operation==='finalize')queueJob(j,'export',false);
-    else if(operation==='audit')j.ai_audit={state:'QUEUED',message:body.visual?'Visual AI Audit mẫu đã xếp hàng':'JSON audit mẫu đã xếp hàng'};
-    else if(operation==='restore'){const skipped=j.state==='SKIPPED';j.source_archived=false;j.source_present=true;j.source_archive={...j.source_archive,state:'RESTORED'};j.state=skipped?'SKIPPED':j.review_summary?.status==='READY_FOR_EDIT_PLAN'?'READY_TO_EXPORT':'WAITING_REVIEW';}
-    else if(operation==='recheck'){if(body.kind==='source_cleanup')j.source_cleanup.verified=true;else j.source_archive.export_verified=true;}
-    j.updated_at=new Date().toISOString();
-  }else if(operation==='scheduler'){state.scheduler_paused=body.paused;state.queue.paused=body.paused;}
-  else if(operation==='aiConfig'){state.ai.config={...body};state.ai.ready=body.enabled;}
-  else if(operation==='aiCheck'){state.ai.ready=state.ai.config.enabled;state.ai.message=state.ai.ready?'Kết nối mẫu sẵn sàng':'AI đang tắt';}
-  else if(operation==='aiLogin')state.ai.message='Đăng nhập được mô phỏng; không mở tài khoản thật.';
-  else if(operation==='shutdown'){state.offline=true;state.active=null;}
-  previewVersion++;normalizeQueue();render();if(currentJob)openDrawer(currentJob);
-  return descriptor;
+  const result=await store.dispatch(operation,j,body);
+  if(j&&operation==='rerun')sceneCache.delete(j.id);
+  return result;
 }
 function simpleConfirm(j,a){
   const text={cancel:'Hủy xử lý video này? Video gốc, report và quyết định duyệt vẫn được giữ. Dừng chỉ tạm dừng; Bỏ qua đánh dấu xong mà không xuất.',
@@ -274,45 +262,67 @@ function simpleConfirm(j,a){
     recheck:'Đọc lại Thùng rác và ghi kết quả kiểm tra? Các bản ghi dọn/lưu trữ cũ được giữ nguyên.'};
   showModal(a.label,'<p>'+esc(text[a.id]||a.label+'?')+'</p><p><strong>#'+j.id+' · '+esc(j.name)+'</strong></p>',()=>{
     let body={};if(a.id==='recheck')body=j.source_cleanup?.state==='RECYCLED'?{kind:'source_cleanup',id:j.source_cleanup.id}:{kind:'archive_export',id:j.source_archive.id};
-    mutate(a.id,j,body);toast('Đã mô phỏng: '+a.label+' · #'+j.id);return true;
+    return mutate(a.id,j,body).then(()=>{toast(sent(a.label+' · #'+j.id));return true;});
   },a.label);
 }
 function scanForm(j,rerun){
-  const draft=scanDrafts.get(j.job_key)||{detectors:j.detector_groups.length?[...j.detector_groups]:Object.keys(C.detectors),ocr_recognition_batch_size:j.ocr_recognition_batch_size,fast_scan:j.fast_scan,content_style:j.content_style,profile:j.profile};
+  const draft=scanDrafts.get(draftKey(j))||{detectors:j.detector_groups.length?[...j.detector_groups]:Object.keys(C.detectors),ocr_recognition_batch_size:j.ocr_recognition_batch_size,fast_scan:j.fast_scan,content_style:j.content_style,profile:j.profile};
   showModal(rerun?'Chạy lại kiểm tra':'Thiết lập video','#'+j.id+' · '+esc(j.name)+'<div class="scope-options">'+Object.entries(C.detectors).map(([id,label])=>'<label class="scope-option"><input type="checkbox" name="detector" value="'+id+'" '+(draft.detectors.includes(id)?'checked':'')+'>'+label+'</label>').join('')+'</div>'+(rerun?'':'<div class="form-columns"><label class="field"><span>Loại nội dung</span><select id="scan-style">'+[['animation','Hoạt hình'],['live_action','Phim thực tế'],['mixed','Hỗn hợp']].map(([id,label])=>'<option value="'+id+'" '+(draft.content_style===id?'selected':'')+'>'+label+'</option>').join('')+'</select></label><label class="field"><span>Chế độ quét</span><select id="scan-profile"><option value="careful" '+(draft.profile==='careful'?'selected':'')+'>Tỉ mỉ</option><option value="fast" '+(draft.profile==='fast'?'selected':'')+'>Nhanh · giảm mật độ quét</option></select></label></div>')+'<label class="field"><span>OCR quảng cáo / logo</span><select id="scan-ocr"><option value="1" '+(draft.ocr_recognition_batch_size===1?'selected':'')+'>Chuẩn (mặc định)</option><option value="8" '+(draft.ocr_recognition_batch_size===8?'selected':'')+'>Tăng tốc · thử nghiệm</option></select></label><label class="check-line"><input id="scan-fast" type="checkbox" '+(draft.fast_scan?'checked':'')+'><span>Tăng tốc xử lý<small>Giữ mật độ quét. Đây là tùy chọn riêng với chế độ Nhanh ở trên.</small></span></label><p>'+(rerun?'Tạo revision mới; report và quyết định cũ được giữ.':'Xác nhận phạm vi đã chọn trước khi xếp video vào hàng đợi.')+'</p>',()=>{
     const data={detectors:[...document.querySelectorAll('input[name="detector"]:checked')].map(x=>x.value),ocr_recognition_batch_size:Number($('#scan-ocr').value),fast_scan:$('#scan-fast').checked};
     if(!rerun){data.content_style=$('#scan-style').value;data.profile=$('#scan-profile').value;}
-    C.validateScan(data,!rerun);scanDrafts.set(j.job_key,{...draft,...data});
-    showModal('Xác nhận phạm vi kiểm tra','<p><strong>#'+j.id+' · '+esc(j.name)+'</strong></p><p>Nhóm đã chọn: '+data.detectors.map(id=>esc(C.detectors[id])).join(', ')+'</p><p>Nhóm chưa kiểm tra: '+(Object.keys(C.detectors).filter(id=>!data.detectors.includes(id)).map(id=>esc(C.detectors[id])).join(', ')||'Không có')+'</p><p>'+ (rerun?'Lượt mới sẽ có revision riêng.':'Video sẽ được xếp theo thứ tự bạn bấm.')+'</p>',()=>{mutate(rerun?'rerun':'start',j,data);scanDrafts.delete(j.job_key);toast('Đã xếp video mẫu #'+j.id+' vào hàng đợi quét.');return true;},rerun?'Xác nhận chạy lại':'Xác nhận bắt đầu');
+    C.validateScan(data,!rerun);scanDrafts.set(draftKey(j),{...draft,...data});
+    showModal('Xác nhận phạm vi kiểm tra','<p><strong>#'+j.id+' · '+esc(j.name)+'</strong></p><p>Nhóm đã chọn: '+data.detectors.map(id=>esc(C.detectors[id])).join(', ')+'</p><p>Nhóm chưa kiểm tra: '+(Object.keys(C.detectors).filter(id=>!data.detectors.includes(id)).map(id=>esc(C.detectors[id])).join(', ')||'Không có')+'</p><p>'+ (rerun?'Lượt mới sẽ có revision riêng.':'Video sẽ được xếp theo thứ tự bạn bấm.')+'</p>',async()=>{await mutate(rerun?'rerun':'start',j,data);scanDrafts.delete(draftKey(j));toast((LIVE?'Đã gửi lệnh quét #':'Đã xếp video mẫu #')+j.id+(LIVE?'; xem thứ tự trong Hàng đợi.':' vào hàng đợi quét.'));return true;},rerun?'Xác nhận chạy lại':'Xác nhận bắt đầu');
     return false;
   },'Kiểm tra lựa chọn');
   scanFormJob=j.id;
 }
+let exportFormJob=null;
 function exportModal(j){
-  showModal('Xuất video đã duyệt','<p><strong>#'+j.id+' · '+esc(j.name)+'</strong></p><p>'+ (C.reviewStats(j).total)+' cảnh đã có quyết định cuối cùng. Xuất khóa các lựa chọn hiện tại.</p><label class="field"><span>Giới hạn dung lượng bản xuất</span><select id="export-mode"><option value="default">Tối đa 3,5 GB (mặc định)</option><option value="custom">Giới hạn tùy chỉnh</option><option value="unlimited">Không giới hạn dung lượng</option></select></label><label class="field" id="custom-size" hidden><span>Dung lượng tối đa (GB)</span><input id="export-gb" type="number" min="0.05" max="1000" step="0.1" value="3.5"></label><p>Video được xếp vào hàng đợi xuất. Trạng thái hoàn tất chỉ xuất hiện sau khi xuất và kiểm tra xong.</p>',()=>{
-    const selection=C.exportSelection($('#export-mode').value,$('#export-gb').value);mutate('finalize',j,selection);toast('Đã xếp video mẫu #'+j.id+' vào hàng đợi xuất.');return true;
+  showModal('Xuất video đã duyệt','<p><strong>#'+j.id+' · '+esc(j.name)+'</strong></p><p>'+ (C.reviewStats(j).total)+' cảnh đã có quyết định cuối cùng. Xuất khóa các lựa chọn hiện tại.</p><label class="field"><span>Giới hạn dung lượng bản xuất</span><select id="export-mode"><option value="default">Tối đa 3,5 GB (mặc định)</option><option value="custom">Giới hạn tùy chỉnh</option><option value="unlimited">Không giới hạn dung lượng</option></select></label><label class="field" id="custom-size" hidden><span>Dung lượng tối đa (GB)</span><input id="export-gb" type="number" min="0.05" max="1000" step="0.1" value="3.5"></label><p>Video được xếp vào hàng đợi xuất. Trạng thái hoàn tất chỉ xuất hiện sau khi xuất và kiểm tra xong.</p>',async()=>{
+    const selection=C.exportSelection($('#export-mode').value,$('#export-gb').value);
+    const result=await mutate('finalize',j,selection);exportDrafts.delete(draftKey(j));
+    const status=result&&result.body&&result.body.status;
+    toast(LIVE?(status==='COMPLETED'?'Bản xuất của lần duyệt này đã có (manifest khớp); không xuất lại.':'Đã xếp lệnh xuất #'+j.id+'. Hoàn tất chỉ hiện sau khi xuất và kiểm tra xong.'):'Đã xếp video mẫu #'+j.id+' vào hàng đợi xuất.');return true;
   },'Xác nhận xuất video');
-  const policy=j.review_summary?.export_size_policy||{},mode=['default','custom','unlimited'].includes(policy.mode)?policy.mode:'default';
-  $('#export-mode').value=mode;$('#export-gb').value=policy.maximum_output_gb||3.5;$('#custom-size').hidden=mode!=='custom';
+  exportFormJob=j;
+  const policy=j.review_summary?.export_size_policy||{},saved=exportDrafts.get(draftKey(j));
+  const mode=saved?saved.mode:['default','custom','unlimited'].includes(policy.mode)?policy.mode:'default';
+  $('#export-mode').value=mode;$('#export-gb').value=saved?saved.gb:policy.maximum_output_gb||3.5;$('#custom-size').hidden=mode!=='custom';
 }
-function filePreview(kind,ids){
-  const chosen=ids.map(getJob).filter(j=>C.eligible(j,kind)).slice(0,50),version=previewVersion,previewId='demo-preview-'+version,capacity=state.scenario==='bin_full'?49.99:7.2,total=chosen.reduce((n,j)=>n+(kind==='archive'&&j.state==='SKIPPED'?0:j.source_size_bytes),0);
-  const descriptor=C.request(kind==='cleanup'?'cleanupPreview':'archivePreview',null,{});
-  descriptor.path+='?ids='+chosen.map(j=>j.id).join(',');state.requests.push(descriptor);
-  const blocked=capacity+total/1e9>50-64*1024*1024/1e9||state.source_cleanup_running||state.offline||!chosen.length;
+function previewMarkup(kind,p,message){
+  const eligible=p.eligible||[],ineligible=p.ineligible||[],rb=p.recycle_bin;
   const text=kind==='cleanup'?'Video gốc sẽ vào Thùng rác Windows. Report, quyết định duyệt, bộ nhớ logo và bản xuất được giữ. Chỉ giải phóng dung lượng khi bạn dọn sạch Thùng rác.':'Video gốc được chuyển vào archive trên cùng ổ và kiểm SHA-256. Bản xuất và manifest của video đã xuất vào Thùng rác; video bỏ qua chỉ lưu trữ nguồn. Khôi phục trả nguồn về input để xuất lại.';
-  showModal(kind==='cleanup'?'Dọn video gốc':'Lưu trữ video','<p>'+text+'</p><ul class="confirm-list">'+chosen.map(j=>'<li><strong>#'+j.id+' · '+esc(j.name)+'</strong><small>'+esc(j.source_path)+' · '+bytes(j.source_size_bytes)+'</small><small>'+(kind==='archive'?'Nơi lưu: archive/sources/'+esc(j.job_key)+'/':'Bản xuất: '+esc(j.output_path||'Đã bỏ qua · không xuất'))+'</small></li>').join('')+'</ul><div class="bin-preview">Thùng rác ổ E · '+capacity.toLocaleString('vi-VN')+' / 50 GB<br>Sau thao tác: '+(capacity+total/1e9).toLocaleString('vi-VN',{maximumFractionDigits:2})+' GB · dự phòng 64 MiB</div>'+(blocked?'<div class="notice">Thao tác bị khóa: lựa chọn không hợp lệ, hệ thống đang bận hoặc Thùng rác không đủ chỗ.</div>':''),blocked?null:()=>{
-    if(version!==previewVersion)throw new Error('Danh sách đã thay đổi. Đóng hộp thoại rồi mở lại để duyệt danh sách mới.');
+  return (message?'<div class="notice" role="alert">'+esc(message)+'</div>':'')+'<p>'+text+'</p><ul class="confirm-list">'+eligible.map(x=>'<li><strong>#'+x.job_id+' · '+esc(x.name||x.file_name)+'</strong><small>'+esc(x.source_path||x.file_name||'')+' · '+bytes(Number(x.size_bytes)||0)+'</small><small>'+(kind==='archive'?'Nơi lưu: '+esc(x.archive_path||'archive/sources/'):'Bản xuất: '+esc(x.output_name||(x.kind==='SKIPPED'?'Đã bỏ qua · không xuất':'—')))+'</small></li>').join('')+'</ul>'+
+    (ineligible.length?'<h3>Không thực hiện ('+ineligible.length+')</h3><ul class="confirm-list">'+ineligible.map(x=>'<li><strong>#'+x.job_id+(x.name?' · '+esc(x.name):'')+'</strong><small>'+esc(x.reason)+'</small></li>').join('')+'</ul>':'')+
+    '<div class="bin-preview">'+(rb?'Thùng rác '+esc(rb.volume||'')+' · '+bytes(Number(rb.used_bytes)||0)+(rb.max_bytes?' / '+bytes(Number(rb.max_bytes)):' · không rõ giới hạn')+'<br>Sau thao tác: '+bytes(Number(rb.after_bytes)||0)+' · dự phòng 64 MiB':'Không đọc được Thùng rác: thao tác cần Thùng rác sẽ bị từ chối.')+'</div>'+
+    (p.blocked?'<div class="notice">Thao tác bị khóa: '+esc(p.blocked)+'</div>':!eligible.length?'<div class="notice">Không có video đủ điều kiện.</div>':'');
+}
+async function filePreview(kind,ids){
+  let p;
+  try{p=await store.preview(kind,ids.slice(0,50));}catch(e){toast(e.message,true);return;}
+  showPreview(kind,ids,p,'');
+}
+function showPreview(kind,ids,p,message){
+  const eligible=p.eligible||[],blocked=!!p.blocked||!eligible.length||state.source_cleanup_running||state.offline;
+  const chosen=eligible.map(x=>x.job_id);
+  showModal(kind==='cleanup'?'Dọn video gốc':'Lưu trữ video',previewMarkup(kind,p,message),blocked?null:async()=>{
     if(state.offline||state.source_cleanup_running)throw new Error('Hệ thống không sẵn sàng. Không thực hiện thao tác.');
-    if(chosen.some(j=>!C.eligible(j,kind)))throw new Error('Video không còn đủ điều kiện.');
-    if(state.scenario==='conflict'&&!conflictUsed){conflictUsed=true;throw new Error('409 preview_changed: Không tự gửi lại. Mở lại danh sách và xác nhận lần nữa.');}
-    state.requests.push(C.request(kind,null,{job_ids:chosen.map(j=>j.id),preview_id:previewId}));
-    chosen.forEach(j=>{if(kind==='cleanup'){j.source_cleaned=true;j.source_present=false;j.source_cleanup={id:1000+j.id,state:'RECYCLED',verified:true};}else{j.source_archived=true;j.source_present=false;j.source_archive={id:2000+j.id,state:'ARCHIVED',kind:j.state==='SKIPPED'?'SKIPPED':'EXPORTED',export_recycled:j.state!=='SKIPPED',export_verified:true};}selected.delete(j.id);});
-    previewVersion++;render();if(currentJob)openDrawer(currentJob);toast('Đã mô phỏng '+(kind==='cleanup'?'dọn':'lưu trữ')+' '+chosen.length+' video.');return true;
+    let result;
+    try{result=await store.fileAction(kind,chosen,p.preview_id);}
+    catch(e){
+      // 409 with a new preview: show the new list; the user confirms again. Nothing is resent.
+      if(e.status===409&&e.preview){showPreview(kind,ids,e.preview,e.message);return false;}
+      throw e;
+    }
+    const results=(result&&result.results)||[],ok=results.filter(r=>['RECYCLED','ARCHIVED'].includes(r.status));
+    ok.forEach(r=>selected.delete(r.job_id));
+    if(ok.length===results.length){toast((LIVE?'Đã ':'Đã mô phỏng ')+(kind==='cleanup'?'dọn':'lưu trữ')+' '+ok.length+' video.');return true;}
+    showModal('Kết quả từng video','<ul class="confirm-list">'+results.map(r=>'<li><strong>#'+r.job_id+' · '+esc(r.name||'')+' · '+esc(r.status)+'</strong><small>'+esc(r.message||'')+'</small></li>').join('')+'</ul><p>Mục chưa thành công vẫn được giữ trong lựa chọn.</p>',null);
+    return false;
   },kind==='cleanup'?'Chuyển '+chosen.length+' video vào Thùng rác':'Lưu trữ '+chosen.length+' video');
 }
 function auditModal(j){
-  showModal('Kiểm tra bằng AI Supervisor','<p><strong>#'+j.id+' · '+esc(j.name)+'</strong></p><label class="field"><span>Dữ liệu gửi kiểm tra</span><select id="audit-kind"><option value="json">JSON / báo cáo, không gửi ảnh</option><option value="visual">Visual AI Audit · có ảnh thumbnail</option></select></label><p>Chọn Visual AI Audit nghĩa là bạn đồng ý gửi tối đa 36 thumbnail của video này qua tài khoản ChatGPT. Video và âm thanh gốc không được gửi. AI chỉ đề xuất; bạn duyệt mọi quyết định.</p>',()=>{mutate('audit',j,{visual:$('#audit-kind').value==='visual'});toast('Đã xếp AI audit mẫu cho #'+j.id);return true;},'Xác nhận kiểm tra');
+  showModal('Kiểm tra bằng AI Supervisor','<p><strong>#'+j.id+' · '+esc(j.name)+'</strong></p><label class="field"><span>Dữ liệu gửi kiểm tra</span><select id="audit-kind"><option value="json">JSON / báo cáo, không gửi ảnh</option><option value="visual">Visual AI Audit · có ảnh thumbnail</option></select></label><p>Chọn Visual AI Audit nghĩa là bạn đồng ý gửi tối đa 36 thumbnail của video này qua tài khoản ChatGPT. Video và âm thanh gốc không được gửi. AI chỉ đề xuất; bạn duyệt mọi quyết định.</p>',async()=>{await mutate('audit',j,{visual:$('#audit-kind').value==='visual'});toast(sent('AI audit #'+j.id));return true;},'Xác nhận kiểm tra');
 }
 function sceneList(j){if(!sceneCache.has(j.id)){const scenes=Mock.scenes(j);if(!j.review_summary?.skip_eligible&&C.reviewStats(j).resolved>0&&scenes.length)scenes[0].decision='BLUR';sceneCache.set(j.id,scenes);}return sceneCache.get(j.id);}
 function readonlyReview(j){return C.locked(j)||C.inFlight(j)||j.state==='SKIPPED';}
@@ -321,46 +331,40 @@ function reviewMarkup(j){
   return '<p>Ảnh và cảnh minh họa của prototype. Khi tích hợp, nút Duyệt cảnh mở trang review hiện có của video.</p>'+(readonly?'<div class="notice">Chỉ xem · video gốc bị khóa, đã bỏ qua hoặc có lệnh xuất đang chờ/chạy.</div>':'')+'<div class="review-heading"><span>'+scenes.filter(s=>!['KEEP','BLUR','CUT'].includes(s.decision)).length+' / '+scenes.length+' cảnh cần quyết định cuối</span><button class="small secondary" data-action="bulk-review" data-op="bulkKeep" '+(readonly||state.offline?'disabled':'')+'>Giữ tất cả</button><button class="small secondary" data-action="bulk-review" data-op="bulkAccept" '+(readonly||state.offline?'disabled':'')+'>Dùng đề xuất</button></div><div class="review-scenes">'+scenes.map(s=>'<article class="scene"><div class="scene-art">'+(s.region?'<span class="watermark '+(s.decision==='BLUR'?'blurred':'')+'">LOGO MẪU</span>':'')+'<span class="retained">TÊN PHIM</span><span>'+ (s.decision==='CUT'?'Cảnh mẫu đã chọn cắt':'Khung hình minh họa')+'</span></div><div class="scene-content"><h3>'+esc(s.title)+'</h3><small>'+fmtTime(s.start)+'–'+fmtTime(s.end)+' · '+esc(s.group)+(s.region?' · vùng logo góc trái':'')+'</small><div class="scene-actions">'+[['KEEP','Giữ'],['BLUR','Làm mờ'],['CUT','Cắt'],['NEEDS_MORE_CONTEXT','Cần xem thêm']].map(([d,l])=>'<button '+(s.decision===d?'class="selected"':'')+' data-action="scene-decision" data-scene="'+s.id+'" data-decision="'+d+'" '+(readonly||state.offline?'disabled':'')+'>'+l+'</button>').join('')+'<button data-action="scene-clear" data-scene="'+s.id+'" '+(readonly||state.offline?'disabled':'')+'>Xóa quyết định</button></div></div></article>').join('')+'</div>';
 }
 function reviewModal(j){reviewJob=j.id;showModal('Duyệt cảnh · #'+j.id,reviewMarkup(j),null);}
-function updateReview(j){
+function reviewPatch(j){
   const scenes=sceneList(j),resolved=scenes.filter(s=>['KEEP','BLUR','CUT'].includes(s.decision)).length,more=scenes.filter(s=>s.decision==='NEEDS_MORE_CONTEXT').length;
   const decisions={};scenes.filter(s=>s.decision).forEach(s=>decisions[s.decision]=(decisions[s.decision]||0)+1);
-  j.review_summary={...j.review_summary,main_items:scenes.length,pending:scenes.filter(s=>!s.decision).length,decisions,status:resolved===scenes.length?'READY_FOR_EDIT_PLAN':'WAITING_REVIEW',skip_eligible:scenes.every(s=>s.decision==='KEEP')};
-  j.state=resolved===scenes.length?'READY_TO_EXPORT':'WAITING_REVIEW';previewVersion++;render();if(currentJob)openDrawer(currentJob);
+  return {review_summary:{...j.review_summary,main_items:scenes.length,pending:scenes.filter(s=>!s.decision).length,decisions,status:resolved===scenes.length?'READY_FOR_EDIT_PLAN':'WAITING_REVIEW',skip_eligible:scenes.every(s=>s.decision==='KEEP')},
+    state:resolved===scenes.length?'READY_TO_EXPORT':'WAITING_REVIEW'};
 }
 function updateReviewBody(j){$('.modal-body').innerHTML=reviewMarkup(j)+'<div class="modal-error" id="modal-error" role="alert" hidden></div>';}
 function decideScene(id,decision,clear){
   const j=getJob(reviewJob);if(!j||readonlyReview(j)||state.offline)return;
   const scene=sceneList(j).find(s=>s.id===id);if(!scene)return;
-  state.requests.push(C.request(clear?'clear':'decision',j,clear?{id}:{id,decision}));scene.decision=clear?null:decision;updateReview(j);updateReviewBody(j);
+  const before=scene.decision;scene.decision=clear?null:decision;
+  if(!store.recordReview(clear?'clear':'decision',j,clear?{id}:{id,decision},reviewPatch(j))){scene.decision=before;return;}
+  updateReviewBody(getJob(j.id));
 }
 function logoAction(key,remove){
   const l=state.logos.find(x=>x.key===key);if(!l)return;const sha=state.memory_sha256;
   const target=l.memory_class==='studio_logo'?'platform_logo':'studio_logo';
-  showModal(remove?'Xóa khỏi bộ nhớ logo':'Đổi loại logo','<p><strong>'+esc(l.name)+'</strong></p><p>'+(remove?'Bản ghi được xóa khỏi bộ nhớ; bộ nhớ và ảnh khung hình được sao lưu. Các thẻ đã duyệt không thay đổi.':'Chuyển thành '+(target==='platform_logo'?'logo nền tảng với đề xuất BLUR':'logo hãng phim với đề xuất KEEP')+'. Thay đổi có hiệu lực ở lần quét sau.')+'</p>'+(target==='platform_logo'&&!remove?'<label class="field"><span>Nền tảng</span><select id="logo-platform"><option value="iqiyi">iQIYI</option><option value="youku">Youku</option><option value="tencent_video">Tencent / WeTV</option><option value="mango_tv">Mango TV</option><option value="sohu">Sohu</option><option value="pptv">PPTV</option></select></label>':''),()=>{
+  showModal(remove?'Xóa khỏi bộ nhớ logo':'Đổi loại logo','<p><strong>'+esc(l.name)+'</strong></p><p>'+(remove?'Bản ghi được xóa khỏi bộ nhớ; bộ nhớ và ảnh khung hình được sao lưu. Các thẻ đã duyệt không thay đổi.':'Chuyển thành '+(target==='platform_logo'?'logo nền tảng với đề xuất BLUR':'logo hãng phim với đề xuất KEEP')+'. Thay đổi có hiệu lực ở lần quét sau.')+'</p>'+(target==='platform_logo'&&!remove?'<label class="field"><span>Nền tảng</span><select id="logo-platform"><option value="iqiyi">iQIYI</option><option value="youku">Youku</option><option value="tencent_video">Tencent / WeTV</option><option value="mango_tv">Mango TV</option><option value="sohu">Sohu</option><option value="pptv">PPTV</option></select></label>':''),async()=>{
     if(state.offline)throw new Error('Mất kết nối. Chưa gửi thao tác.');
-    if(sha!==state.memory_sha256||state.scenario==='conflict'&&!conflictUsed){conflictUsed=true;throw new Error('409 memory_changed: Bộ nhớ vừa thay đổi. Tải lại danh sách và xác nhận lần nữa.');}
+    if(!sha)throw new Error('Chưa tải bộ nhớ logo. Tải lại trang rồi làm lại.');
     const body={key,expected_sha256:sha};if(!remove){body.memory_class=target;if(target==='platform_logo')body.platform=$('#logo-platform').value;}
-    state.requests.push(C.request(remove?'logoDelete':'logoClass',null,body));
-    if(remove)state.logos=state.logos.filter(x=>x.key!==key);else{l.memory_class=target;l.platform=body.platform;}
-    state.memory_sha256=(parseInt(state.memory_sha256.slice(-6),16)+1).toString(16).padStart(64,'0');render();toast('Đã cập nhật bộ nhớ logo mẫu.');return true;
+    await store.logoAction(remove,body);toast(LIVE?'Đã cập nhật bộ nhớ logo.':'Đã cập nhật bộ nhớ logo mẫu.');return true;
   },remove?'Xác nhận xóa khỏi bộ nhớ':'Xác nhận đổi loại');
 }
 function jobAction(id,operation){
   const j=getJob(id),a=j&&ops(j).find(x=>x.id===operation);if(!a||!a.enabled)return;
-  if(operation==='review')reviewModal(j);
+  if(operation==='review'){if(LIVE)location.assign('/review/'+encodeURIComponent(j.id));else reviewModal(j);}
   else if(operation==='start'||operation==='rerun')scanForm(j,operation==='rerun');
   else if(operation==='finalize')exportModal(j);
   else if(operation==='audit')auditModal(j);
   else if(operation==='cleanup'||operation==='archive')filePreview(operation,[j.id]);
   else simpleConfirm(j,a);
 }
-function scenario(name){
-  state.scenario=name;state.offline=name==='offline';state.source_cleanup_running=name==='busy';conflictUsed=false;
-  const j=getJob(102);
-  if(name==='rendering'){j.state='RENDERING';j.render_progress={state:'VERIFYING',percent:98};state.active={job_id:102,stage:'render',pid:12345};}
-  else if(j.state==='RENDERING'){j.state='SCANNING_LOGO';delete j.render_progress;state.active={job_id:102,stage:'visual_logo',pid:12345};}
-  previewVersion++;render();
-}
+function scenario(name){if(LIVE)return;store.scenario(name);}
 document.addEventListener('click',async event=>{
   const el=event.target.closest('[data-action]');if(!el||el.disabled)return;
   const action=el.dataset.action;
@@ -381,7 +385,7 @@ document.addEventListener('click',async event=>{
   else if(action==='prev'){page--;refreshList();}
   else if(action==='next'){page++;refreshList();}
   else if(action==='job')jobAction(el.dataset.id,el.dataset.op);
-  else if(action==='scheduler')showModal(state.scheduler_paused?'Tiếp tục hàng đợi':'Tạm dừng hàng đợi','<p>Giữ nguyên thứ tự quét và xuất. Bước đang chạy được giữ riêng; bạn có thể dừng nó trong Chi tiết video.</p>',()=>{mutate('scheduler',null,{paused:!state.scheduler_paused});toast('Đã thay đổi hàng đợi mẫu.');return true;});
+  else if(action==='scheduler')showModal(state.scheduler_paused?'Tiếp tục hàng đợi':'Tạm dừng hàng đợi','<p>Giữ nguyên thứ tự quét và xuất. Bước đang chạy được giữ riêng; bạn có thể dừng nó trong Chi tiết video.</p>',async()=>{await mutate('scheduler',null,{paused:!state.scheduler_paused});toast(LIVE?'Đã gửi lệnh hàng đợi.':'Đã thay đổi hàng đợi mẫu.');return true;});
   else if(action==='select-all'){selected=new Set(allFiltered().filter(j=>C.eligible(j,'cleanup')).slice(0,50).map(j=>j.id));refreshList();}
   else if(action==='deselect'){selected.clear();refreshList();}
   else if(action==='bulk-cleanup'||action==='bulk-archive')filePreview(action==='bulk-cleanup'?'cleanup':'archive',[...selected]);
@@ -391,14 +395,14 @@ document.addEventListener('click',async event=>{
     const j=getJob(reviewJob);if(!j||readonlyReview(j)||state.offline)return;const op=el.dataset.op;
     const pending=sceneList(j).filter(s=>!s.decision);
     if(!pending.length){toast('Không có cảnh chưa duyệt. Các quyết định Cần xem thêm phải được duyệt riêng.',true);return;}
-    showModal(op==='bulkKeep'?'Giữ các cảnh chưa duyệt':'Dùng đề xuất chưa duyệt','<p>Xác nhận áp dụng cho '+pending.length+' cảnh chưa duyệt trong bộ lọc? Các quyết định đã có, kể cả Cần xem thêm, được giữ.</p>',()=>{state.requests.push(C.request(op,j,{filter:'all'}));pending.forEach(s=>s.decision=op==='bulkKeep'?'KEEP':s.region?'BLUR':'KEEP');updateReview(j);toast('Đã mô phỏng quyết định cho các cảnh chưa duyệt.');return true;});
+    showModal(op==='bulkKeep'?'Giữ các cảnh chưa duyệt':'Dùng đề xuất chưa duyệt','<p>Xác nhận áp dụng cho '+pending.length+' cảnh chưa duyệt trong bộ lọc? Các quyết định đã có, kể cả Cần xem thêm, được giữ.</p>',()=>{pending.forEach(s=>s.decision=op==='bulkKeep'?'KEEP':s.region?'BLUR':'KEEP');store.recordReview(op,j,{filter:'all'},reviewPatch(j));toast('Đã mô phỏng quyết định cho các cảnh chưa duyệt.');return true;});
   }
-  else if(action==='shutdown')showModal('Tắt BiliFlow','<p>'+ (el.dataset.mode==='immediate'?'Dừng bước hiện tại và tắt Control Center?':'Tắt Control Center sau khi bước hiện tại hoàn tất?')+'</p><p>Đóng tab không dừng backend. Ở demo, thao tác này mô phỏng mất kết nối.</p>',()=>{mutate('shutdown',null,{mode:el.dataset.mode});toast('Đã mô phỏng lệnh tắt; backend thật vẫn hoạt động.');return true;},'Xác nhận tắt');
-  else if(action==='ai-save'){const data={enabled:$('#ai-enabled').checked,model:$('#ai-model').value,reasoning_effort:$('#ai-effort').value};try{mutate('aiConfig',null,data);toast('Đã lưu cấu hình AI mẫu.');}catch(e){toast(e.message,true);}}
-  else if(action==='ai-check'){try{mutate('aiCheck',null,{});toast(state.ai.message);}catch(e){toast(e.message,true);}}
-  else if(action==='ai-login')showModal('Đăng nhập ChatGPT','<p>Trong bản tích hợp, thao tác này mở luồng đăng nhập hiện có. Demo chỉ mô phỏng trạng thái.</p>',()=>{mutate('aiLogin',null,{});toast('Đã mô phỏng đăng nhập.');return true;});
-  else if(action==='help')showModal('Làm việc với BiliFlow V2','<ol class="help-steps"><li><strong>Thiết lập video:</strong> chọn nhóm kiểm tra, loại nội dung và chế độ quét.</li><li><strong>Duyệt cảnh:</strong> quyết định Giữ, Làm mờ, Cắt hoặc Cần xem thêm. Cần xem thêm vẫn chặn xuất.</li><li><strong>Xuất hoặc bỏ qua:</strong> xuất khi mọi cảnh đã quyết định cuối; bỏ qua khi không cần chỉnh sửa.</li><li><strong>Quản lý video gốc:</strong> dọn vào Thùng rác hoặc lưu trữ sau khi kiểm tra bản xuất.</li></ol><p>Mọi dữ liệu là mẫu. Tải lại trang đặt lại trạng thái. Bản demo không kết nối API thật.</p>',null);
-  else if(action==='reset'){clearInterval(downloadTimer);downloadTimer=null;downloadDraft={domain:D.domains[0].id,url:'',error:''};downloadQueue=D.createQueue();downloadFilter='all';state=Mock.create();sceneCache.clear();scanDrafts.clear();selected.clear();previewVersion++;conflictUsed=false;filter='all';query='';page=1;closeDrawer();render();toast('Đã đặt lại dữ liệu mẫu.');}
+  else if(action==='shutdown')showModal('Tắt BiliFlow','<p>'+ (el.dataset.mode==='immediate'?'Dừng bước hiện tại và tắt Control Center?':'Tắt Control Center sau khi bước hiện tại hoàn tất?')+'</p><p>Đóng tab không dừng backend. '+(LIVE?'Control Center nhận lệnh rồi mới tắt; trang sẽ mất kết nối.':'Ở demo, thao tác này mô phỏng mất kết nối.')+'</p>',async()=>{await mutate('shutdown',null,{mode:el.dataset.mode});toast(LIVE?'Control Center nhận lệnh tắt (202). Chưa chứng minh đã tắt; kiểm tra lại sau.':'Đã mô phỏng lệnh tắt; backend thật vẫn hoạt động.');return true;},'Xác nhận tắt');
+  else if(action==='ai-save'){const data={enabled:$('#ai-enabled').checked,model:$('#ai-model').value,reasoning_effort:$('#ai-effort').value};if(el.dataset.busy)return;el.dataset.busy='1';try{await mutate('aiConfig',null,data);aiDirty=false;toast(LIVE?'Đã lưu cấu hình AI.':'Đã lưu cấu hình AI mẫu.');render();}catch(e){toast(e.message,true);}finally{delete el.dataset.busy;}}
+  else if(action==='ai-check'){if(el.dataset.busy)return;el.dataset.busy='1';try{await mutate('aiCheck',null,{});state=store.snapshot();toast(state.ai.message);render();}catch(e){toast(e.message,true);}finally{delete el.dataset.busy;}}
+  else if(action==='ai-login')showModal('Đăng nhập ChatGPT',(LIVE?'<p>Mở luồng đăng nhập ChatGPT hiện có của Codex trên máy này. Không dùng API trả phí.</p>':'<p>Trong bản tích hợp, thao tác này mở luồng đăng nhập hiện có. Demo chỉ mô phỏng trạng thái.</p>'),async()=>{await mutate('aiLogin',null,{});toast(LIVE?'Đã mở luồng đăng nhập ChatGPT hiện có.':'Đã mô phỏng đăng nhập.');return true;});
+  else if(action==='help')showModal('Làm việc với BiliFlow V2','<ol class="help-steps"><li><strong>Thiết lập video:</strong> chọn nhóm kiểm tra, loại nội dung và chế độ quét.</li><li><strong>Duyệt cảnh:</strong> quyết định Giữ, Làm mờ, Cắt hoặc Cần xem thêm. Cần xem thêm vẫn chặn xuất.</li><li><strong>Xuất hoặc bỏ qua:</strong> xuất khi mọi cảnh đã quyết định cuối; bỏ qua khi không cần chỉnh sửa.</li><li><strong>Quản lý video gốc:</strong> dọn vào Thùng rác hoặc lưu trữ sau khi kiểm tra bản xuất.</li></ol>'+(LIVE?'<p>Dữ liệu lấy từ Control Center trên máy này. Trang Tải video vẫn là mô phỏng.</p>':'<p>Mọi dữ liệu là mẫu. Tải lại trang đặt lại trạng thái. Bản demo không kết nối API thật.</p>')+'',null);
+  else if(action==='reset'&&!LIVE){clearInterval(downloadTimer);downloadTimer=null;downloadDraft={domain:D.domains[0].id,url:'',error:''};downloadQueue=D.createQueue();downloadFilter='all';sceneCache.clear();scanDrafts.clear();exportDrafts.clear();selected.clear();filter='all';query='';page=1;closeDrawer();if(!LIVE)store.reset();render();toast('Đã đặt lại dữ liệu mẫu.');}
   else if(action==='confirm'&&modalCommit&&!modalBusy){
     const callback=modalCommit;modalBusy=true;el.disabled=true;
     try{const done=await callback();modalBusy=false;if(done!==false)closeModal();}
@@ -409,9 +413,11 @@ document.addEventListener('click',async event=>{
 document.addEventListener('change',event=>{
   const el=event.target;
   if(scanFormJob && (el.name==='detector'||['scan-ocr','scan-fast','scan-style','scan-profile'].includes(el.id))){
-    const j=getJob(scanFormJob),old=scanDrafts.get(j.job_key)||{};
-    scanDrafts.set(j.job_key,{...old,detectors:[...document.querySelectorAll('input[name="detector"]:checked')].map(x=>x.value),ocr_recognition_batch_size:Number($('#scan-ocr').value),fast_scan:$('#scan-fast').checked,content_style:$('#scan-style')?.value||j.content_style,profile:$('#scan-profile')?.value||j.profile});
+    const j=getJob(scanFormJob);if(!j)return;const old=scanDrafts.get(draftKey(j))||{};
+    scanDrafts.set(draftKey(j),{...old,detectors:[...document.querySelectorAll('input[name="detector"]:checked')].map(x=>x.value),ocr_recognition_batch_size:Number($('#scan-ocr').value),fast_scan:$('#scan-fast').checked,content_style:$('#scan-style')?.value||j.content_style,profile:$('#scan-profile')?.value||j.profile});
   }
+  if(exportFormJob&&['export-mode','export-gb'].includes(el.id))exportDrafts.set(draftKey(exportFormJob),{mode:$('#export-mode').value,gb:$('#export-gb').value});
+  if(['ai-enabled','ai-model','ai-effort'].includes(el.id))aiDirty=true;
   if(el.id==='sort'){sort=el.value;page=1;refreshList();}
   else if(el.id==='download-domain'){downloadDraft.domain=el.value;downloadDraft.error='';render();}
   else if(el.id==='download-parallel'){D.setParallel(downloadQueue,el.value);refreshDownload();ensureDownloadTimer();}
@@ -431,7 +437,35 @@ document.addEventListener('keydown',event=>{
     else if(!event.shiftKey&&document.activeElement===last){event.preventDefault();first?.focus();}
   }
 });
-function route(){const hash=location.hash.slice(1);view=['overview','downloads','videos','queue','logos','settings'].includes(hash)?hash:'overview';closeDrawer();render();window.scrollTo(0,0);}
+function route(){aiDirty=false;const hash=location.hash.slice(1);view=['overview','downloads','videos','queue','logos','settings'].includes(hash)?hash:'overview';closeDrawer();render();window.scrollTo(0,0);}
 window.addEventListener('hashchange',route);
+/* A new snapshot (polling or after an action) re-renders without losing the user's place. */
+function liveChrome(){
+  if(!LIVE)return;const d=state.resources&&state.resources.disk||{},strong=$('.storage-mini strong'),bar=$('.storage-mini .meter i');
+  if(strong)strong.textContent=Number.isFinite(d.free_bytes)?bytes(d.free_bytes)+' trống':'—';
+  if(bar)bar.style.width=(Number(d.percent)||0)+'%';
+}
+function onSnapshot(){
+  state=store.snapshot();liveChrome();
+  if(view==='downloads'||view==='settings'&&(aiDirty||$('#main').contains(document.activeElement))){nav();return;}
+  const focus=document.activeElement,id=focus&&focus.id,range=id==='search'?[focus.selectionStart,focus.selectionEnd]:null,y=window.scrollY;
+  const inMain=focus&&$('#main').contains(focus)?[focus.dataset.action,focus.dataset.id,focus.dataset.op,focus.dataset.filter]:null;
+  render();
+  if(currentJob)refreshDrawer();
+  if(id&&$('#main').contains(document.getElementById(id))){const el=document.getElementById(id);el.focus({preventScroll:true});if(range)el.setSelectionRange(range[0],range[1]);}
+  else if(inMain){const el=[...$('#main').querySelectorAll('[data-action]')].find(x=>x.dataset.action===inMain[0]&&x.dataset.id===inMain[1]&&x.dataset.op===inMain[2]&&x.dataset.filter===inMain[3]);if(el)el.focus({preventScroll:true});}
+  window.scrollTo(0,y);
+}
+store.subscribe(onSnapshot);
+if(LIVE){
+  const pill=$('.demo-pill');if(pill)pill.textContent='CONTROL CENTER';
+  const reset=$('[data-action="reset"]');if(reset)reset.remove();
+  const mini=$('.storage-mini small');if(mini)mini.textContent='Xem dung lượng thật ở Tổng quan';
+  const footer=$('.page-footer span:last-child');if(footer)footer.textContent='Dashboard V2 · route xem thử /dashboard-v2';
+  const profile=$('.profile small');if(profile)profile.textContent='Dashboard V2 · xem thử';
+  window.addEventListener('hashchange',()=>{if(view==='logos')store.loadMemory().catch(e=>toast(e.message,true));if(view==='settings')store.loadAI();});
+  store.start(3000);
+}
 route();
+if(LIVE&&view==='logos')store.loadMemory().catch(e=>toast(e.message,true));
 })();

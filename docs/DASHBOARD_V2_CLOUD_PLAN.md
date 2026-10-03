@@ -171,13 +171,13 @@ Bảng ở mục 7 có hai cột kết quả: **Cloud** và **Máy thật**.
 
 | ID | Hạng mục | Cloud | Máy thật | Bằng chứng |
 | --- | --- | --- | --- | --- |
-| C1 | Tách DemoStore khỏi phần render; render chỉ nhận snapshot đã chuẩn hóa | [ ] | — | |
-| C2 | `ControlCenterAdapter` là nơi duy nhất gọi HTTP. Lấy token qua GET `/api/session`; POST gửi `Content-Type: application/json` và `X-BiliFlow-Token` | [ ] | [ ] | |
-| C3 | Test adapter bằng transport giả: đúng endpoint/body cho từng thao tác ở guide mục 4; 403 làm mới token **một** lần; 409 không replay; 400/408 hiện lý do; response cũ không ghi đè response mới | [ ] | — | |
-| C4 | Draft (detector, OCR, metadata, chính sách xuất) không mất khi polling hoặc khi mở/đóng Chi tiết | [ ] | [ ] | |
-| C5 | Các khóa: NEEDS_MORE_CONTEXT hoặc pending chặn xuất; nguồn missing/cleaned/archived; export đang chạy; hủy dialog không POST; bấm đúp chỉ gửi một POST | [ ] | [ ] | |
-| C6 | Desktop 1280 và mobile 375 không tràn ngang; Tab/Escape đúng trong modal và drawer. Chỉ làm nếu cloud có trình duyệt headless, nếu không thì `[-]` | [ ] | [ ] | |
-| C7 | Trang Tải video vẫn là mô phỏng: có nhãn rõ ở bản live (hoặc ẩn sau cờ), không gọi mạng | [ ] | [ ] | |
+| C1 | Tách DemoStore khỏi phần render; render chỉ nhận snapshot đã chuẩn hóa | [x] | — | `demo-store.js` (fixture + mutation) và `BFAdapter.createLiveStore` có cùng giao diện `snapshot/subscribe/dispatch/preview/fileAction/logoAction`; `app.js` chỉ đọc `store.snapshot()`. `node dashboard_v2/verify.cjs` → 28/28 (thêm: demo không nạp adapter, live không nạp fixture, chỉ adapter.js có fetch, DemoStore 409 không ghi) |
+| C2 | `ControlCenterAdapter` là nơi duy nhất gọi HTTP. Lấy token qua GET `/api/session`; POST gửi `Content-Type: application/json` và `X-BiliFlow-Token` | [x] | [ ] | `dashboard_v2/adapter.js`; verify.cjs kiểm không file nào khác có fetch/XHR/WebSocket. `node dashboard_v2/verify-adapter.cjs` test 1: token qua GET `/api/session`, header đúng, token không nằm trong URL, dùng lại token |
+| C3 | Test adapter bằng transport giả: đúng endpoint/body cho từng thao tác ở guide mục 4; 403 làm mới token **một** lần; 409 không replay; 400/408 hiện lý do; response cũ không ghi đè response mới | [x] | — | `node dashboard_v2/verify-adapter.cjs` → 15/15: 26 thao tác guide mục 4 đúng path/body; 403 → làm mới token đúng 1 lần, 403 lần 2 hiện lỗi (2 POST); 409 giữ `code`/`preview`, 1 POST; 400 finalize hiện nguyên văn; 408/500/mất kết nối không gửi lại; GET 403 không làm mới token; `/api/status` cũ trả về sau → bỏ; bấm đúp 1 POST |
+| C4 | Draft (detector, OCR, metadata, chính sách xuất) không mất khi polling hoặc khi mở/đóng Chi tiết | [x] | [ ] | `node dashboard_v2/browser-check.cjs` (Chromium headless + API giả): draft quét (bỏ nhóm gore, OCR 8) và xuất (custom 2,5 GB) còn sau polling và sau khi đóng/mở lại; POST finalize đúng body. Draft gắn với `job_key + source_sha256 + revision`. Drawer giữ mục đang mở và focus khi polling; form AI chưa lưu không bị dựng lại. Lỗi tìm được và đã sửa trong commit này: focus trong drawer nhảy sang `summary` khác sau polling |
+| C5 | Các khóa: NEEDS_MORE_CONTEXT hoặc pending chặn xuất; nguồn missing/cleaned/archived; export đang chạy; hủy dialog không POST; bấm đúp chỉ gửi một POST | [x] | [ ] | browser-check: NEEDS_MORE_CONTEXT còn 1 → nút Xuất disabled; Hủy dialog → 0 POST; bấm đúp Xác nhận → 1 POST; 409 hiện lý do trong dialog, không gửi lại. Khóa nguồn/xuất đang chạy: verify.cjs (missing source, render request, archived/cleaned, khóa file chung). Adapter tự chặn POST trùng khi đang bay |
+| C6 | Desktop 1280 và mobile 375 không tràn ngang; Tab/Escape đúng trong modal và drawer. Chỉ làm nếu cloud có trình duyệt headless, nếu không thì `[-]` | [x] | [ ] | browser-check (Playwright 1.56, Chromium headless): 1280 không tràn; 375 px không tràn ở overview/videos/queue/downloads/logos/settings và drawer; Tab 25 lần vẫn trong drawer; Escape đóng modal trước rồi mới đóng drawer. Lỗi tìm được và đã sửa: hero đọc `gpu.name` → trang trắng khi `gpu` null; VRAM cố định của fixture |
+| C7 | Trang Tải video vẫn là mô phỏng: có nhãn rõ ở bản live (hoặc ẩn sau cờ), không gọi mạng | [x] | [ ] | Bản live có badge “MÔ PHỎNG” và khung `#download-simulation`; browser-check: thêm 3 link mẫu → 0 POST, 0 request ra ngoài origin. Không có downloader/endpoint |
 
 ### D. Route `/dashboard-v2` (Pha 3)
 
@@ -228,6 +228,7 @@ git worktree remove ../bf-base
 
 | Ngày | Commit | Việc đã làm | Test đã chạy | Còn lại |
 | --- | --- | --- | --- | --- |
+| 2026-10-03 | (pha 2) | Tách DemoStore, viết ControlCenterAdapter + live store, `live.html`, gate `verify-adapter.cjs`, `browser-check.cjs` (API giả), `tests/test_dashboard_v2_frontend.py`; sửa 2 lỗi do browser-check tìm ra (focus drawer, `gpu` null) | verify.cjs 28/28; verify-adapter 15/15; browser-check 14/14; test_dashboard_v2_frontend + contract 9 OK | Pha 3 (route `/dashboard-v2/`). Push pha 0–1 bị 403 (GitHub), commit vẫn ở local |
 | 2026-10-03 | (pha 0–1) | Pha 0: chạy nền A1–A4. Pha 1: đối chiếu route/schema/state với code, thêm `tests/test_dashboard_v2_contract.py`, guide mục 8, sửa guide mục 4 và 7 | verify.cjs 25/25; node --check; test_dashboard_v2_contract 6 OK; test_export_identity 28 OK; test_control_center 52/53 (1 lỗi thiếu PowerShell); A4 không đổi | Pha 2 (frontend), Pha 3 (route) |
 
 ## 10. Quy tắc commit và bàn giao

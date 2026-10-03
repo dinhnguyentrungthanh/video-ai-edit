@@ -36,6 +36,10 @@ Ngày: 2026-10-03. Đối chiếu ban đầu với Control Center 0.7.24, commit
 | `app.js` | Các view và logic thay đổi fixture | Tách lớp dữ liệu demo khỏi presenter; thay bằng adapter đã kiểm thử |
 | `serve.py`, `Start-Demo.cmd` | Server demo static | Không dùng làm proxy hoặc server production |
 | `verify.cjs` | Kiểm tra hợp đồng, khóa quan trọng và không có transport | Giữ như gate cho prototype; bổ sung gate adapter riêng |
+| `demo-store.js` | (Pha 2) DemoStore: fixture + mutation trong bộ nhớ, cùng giao diện với live store | Chỉ nạp ở `index.html` |
+| `adapter.js` | (Pha 2) ControlCenterAdapter + live store + chuẩn hóa snapshot; nơi duy nhất có HTTP | Chỉ nạp ở `live.html` |
+| `live.html` | (Pha 2) Trang live, `connect-src 'self'`, `data-mode="live"` | Phục vụ ở `/dashboard-v2/` (Pha 3) |
+| `verify-adapter.cjs`, `browser-check.cjs` | (Pha 2) Gate adapter bằng transport giả; kiểm tra trình duyệt tùy chọn với API giả | Chạy trước khi đổi adapter/presenter |
 
 ## 2. Mapping giao diện
 
@@ -354,3 +358,5 @@ Tình trạng: **khớp** (endpoint, body và khóa đã khớp code), **một p
 - 400: hiện nguyên văn `error`.
 - GET chỉ thử lại khi người dùng bấm; 403 của GET không làm mới token.
 - Mọi request đi qua một adapter duy nhất; token chỉ ở bộ nhớ, không ghi URL, localStorage hay log.
+- Trường hiển thị adapter tự thêm (`normalizeJob`): `name` = tên file của `source_path`, `duration` từ `duration_seconds`, `palette` (ảnh minh họa), `output_path` = `cleanup.output_name`/`archive.output_name` do backend trả (không tự tính), `render_request` = `current_stage === "render"` và state PAUSED/FAILED/INTERRUPTED_RECOVERABLE (chỉ để khóa nút; backend vẫn là nguồn thẩm quyền và 409/400 được hiển thị).
+- Polling: `/api/status` mỗi 3 s (như dashboard cũ); `/api/ai` khi mở trang và khi đang đăng nhập; `/api/logo-memory` khi mở trang Bộ nhớ logo và sau mỗi thao tác logo.
