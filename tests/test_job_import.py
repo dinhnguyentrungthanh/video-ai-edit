@@ -9,7 +9,7 @@ from biliflow.job_import import import_existing_project
 from biliflow.job_pipeline import PipelineStage
 from biliflow.job_store import JobStore
 from biliflow.review_workflow import review_export_paths
-from biliflow.scheduler import JobScheduler
+from biliflow.scheduler import InputWatcher, JobScheduler
 
 
 class JobImportTests(unittest.TestCase):
@@ -215,6 +215,121 @@ class RestartImportTests(unittest.TestCase):
         self.assertEqual((after["state"], after["current_stage"], after["error"]), ("WAITING_REVIEW", None, None))
         self.assertEqual(after["active_queue_path"], queue_path.relative_to(self.root).as_posix())
         self.assertEqual(after["active_revision"], 2)
+
+    def clean(self, state="RECYCLED", job_id=None):
+        """A "Dọn video gốc" row as execute_cleanup leaves it (the watcher row is reset)."""
+        job = self.store.get_job(self.job_id if job_id is None else job_id)
+        source = Path(job["source_path"])
+        row_id = self.store.add_source_cleanup(
+            job_id=int(job["id"]), kind="EXPORTED", source_path=str(source.resolve()),
+            source_sha256=job["source_sha256"], size_bytes=job["source_size_bytes"],
+            mtime_ns=job["source_mtime_ns"], output_path="output/movie-reviewed.mp4",
+        )
+        if state == "RECYCLED":  # the file left input/
+            source.unlink()
+            self.store.finish_source_cleanup(row_id, state=state, verified=True)
+            self.store.reset_watched_file(source)
+        elif state == "FAILED":  # the file never moved
+            self.store.finish_source_cleanup(row_id, state=state, error="File đang được mở")
+        return row_id
+
+    def identity(self, job_id=None):
+        job = self.store.get_job(self.job_id if job_id is None else job_id)
+        keys = ("source_path", "source_sha256", "source_size_bytes", "source_mtime_ns", "state",
+                "active_queue_path", "active_revision", "content_style", "progress", "updated_at")
+        return ({key: job[key] for key in keys}, self.store.revisions(int(job["id"])),
+                self.store.artifacts(int(job["id"])), len(self.store.list_jobs()))
+
+    def test_a_different_file_at_a_cleaned_path_is_left_to_the_watcher(self):
+        # The queue still names input/movie.mp4: without the cleaned-path skip the
+        # import would take the old sha from it and give the job this file's size/mtime.
+        self.store.update_job(self.job_id, state="COMPLETED", progress=1.0)
+        row_id = self.clean()
+        self.source.write_bytes(b"a different video at the old name")
+        before = self.identity()
+        with patch("biliflow.job_import.sha256_file", side_effect=AssertionError("hashed by import")), \
+                patch("biliflow.job_import.probe_video", side_effect=AssertionError("probed by import")):
+            self.restart()
+        self.assertEqual(self.identity(), before)
+        self.assertEqual(self.store.latest_source_cleanup(self.job_id)["state"], "RECYCLED")
+        # The import did not mark the path either: the watcher hashes it once
+        # stable, rejects it for the old job and makes it a new job.
+        watcher = InputWatcher(self.root, self.store, stable_seconds=0)
+        with patch("biliflow.scheduler.probe_video", return_value={}), \
+                patch("biliflow.scheduler.duration_seconds", return_value=12.0):
+            self.assertEqual(watcher.scan_once(), 1)
+        rejected = [event for event in self.store.events(self.job_id) if event["event_type"] == "SOURCE_RESTORE_REJECTED"]
+        self.assertEqual(len(rejected), 1)
+        self.assertEqual(rejected[0]["payload"]["expected_sha256"], self.digest)
+        self.assertEqual(self.store.latest_source_cleanup(self.job_id)["id"], row_id)
+        self.assertEqual(len(self.store.list_jobs()), 2)
+
+    def test_a_cleaned_path_no_queue_names_is_never_hashed_or_imported(self):
+        # A job the watcher discovered (no historical queue names its path):
+        # the import must not hash the new file there and make it a job itself,
+        # or the watcher would never reject it for the cleaned job.
+        other = self.root / "input" / "other.mp4"
+        other.write_bytes(b"other source")
+        other_id = int(self.store.upsert_job(
+            job_key="other", source_path=other, source_sha256=hashlib.sha256(b"other source").hexdigest(),
+            source_size_bytes=12, source_mtime_ns=other.stat().st_mtime_ns,
+            content_style="live_action", state="COMPLETED",
+        )["id"])
+        self.clean(job_id=other_id)
+        other.write_bytes(b"a replacement video")
+        before = self.identity(other_id)
+        with patch("biliflow.job_import.sha256_file", side_effect=AssertionError("hashed by import")), \
+                patch("biliflow.job_import.probe_video", side_effect=AssertionError("probed by import")):
+            self.restart()
+        self.assertEqual(self.identity(other_id), before)
+        watcher = InputWatcher(self.root, self.store, stable_seconds=0)
+        with patch("biliflow.scheduler.probe_video", return_value={}), \
+                patch("biliflow.scheduler.duration_seconds", return_value=12.0):
+            self.assertEqual(watcher.scan_once(), 1)
+        rejected = [event for event in self.store.events(other_id) if event["event_type"] == "SOURCE_RESTORE_REJECTED"]
+        self.assertEqual(len(rejected), 1)
+        self.assertTrue(self.store.source_cleaned(other_id))
+
+    def test_the_cleaned_video_under_another_name_does_not_move_the_job(self):
+        self.store.update_job(self.job_id, state="COMPLETED", progress=1.0)
+        self.clean()
+        renamed = self.root / "input" / "movie (restored).mp4"
+        renamed.write_bytes(b"source")
+        before = self.identity()
+        with patch("biliflow.job_import.probe_video", side_effect=AssertionError("probed by import")):
+            self.restart()
+        self.assertEqual(self.identity(), before)
+        self.assertEqual(self.store.get_job(self.job_id)["source_path"], str(self.source.resolve()))
+        self.assertTrue(self.store.source_cleaned(self.job_id))
+
+    def test_a_pending_cleanup_is_left_alone_by_the_import(self):
+        # The shell call has not answered: the file is still there, unchanged.
+        self.store.update_job(self.job_id, state="COMPLETED", progress=1.0)
+        self.clean(state="PENDING")
+        self.source.write_bytes(b"source, but rewritten")
+        before = self.identity()
+        with patch("biliflow.job_import.sha256_file", side_effect=AssertionError("hashed by import")):
+            self.restart()
+        self.assertEqual(self.identity(), before)
+        self.assertEqual(self.store.latest_source_cleanup(self.job_id)["state"], "PENDING")
+
+    def test_a_restored_or_failed_cleanup_imports_as_before(self):
+        # Only PENDING/RECYCLED rows lock the job; the export of the active
+        # review still completes a job whose source came back.
+        for state in ("RESTORED", "FAILED"):
+            with self.subTest(state=state):
+                self.store.update_job(self.job_id, state="READY_TO_EXPORT", progress=0.0)
+                row_id = self.clean(state="RECYCLED" if state == "RESTORED" else "FAILED")
+                if state == "RESTORED":
+                    self.source.write_bytes(b"source")
+                    self.assertIsNotNone(self.store.mark_source_restored(
+                        row_id, mtime_ns=self.source.stat().st_mtime_ns))
+                self.assertEqual(self.store.latest_source_cleanup(self.job_id)["state"], state)
+                self.write_manifest(review_export_paths(self.root, self.queue)[1])
+                after = self.restart()
+                self.assertEqual((after["state"], after["progress"]), ("COMPLETED", 1.0))
+                self.assertEqual(after["source_mtime_ns"], self.source.stat().st_mtime_ns)
+                self.assertEqual(len(self.store.list_jobs()), 1)
 
     def test_first_import_still_uses_any_completed_manifest(self):
         with TemporaryDirectory() as directory:

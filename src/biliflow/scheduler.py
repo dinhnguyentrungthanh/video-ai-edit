@@ -10,8 +10,18 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from biliflow.job_import import VIDEO_EXTENSIONS
+from biliflow.job_import import VIDEO_EXTENSIONS, source_path_key
 from biliflow.codex_supervisor import run_local_queue_audit
+# A skipped video ("Bỏ qua (không xuất)") must be reopened before it can run
+# again; both refusals stay importable from biliflow.scheduler. A source moved
+# to the Recycle Bin by "Dọn video gốc" locks every action on its job.
+from biliflow.export_guards import (
+    RESUMABLE_EXPORT_STATES,
+    SKIPPED_REFUSAL,
+    SKIPPED_STOP_REFUSAL,
+    SOURCE_CLEANED_MESSAGE,
+    SOURCE_CLEANED_STOP_REFUSAL,
+)
 from biliflow.job_pipeline import (
     DEFAULT_DETECTOR_GROUPS,
     PipelineStage,
@@ -43,10 +53,36 @@ STARTABLE_STATES = {"NEEDS_METADATA", "DISCOVERED"}
 # Stages whose _after_success sets the job's final state. The worker marks the
 # stage COMPLETED first, so a crash in between leaves no pending stage to run.
 FINISHING_STAGES = ("build_review", "render")
-# A skipped video ("Bỏ qua (không xuất)") must be reopened before it can run again.
-SKIPPED_REFUSAL = "Video đã được đánh dấu bỏ qua; bấm “Mở lại để xuất” trước."
-SKIPPED_STOP_REFUSAL = (
-    "Video đã được đánh dấu bỏ qua (không xuất); không có gì để dừng hoặc hủy."
+# Why an export request (a render stage not yet RUNNING or COMPLETED) was
+# retired; the message is the event text and the stage error.
+EXPORT_RETIRE_MESSAGES = {
+    "cancel": "Đã hủy lệnh xuất video.",
+    "review_changed": (
+        "Lệnh xuất cũ hết hiệu lực vì quyết định duyệt đã đổi; bấm “Xuất video” để xuất lại."
+    ),
+    "skipped": "Lệnh xuất cũ hết hiệu lực vì video đã được đánh dấu bỏ qua.",
+    "output_exists": "Bản xuất của lần duyệt này đã có; không cần render lại.",
+}
+RESUME_STALE_EXPORT_REFUSAL = "Lệnh xuất cũ không còn hiệu lực; bấm “Xuất video” để xuất lại."
+# Format with job_id=...
+RESUME_SETTLED_REFUSAL = (
+    "Video #{job_id} đã có kết quả duyệt; dùng “Xuất video” hoặc “Chạy lại kiểm tra” "
+    "thay vì Tiếp tục."
+)
+# A job with a recorded review result has nothing for Tiếp tục to continue.
+RESUME_SETTLED_STATES = frozenset({"WAITING_REVIEW", "READY_TO_EXPORT", "COMPLETED"})
+# RESUMABLE_EXPORT_STATES (imported above): the only states in which a pending
+# render is an export the user paused, that failed, or that a restart
+# interrupted, so Tiếp tục may run it. The standalone review UI refuses edits
+# in exactly those states (export_guards.standalone_edit_refusal).
+# InputWatcher events for a source that "Dọn video gốc" moved to the Recycle Bin.
+SOURCE_RESTORED_MESSAGE = "Đã khôi phục video gốc (SHA-256 khớp)"
+# Format with file_name=... (the name the source had in input/).
+SOURCE_RESTORE_WRONG_PATH_MESSAGE = (
+    "Đã thấy video gốc ở tên khác; hãy chép lại đúng tên “{file_name}” vào input."
+)
+SOURCE_RESTORE_REJECTED_MESSAGE = (
+    "File mới ở đường dẫn cũ có SHA-256 khác video gốc; không dùng để chạy lại."
 )
 
 
@@ -221,6 +257,7 @@ class JobScheduler:
         """
         with self._start_lock:
             job = self.store.get_job(job_id)
+            self._refuse_cleaned(job_id)
             if job["state"] not in STARTABLE_STATES:
                 raise ValueError(
                     f"Video #{job_id} đang ở trạng thái {job['state']}, không còn chờ thiết lập; "
@@ -246,6 +283,8 @@ class JobScheduler:
         """
         with self._start_lock:
             job = self.store.get_job(job_id)
+            # Before anything is written (render:{id} and skip:{id} below).
+            self._refuse_cleaned(job_id)
             active = self.active
             if (active and active["job_id"] == job_id) or job["state"] in IN_PROCESS_STATES:
                 raise ValueError("Dừng job hiện tại trước khi chạy lại từ đầu")
@@ -284,17 +323,38 @@ class JobScheduler:
             self._wake.set()
             return value
 
+    def _resume_refusal(self, job: dict[str, Any], pending: dict[str, Any] | None) -> str | None:
+        """Why Tiếp tục must not queue ``job`` again, given its next pending stage.
+
+        A settled job (review recorded or exported) has nothing to continue,
+        and a pending render is a live export only while the job was paused,
+        failed, interrupted or is still queued; anywhere else (for example a
+        cancelled job) it is an old request that Xuất video must replace.
+        """
+        if job["state"] in RESUME_SETTLED_STATES:
+            return RESUME_SETTLED_REFUSAL.format(job_id=job["id"])
+        if (
+            pending is not None and pending["name"] == "render"
+            and job["state"] not in RESUMABLE_EXPORT_STATES
+        ):
+            return RESUME_STALE_EXPORT_REFUSAL
+        return None
+
     def resume(self, job_id: int) -> dict:
         with self.job_action_lock:
             job = self.store.get_job(job_id)
             if job["state"] == "SKIPPED":
                 raise ValueError(SKIPPED_REFUSAL)
+            self._refuse_cleaned(job_id)
             if job["content_style"] == "unknown":
                 raise ValueError("Choose animation, live_action, or mixed before starting")
             if self.is_busy(job_id) or job["state"] in IN_PROCESS_STATES:
                 raise ValueError(
                     f"Video #{job_id} đang được xử lý; chờ bước hiện tại xong rồi hãy bấm Tiếp tục."
                 )
+            refusal = self._resume_refusal(job, self.store.next_pending_stage(job_id))
+            if refusal:
+                raise ValueError(refusal)
             # Tiếp tục / Thử lại keep the job's place in the queue (user decision
             # 2026-10-02), including after a graceful shutdown or a restart.
             if not self.store.stages(job_id):
@@ -324,9 +384,18 @@ class JobScheduler:
         if self.store.get_job(job_id)["state"] == "SKIPPED":
             raise ValueError(SKIPPED_STOP_REFUSAL)
 
+    def _refuse_cleaned(self, job_id: int, message: str = SOURCE_CLEANED_MESSAGE) -> None:
+        # The source is in the Recycle Bin, or the shell call moving it there
+        # has not answered (latest source_cleanups row RECYCLED or PENDING).
+        # Only the watcher unlocks the job, once the same file is back.
+        # Called inside job_action_lock, before any write.
+        if self.store.source_cleaned(job_id):
+            raise ValueError(message)
+
     def stop_after_stage(self, job_id: int) -> dict:
         with self.job_action_lock:
             self._refuse_skipped(job_id)
+            self._refuse_cleaned(job_id, SOURCE_CLEANED_STOP_REFUSAL)
             # A job still waiting in the queue has no stage to finish: take it out
             # (PAUSED keeps its place for Tiếp tục) instead of leaving it stuck.
             if self.store.pause_if_queued(job_id):
@@ -339,6 +408,7 @@ class JobScheduler:
     def pause_now(self, job_id: int) -> dict:
         with self.job_action_lock:
             self._refuse_skipped(job_id)
+            self._refuse_cleaned(job_id, SOURCE_CLEANED_STOP_REFUSAL)
             with self._lock:
                 active = self._active
             stages = self.store.stages(job_id)
@@ -356,6 +426,7 @@ class JobScheduler:
     def cancel(self, job_id: int) -> dict:
         with self.job_action_lock:
             self._refuse_skipped(job_id)
+            self._refuse_cleaned(job_id, SOURCE_CLEANED_STOP_REFUSAL)
             with self._lock:
                 active = self._active
             value = self.store.update_job(job_id, state="CANCELLED", stop_mode="CANCELLED")
@@ -363,6 +434,10 @@ class JobScheduler:
                 if stage["state"] == "RUNNING":
                     self.store.update_stage(job_id, stage["name"], state="CANCELLED", pid=None,
                                             heartbeat_at=None, error="Cancelled by user")
+            # Hủy also ends an export that is only waiting (render PENDING), so
+            # neither Tiếp tục nor the worker can start it later. current_stage
+            # stays 'render' for the "Đã hủy xuất video" card.
+            self.retire_render_request(job_id, "cancel")
         if active and active[0] == job_id:
             self._terminate_active("Cancelled by user")
         self.store.add_event(job_id, "JOB_CANCELLED", "Job cancelled; source was not changed")
@@ -373,24 +448,75 @@ class JobScheduler:
             job = self.store.get_job(job_id)
             if job["state"] == "SKIPPED":
                 raise ValueError(SKIPPED_REFUSAL)
+            self._refuse_cleaned(job_id)
             if self.is_busy(job_id) or job["state"] in IN_PROCESS_STATES:
                 raise ValueError(
                     f"Video #{job_id} đang được xử lý; chờ bước hiện tại xong rồi hãy bấm Thử lại."
                 )
             stages = self.store.stages(job_id)
             failed = next((item for item in stages if item["state"] in {"FAILED", "FAILED_RETRYABLE"}), None)
+            # resume() refuses after the reset below would already have been
+            # written; check its refusals against the stage that would be next.
+            pending = next((
+                item for item in stages
+                if item is failed or item["state"] in {"PENDING", "FAILED_RETRYABLE"}
+            ), None)
+            refusal = self._resume_refusal(job, pending)
+            if refusal:
+                raise ValueError(refusal)
             if failed:
                 self.store.update_stage(job_id, failed["name"], state="PENDING", error=None, pid=None)
             return self.resume(job_id)
+
+    def retire_render_request(
+        self, job_id: int, reason: str, *, clear_current_stage: bool = False,
+    ) -> bool:
+        """Retire the job's unfinished export request; True when one was retired.
+
+        Does nothing for a QUEUED or in-process job (finalize, the worker and
+        pause/cancel own those). Otherwise one conditional UPDATE turns a
+        PENDING, FAILED_RETRYABLE or FAILED render stage into CANCELLED; a
+        RUNNING or COMPLETED render is never touched. ``render:{id}`` stays as
+        history. clear_current_stage drops the 'render' marker even when there
+        was no stage left to retire.
+        """
+        message = EXPORT_RETIRE_MESSAGES[reason]
+        with self.job_action_lock:
+            job = self.store.get_job(job_id)
+            if job["state"] == "QUEUED" or job["state"] in IN_PROCESS_STATES:
+                return False
+            old = self.store.retire_stage(job_id, "render", error=message)
+            if clear_current_stage and job.get("current_stage") == "render":
+                self.store.update_job_if(job_id, states={job["state"]}, current_stage=None)
+            if old is None:
+                return False
+            self.store.add_event(
+                job_id, "EXPORT_REQUEST_RETIRED", message,
+                payload={
+                    "reason": reason, "stage_state": old,
+                    "render": self.store.setting(f"render:{job_id}"),
+                },
+            )
+            return True
 
     def queue_render(
         self, job_id: int, *, plan_path: Path, output_path: Path,
         max_output_bytes: int | None = DEFAULT_MAX_OUTPUT_BYTES,
         target_output_bytes: int | None = DEFAULT_TARGET_OUTPUT_BYTES,
     ) -> dict:
+        """Queue the approved export: a PENDING render stage plus the ``render:{id}`` setting.
+
+        ``render:{id}`` only tells the worker what to render and records the
+        last export; it stays after the request is retired or finished. No
+        check reads it to decide whether a job is exporting or whether its
+        source may be cleaned: the render stage state (render_request) and the
+        job state decide that.
+        """
         if (max_output_bytes is None) != (target_output_bytes is None):
             raise ValueError("Output maximum and target must both be set or both be unlimited")
         with self.job_action_lock:
+            # Defensive: finalize refuses a cleaned source before it gets here.
+            self._refuse_cleaned(job_id)
             # Finalizing an export that is already waiting keeps its place.
             reseq = self.store.get_job(job_id)["state"] != "QUEUED"
             self.store.ensure_stage(job_id, "render")
@@ -829,32 +955,101 @@ class InputWatcher:
     def scan_once(self) -> int:
         imported = 0
         ffprobe = self.root / "tools" / "ffmpeg" / "bin" / "ffprobe.exe"
+        # Sources that "Dọn video gốc" moved to the Recycle Bin, by path: one
+        # query per scan, used to reject a different file put at an old path.
+        recycled = {
+            source_path_key(row["source_path"]): row for row in self.store.recycled_cleanups()
+        }
         for path in sorted((self.root / "input").iterdir()):
-            if not path.is_file() or path.suffix.casefold() not in VIDEO_EXTENSIONS:
+            try:
+                if self._scan_file(path, ffprobe, recycled):
+                    imported += 1
+            except FileNotFoundError:
+                # The file left input/ between iterdir() and stat() or the hash;
+                # the rest of the scan still runs (no WATCHER_ERROR).
                 continue
-            stat = path.stat()
-            observed = self.store.observe_file(path, stat.st_size, stat.st_mtime_ns)
-            if observed.get("imported_job_id"):
-                continue
-            stable_since = datetime.fromisoformat(observed["stable_since"])
-            elapsed = (datetime.now(stable_since.tzinfo) - stable_since).total_seconds()
-            if elapsed < self.stable_seconds:
-                continue
-            digest = sha256_file(path)
-            job = self.store.find_by_sha(digest)
-            if job is None:
-                duration = duration_seconds(probe_video(ffprobe, path))
-                job = self.store.upsert_job(
-                    job_key=safe_job_key(path, digest), source_path=path,
-                    source_sha256=digest, source_size_bytes=stat.st_size,
-                    source_mtime_ns=stat.st_mtime_ns, duration_seconds=duration,
-                    state="NEEDS_METADATA",
-                )
-                self.store.add_event(job["id"], "INPUT_DISCOVERED",
-                                     "Stable input discovered; choose content style")
-                imported += 1
-            self.store.mark_file_imported(path, int(job["id"]))
         return imported
+
+    def _scan_file(self, path: Path, ffprobe: Path, recycled: dict[str, dict[str, Any]]) -> bool:
+        """Observe one input file and hash it once it is stable; True when a job was discovered.
+
+        Each (path, size, mtime) is hashed once: mark_file_imported records the
+        result. A file whose SHA-256 belongs to a cleaned job never moves the
+        job's source_path and never creates a second job for the same video.
+        """
+        if not path.is_file() or path.suffix.casefold() not in VIDEO_EXTENSIONS:
+            return False
+        stat = path.stat()
+        observed = self.store.observe_file(path, stat.st_size, stat.st_mtime_ns)
+        imported_job_id = observed.get("imported_job_id")
+        if imported_job_id:
+            # A cleanup resets the watcher row (reset_watched_file), so a source
+            # put back counts as new and waits to be stable. Should that reset
+            # be missing, a source restored with its old size and mtime would
+            # stay "imported" for ever: the path of a recycled source still
+            # marked with that same job is hashed once more.
+            row = recycled.get(source_path_key(observed["path"]))
+            if row is None or int(row["job_id"]) != int(imported_job_id):
+                return False
+        stable_since = datetime.fromisoformat(observed["stable_since"])
+        elapsed = (datetime.now(stable_since.tzinfo) - stable_since).total_seconds()
+        if elapsed < self.stable_seconds:
+            return False
+        digest = sha256_file(path)
+        job = self.store.find_by_sha(digest)
+        if job is not None:
+            cleanup = self.store.latest_source_cleanup(int(job["id"]))
+            if cleanup is not None and cleanup["state"] == "RECYCLED":
+                self._source_came_back(path, stat, digest, cleanup)
+            # A PENDING row (the shell call has not answered yet) and every
+            # other known video: only mark the file, never upsert.
+            self.store.mark_file_imported(path, int(job["id"]))
+            return False
+        duration = duration_seconds(probe_video(ffprobe, path))
+        job = self.store.upsert_job(
+            job_key=safe_job_key(path, digest), source_path=path,
+            source_sha256=digest, source_size_bytes=stat.st_size,
+            source_mtime_ns=stat.st_mtime_ns, duration_seconds=duration,
+            state="NEEDS_METADATA",
+        )
+        self.store.add_event(job["id"], "INPUT_DISCOVERED",
+                             "Stable input discovered; choose content style")
+        rejected = recycled.get(source_path_key(path.resolve()))
+        if rejected is not None:
+            # A different video at the path of a recycled source: the old job
+            # stays locked and this file became a new job (still needs Bắt đầu).
+            self.store.add_event(
+                int(rejected["job_id"]), "SOURCE_RESTORE_REJECTED", SOURCE_RESTORE_REJECTED_MESSAGE,
+                level="WARNING", payload={
+                    "path": str(path.resolve()), "size_bytes": stat.st_size,
+                    "mtime_ns": stat.st_mtime_ns, "sha256": digest,
+                    "expected_sha256": rejected["source_sha256"],
+                },
+            )
+        self.store.mark_file_imported(path, int(job["id"]))
+        return True
+
+    def _source_came_back(self, path: Path, stat: os.stat_result, digest: str,
+                          cleanup: dict[str, Any]) -> None:
+        """The SHA-256 of a recycled source is in input/ again: restore or explain."""
+        job_id = int(cleanup["job_id"])
+        resolved = str(path.resolve())
+        if (source_path_key(resolved) == source_path_key(cleanup["source_path"])
+                and stat.st_size == int(cleanup["size_bytes"])):
+            # Same path, same size, same SHA-256: the job is unlocked and takes
+            # the new mtime. None means another writer settled the row first.
+            if self.store.mark_source_restored(int(cleanup["id"]), mtime_ns=stat.st_mtime_ns) is not None:
+                self.store.add_event(
+                    job_id, "SOURCE_RESTORED", SOURCE_RESTORED_MESSAGE,
+                    payload={"path": resolved, "size_bytes": stat.st_size, "sha256": digest},
+                )
+            return
+        self.store.add_event(
+            job_id, "SOURCE_RESTORE_WRONG_PATH",
+            SOURCE_RESTORE_WRONG_PATH_MESSAGE.format(file_name=Path(cleanup["source_path"]).name),
+            level="WARNING",
+            payload={"path": resolved, "expected_path": cleanup["source_path"], "sha256": digest},
+        )
 
     def _run(self) -> None:
         while not self._stop.is_set():

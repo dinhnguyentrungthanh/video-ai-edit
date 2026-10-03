@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Any
 
 from biliflow.job_pipeline import safe_job_key
-from biliflow.job_store import JobStore, sha256_file
+from biliflow.job_store import SOURCE_CLEANED_STATES, JobStore, sha256_file
 from biliflow.probe import duration_seconds, probe_video
 from biliflow.review_workflow import review_export_paths
 
@@ -21,8 +21,13 @@ SETTLED_STATES = frozenset({"NEEDS_METADATA", "DISCOVERED", "WAITING_REVIEW", "R
 UNREVIEWED_STATES = frozenset({"NEEDS_METADATA", "DISCOVERED"})
 
 
+def source_path_key(path: Path | str) -> str:
+    """Compare key of a source path (stored source paths are already resolved)."""
+    return os.path.normcase(os.path.abspath(path))
+
+
 def _same_path(left: Path, right: Path) -> bool:
-    return os.path.normcase(os.path.abspath(left)) == os.path.normcase(os.path.abspath(right))
+    return source_path_key(left) == source_path_key(right)
 
 
 def _read_json(path: Path) -> dict[str, Any] | None:
@@ -83,13 +88,27 @@ def import_existing_project(root: Path, store: JobStore) -> dict[str, int]:
         by_source_path.setdefault(source, []).append((path, payload))
         by_sha.setdefault(str(payload["source"]["sha256"]), []).append((path, payload))
 
+    # Jobs whose source is in the Recycle Bin or on its way there ("Dọn video
+    # gốc"). The import never re-creates, moves or re-dates them: a file at one
+    # of their paths may be a different video, and only the watcher (after the
+    # file is stable and hashed) restores the job or rejects the file.
+    cleaned = {
+        job_id: row for job_id, row in store.latest_source_cleanups().items()
+        if row["state"] in SOURCE_CLEANED_STATES
+    }
+    cleaned_paths = {source_path_key(row["source_path"]) for row in cleaned.values()}
+
     imported = 0
     revisions = 0
     for source in sorted(input_root.iterdir()):
         if not source.is_file() or source.suffix.casefold() not in VIDEO_EXTENSIONS:
             continue
+        resolved = source.resolve()
+        if source_path_key(resolved) in cleaned_paths:
+            # Before the sha is taken from a historical queue by path.
+            continue
         stat = source.stat()
-        matching = by_source_path.get(source.resolve(), [])
+        matching = by_source_path.get(resolved, [])
         if matching:
             source_hash = str(matching[0][1]["source"]["sha256"])
             duration = float(matching[0][1]["source"].get("duration_seconds") or 0) or None
@@ -98,12 +117,16 @@ def import_existing_project(root: Path, store: JobStore) -> dict[str, int]:
             known = by_sha.get(source_hash, [])
             matching = known
             duration = None
+        existing = store.find_by_sha(source_hash)
+        if existing is not None and int(existing["id"]) in cleaned:
+            # The cleaned video under another name: no upsert (it would move
+            # source_path), no observe/mark and no revision.
+            continue
         if duration is None:
             duration = duration_seconds(probe_video(ffprobe, source))
         matching.sort(key=lambda item: _queue_sort_value(item[1], item[0]))
         style = _infer_style(root, [item[1] for item in matching]) if matching else "unknown"
         state = "NEEDS_METADATA" if style == "unknown" else "DISCOVERED"
-        existing = store.find_by_sha(source_hash)
         previous_state = None if existing is None else str(existing["state"])
         settled = previous_state is None or previous_state in SETTLED_STATES
         job = store.upsert_job(

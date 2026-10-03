@@ -1,5 +1,7 @@
 import hashlib
 import http.client
+import importlib
+import importlib.util
 import json
 import re
 import shutil
@@ -13,6 +15,15 @@ from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
 from biliflow.export_dialog import EXPORT_DIALOG_JS
+from biliflow.export_guards import (
+    CONTROL_CENTER_JOB_MESSAGE,
+    CONTROL_CENTER_STATE_UNREADABLE,
+    REVIEW_EDIT_IN_FLIGHT_MESSAGE,
+    SOURCE_CLEANED_REVIEW_REFUSAL,
+    SOURCE_MISSING_MESSAGE,
+    STANDALONE_SKIPPED_EDIT_REFUSAL,
+)
+from biliflow.job_store import JobStore
 from biliflow.review_workflow import (
     _guard_in_film_text,
     _guard_title_overlays,
@@ -40,6 +51,30 @@ from biliflow.review_workflow import (
     triage_adult_items,
     union_pixel_regions,
 )
+
+
+_SHELL_DELETE_PATCH = None
+
+
+def setUpModule():
+    """Contract R13: serve_review_ui imports control_center, so no test here may reach the real Recycle Bin."""
+    global _SHELL_DELETE_PATCH
+    if importlib.util.find_spec("biliflow.recycle_bin") is None:  # batch 3 step A5 not landed yet
+        return
+    recycle_bin = importlib.import_module("biliflow.recycle_bin")
+
+    def refuse(*_args, **_kwargs):
+        raise AssertionError("real Recycle Bin call in a test")
+
+    _SHELL_DELETE_PATCH = patch.object(recycle_bin, "_shell_delete", refuse)
+    _SHELL_DELETE_PATCH.start()
+
+
+def tearDownModule():
+    global _SHELL_DELETE_PATCH
+    if _SHELL_DELETE_PATCH is not None:
+        _SHELL_DELETE_PATCH.stop()
+        _SHELL_DELETE_PATCH = None
 
 
 def _box(x, y, width, height):
@@ -2285,6 +2320,121 @@ class StandaloneReviewServerTests(unittest.TestCase):
         self.assertEqual(dict(order[1:]), {"decision": 200, "/api/queue": 200, "/api/export": 200})
         self.assertEqual(json.loads(self.queue_path.read_text(encoding="utf-8"))["items"][0]["decision"], "KEEP")
 
+    # ---------------- Control Center guards (batch 3, step B5: open item (a))
+    SHA = "ab" * 32
+    EDITS = (
+        ("/api/decision", {"id": "a", "decision": "BLUR", "full_frame": True}),
+        ("/api/clear", {"id": "a"}),
+        ("/api/bulk-keep", {"filter": "pending"}),
+        ("/api/bulk-accept", {"filter": "pending"}),
+    )
+
+    def post_json(self, path, body=None):
+        local = f"127.0.0.1:{self.port}"
+        token = re.search(rb'let token="([^"]+)";', self.request("/", host=local)[1]).group(1).decode()
+        status, payload = self.request(
+            path, host=local, method="POST",
+            headers={"X-BiliFlow-Token": token, "Content-Type": "application/json"},
+            body=json.dumps(body or {}).encode(),
+        )
+        return status, json.loads(payload or b"{}")
+
+    def ready_queue(self, *, sha=SHA, source_exists=False):
+        source = self.root / "input" / "Tập 7.mp4"
+        if source_exists:
+            source.parent.mkdir(parents=True, exist_ok=True)
+            source.write_bytes(b"source video")
+        queue = json.loads(self.queue_path.read_text(encoding="utf-8"))
+        queue.update({"status": "READY_FOR_EDIT_PLAN",
+                      "source": {"path": str(source), "sha256": sha, "duration_seconds": 60.0}})
+        queue["items"][0].update({"decision": "KEEP", "priority": "high", "labels": [], "preview_images": []})
+        self.queue_path.write_text(json.dumps(queue), encoding="utf-8")
+        return source
+
+    def control_center_job(self, state, *, sha=SHA, cleanup=None, **fields):
+        """A job of the Control Center database in this root, written and closed (never the real DB)."""
+        store = JobStore(self.root / "state" / "control-center.sqlite3")
+        try:
+            source = self.root / "input" / "Tập 7.mp4"
+            job = store.upsert_job(
+                job_key=f"tap7-{sha[:8]}", source_path=source, source_sha256=sha, source_size_bytes=12,
+                source_mtime_ns=1, content_style="animation", state=state,
+            )
+            if fields:
+                store.update_job(job["id"], **fields)
+            if cleanup:
+                row = store.add_source_cleanup(
+                    job_id=job["id"], kind="EXPORTED", source_path=str(source), source_sha256=sha,
+                    size_bytes=12, mtime_ns=1,
+                )
+                if cleanup != "PENDING":
+                    store.finish_source_cleanup(row, state=cleanup, verified=True)
+            return int(job["id"])
+        finally:
+            store.close()
+
+    def assert_refused(self, path, body, message):
+        before = self.queue_path.read_bytes()
+        status, payload = self.post_json(path, body)
+        self.assertEqual((status, payload.get("error")), (400, message))
+        self.assertEqual(self.queue_path.read_bytes(), before)
+        self.assertEqual(sorted(self.root.rglob("*-export-job.json")), [])
+        self.assertFalse((self.root / "work").exists())
+
+    def test_standalone_export_refuses_a_missing_source(self):
+        self.ready_queue(source_exists=False)
+        self.assert_refused("/api/finalize", {"size_mode": "unlimited"}, SOURCE_MISSING_MESSAGE)
+
+    def test_standalone_export_refuses_a_video_the_control_center_owns(self):
+        for index, state in enumerate(("READY_TO_EXPORT", "COMPLETED", "SKIPPED")):
+            with self.subTest(state=state):
+                sha = f"{index + 1:02x}" * 32
+                # The queue hash matches whatever its case.
+                self.ready_queue(sha=sha.upper(), source_exists=True)
+                job_id = self.control_center_job(state, sha=sha)
+                message = CONTROL_CENTER_JOB_MESSAGE.format(job_id=job_id, state=state)
+                self.assertTrue(message.startswith(f"Video này thuộc job #{job_id} của Control Center"))
+                self.assert_refused("/api/finalize", {"size_mode": "default"}, message)
+
+    def test_an_unreadable_control_center_database_fails_closed(self):
+        self.ready_queue(source_exists=True)
+        database = self.root / "state" / "control-center.sqlite3"
+        database.parent.mkdir(parents=True)
+        database.write_bytes(b"not a sqlite database " * 64)
+        self.assert_refused("/api/finalize", {}, CONTROL_CENTER_STATE_UNREADABLE)
+        for path, body in self.EDITS:
+            with self.subTest(path=path):
+                self.assert_refused(path, body, CONTROL_CENTER_STATE_UNREADABLE)
+
+    def test_standalone_edits_follow_the_control_center_job(self):
+        cases = (
+            ("waiting export", {"state": "QUEUED", "current_stage": "render"}, REVIEW_EDIT_IN_FLIGHT_MESSAGE),
+            ("rendering", {"state": "RENDERING"}, REVIEW_EDIT_IN_FLIGHT_MESSAGE),
+            ("skipped", {"state": "SKIPPED"}, STANDALONE_SKIPPED_EDIT_REFUSAL),
+            ("recycled", {"state": "COMPLETED", "cleanup": "RECYCLED"}, SOURCE_CLEANED_REVIEW_REFUSAL),
+            ("moving", {"state": "COMPLETED", "cleanup": "PENDING"}, SOURCE_CLEANED_REVIEW_REFUSAL),
+        )
+        for index, (name, fields, message) in enumerate(cases):
+            sha = f"{index + 1:02x}" * 32
+            self.ready_queue(sha=sha, source_exists=True)
+            fields = dict(fields)
+            state = fields.pop("state")
+            self.control_center_job(state, sha=sha, **fields)
+            for path, body in self.EDITS:
+                with self.subTest(case=name, path=path):
+                    self.assert_refused(path, body, message)
+        # A settled job of the Control Center can still be reviewed here (only
+        # its export goes through the Dashboard); a FAILED cleanup row does not lock.
+        sha = "ee" * 32
+        self.ready_queue(sha=sha, source_exists=True)
+        self.control_center_job("READY_TO_EXPORT", sha=sha, cleanup="FAILED")
+        status, payload = self.post_json("/api/clear", {"id": "a"})
+        self.assertEqual(status, 200, payload)
+        self.assertIsNone(payload["items"][0]["decision"])
+        status, payload = self.post_json("/api/decision", {"id": "a", "decision": "KEEP"})
+        self.assertEqual(status, 200, payload)
+        self.assertEqual(payload["items"][0]["decision"], "KEEP")
+
 
 REVISION = "a5ce9eec1ac11773ca9ff44f45b1bb6591631562"
 
@@ -2696,7 +2846,10 @@ class ExportPanelTests(unittest.TestCase):
         self.assertIn("finally{exportRequestInFlight=false;renderExport();}", finalize)
         render = _js_function(page, "renderExport")
         self.assertIn("$('#finalize').disabled=!ready||exportRequestInFlight;", render)
-        self.assertIn("setText($('#export-status'),exportError||exportText[exportJob.status]||pendingDescription())", render)
+        self.assertIn(
+            "setText($('#export-status'),exportError||(cleaned?cleanedText:exportText[exportJob.status])"
+            "||pendingDescription())", render,
+        )
         # Polling updates only the notice; nothing in it reopens the panel.
         self.assertNotIn("open", _js_function(page, "updateExportNotice"))
         self.assertIn("renderExport();updateExportNotice();}catch(_error){}}},3000);", page)
@@ -2720,8 +2873,13 @@ class ExportPanelTests(unittest.TestCase):
                     if write in body:
                         self.assertLess(guard, body.index(write), write)
         render = _js_function(page, "renderExport")
-        self.assertIn("document.body.classList.toggle('export-locked',active);", render)
-        self.assertIn("for(const b of document.querySelectorAll('.list-foot button')){b.disabled=active;", render)
+        # One lock for an export that waits or runs and for a source moved to the Recycle Bin.
+        self.assertIn("cleaned=!!exportJob.source_cleaned,locked=active||cleaned,", render)
+        self.assertIn("document.body.classList.toggle('export-locked',locked);", render)
+        self.assertIn(
+            "for(const b of document.querySelectorAll('.list-foot button')){b.disabled=locked;"
+            "b.title=locked?(cleaned?SOURCE_CLEANED_LOCK_MESSAGE:EXPORT_LOCK_MESSAGE):'';}", render,
+        )
         self.assertIn("body.export-locked .decide button", page)
 
     @unittest.skipUnless(shutil.which("node"), "node is not installed")
@@ -2729,22 +2887,32 @@ class ExportPanelTests(unittest.TestCase):
         script = (
             "let exportJob={status:'IDLE'};const alerts=[];globalThis.alert=m=>alerts.push(m);"
             + re.search(r"const EXPORT_LOCK_MESSAGE='[^']*';", self.page).group(0)
+            + re.search(r"const SOURCE_CLEANED_LOCK_MESSAGE='[^']*';", self.page).group(0)
             + _js_function(self.page, "decisionsLocked") + _js_function(self.page, "refuseWhileExporting")
             + "const out={};for(const s of ['IDLE','READY_TO_EXPORT','QUEUED','RENDERING','COMPLETED','FAILED','SKIPPED'])"
-            "{exportJob={status:s};out[s]=refuseWhileExporting();}out.alerts=alerts;console.log(JSON.stringify(out));"
+            "{exportJob={status:s};out[s]=refuseWhileExporting();}"
+            # A source moved to the Recycle Bin locks every decision, whatever the export status.
+            "for(const s of ['COMPLETED','SKIPPED']){exportJob={status:s,source_cleaned:true};out['cleaned_'+s]=refuseWhileExporting();}"
+            "exportJob={status:'COMPLETED',source_cleaned:false};out.restored=refuseWhileExporting();"
+            "out.alerts=alerts;console.log(JSON.stringify(out));"
         )
         result = subprocess.run([shutil.which("node"), "-e", script], capture_output=True, text=True,
                                 encoding="utf-8", timeout=60)
         self.assertEqual(result.returncode, 0, result.stderr)
         out = json.loads(result.stdout.strip().splitlines()[-1])
-        self.assertEqual({key: value for key, value in out.items() if value is True}, {"QUEUED": True, "RENDERING": True})
+        self.assertEqual({key: value for key, value in out.items() if value is True},
+                         {"QUEUED": True, "RENDERING": True, "cleaned_COMPLETED": True, "cleaned_SKIPPED": True})
+        self.assertFalse(out["restored"])
         self.assertEqual(out["alerts"], [
-            "Video đang chờ xuất hoặc đang xuất; hủy lệnh xuất trước khi đổi quyết định."] * 2)
+            "Video đang chờ xuất hoặc đang xuất; hủy lệnh xuất trước khi đổi quyết định."] * 2 + [
+            "Video gốc đã được dọn vào Thùng rác; trang duyệt chỉ để xem. Chép lại video gốc vào input để sửa "
+            "quyết định hoặc xuất lại."] * 2)
 
     def test_skipped_video_cannot_be_exported_from_the_review_page(self):
         render = _js_function(self.page, "renderExport")
         self.assertIn(
-            "skippedExport=exportJob.status==='SKIPPED',ready=status==='READY_FOR_EDIT_PLAN'&&!active&&!skippedExport;",
+            "skippedExport=exportJob.status==='SKIPPED',cleaned=!!exportJob.source_cleaned,locked=active||cleaned,"
+            "ready=status==='READY_FOR_EDIT_PLAN'&&!active&&!skippedExport&&!cleaned;",
             render,
         )
         self.assertIn(
@@ -2752,6 +2920,133 @@ class ExportPanelTests(unittest.TestCase):
             render,
         )
         self.assertIn("skippedExport?'đã bỏ qua'", render)
+
+    @unittest.skipUnless(shutil.which("node"), "node is not installed")
+    def test_cleaned_source_review_page_is_read_only_in_node(self):
+        page = self.page
+        script = (
+            "let exportRequestInFlight=false,exportError='',resources=null,exportJob={status:'IDLE'};"
+            "let queue={status:'READY_FOR_EDIT_PLAN',items:[{decision:'KEEP',category:'text'}],advisory_items:[],"
+            "source:{duration_seconds:100}};const alerts=[];globalThis.alert=m=>alerts.push(m);"
+            "const mk=()=>({textContent:'',disabled:false,title:'',classList:{set:new Set(),"
+            "toggle(c,on){if(on)this.set.add(c);else this.set.delete(c)},contains(c){return this.set.has(c)}}});"
+            "const els={'#summary':mk(),'#resources':mk(),'#finalize':mk(),'#export-status':mk(),"
+            "'#export-summary':mk(),'#export-section':mk()};const $=s=>els[s];const foot=[mk(),mk()],body=mk();"
+            "globalThis.document={body,querySelectorAll:s=>s==='.list-foot button'?foot:[]};"
+            + re.search(r"const EXPORT_LOCK_MESSAGE='[^']*';", page).group(0)
+            + re.search(r"const SOURCE_CLEANED_LOCK_MESSAGE='[^']*';", page).group(0)
+            + "".join(_js_function(page, name) for name in (
+                "formatStamp", "countsFrom", "trackCoversFullVideo", "pendingDescription", "setText", "setHtml",
+                "renderExport", "decisionsLocked", "refuseWhileExporting"))
+            + "const out={};const snap=()=>({finalize:els['#finalize'].disabled,locked:body.classList.contains('export-locked'),"
+            "foot:foot.map(b=>[b.disabled,b.title]),status:els['#export-status'].textContent,"
+            "summary:els['#export-summary'].textContent,ready:els['#export-section'].classList.contains('ready')});"
+            "const jobs={ready:{status:'READY_TO_EXPORT'},completed:{status:'COMPLETED',output:'output/a.mp4'},"
+            "cleaned:{status:'COMPLETED',output:'output/a.mp4',source_cleaned:true,source_name:'Tập 11.mp4',"
+            "source_cleanup:{state:'RECYCLED',finished_at:'2026-10-03T08:00:04+07:00'}},"
+            "cleaned_skipped:{status:'SKIPPED',source_cleaned:true,source_name:'Tập 30.mp4',"
+            "source_cleanup:{state:'PENDING',finished_at:null}},queued:{status:'QUEUED'}};"
+            "for(const [key,job] of Object.entries(jobs)){exportJob=job;renderExport();out[key]=snap();"
+            "out[key].refused=refuseWhileExporting();}"
+            "exportJob=jobs.cleaned;exportError='Không gửi được lệnh xuất: X';renderExport();"
+            "out.error_first=els['#export-status'].textContent;out.alerts=alerts;console.log(JSON.stringify(out));"
+        )
+        result = subprocess.run([shutil.which("node"), "-e", script], capture_output=True, text=True,
+                                encoding="utf-8", timeout=60)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        out = json.loads(result.stdout.strip().splitlines()[-1])
+        export_lock = "Video đang chờ xuất hoặc đang xuất; hủy lệnh xuất trước khi đổi quyết định."
+        cleaned_lock = ("Video gốc đã được dọn vào Thùng rác; trang duyệt chỉ để xem. Chép lại video gốc vào "
+                        "input để sửa quyết định hoặc xuất lại.")
+        self.assertEqual(out["ready"], {"finalize": False, "locked": False, "foot": [[False, ""]] * 2,
+                                        "status": "Đã duyệt đủ. Bạn có thể xuất video.", "summary": "sẵn sàng",
+                                        "ready": True, "refused": False})
+        self.assertEqual((out["completed"]["finalize"], out["completed"]["locked"], out["completed"]["status"],
+                          out["completed"]["summary"]), (False, False, "Hoàn tất: output/a.mp4", "đã xuất"))
+        cleaned = out["cleaned"]
+        self.assertEqual((cleaned["finalize"], cleaned["locked"], cleaned["ready"], cleaned["refused"]),
+                         (True, True, False, True))
+        self.assertEqual(cleaned["foot"], [[True, cleaned_lock]] * 2)
+        self.assertEqual(cleaned["summary"], "đã dọn video gốc")
+        self.assertTrue(cleaned["status"].startswith(
+            "Hoàn tất: output/a.mp4. Video gốc đã được dọn vào Thùng rác lúc "), cleaned["status"])
+        self.assertTrue(cleaned["status"].endswith(
+            ". Chép lại đúng tên “Tập 11.mp4” vào input để xuất lại hoặc sửa quyết định."), cleaned["status"])
+        skipped = out["cleaned_skipped"]
+        self.assertEqual(skipped["status"], "Video gốc đã được dọn vào Thùng rác. Chép lại đúng tên “Tập 30.mp4” "
+                                            "vào input để xuất lại hoặc sửa quyết định.")
+        self.assertEqual((skipped["finalize"], skipped["locked"], skipped["summary"]), (True, True, "đã dọn video gốc"))
+        queued = out["queued"]
+        self.assertEqual((queued["locked"], queued["foot"], queued["summary"]),
+                         (True, [[True, export_lock]] * 2, "đang xuất…"))
+        # A request error is still shown first.
+        self.assertEqual(out["error_first"], "Không gửi được lệnh xuất: X")
+        self.assertEqual(out["alerts"], [cleaned_lock, cleaned_lock, export_lock])
+
+    @unittest.skipUnless(shutil.which("node"), "node is not installed")
+    def test_cleaned_source_uses_stored_previews_in_node(self):
+        page = self.page
+        script = (
+            "const SAFETY={};let mediaKey='k';"
+            + "".join(_js_function(page, name) for name in (
+                "videoReason", "stripFrames", "pickFor", "pickStrip", "pickSceneStrip", "momentsOf", "thumbTime",
+                "isScene", "isSafety", "momentIndex"))
+            + "const x={category:'text',preview_images:['reports/a/x-12.5s.jpg','reports/a/x-20s.jpg']};"
+            "const frames=[{t:1,kind:'seed'},{t:2,kind:'strongest'}];"
+            "const out={reason:videoReason({reason:'source_cleaned'}),"
+            "cleaned:stripFrames(x,{frames,video:{available:false,mime:null,reason:'source_cleaned'}}),"
+            "missing:stripFrames(x,{frames,video:{available:false,reason:'source_missing'}}),"
+            "live:stripFrames(x,{frames,video:{available:true}}),"
+            "changed:stripFrames(x,{frames,video:{available:false,reason:'source_changed'}})};"
+            "console.log(JSON.stringify(out));"
+        )
+        result = subprocess.run([shutil.which("node"), "-e", script], capture_output=True, text=True,
+                                encoding="utf-8", timeout=60)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        out = json.loads(result.stdout.strip().splitlines()[-1])
+        self.assertEqual(out["reason"], "Video gốc đã được dọn vào Thùng rác; chỉ xem được ảnh đã lưu trong report.")
+        stored = [
+            {"t": 12.5, "kind": "preview", "src": "/media/reports%2Fa%2Fx-12.5s.jpg"},
+            {"t": 20, "kind": "preview", "src": "/media/reports%2Fa%2Fx-20s.jpg"},
+        ]
+        # The frame route answers 410 for a cleaned source (404 when it is missing): use the stored previews.
+        self.assertEqual(out["cleaned"], stored)
+        self.assertEqual(out["missing"], stored)
+        remote = [{"t": 1, "kind": "seed", "remote": True}, {"t": 2, "kind": "strongest", "remote": True}]
+        self.assertEqual(out["live"], remote)
+        self.assertEqual(out["changed"], remote)
+
+    def test_video_failure_410_means_the_source_was_cleaned(self):
+        failed = _js_function(self.page, "videoFailed")
+        self.assertIn("{404:'source_missing',409:'source_changed',410:'source_cleaned',415:'unsupported_container'}",
+                      failed)
+        self.assertIn(
+            "const SOURCE_CLEANED_LOCK_MESSAGE='Video gốc đã được dọn vào Thùng rác; trang duyệt chỉ để xem. "
+            "Chép lại video gốc vào input để sửa quyết định hoặc xuất lại.';", self.page,
+        )
+        self.assertIn("function decisionsLocked(){return ['QUEUED','RENDERING'].includes(exportJob.status)"
+                      "||!!exportJob.source_cleaned;}", self.page)
+        render = _js_function(self.page, "renderExport")
+        self.assertIn("active?'đang xuất…':cleaned?'đã dọn video gốc':skippedExport?'đã bỏ qua'", render)
+        self.assertIn("formatStamp(exportJob.source_cleanup?.finished_at)", render)
+
+    @unittest.skipUnless(shutil.which("node"), "node is not installed")
+    def test_the_done_note_does_not_offer_an_export_after_cleanup_in_node(self):
+        source = "let exportJob={status:'IDLE'};" + "\n".join(
+            _js_function(self.page, name) for name in ("reviewDoneHint", "nextNote"))
+        source += (
+            "\nconst ready=nextNote({pending:0});exportJob={status:'COMPLETED',source_cleaned:true};"
+            "console.log(JSON.stringify([ready,nextNote({pending:0})]));"
+        )
+        result = subprocess.run([shutil.which("node"), "-e", source],
+                                capture_output=True, text=True, encoding="utf-8", timeout=60)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(json.loads(result.stdout.strip().splitlines()[-1]), [
+            "Đã duyệt đủ mọi mục chính. Bấm “Xuất video” ở trên để xuất.",
+            "Đã duyệt đủ mọi mục chính. Video gốc đã được dọn vào Thùng rác; trang duyệt chỉ để xem.",
+        ])
+        focus = _js_function(self.page, "renderFocus")
+        self.assertIn("`Đã duyệt đủ ${queue.items.length} mục chính. ${reviewDoneHint()}`", focus)
 
     @unittest.skipUnless(shutil.which("node"), "node is not installed")
     def test_finalize_export_closes_reports_and_reopens_in_node(self):

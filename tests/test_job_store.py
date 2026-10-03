@@ -249,6 +249,166 @@ class JobStoreTests(unittest.TestCase):
         self.store.add_event(self.job["id"], "TEST", "ok", payload={"a": 1})
         self.assertEqual(self.store.events(self.job["id"])[0]["payload"], {"a": 1})
 
+    def test_retire_stage_only_changes_requests(self):
+        job_id = self.job["id"]
+        self.store.replace_stages(job_id, ["preflight", "render"])
+        for state in ("PENDING", "FAILED_RETRYABLE", "FAILED"):
+            with self.subTest(state=state):
+                self.store.update_stage(job_id, "render", state=state, pid=99, heartbeat_at="beat", error="old")
+                self.assertEqual(self.store.retire_stage(job_id, "render", error="retired"), state)
+                stage = self.store.stage(job_id, "render")
+                self.assertEqual(
+                    (stage["state"], stage["pid"], stage["heartbeat_at"], stage["error"]),
+                    ("CANCELLED", None, None, "retired"),
+                )
+                # A second call finds nothing left to retire.
+                self.assertIsNone(self.store.retire_stage(job_id, "render", error="again"))
+                self.assertEqual(self.store.stage(job_id, "render")["error"], "retired")
+        for state in ("RUNNING", "COMPLETED", "CANCELLED"):
+            with self.subTest(state=state):
+                self.store.update_stage(job_id, "render", state=state, pid=99, heartbeat_at="beat", error=None)
+                before = self.store.stage(job_id, "render")
+                self.assertIsNone(self.store.retire_stage(job_id, "render", error="retired"))
+                self.assertEqual(self.store.stage(job_id, "render"), before)
+        # Only the named stage changes, and a narrower state filter is honoured.
+        self.store.update_stage(job_id, "render", state="FAILED")
+        self.assertIsNone(self.store.retire_stage(job_id, "render", error="x", states=("PENDING",)))
+        self.assertEqual(self.store.stage(job_id, "render")["state"], "FAILED")
+        self.assertEqual(self.store.retire_stage(job_id, "preflight", error="x", states=("PENDING",)), "PENDING")
+        self.assertEqual(self.store.stage(job_id, "render")["state"], "FAILED")
+        self.assertIsNone(self.store.retire_stage(job_id, "missing", error="x"))
+        self.assertIsNone(self.store.retire_stage(9999, "render", error="x"))
+        for states in (("RUNNING",), ("PENDING", "COMPLETED"), ()):
+            with self.assertRaises(ValueError):
+                self.store.retire_stage(job_id, "render", error="x", states=states)
+        self.assertEqual(self.store.stage(job_id, "render")["state"], "FAILED")
+
+    def add_cleanup(self, job_id, **values):
+        fields = {
+            "job_id": job_id, "kind": "EXPORTED", "source_path": str(self.source.resolve()),
+            "source_sha256": "1" * 64, "size_bytes": 5, "mtime_ns": 11,
+            "output_path": "output/video-reviewed.mp4", "output_sha256": "f" * 64, "output_bytes": 3,
+            "exported_at": "2026-10-03T09:00:00+07:00",
+        }
+        fields.update(values)
+        return self.store.add_source_cleanup(**fields)
+
+    def test_source_cleanup_lifecycle(self):
+        job_id = self.job["id"]
+        other = self.add_job("other", "2")["id"]
+        self.assertIsNone(self.store.latest_source_cleanup(job_id))
+        self.assertFalse(self.store.source_cleaned(job_id))
+        self.assertEqual(self.store.latest_source_cleanups(), {})
+        row_id = self.add_cleanup(job_id)
+        row = self.store.latest_source_cleanup(job_id)
+        self.assertEqual(set(row), {
+            "id", "job_id", "kind", "source_path", "source_sha256", "size_bytes", "mtime_ns",
+            "output_path", "output_sha256", "output_bytes", "exported_at", "skipped_at", "state",
+            "verified", "recycle_record", "error", "created_at", "finished_at", "restored_at",
+            "restored_mtime_ns",
+        })
+        self.assertEqual((row["id"], row["state"], row["verified"], row["finished_at"]),
+                         (row_id, "PENDING", False, None))
+        self.assertIsNotNone(row["created_at"])
+        # PENDING already locks the job: the shell call may still move the file.
+        self.assertTrue(self.store.source_cleaned(job_id))
+        self.assertEqual([item["id"] for item in self.store.pending_source_cleanups()], [row_id])
+        self.assertEqual(self.store.recycled_cleanups(), [])
+        finished = self.store.finish_source_cleanup(
+            row_id, state="RECYCLED", verified=True, recycle_record="E:\\$Recycle.Bin\\S-1\\$IABC.mp4",
+        )
+        self.assertEqual((finished["state"], finished["verified"]), ("RECYCLED", True))
+        self.assertIs(type(finished["verified"]), bool)
+        self.assertIsNotNone(finished["finished_at"])
+        # Only a PENDING row can finish, once.
+        self.assertIsNone(self.store.finish_source_cleanup(row_id, state="FAILED", error="late"))
+        self.assertIsNone(self.store.finish_source_cleanup(9999, state="FAILED"))
+        self.assertEqual(self.store.latest_source_cleanup(job_id)["state"], "RECYCLED")
+        self.assertTrue(self.store.source_cleaned(job_id))
+        self.assertEqual(self.store.pending_source_cleanups(), [])
+        self.assertEqual([item["id"] for item in self.store.recycled_cleanups()], [row_id])
+        # Another job: a SKIPPED cleanup that failed does not lock it.
+        failed_id = self.add_cleanup(other, kind="SKIPPED", output_path=None, output_sha256=None,
+                                     output_bytes=None, exported_at=None,
+                                     skipped_at="2026-10-03T08:00:00+07:00")
+        failed = self.store.finish_source_cleanup(failed_id, state="FAILED", error="File đang được mở")
+        self.assertEqual((failed["state"], failed["verified"], failed["error"]),
+                         ("FAILED", False, "File đang được mở"))
+        self.assertFalse(self.store.source_cleaned(other))
+        latest = self.store.latest_source_cleanups()
+        self.assertEqual({key: value["id"] for key, value in latest.items()}, {job_id: row_id, other: failed_id})
+        self.assertIs(type(latest[job_id]["verified"]), bool)
+        # The source came back with its SHA-256: the job unlocks and takes the new mtime.
+        self.assertIsNone(self.store.mark_source_restored(failed_id, mtime_ns=5))
+        restored = self.store.mark_source_restored(row_id, mtime_ns=123456789)
+        self.assertEqual((restored["state"], restored["restored_mtime_ns"]), ("RESTORED", 123456789))
+        self.assertIsNotNone(restored["restored_at"])
+        self.assertEqual(self.store.get_job(job_id)["source_mtime_ns"], 123456789)
+        self.assertEqual(self.store.get_job(other)["source_mtime_ns"], 1)
+        self.assertFalse(self.store.source_cleaned(job_id))
+        self.assertEqual(self.store.recycled_cleanups(), [])
+        self.assertIsNone(self.store.mark_source_restored(row_id, mtime_ns=1))
+        self.assertEqual(self.store.get_job(job_id)["source_mtime_ns"], 123456789)
+        # A later cleanup of the same job is the latest row again.
+        again = self.add_cleanup(job_id)
+        self.assertTrue(self.store.source_cleaned(job_id))
+        self.assertEqual(self.store.latest_source_cleanups()[job_id]["id"], again)
+        self.assertEqual([item["id"] for item in self.store.pending_source_cleanups()], [again])
+
+    def test_source_cleanup_refuses_bad_values(self):
+        job_id = self.job["id"]
+        with self.assertRaises(ValueError):
+            self.add_cleanup(job_id, kind="DELETED")
+        with self.assertRaises(KeyError):
+            self.add_cleanup(9999)
+        row_id = self.add_cleanup(job_id)
+        for state in ("PENDING", "RESTORED", "DELETED"):
+            with self.assertRaises(ValueError):
+                self.store.finish_source_cleanup(row_id, state=state)
+        self.assertEqual(self.store.latest_source_cleanup(job_id)["state"], "PENDING")
+        self.assertEqual(len(self.store.latest_source_cleanups()), 1)
+        # The store still writes normally after a refused insert.
+        self.store.update_job(job_id, progress=0.5)
+        self.assertEqual(self.store.get_job(job_id)["progress"], 0.5)
+
+    def test_reset_watched_file_makes_the_watcher_look_again(self):
+        observed = self.store.observe_file(self.source, 5, 7)
+        self.store.mark_file_imported(self.source, self.job["id"])
+        self.store._connection.execute(
+            "UPDATE watcher_files SET stable_since='2000-01-01T00:00:00+00:00' WHERE path=?",
+            (observed["path"],),
+        )
+        self.store._connection.commit()
+        self.store.reset_watched_file(self.source)
+        row = dict(self.store._connection.execute(
+            "SELECT * FROM watcher_files WHERE path=?", (observed["path"],)
+        ).fetchone())
+        self.assertEqual((row["size_bytes"], row["mtime_ns"], row["imported_job_id"]), (-1, -1, None))
+        self.assertNotEqual(row["stable_since"], "2000-01-01T00:00:00+00:00")
+        # The same file seen again is new: its stability restarts and it is not imported.
+        again = self.store.observe_file(self.source, 5, 7)
+        self.assertEqual((again["size_bytes"], again["mtime_ns"], again["imported_job_id"]), (5, 7, None))
+        self.assertNotEqual(again["stable_since"], "2000-01-01T00:00:00+00:00")
+        # Unknown paths are ignored and rows are never deleted.
+        self.store.reset_watched_file(self.root / "missing.mp4")
+        self.assertEqual(self.store._connection.execute("SELECT COUNT(*) FROM watcher_files").fetchone()[0], 1)
+
+    def test_render_request_is_an_unfinished_render_stage(self):
+        job_id = self.job["id"]
+        self.assertIsNone(self.store.render_request(job_id))
+        self.store.replace_stages(job_id, ["preflight"])
+        self.assertIsNone(self.store.render_request(job_id))
+        self.store.ensure_stage(job_id, "render")
+        for state, expected in (("PENDING", True), ("RUNNING", True), ("FAILED_RETRYABLE", True),
+                                ("FAILED", True), ("COMPLETED", False), ("CANCELLED", False)):
+            with self.subTest(state=state):
+                self.store.update_stage(job_id, "render", state=state)
+                value = self.store.render_request(job_id)
+                if expected:
+                    self.assertEqual((value["name"], value["state"]), ("render", state))
+                else:
+                    self.assertIsNone(value)
+
 
 class QueueMigrationTests(unittest.TestCase):
     def make_old_database(self, path):
@@ -297,22 +457,29 @@ class QueueMigrationTests(unittest.TestCase):
                     store._connection.execute("SELECT version FROM schema_info").fetchone()[0],
                     SCHEMA_VERSION,
                 )
-                self.assertIn("idx_jobs_queue", {
+                indexes = {
                     row[0] for row in store._connection.execute(
                         "SELECT name FROM sqlite_master WHERE type='index'")
-                })
+                }
+                self.assertTrue(
+                    {"idx_jobs_queue", "idx_source_cleanups_job", "idx_source_cleanups_state"} <= indexes
+                )
+                self.assertEqual(store.latest_source_cleanups(), {})
                 snapshot = store.list_jobs()
             finally:
                 store.close()
             after = table_counts(database)
             for table, count in before.items():
                 self.assertEqual(after[table], count, table)
+            self.assertEqual(after["source_cleanups"], 0)
+            # One backup for both additive changes, named after the first one.
             backups = sorted((state / "backups").iterdir())
             self.assertEqual(len(backups), 1)
             self.assertTrue(backups[0].name.startswith("control-center-before-queue-order-"))
-            # The backup holds every old row, before any column was added.
+            # The backup holds every old row, before any column or table was added.
             saved = table_counts(backups[0])
             self.assertEqual({table: saved[table] for table in before}, before)
+            self.assertNotIn("source_cleanups", saved)
             backup = sqlite3.connect(backups[0])
             try:
                 self.assertNotIn("queue_seq", {row[1] for row in backup.execute("PRAGMA table_info(jobs)")})
@@ -350,6 +517,105 @@ class QueueMigrationTests(unittest.TestCase):
             JobStore(state / "control-center.sqlite3").close()
             self.assertFalse((state / "backups").exists())
 
+    def make_queue_ready_database(self, path, *, with_job=True):
+        """A database written by the code before source cleanup (queue columns, no cleanup table)."""
+        store = JobStore(path)
+        try:
+            if with_job:
+                job = store.upsert_job(
+                    job_key="old", source_path=path.parent / "old.mp4", source_sha256="1" * 64,
+                    source_size_bytes=5, source_mtime_ns=1, state="COMPLETED",
+                )
+                store.replace_stages(job["id"], ["preflight", "render"])
+                store.add_event(job["id"], "TEST", "old")
+                store.set_setting(f"render:{job['id']}", {"output": "output/old.mp4"})
+                store.observe_file(path.parent / "old.mp4", 5, 1)
+        finally:
+            store.close()
+        connection = sqlite3.connect(path)
+        try:
+            # Dropping the table drops its two indexes as well.
+            connection.execute("DROP TABLE source_cleanups")
+            connection.commit()
+            names = {row[0] for row in connection.execute("SELECT name FROM sqlite_master")}
+        finally:
+            connection.close()
+        self.assertFalse({"source_cleanups", "idx_source_cleanups_job", "idx_source_cleanups_state"} & names)
+
+    def test_queue_ready_database_gains_the_cleanup_table_with_one_backup(self):
+        with TemporaryDirectory() as directory:
+            state = Path(directory) / "state"
+            state.mkdir()
+            database = state / "control-center.sqlite3"
+            self.make_queue_ready_database(database)
+            before = table_counts(database)
+            self.assertNotIn("source_cleanups", before)
+            store = JobStore(database)
+            try:
+                names = {row[0] for row in store._connection.execute("SELECT name FROM sqlite_master")}
+                self.assertTrue(
+                    {"source_cleanups", "idx_source_cleanups_job", "idx_source_cleanups_state"} <= names
+                )
+                self.assertEqual(
+                    store._connection.execute("SELECT version FROM schema_info").fetchone()[0], SCHEMA_VERSION,
+                )
+                snapshot = store.list_jobs()
+                self.assertEqual(store.setting("render:1"), {"output": "output/old.mp4"})
+            finally:
+                store.close()
+            after = table_counts(database)
+            self.assertEqual({table: after[table] for table in before}, before)
+            self.assertEqual(after["source_cleanups"], 0)
+            backups = sorted((state / "backups").iterdir())
+            self.assertEqual(len(backups), 1)
+            self.assertTrue(backups[0].name.startswith("control-center-before-source-cleanup-"))
+            self.assertTrue(backups[0].name.endswith(".sqlite3"))
+            # The backup is the database before the change: same rows, no new table.
+            self.assertEqual(table_counts(backups[0]), before)
+            # A later open changes nothing and takes no further backup.
+            store = JobStore(database)
+            try:
+                self.assertEqual(store.list_jobs(), snapshot)
+            finally:
+                store.close()
+            self.assertEqual(len(list((state / "backups").iterdir())), 1)
+            self.assertEqual(table_counts(database), after)
+
+            # Code without source cleanup (the migration script it runs is unchanged)
+            # still opens the migrated database and reads every job.
+            class OlderStore(JobStore):
+                def _ensure_additive_schema(self):
+                    pass
+
+            older = OlderStore(database)
+            try:
+                self.assertEqual(older.list_jobs(), snapshot)
+            finally:
+                older.close()
+            old = sqlite3.connect(database)
+            try:
+                old.executescript(PRE_QUEUE_SCHEMA)
+                self.assertEqual(old.execute("SELECT version FROM schema_info").fetchone()[0], 1)
+                self.assertEqual(len(old.execute("SELECT * FROM jobs").fetchall()), 1)
+            finally:
+                old.close()
+            self.assertEqual(table_counts(database), after)
+            self.assertEqual(len(list((state / "backups").iterdir())), 1)
+
+    def test_queue_ready_database_without_jobs_needs_no_backup(self):
+        with TemporaryDirectory() as directory:
+            state = Path(directory) / "state"
+            state.mkdir()
+            database = state / "control-center.sqlite3"
+            self.make_queue_ready_database(database, with_job=False)
+            store = JobStore(database)
+            try:
+                self.assertEqual(store.latest_source_cleanups(), {})
+            finally:
+                store.close()
+            self.assertIn("source_cleanups", table_counts(database))
+            self.assertFalse((state / "backups").exists())
+
     @unittest.skipUnless(
         (DATA_ROOT / "state" / "control-center.sqlite3").is_file(),
         "no Control Center database under BILIFLOW_TEST_DATA_ROOT",
@@ -379,8 +645,14 @@ class QueueMigrationTests(unittest.TestCase):
             self.assertEqual(version, 1)
             after = table_counts(copy)
             self.assertEqual({table: after[table] for table in before}, before)
+            self.assertIn("source_cleanups", after)
             backups = list((state / "backups").glob("*.sqlite3")) if (state / "backups").exists() else []
             self.assertLessEqual(len(backups), 1)
+            if "source_cleanups" not in before and before.get("jobs"):
+                self.assertEqual(len(backups), 1)
+                self.assertTrue(backups[0].name.startswith(
+                    ("control-center-before-source-cleanup-", "control-center-before-queue-order-")
+                ))
             store = JobStore(copy)
             try:
                 self.assertEqual(store.list_jobs(), first)

@@ -1,6 +1,8 @@
 import hashlib
 import hmac
 import http.client
+import importlib
+import importlib.util
 import json
 import os
 import re
@@ -26,6 +28,47 @@ from biliflow.final_renderer import render_progress_path
 from biliflow.review_evidence import ReviewFrameCache
 from biliflow.review_workflow import record_review_decision
 from biliflow.scheduler import STARTABLE_STATES, JobScheduler
+
+
+_SHELL_DELETE_PATCH = None
+
+
+def setUpModule():
+    """Contract R13: no test in this module may reach the real Windows Recycle Bin."""
+    global _SHELL_DELETE_PATCH
+    if importlib.util.find_spec("biliflow.recycle_bin") is None:  # batch 3 step A5 not landed yet
+        return
+    recycle_bin = importlib.import_module("biliflow.recycle_bin")
+
+    def refuse(*_args, **_kwargs):
+        raise AssertionError("real Recycle Bin call in a test")
+
+    _SHELL_DELETE_PATCH = patch.object(recycle_bin, "_shell_delete", refuse)
+    _SHELL_DELETE_PATCH.start()
+
+
+def tearDownModule():
+    global _SHELL_DELETE_PATCH
+    if _SHELL_DELETE_PATCH is not None:
+        _SHELL_DELETE_PATCH.stop()
+        _SHELL_DELETE_PATCH = None
+
+
+def _dashboard_function(script, name):
+    """Source of one named JS function of the dashboard script (brace matched)."""
+    match = re.search(rf"(?:async )?function {re.escape(name)}\(", script)
+    if match is None:
+        raise AssertionError(f"function {name} is missing from the dashboard")
+    start = script.index("{", match.end())
+    depth = 0
+    for index in range(start, len(script)):
+        if script[index] == "{":
+            depth += 1
+        elif script[index] == "}":
+            depth -= 1
+            if depth == 0:
+                return script[match.start():index + 1]
+    raise AssertionError(f"function {name} is not closed")
 
 
 class ControlCenterVisualAuditTests(unittest.TestCase):
@@ -185,6 +228,13 @@ class ControlCenterVisualAuditTests(unittest.TestCase):
             "Hàng đợi đang tạm dừng — bấm “Chạy hàng đợi” để tiếp tục (vẫn giữ thứ tự).",
         )
         self.assertEqual(out["paused_worker"], "Scheduler tạm dừng · 3 việc giữ nguyên thứ tự")
+        # "Chạy lại kiểm tra" says where the new revision waits, read from the poll after the POST.
+        self.assertEqual(out["rerun_posts"], [{"id": 63, "rerun": True, "detectors": ["advertising"]}])
+        self.assertEqual(
+            out["rerun_notice"],
+            "Đã xếp #63 chạy lại theo phạm vi mới trong một revision riêng (lượt 4/4).",
+        )
+        self.assertFalse(out["rerun_notice_is_error"])
 
     @unittest.skipUnless(shutil.which("node"), "node is not installed")
     def test_dashboard_behaviour_in_node_stale_poll_drafts_and_confirm(self):
@@ -196,6 +246,9 @@ class ControlCenterVisualAuditTests(unittest.TestCase):
         self.assertEqual(out["initial_scan_queue"], [44, 45])
         self.assertEqual(out["posts"], [{"id": 46, "detectors": ["advertising"]}])
         self.assertEqual(out["confirms_for_46"], [])
+        # Start says where #46 waits, built from the poll after the POST (#44, #45 were clicked first).
+        self.assertEqual(out["start_notice"], "Đã xếp #46 Tập 46.mp4 vào hàng đợi quét cảnh (lượt 3/3).")
+        self.assertFalse(out["start_notice_is_error"])
         # The slow poll issued before Start(46) is discarded: no ghost setup card.
         self.assertFalse(out["stale_applied"])
         for snapshot in (out["after_start"], out["after_stale_poll"]):
@@ -373,8 +426,8 @@ class ControlCenterVisualAuditTests(unittest.TestCase):
             written |= set(re.findall(r'PipelineStage\(\s*"[a-z_]+",\s*"([A-Z_]+)"', text))
         written |= {"SKIPPED", "COMPLETED", "CANCELLED", "PAUSED", "FAILED", "QUEUED",
                     "WAITING_REVIEW", "READY_TO_EXPORT", "INTERRUPTED_RECOVERABLE"}
-        # Stage rows have their own states; these never reach jobs.state.
-        written -= {"PENDING", "RUNNING", "FAILED_RETRYABLE"}
+        # Stage rows and source_cleanups rows have their own states; these never reach jobs.state.
+        written -= {"PENDING", "RUNNING", "FAILED_RETRYABLE", "RECYCLED", "RESTORED"}
         self.assertLessEqual(written, fixture_states, written - fixture_states)
         self.assertIn("WEIRD", fixture_states)
         ids = [card[0] for card in out["cards"]]
@@ -447,6 +500,103 @@ class ControlCenterVisualAuditTests(unittest.TestCase):
         self.assertTrue(out["refused_is_error"])
         self.assertEqual(out["refused_tab"], "review")
 
+    def test_dashboard_cleanup_markup_and_texts(self):
+        from biliflow.export_guards import SOURCE_CLEANED_MESSAGE
+
+        page = _dashboard_html()
+        # The dialog sits outside #jobs, so the 3 s rebuild never touches it.
+        dialog = page.index('<dialog id="cleanup-dialog" aria-labelledby="cleanup-title">')
+        self.assertGreater(dialog, page.index('<section id="jobs" class="job-list"></section></section></main>'))
+        self.assertLess(dialog, page.index("<script>"))
+        self.assertIn(
+            '<form class="cleanup-form" method="dialog" onsubmit="return false"><h2 id="cleanup-title">'
+            'Chuyển video gốc vào Thùng rác</h2><div id="cleanup-dialog-body" class="cleanup-scroll"></div>'
+            '<div class="cleanup-actions"><button type="button" id="cleanup-cancel" onclick="closeCleanupDialog()">'
+            'Hủy</button><button type="button" class="danger" id="cleanup-confirm" onclick="confirmCleanup()" '
+            'disabled>Chuyển vào Thùng rác</button></div></form></dialog>',
+            page,
+        )
+        self.assertIn(f"const SOURCE_CLEANED_MESSAGE='{SOURCE_CLEANED_MESSAGE}';", page)
+        self.assertNotIn("__SOURCE_CLEANED", page)
+        self.assertNotIn("__SOURCE", page)
+        self.assertNotIn("__EXPORT", page)
+        for text in (
+            "Đã dọn video gốc · ", " (đang ở Thùng rác)",
+            " · Windows chưa xác nhận bản ghi trong Thùng rác; hãy kiểm tra Thùng rác.",
+            "Đang dọn video gốc…", "Đã khôi phục video gốc (SHA-256 khớp)",
+            "Lần dọn trước không thành công: ", "Không còn video gốc trong input", "Chưa dọn được: ",
+            " Chọn để dọn</label>", ">Dọn video gốc</button>", "Đang dọn video gốc; chờ lượt hiện tại xong.",
+            "Chép lại video gốc vào input để chạy lại (đúng tên: ",
+            'role="group" aria-label="Dọn video gốc"', "Dọn video gốc: ", " video dọn được · đã chọn ",
+            "Chọn tất cả video dọn được", ">Bỏ chọn</button>", "Dọn video gốc đã chọn (",
+            "Chỉ chuyển vào Thùng rác của Windows, không xóa vĩnh viễn.",
+            "Mỗi lần dọn tối đa 50 video; đã chọn 50 video đầu tiên.",
+            "Không lấy được danh sách dọn video gốc: ",
+            "Các video gốc dưới đây sẽ được chuyển vào Thùng rác của Windows (không xóa vĩnh viễn). Report, "
+            "quyết định duyệt, bộ nhớ logo/studio và video đã xuất được giữ nguyên. Dung lượng chỉ được giải "
+            "phóng khi bạn dọn sạch Thùng rác; trước đó bạn có thể khôi phục video từ Thùng rác.",
+            '<p class="cleanup-alert" role="alert">', "<th>Video gốc</th><th>Dung lượng</th>"
+            "<th>Video đã xuất</th><th>Xuất lúc</th>", 'data-label="Video gốc"', 'data-label="Dung lượng"',
+            'data-label="Video đã xuất"', 'data-label="Xuất lúc"', "Đã bỏ qua (không xuất)", "Bỏ qua lúc ",
+            "Tổng cộng: ${n} video · ", " sẽ được giải phóng sau khi dọn sạch Thùng rác.",
+            "Thùng rác của ổ ${rb.volume} đang chứa ", " / giới hạn ", "; sau khi chuyển: ",
+            '<p class="cleanup-block" role="alert">', "Không có video nào dọn được trong lựa chọn này.",
+            "Không thể dọn:", "Chuyển ${n} video vào Thùng rác",
+            "Đang kiểm tra SHA-256 và chuyển vào Thùng rác…",
+            "Có thể mất vài phút với nhiều video; đừng tắt BiliFlow.",
+            "/api/source-cleanup/preview?ids=", "post('/api/source-cleanup',{job_ids:ids,preview_id:p.preview_id})",
+            "Đã chuyển ${n} video gốc vào Thùng rác (", "). Dung lượng được giải phóng khi bạn dọn sạch Thùng rác.",
+            "Không chuyển được video gốc nào vào Thùng rác.", " Không dọn được #${x.job_id}: ",
+            ": đã chuyển nhưng Windows chưa xác nhận bản ghi trong Thùng rác; hãy kiểm tra Thùng rác.",
+            "Danh sách đã thay đổi, hãy xem lại.", "Không dọn được: ${e.message}",
+        ):
+            with self.subTest(text=text):
+                self.assertIn(text, page)
+        # In-memory selection only; the cleanup code never touches localStorage.
+        self.assertIn(
+            "const cleanupSelection=new Set();let cleanupPreview=null,cleanupOpening=false,cleanupPosting=false;",
+            page,
+        )
+        script = page[page.index("<script>"):page.rindex("</script>")]
+        for name in ("pruneCleanupSelection", "toggleCleanup", "selectAllCleanup", "clearCleanupSelection",
+                     "updateCleanupToolbar", "cleanupControls", "cleanupToolbar", "openCleanup",
+                     "renderCleanupDialog", "confirmCleanup", "closeCleanupDialog", "watchCleanupDialog"):
+            with self.subTest(function=name):
+                body = _dashboard_function(script, name)
+                self.assertNotIn("storage", body.casefold())
+        # Errors keep the server's code and body, so a 409 can carry the new preview.
+        self.assertIn(
+            "if(!r.ok){const e=Error(v.error||r.statusText);e.status=r.status;e.code=v.code||null;e.body=v;throw e}",
+            page,
+        )
+        # The selection is pruned on every render, before the cards are built.
+        self.assertIn("const jobs=status.jobs||[];pruneCleanupSelection(jobs);", page)
+        self.assertIn("(tab==='completed'&&groups.completed.length?cleanupToolbar(groups.completed):'')", page)
+        # The rerun panel template is unchanged for a video that still has its source.
+        self.assertIn("isSourceCleaned(j)?cleanedRerun(j):`<details class=\"rerun-panel\" data-job-id=\"${id}\"", page)
+        # Esc cannot close the dialog while the request runs; the dialog listeners are set at boot.
+        self.assertIn("d.addEventListener('cancel',e=>{if(cleanupPosting)e.preventDefault()})", page)
+        self.assertIn("watchCleanupDialog();(async()=>{", page)
+        style = page[page.index("<style>"):page.index("</style>")]
+        base = style[:style.index("@media(max-width:1050px)")]
+        for rule in (".cleanup-toolbar{", ".cleanup-pick{", ".source-line{", ".cleanup-note{",
+                     "#cleanup-dialog{width:min(900px,calc(100vw - 24px));", "max-height:calc(100vh - 24px);",
+                     "#cleanup-dialog::backdrop{", ".cleanup-form{display:flex;flex-direction:column;",
+                     ".cleanup-scroll{", "overflow:auto", ".cleanup-table-wrap{overflow-x:auto;",
+                     ".cleanup-table{", ".cleanup-alert{", ".cleanup-block{", ".cleanup-actions{position:sticky;bottom:0;"):
+            with self.subTest(rule=rule):
+                self.assertIn(rule, base)
+        # <dialog> defaults to a white background: colours are explicit.
+        dialog_rule = base[base.index("#cleanup-dialog{"):]
+        dialog_rule = dialog_rule[:dialog_rule.index("}")]
+        self.assertIn("background:#141923;color:#e8ecf4", dialog_rule)
+        phone = style[style.index("@media(max-width:680px)"):]
+        for rule in (".cleanup-toolbar button{flex:1 1 100%}", ".cleanup-table thead{display:none}",
+                     ".cleanup-table tr,.cleanup-table td{display:block}",
+                     '.cleanup-table td::before{content:attr(data-label) ": "', ".cleanup-actions button{flex:1}"):
+            with self.subTest(rule=rule):
+                self.assertIn(rule, phone)
+
     def test_card_action_results_show_where_the_user_is(self):
         page = _dashboard_html()
         # The notice is a toast fixed to the viewport, not a line at the top of the page.
@@ -471,8 +621,26 @@ class ControlCenterVisualAuditTests(unittest.TestCase):
         for job_id in (63, 64):
             self.assertFalse(before[job_id]["hasExport"])
             self.assertEqual(before[job_id]["tab"], "export")
+        # A paused export and a cancelled one (render stage retired) wait in "Đang chờ xử lý".
+        self.assertEqual(
+            (before[65]["tab"], before[65]["exportValue"], before[65]["exportDetail"]),
+            ("waiting", "Xuất video tạm dừng",
+             "Bấm “Tiếp tục” để xuất tiếp; lệnh xuất giữ vị trí cũ trong hàng đợi."),
+        )
+        self.assertEqual(
+            (before[66]["tab"], before[66]["exportValue"], before[66]["exportDetail"]),
+            ("waiting", "Đã hủy xuất video",
+             "Mở “Duyệt cảnh” rồi bấm “Hoàn tất duyệt và xuất video” để xếp lệnh xuất mới."),
+        )
+        self.assertFalse(before[65]["hasExport"])
+        self.assertFalse(before[66]["hasExport"])
         self.assertEqual(out["preset_62"], ["custom", "2"])
         self.assertEqual(out["kept_after_load"], {"open": True, "mode": "custom", "gb": "2.5"})
+        # A focused number field (the custom size) defers the 3 s rebuild until it loses focus.
+        self.assertEqual(out["focused_type"], "number")
+        self.assertTrue(out["deferred_while_typing"])
+        self.assertTrue(out["rendered_after_blur"])
+        self.assertEqual(out["kept_after_blur"], {"open": True, "mode": "custom", "gb": "2.5"})
         self.assertEqual(out["cancel"], {
             "actions": 0, "open": True,
             "confirm": "Khóa các lựa chọn hiện tại và bắt đầu xuất video hoàn chỉnh (tối đa 2,5 GB)?",
@@ -496,6 +664,165 @@ class ControlCenterVisualAuditTests(unittest.TestCase):
         self.assertEqual((ok["tab"], ok["card"]["badge"], ok["card"]["hasExport"]), ("export", "Chờ xuất video", False))
         self.assertEqual(ok["noticeClass"], "notice show")
         self.assertEqual(out["gate"], {"actions": 0, "alerts": ["Vẫn còn mục chưa có quyết định cuối cùng."]})
+
+    @unittest.skipUnless(shutil.which("node"), "node is not installed")
+    def test_dashboard_source_cleanup_in_node(self):
+        out = self.run_dashboard_harness("cleanup")
+        cards = out["cards"]
+        self.assertEqual(out["headings"], [["Đã xuất video", 5], ["Đã bỏ qua (không xuất)", 2]])
+        # Eligible: exported #42, skipped #60 and #45 whose source came back (RESTORED).
+        for job_id in ("42", "60", "45"):
+            with self.subTest(job=job_id):
+                self.assertTrue(cards[job_id]["hasCleanupPick"])
+                self.assertTrue(cards[job_id]["hasCleanupButton"])
+                self.assertFalse(cards[job_id]["cleanupButtonDisabled"])
+                self.assertFalse(cards[job_id]["cleanupChecked"])
+        self.assertIsNone(cards["42"]["sourceLine"])
+        self.assertTrue(cards["45"]["sourceLine"].startswith("Đã khôi phục video gốc (SHA-256 khớp) lúc "))
+        self.assertTrue(cards["60"]["hasUnskip"])
+        # #41 was cleaned: read-only card, rerun disabled with the exact file name to copy back.
+        cleaned = cards["41"]
+        self.assertTrue(cleaned["sourceLine"].startswith("Đã dọn video gốc · 244 MB · lúc "), cleaned["sourceLine"])
+        self.assertTrue(cleaned["sourceLine"].endswith("(đang ở Thùng rác)"), cleaned["sourceLine"])
+        self.assertEqual(cleaned["sourceTone"], "complete")
+        self.assertTrue(cleaned["rerunDisabled"])
+        self.assertFalse(cleaned["hasRerun"])
+        self.assertFalse(cleaned["hasCleanupPick"])
+        self.assertFalse(cleaned["hasCleanupButton"])
+        self.assertEqual(cleaned["cleanupNote"], "Chép lại video gốc vào input để chạy lại (đúng tên: Tập 11.mp4)")
+        # A cleaned skipped video cannot be reopened; an unverified move says so.
+        skipped = cards["70"]
+        self.assertTrue(skipped["unskipDisabled"])
+        self.assertFalse(skipped["hasUnskip"])
+        self.assertTrue(skipped["sourceLine"].endswith(
+            "(đang ở Thùng rác) · Windows chưa xác nhận bản ghi trong Thùng rác; hãy kiểm tra Thùng rác."))
+        self.assertEqual(skipped["cleanupNote"], "Chép lại video gốc vào input để chạy lại (đúng tên: Tập 40.mp4)")
+        # Its "Xuất video" box no longer says the source is kept.
+        self.assertTrue(skipped["exportDetail"].startswith("Đã bỏ qua lúc "), skipped["exportDetail"])
+        self.assertTrue(skipped["exportDetail"].endswith(
+            "; report và quyết định duyệt được giữ nguyên; video gốc đã được dọn vào Thùng rác."), skipped["exportDetail"])
+        self.assertTrue(cards["60"]["exportDetail"].endswith(
+            "; video gốc, report và quyết định duyệt được giữ nguyên."), cards["60"]["exportDetail"])
+        # Not cleanable: the reason, or the missing source; no checkbox.
+        # (The real jobs 37/38: their export of the current review left output/.)
+        self.assertEqual(cards["37"]["sourceLine"],
+                         "Chưa dọn được: Không thấy bản xuất trong thư mục output (đã bị dời hoặc đổi tên?)")
+        self.assertFalse(cards["37"]["hasCleanupPick"])
+        self.assertTrue(cards["37"]["hasRerun"])
+        self.assertEqual((cards["3"]["sourceLine"], cards["3"]["sourceTone"]), ("Không còn video gốc trong input", "error"))
+        self.assertFalse(cards["3"]["hasCleanupPick"])
+        # The toolbar heads the tab.
+        toolbar = out["toolbar0"]
+        self.assertTrue(toolbar["first"])
+        self.assertEqual(toolbar["summary"], "Dọn video gốc: 3 video dọn được · đã chọn 0 (0 MB)")
+        self.assertEqual(toolbar["run"], {"text": "Dọn video gốc đã chọn (0)", "disabled": True, "title": ""})
+        self.assertEqual(toolbar["all"]["text"], "Chọn tất cả video dọn được")
+        self.assertTrue(toolbar["none"]["disabled"])
+        self.assertEqual(toolbar["note"], "Chỉ chuyển vào Thùng rác của Windows, không xóa vĩnh viễn.")
+        self.assertEqual(out["selection0"], [])
+        # A focused checkbox does not hold the rebuild back (only text fields and selects do).
+        self.assertTrue(out["focused_checkbox"])
+        self.assertTrue(out["checkbox_focus_rendered"])
+        # Select all, untick #45 in place, survive a poll, prune when a video leaves the tab.
+        self.assertEqual(out["after_all"]["selection"], [42, 45, 60])
+        self.assertEqual(out["after_all"]["checked"], {"42": True, "45": True, "60": True})
+        self.assertEqual(out["after_all"]["toolbar"]["run"]["text"], "Dọn video gốc đã chọn (3)")
+        self.assertFalse(out["after_all"]["toolbar"]["run"]["disabled"])
+        toggle = out["after_toggle"]
+        self.assertEqual(toggle["selection"], [42, 60])
+        self.assertTrue(toggle["html_unchanged"])
+        self.assertEqual((toggle["run_text"], toggle["run_disabled"]), ("Dọn video gốc đã chọn (2)", False))
+        self.assertEqual(toggle["summary"], "Dọn video gốc: 3 video dọn được · đã chọn 2 (477 MB)")
+        self.assertEqual(out["after_load"]["selection"], [42, 60])
+        self.assertEqual(out["after_load"]["checked"], {"42": True, "45": False, "60": True})
+        self.assertEqual(out["after_ready"], [42])
+        self.assertEqual(out["after_back"], [42])
+        self.assertEqual(out["preview_error"], {
+            "notice": "Không lấy được danh sách dọn video gốc: Chọn từ 1 đến 50 video mỗi lần dọn.",
+            "error": True, "open": False,
+        })
+        # The preview dialog (ids deduplicated and sorted).
+        preview = out["preview"]
+        self.assertEqual(preview["calls"], ["42,60"])
+        self.assertEqual((preview["open"], preview["shown"], preview["focused"]), (True, 1, 1))
+        for text in ("#42 Tập 12.mp4", "240 MB", "Đã bỏ qua (không xuất)", "Bỏ qua lúc ",
+                     "Tổng cộng: 2 video · 477 MB sẽ được giải phóng sau khi dọn sạch Thùng rác.",
+                     "Thùng rác của ổ E: đang chứa 11,0 GB / giới hạn 48,6 GB; sau khi chuyển: 11,5 GB.",
+                     'data-label="Dung lượng"'):
+            with self.subTest(text=text):
+                self.assertIn(text, preview["body"])
+        self.assertEqual((preview["confirm"], preview["confirmDisabled"]), ("Chuyển 2 video vào Thùng rác", False))
+        # Hủy posts nothing, and confirm without an open preview posts nothing.
+        self.assertEqual(out["cancel"], {"posts": 0, "open": False, "preview_cleared": True})
+        # Two clicks on confirm: one POST of the eligible ids with the preview id; Esc and Hủy do nothing meanwhile.
+        posting = out["posting"]
+        self.assertEqual(posting["confirm"], "Đang kiểm tra SHA-256 và chuyển vào Thùng rác…")
+        self.assertTrue(posting["confirmDisabled"])
+        self.assertTrue(posting["cancelDisabled"])
+        self.assertTrue(posting["esc_prevented"])
+        self.assertTrue(posting["wait_shown"])
+        self.assertTrue(posting["open_after_close_click"])
+        # A non-cancelable Esc closes the <dialog> natively: it reopens while the POST runs.
+        self.assertTrue(posting["open_after_forced_close"])
+        self.assertEqual(posting["reshown"], 1)
+        self.assertTrue(posting["preview_kept"])
+        ok = out["ok"]
+        self.assertEqual(ok["posts"], [{"job_ids": [42, 60], "preview_id": "a" * 64}])
+        self.assertTrue(ok["notice"].startswith("Đã chuyển 2 video gốc vào Thùng rác ("), ok["notice"])
+        self.assertEqual(ok["notice"], "Đã chuyển 2 video gốc vào Thùng rác (477 MB). "
+                                       "Dung lượng được giải phóng khi bạn dọn sạch Thùng rác.")
+        self.assertFalse(ok["error"])
+        self.assertFalse(ok["open"])
+        self.assertEqual(ok["selection"], [])
+        self.assertEqual(ok["picks"], [False, False])
+        for line in ok["lines"]:
+            self.assertTrue(line.startswith("Đã dọn video gốc · ") and line.endswith("(đang ở Thùng rác)"), line)
+        self.assertFalse(ok["esc_prevented_when_idle"])
+        # A blocked preview cannot be confirmed.
+        blocked = out["blocked"]
+        self.assertTrue(blocked["confirmDisabled"])
+        self.assertEqual(blocked["posts"], 0)
+        self.assertIn('<p class="cleanup-block" role="alert">Không thể dọn: Thùng rác của ổ E: đang chứa 11,0 GB',
+                      blocked["body"])
+        # 409 preview_changed: the dialog stays open with the new list; the next POST uses the new id.
+        changed = out["changed"]
+        self.assertTrue(changed["open"])
+        self.assertIn('<p class="cleanup-alert" role="alert">Danh sách đã thay đổi, hãy xem lại.</p>', changed["body"])
+        self.assertEqual(changed["preview_id"], "b" * 64)
+        self.assertFalse(changed["confirmDisabled"])
+        self.assertFalse(changed["cancelDisabled"])
+        busy = out["busy"]
+        self.assertEqual(busy["body_sent"], {"job_ids": [45], "preview_id": "b" * 64})
+        self.assertTrue(busy["open"])
+        self.assertIn("Đang dọn video gốc; chờ lần dọn trước xong rồi thử lại.", busy["body"])
+        self.assertIn("Không dọn được: boom", out["other_error"]["body"])
+        self.assertFalse(out["other_error"]["confirmDisabled"])
+        # A partial failure is an error notice; the failed video stays selectable and selected.
+        partial = out["partial"]
+        self.assertIn("Không dọn được #60: File đang được mở", partial["notice"])
+        self.assertTrue(partial["notice"].startswith("Đã chuyển 1 video gốc vào Thùng rác ("))
+        self.assertTrue(partial["error"])
+        self.assertEqual(partial["selection"], [60])
+        self.assertTrue(partial["line60"].startswith("Lần dọn trước không thành công: File đang được mở"))
+        self.assertTrue(partial["pick60"])
+        self.assertTrue(partial["line45"].startswith("Đã dọn video gốc · "))
+        # Nothing cleanable in the selection.
+        nothing = out["nothing"]
+        self.assertTrue(nothing["confirmDisabled"])
+        self.assertIn("Không có video nào dọn được trong lựa chọn này.", nothing["body"])
+        self.assertIn("<p>Không thể dọn:</p><ul><li>#3 Tập 3.mp4 — Video gốc không còn trong thư mục input</li></ul>",
+                      nothing["body"])
+        # A running cleanup disables the card button and the toolbar run button.
+        running = out["running"]
+        self.assertTrue(running["card"])
+        self.assertEqual(running["title"], "Đang dọn video gốc; chờ lượt hiện tại xong.")
+        self.assertTrue(running["toolbar"]["run"]["disabled"])
+        self.assertTrue(running["static_run_disabled"])
+        # "Chọn tất cả" stops at 50 videos, the lowest ids first.
+        limit = out["limit"]
+        self.assertEqual((limit["count"], limit["eligible"], limit["first50"]), (50, 56, True))
+        self.assertEqual(limit["notice"], "Mỗi lần dọn tối đa 50 video; đã chọn 50 video đầu tiên.")
+        self.assertEqual(limit["toolbar"]["run"]["text"], "Dọn video gốc đã chọn (50)")
 
     def test_status_exposes_the_workers_queue_order(self):
         from biliflow.scheduler import JobScheduler
@@ -856,7 +1183,11 @@ class ControlCenterHttpTests(unittest.TestCase):
             f"/api/jobs/{self.job_id}/review/session",
             f"/api/jobs/{self.job_id}/review/evidence?item={MEDIA_ITEM}",
             f"/api/jobs/{self.job_id}/review/video?k={self.key(self.job_id)}",
+            # Batch 3 (B8): the cleanup preview (read-only, no token, like every GET).
+            "/api/source-cleanup/preview?ids=1",
         ]
+        recycler = Mock(side_effect=AssertionError("recycler reached"))
+        self.center.recycler = recycler
         for route in routes:
             for host in ("evil.example", f"evil.example:{self.port}", "127.0.0.1.evil.example",
                          f"localhost:{self.port}x", "", "[::2]"):
@@ -890,6 +1221,22 @@ class ControlCenterHttpTests(unittest.TestCase):
                     status, _, _ = self.request(route, host=host, method="POST", headers=headers, body=b"{}")
                     self.assertEqual(status, 403)
                 self.assertEqual(self.store.get_job(self.job_id)["state"], "WAITING_REVIEW")
+        # Batch 3 (B8): the cleanup POST needs the local Host and the session token.
+        cleanup_body = json.dumps({"job_ids": [self.job_id], "preview_id": "a" * 64}).encode()
+        for host, token in (("evil.example", "test-token"), (f"evil.example:{self.port}", "test-token"),
+                            (None, "wrong"), (None, None)):
+            with self.subTest(route="/api/source-cleanup", host=host, token=token):
+                headers = {"Content-Type": "application/json"}
+                if token:
+                    headers["X-BiliFlow-Token"] = token
+                status, _, body = self.request(
+                    "/api/source-cleanup", host=host, method="POST", headers=headers, body=cleanup_body,
+                )
+                self.assertEqual(status, 403)
+                self.assertNotIn(b"test-token", body)
+        recycler.assert_not_called()
+        self.assertTrue(self.source.is_file())
+        self.assertIsNone(self.store.latest_source_cleanup(self.job_id))
 
     def test_review_page_and_media_still_work_on_localhost(self):
         status, headers, body = self.request(f"/review/{self.job_id}")
@@ -912,9 +1259,12 @@ class ControlCenterHttpTests(unittest.TestCase):
 
     def test_export_route_reports_errors_and_render_progress(self):
         route = f"/api/jobs/{self.job_id}/review/export"
+        # Batch 3 (B7, B8): the review page also learns whether the source was
+        # cleaned, and the latest cleanup row (none here).
         self.assertEqual(
             json.loads(self.request(route)[2]),
-            {"status": "WAITING_REVIEW", "output": None, "error": None, "render_progress": None},
+            {"status": "WAITING_REVIEW", "output": None, "error": None, "render_progress": None,
+             "source_cleaned": False, "source_name": "movie.mp4", "source_cleanup": None},
         )
         self.store.update_job(self.job_id, state="FAILED", error="boom", current_stage="render")
         value = json.loads(self.request(route)[2])

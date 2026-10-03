@@ -16,7 +16,7 @@ from typing import Any
 
 import psutil
 
-from biliflow import __version__
+from biliflow import __version__, recycle_bin, source_cleanup
 from biliflow.codex_supervisor import (
     codex_connection_status,
     collect_visual_evidence,
@@ -30,6 +30,25 @@ from biliflow.codex_supervisor import (
 from biliflow.export_dialog import (
     EXPORT_CUSTOM_GB_ATTRIBUTES,
     EXPORT_DIALOG_JS,
+)
+# Shared with the standalone review UI and source cleanup (batch 3, step B5):
+# _REVIEW_QUEUE_IO is the same lock object as export_guards.REVIEW_QUEUE_IO and
+# the old names stay importable from this module.
+from biliflow.export_guards import (
+    DECISION_LABELS,
+    EXPORT_IN_FLIGHT_MESSAGE,
+    QUEUE_NOT_READY_MESSAGE,
+    REVIEW_EDIT_IN_FLIGHT_MESSAGE,
+    REVIEW_QUEUE_IO as _REVIEW_QUEUE_IO,
+    SOURCE_CLEANED_MEDIA_MESSAGE,
+    SOURCE_CLEANED_MESSAGE,
+    SOURCE_CLEANED_REVIEW_REFUSAL,
+    SOURCE_MISSING_MESSAGE,
+    export_source_refusal,
+    export_state_refusal,
+    render_in_flight,
+    review_summary,
+    skip_refusal,
 )
 from biliflow.job_import import import_existing_project
 from biliflow.job_pipeline import DETECTOR_GROUPS
@@ -63,6 +82,22 @@ from biliflow.review_evidence import (
 )
 from biliflow.scheduler import SKIPPED_REFUSAL, InputWatcher, JobScheduler
 from biliflow.storage import storage_status
+
+
+UNCONFIGURED_RECYCLE_BIN_MESSAGE = "Chưa cấu hình Thùng rác cho Control Center này."
+# How long serve() keeps the process alive for an /api/shutdown stop() after
+# serve_forever returned: stop() waits up to 90 s for a running cleanup.
+STOP_WAIT_SECONDS = 120.0
+
+
+def _unconfigured_recycler(*_args: Any, **_kwargs: Any) -> Any:
+    """ControlCenter.recycler until __init__ binds the real one (stubs and tests never reach the shell)."""
+    raise RuntimeError(UNCONFIGURED_RECYCLE_BIN_MESSAGE)
+
+
+def _unconfigured_bin_info(path: Any) -> Any:
+    """ControlCenter.bin_info until __init__ binds the real one; a preview then shows it as blocked."""
+    raise recycle_bin.RecycleRefused(UNCONFIGURED_RECYCLE_BIN_MESSAGE)
 
 
 def _merge_visual_audit_batches(
@@ -174,13 +209,6 @@ class SingleInstanceLock:
             self.handle.close()
 
 
-# Serializes review-queue reads (page polling, evidence, strip frames, video)
-# with review-queue writes. On Windows, Path.replace onto a file that another
-# thread has open fails with WinError 5, which lost decisions while the focus
-# page loaded frames for the next item.
-_REVIEW_QUEUE_IO = threading.RLock()
-
-
 def _write_json(path: Path, payload: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_suffix(path.suffix + ".tmp")
@@ -192,67 +220,11 @@ def _read_json(path: Path) -> dict[str, Any]:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
-SOURCE_MISSING_MESSAGE = "Video gốc không còn trong input; không thể xuất."
-EXPORT_IN_FLIGHT_MESSAGE = "Video này đang chờ xuất hoặc đang xuất; không xếp lệnh xuất thêm lần nữa."
-REVIEW_EDIT_IN_FLIGHT_MESSAGE = (
-    "Video đang chờ xuất hoặc đang xuất; hủy lệnh xuất trước khi đổi quyết định."
-)
-DECISION_LABELS = {
-    "KEEP": "Giữ nguyên", "BLUR": "Làm mờ", "CUT": "Cắt cảnh",
-    "NEEDS_MORE_CONTEXT": "Cần xem thêm",
-}
 # Jobs whose card shows a review summary (the only queues status() reads).
 REVIEW_SUMMARY_STATES = frozenset({"WAITING_REVIEW", "READY_TO_EXPORT", "SKIPPED"})
 # A review decision never moves these jobs: an export waiting or running keeps
 # the plan fixed at finalize, and a skip ends only through unskip or rerun.
 SYNC_KEEP_STATES = frozenset({"QUEUED", "SKIPPED"}) | IN_PROCESS_STATES
-
-
-def review_summary(queue: dict[str, Any]) -> dict[str, Any]:
-    """Compact counts of a review queue for the dashboard (no item data)."""
-    items = list(queue.get("items") or [])
-    decisions: dict[str, int] = {}
-    for item in items:
-        if item.get("decision"):
-            key = str(item["decision"])
-            decisions[key] = decisions.get(key, 0) + 1
-    policy = queue.get("export_size_policy")
-    summary = {
-        "status": queue.get("status"),
-        "main_items": len(items),
-        "advisory_items": len(queue.get("advisory_items") or []),
-        "pending": sum(1 for item in items if not item.get("decision")),
-        "decisions": dict(sorted(decisions.items())),
-        "export_size_policy": (
-            {"mode": policy.get("mode"), "maximum_output_gb": policy.get("maximum_output_gb")}
-            if isinstance(policy, dict) else None
-        ),
-    }
-    summary["skip_eligible"] = skip_refusal(summary) is None
-    return summary
-
-
-def skip_refusal(summary: dict[str, Any]) -> str | None:
-    """Why "Bỏ qua (không xuất)" is not allowed for this review, or None.
-
-    User decision 2026-10-02: a fully reviewed queue with no main item
-    (advisory candidates do not count), or whose every main decision is KEEP.
-    """
-    if summary.get("status") != "READY_FOR_EDIT_PLAN" or summary.get("pending"):
-        return "Video còn mục chưa có quyết định cuối cùng; không thể bỏ qua."
-    decisions = dict(summary.get("decisions") or {})
-    other = {key: value for key, value in decisions.items() if key != "KEEP"}
-    if other:
-        named = ", ".join(
-            f"{value} {DECISION_LABELS.get(key, key)}" for key, value in sorted(other.items())
-        )
-        return (
-            f"Video có cảnh chính không phải Giữ nguyên ({named}); "
-            "hãy xuất video thay vì bỏ qua."
-        )
-    if int(decisions.get("KEEP", 0)) != int(summary.get("main_items") or 0):
-        return "Video còn mục chưa có quyết định cuối cùng; không thể bỏ qua."
-    return None
 
 
 # Per-process cache of review summaries, keyed by (path, mtime_ns, size). It
@@ -353,12 +325,12 @@ def _dashboard_html() -> str:
     page = """<!doctype html><html lang="vi"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1"><title>BiliFlow Control Center</title>
 <style>
-:root{color-scheme:dark;font:15px system-ui,-apple-system,"Segoe UI",sans-serif;background:#090b10;color:#e8ecf4;--panel:#141923;--panel-2:#1a202c;--line:#2b3546;--muted:#9aa7ba;--blue:#55b8f5;--green:#61d39b;--amber:#e3ad4d;--red:#ff7f8e}*{box-sizing:border-box}body{margin:0;min-height:100vh;background:radial-gradient(circle at 15% -10%,#18263a 0,transparent 34rem),#090b10}header{padding:16px 24px;background:rgba(15,19,27,.94);border-bottom:1px solid #222b39;display:flex;gap:10px;align-items:center;position:sticky;top:0;z-index:4;backdrop-filter:blur(14px)}h1{font-size:21px;margin:0 auto 0 0;letter-spacing:-.02em}.pill{padding:6px 10px;border:1px solid #303a4b;border-radius:99px;background:#202633;color:#cbd5e4;font-size:13px}main{padding:22px;max-width:1500px;margin:auto}.bar,.job,.workspace{background:rgba(20,25,35,.96);border:1px solid var(--line);border-radius:16px;box-shadow:0 14px 36px rgba(0,0,0,.16)}.bar{padding:14px;margin-bottom:14px;display:flex;gap:10px;flex-wrap:wrap;align-items:center}.ai{display:grid;grid-template-columns:1fr auto;gap:16px}.ai-controls{display:flex;gap:8px;flex-wrap:wrap;align-items:center}.workspace{overflow:clip}.workspace-head{padding:18px 20px 0}.workspace-title{font-size:19px;font-weight:750;margin:0}.workspace-subtitle{color:var(--muted);font-size:13px;margin-top:4px}.job-tabs{display:flex;gap:8px;padding:16px 20px 0;border-bottom:1px solid var(--line);overflow-x:auto;position:sticky;top:var(--header-h,64px);z-index:3;background:rgba(20,25,35,.98);backdrop-filter:blur(14px)}.job-tab{display:flex;align-items:center;gap:8px;padding:11px 14px;border:1px solid transparent;border-radius:10px 10px 0 0;background:transparent;color:#aab6c8;white-space:nowrap}.job-tab:hover{background:#1c2330;color:#fff}.job-tab.active{background:#202837;border-color:#354258;border-bottom-color:#202837;color:#fff}.tab-count{min-width:24px;padding:2px 7px;border-radius:99px;background:#2d3748;font-size:12px;text-align:center}.job-tab.active .tab-count{background:#286b96;color:#eaf7ff}.job-list{padding:16px}.job{padding:0;margin-bottom:14px;overflow:hidden}.job:last-child{margin-bottom:0}.job[data-bucket="completed"]{border-color:#285744}.job[data-bucket="scanning"],.job[data-bucket="export"]{border-color:#2e5872}.job[data-bucket="review"]{border-color:#4a4227}.job-head{display:flex;gap:14px;align-items:flex-start;padding:17px 18px;border-bottom:1px solid #273142}.job-identity{min-width:0;flex:1}.job-title{font-size:17px;font-weight:750;word-break:break-word}.job-key{color:#738197;font-size:12px;margin-top:3px;word-break:break-all}.job-path{color:var(--muted);font-size:12px;margin-top:7px;word-break:break-all}.state-badge{padding:7px 10px;border:1px solid #3b4658;border-radius:99px;background:#252d3a;font-weight:700;font-size:12px;white-space:nowrap}.tone-running{color:#8fd8ff;border-color:#2e6f96;background:#153348}.tone-complete{color:#88e7b8;border-color:#297252;background:#143c2e}.tone-waiting{color:#f0c66f;border-color:#74591f;background:#3d3014}.tone-error{color:#ff9aa5;border-color:#7e3540;background:#401d24}.job-badges{display:flex;flex-direction:column;align-items:flex-end;gap:6px}.queue-badge{padding:5px 9px;border:1px dashed #5b6b84;border-radius:99px;color:#c9d6e8;font-size:12px;font-weight:700;white-space:nowrap}.job-body{padding:17px 18px}.progress-row{display:flex;align-items:center;gap:12px}.progress-label{min-width:145px;color:#c8d2e1;font-size:13px}.progress{height:8px;background:#252d39;border-radius:99px;overflow:hidden;flex:1}.progress i{display:block;height:100%;border-radius:99px;background:linear-gradient(90deg,#368fd2,#5dc6f5)}.progress-value{min-width:40px;text-align:right;color:#c9d8e9;font-variant-numeric:tabular-nums}.status-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;margin-top:15px}.status-box{min-height:106px;padding:12px;border:1px solid #2d3748;border-radius:12px;background:#10151e}.status-box.tone-complete{border-color:#285b46;background:#10261f}.status-box.tone-running{border-color:#285e7c;background:#102431}.status-box.tone-waiting{border-color:#655020;background:#2a2415}.status-box.tone-error{border-color:#70313b;background:#2c171c}.status-kicker{color:#8f9db0;font-size:11px;font-weight:750;text-transform:uppercase;letter-spacing:.06em}.status-value{font-weight:750;margin-top:7px}.status-detail{color:#9eacbf;font-size:12px;line-height:1.4;margin-top:5px}.mini-progress{height:6px;margin-top:9px;border-radius:99px;background:#273242;overflow:hidden}.mini-progress i{display:block;height:100%;border-radius:99px;background:linear-gradient(90deg,#2e8dca,#67d1ff)}.phase-group+.phase-group{margin-top:20px}.phase-heading{display:flex;align-items:center;gap:9px;margin:1px 2px 11px;color:#d8e3f1;font-size:13px;font-weight:750}.phase-heading span{padding:2px 7px;border-radius:99px;background:#293444;color:#aebdd0;font-size:11px}.job-error{margin-top:12px;padding:10px 12px;border:1px solid #793641;border-radius:10px;background:#341a20;color:#ff9ba6}.job-footer{padding:14px 18px 17px;border-top:1px solid #273142;background:#11161f}.scope-line{color:#9ba9bc;font-size:12px;margin-bottom:12px}.actions{display:flex;gap:8px;flex-wrap:wrap;align-items:center}.actions select{max-width:220px}button,select{border:1px solid transparent;border-radius:9px;padding:9px 12px;background:#2d70b7;color:#fff;cursor:pointer}button:hover{filter:brightness(1.08)}button.warn{background:#8b611d}button.danger{background:#963845}button.green{background:#247554}button:disabled{opacity:.45;cursor:not-allowed}.detectors{width:100%;border:1px solid #39445a;border-radius:10px;padding:9px 11px;text-align:left}.detectors legend{color:#9ca8bb;padding:0 5px}.detectors label{display:inline-flex;gap:5px;align-items:center;margin:3px 10px 3px 0}.rerun-panel{width:100%;border:1px solid #354055;border-radius:11px;background:#171d28}.rerun-panel summary{cursor:pointer;padding:10px 12px;color:#c5d0df;font-weight:650}.rerun-body{display:flex;gap:8px;flex-wrap:wrap;padding:0 10px 10px}.export-panel{width:100%;border:1px solid #2f5a45;border-radius:11px;background:#131f1a}.export-panel summary{cursor:pointer;padding:10px 12px;color:#bfe9d2;font-weight:650}.export-body{display:flex;gap:8px;flex-wrap:wrap;align-items:center;padding:0 10px 10px}.export-body label{display:inline-flex;gap:6px;align-items:center;color:#c8d2e1}.export-body input{width:96px;border:1px solid #39445a;border-radius:9px;padding:8px;background:#0f141c;color:#e8ecf4}.export-reason{color:#f0c66f;font-size:12px;flex-basis:100%}.export-error{color:#ff9aa5;font-size:12px;flex-basis:100%}[hidden]{display:none!important}.empty{text-align:center;padding:52px 20px;color:var(--muted)}.detail{font-size:13px}.muted{color:var(--muted)}.state{font-weight:700;color:var(--blue)}.ok{color:var(--green)}.error{color:var(--red)}.notice{display:none;position:fixed;left:16px;right:16px;bottom:16px;z-index:30;max-width:640px;margin:0 auto;border-radius:10px;padding:12px 14px;background:#173c30;border:1px solid #2f8b69;box-shadow:0 10px 30px rgba(0,0,0,.45);cursor:pointer}.notice.error{display:block;background:#4a2027;border-color:#a43d4a}.notice.show{display:block}@media(max-width:1050px){.status-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.ai{grid-template-columns:1fr}}@media(max-width:680px){header{align-items:flex-start;flex-wrap:wrap}h1{width:100%}main{padding:12px}.status-grid{grid-template-columns:1fr}.job-head{flex-direction:column}.job-badges{flex-direction:row;align-items:center;flex-wrap:wrap}.progress-row{align-items:flex-start;flex-wrap:wrap}.progress-label{width:100%}.progress{min-width:180px}.job-tabs{padding-left:12px}.job-list{padding:10px}.actions{align-items:stretch}.actions button,.actions select{flex:1 1 auto}.export-body label{flex:1 1 100%;flex-wrap:wrap}.actions .export-body select{flex:1 1 100%;max-width:none}.export-body input{flex:1}}
+:root{color-scheme:dark;font:15px system-ui,-apple-system,"Segoe UI",sans-serif;background:#090b10;color:#e8ecf4;--panel:#141923;--panel-2:#1a202c;--line:#2b3546;--muted:#9aa7ba;--blue:#55b8f5;--green:#61d39b;--amber:#e3ad4d;--red:#ff7f8e}*{box-sizing:border-box}body{margin:0;min-height:100vh;background:radial-gradient(circle at 15% -10%,#18263a 0,transparent 34rem),#090b10}header{padding:16px 24px;background:rgba(15,19,27,.94);border-bottom:1px solid #222b39;display:flex;gap:10px;align-items:center;position:sticky;top:0;z-index:4;backdrop-filter:blur(14px)}h1{font-size:21px;margin:0 auto 0 0;letter-spacing:-.02em}.pill{padding:6px 10px;border:1px solid #303a4b;border-radius:99px;background:#202633;color:#cbd5e4;font-size:13px}main{padding:22px;max-width:1500px;margin:auto}.bar,.job,.workspace{background:rgba(20,25,35,.96);border:1px solid var(--line);border-radius:16px;box-shadow:0 14px 36px rgba(0,0,0,.16)}.bar{padding:14px;margin-bottom:14px;display:flex;gap:10px;flex-wrap:wrap;align-items:center}.ai{display:grid;grid-template-columns:1fr auto;gap:16px}.ai-controls{display:flex;gap:8px;flex-wrap:wrap;align-items:center}.workspace{overflow:clip}.workspace-head{padding:18px 20px 0}.workspace-title{font-size:19px;font-weight:750;margin:0}.workspace-subtitle{color:var(--muted);font-size:13px;margin-top:4px}.job-tabs{display:flex;gap:8px;padding:16px 20px 0;border-bottom:1px solid var(--line);overflow-x:auto;position:sticky;top:var(--header-h,64px);z-index:3;background:rgba(20,25,35,.98);backdrop-filter:blur(14px)}.job-tab{display:flex;align-items:center;gap:8px;padding:11px 14px;border:1px solid transparent;border-radius:10px 10px 0 0;background:transparent;color:#aab6c8;white-space:nowrap}.job-tab:hover{background:#1c2330;color:#fff}.job-tab.active{background:#202837;border-color:#354258;border-bottom-color:#202837;color:#fff}.tab-count{min-width:24px;padding:2px 7px;border-radius:99px;background:#2d3748;font-size:12px;text-align:center}.job-tab.active .tab-count{background:#286b96;color:#eaf7ff}.job-list{padding:16px}.job{padding:0;margin-bottom:14px;overflow:hidden}.job:last-child{margin-bottom:0}.job[data-bucket="completed"]{border-color:#285744}.job[data-bucket="scanning"],.job[data-bucket="export"]{border-color:#2e5872}.job[data-bucket="review"]{border-color:#4a4227}.job-head{display:flex;gap:14px;align-items:flex-start;padding:17px 18px;border-bottom:1px solid #273142}.job-identity{min-width:0;flex:1}.job-title{font-size:17px;font-weight:750;word-break:break-word}.job-key{color:#738197;font-size:12px;margin-top:3px;word-break:break-all}.job-path{color:var(--muted);font-size:12px;margin-top:7px;word-break:break-all}.state-badge{padding:7px 10px;border:1px solid #3b4658;border-radius:99px;background:#252d3a;font-weight:700;font-size:12px;white-space:nowrap}.tone-running{color:#8fd8ff;border-color:#2e6f96;background:#153348}.tone-complete{color:#88e7b8;border-color:#297252;background:#143c2e}.tone-waiting{color:#f0c66f;border-color:#74591f;background:#3d3014}.tone-error{color:#ff9aa5;border-color:#7e3540;background:#401d24}.job-badges{display:flex;flex-direction:column;align-items:flex-end;gap:6px}.queue-badge{padding:5px 9px;border:1px dashed #5b6b84;border-radius:99px;color:#c9d6e8;font-size:12px;font-weight:700;white-space:nowrap}.job-body{padding:17px 18px}.progress-row{display:flex;align-items:center;gap:12px}.progress-label{min-width:145px;color:#c8d2e1;font-size:13px}.progress{height:8px;background:#252d39;border-radius:99px;overflow:hidden;flex:1}.progress i{display:block;height:100%;border-radius:99px;background:linear-gradient(90deg,#368fd2,#5dc6f5)}.progress-value{min-width:40px;text-align:right;color:#c9d8e9;font-variant-numeric:tabular-nums}.status-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;margin-top:15px}.status-box{min-height:106px;padding:12px;border:1px solid #2d3748;border-radius:12px;background:#10151e}.status-box.tone-complete{border-color:#285b46;background:#10261f}.status-box.tone-running{border-color:#285e7c;background:#102431}.status-box.tone-waiting{border-color:#655020;background:#2a2415}.status-box.tone-error{border-color:#70313b;background:#2c171c}.status-kicker{color:#8f9db0;font-size:11px;font-weight:750;text-transform:uppercase;letter-spacing:.06em}.status-value{font-weight:750;margin-top:7px}.status-detail{color:#9eacbf;font-size:12px;line-height:1.4;margin-top:5px}.mini-progress{height:6px;margin-top:9px;border-radius:99px;background:#273242;overflow:hidden}.mini-progress i{display:block;height:100%;border-radius:99px;background:linear-gradient(90deg,#2e8dca,#67d1ff)}.phase-group+.phase-group{margin-top:20px}.phase-heading{display:flex;align-items:center;gap:9px;margin:1px 2px 11px;color:#d8e3f1;font-size:13px;font-weight:750}.phase-heading span{padding:2px 7px;border-radius:99px;background:#293444;color:#aebdd0;font-size:11px}.job-error{margin-top:12px;padding:10px 12px;border:1px solid #793641;border-radius:10px;background:#341a20;color:#ff9ba6}.job-footer{padding:14px 18px 17px;border-top:1px solid #273142;background:#11161f}.scope-line{color:#9ba9bc;font-size:12px;margin-bottom:12px}.actions{display:flex;gap:8px;flex-wrap:wrap;align-items:center}.actions select{max-width:220px}button,select{border:1px solid transparent;border-radius:9px;padding:9px 12px;background:#2d70b7;color:#fff;cursor:pointer}button:hover{filter:brightness(1.08)}button.warn{background:#8b611d}button.danger{background:#963845}button.green{background:#247554}button:disabled{opacity:.45;cursor:not-allowed}.detectors{width:100%;border:1px solid #39445a;border-radius:10px;padding:9px 11px;text-align:left}.detectors legend{color:#9ca8bb;padding:0 5px}.detectors label{display:inline-flex;gap:5px;align-items:center;margin:3px 10px 3px 0}.rerun-panel{width:100%;border:1px solid #354055;border-radius:11px;background:#171d28}.rerun-panel summary{cursor:pointer;padding:10px 12px;color:#c5d0df;font-weight:650}.rerun-body{display:flex;gap:8px;flex-wrap:wrap;padding:0 10px 10px}.export-panel{width:100%;border:1px solid #2f5a45;border-radius:11px;background:#131f1a}.export-panel summary{cursor:pointer;padding:10px 12px;color:#bfe9d2;font-weight:650}.export-body{display:flex;gap:8px;flex-wrap:wrap;align-items:center;padding:0 10px 10px}.export-body label{display:inline-flex;gap:6px;align-items:center;color:#c8d2e1}.export-body input{width:96px;border:1px solid #39445a;border-radius:9px;padding:8px;background:#0f141c;color:#e8ecf4}.export-reason{color:#f0c66f;font-size:12px;flex-basis:100%}.export-error{color:#ff9aa5;font-size:12px;flex-basis:100%}[hidden]{display:none!important}.empty{text-align:center;padding:52px 20px;color:var(--muted)}.detail{font-size:13px}.muted{color:var(--muted)}.state{font-weight:700;color:var(--blue)}.ok{color:var(--green)}.error{color:var(--red)}.notice{display:none;position:fixed;left:16px;right:16px;bottom:16px;z-index:30;max-width:640px;margin:0 auto;border-radius:10px;padding:12px 14px;background:#173c30;border:1px solid #2f8b69;box-shadow:0 10px 30px rgba(0,0,0,.45);cursor:pointer}.notice.error{display:block;background:#4a2027;border-color:#a43d4a}.notice.show{display:block}.cleanup-toolbar{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin:0 0 14px;padding:12px 14px;border:1px solid #2f5a45;border-radius:12px;background:#131f1a}.cleanup-summary{color:#d8e3f1;font-weight:650}.cleanup-toolbar .cleanup-summary{flex:1 1 280px}.cleanup-pick{display:inline-flex;gap:6px;align-items:center;color:#c8d2e1;padding:6px 2px;cursor:pointer}.cleanup-pick input{width:17px;height:17px;margin:0}.source-line{margin:0 0 12px;padding:8px 10px;border:1px solid #2d3748;border-radius:9px;background:#10151e;color:#c8d2e1;font-size:12px;line-height:1.45;word-break:break-word}.source-line.tone-complete{color:#88e7b8;border-color:#285b46;background:#10261f}.source-line.tone-running{color:#8fd8ff;border-color:#285e7c;background:#102431}.source-line.tone-waiting{color:#f0c66f;border-color:#655020;background:#2a2415}.source-line.tone-error{color:#ff9aa5;border-color:#70313b;background:#2c171c}.cleanup-note{color:var(--muted);font-size:12px;line-height:1.4}.actions .cleanup-note{flex-basis:100%}#cleanup-dialog{width:min(900px,calc(100vw - 24px));max-width:none;max-height:calc(100vh - 24px);padding:0;border:1px solid #354258;border-radius:14px;background:#141923;color:#e8ecf4;box-shadow:0 24px 70px rgba(0,0,0,.6)}#cleanup-dialog::backdrop{background:rgba(4,6,10,.74)}.cleanup-form{display:flex;flex-direction:column;max-height:calc(100vh - 26px);margin:0}.cleanup-form h2{margin:0;padding:16px 18px;font-size:18px;border-bottom:1px solid var(--line)}.cleanup-scroll{flex:1 1 auto;min-height:0;overflow:auto;padding:14px 18px}.cleanup-scroll p{margin:0 0 10px;line-height:1.45}.cleanup-scroll ul{margin:4px 0 10px;padding-left:20px;color:#c8d2e1;font-size:13px;line-height:1.5}.cleanup-bin{color:#c8d2e1;font-size:13px}.cleanup-table-wrap{overflow-x:auto;margin:0 0 10px;border:1px solid #273142;border-radius:10px}.cleanup-table{width:100%;border-collapse:collapse;font-size:13px}.cleanup-table th,.cleanup-table td{padding:8px 10px;border-bottom:1px solid #273142;text-align:left;vertical-align:top;word-break:break-word}.cleanup-table th{color:#8f9db0;font-size:11px;font-weight:750;text-transform:uppercase;letter-spacing:.05em;background:#10151e}.cleanup-table tbody tr:last-child td{border-bottom:0}.cleanup-alert{padding:9px 11px;border:1px solid #74591f;border-radius:9px;background:#3d3014;color:#f0c66f}.cleanup-block{padding:9px 11px;border:1px solid #7e3540;border-radius:9px;background:#401d24;color:#ff9aa5}.cleanup-actions{position:sticky;bottom:0;display:flex;gap:8px;justify-content:flex-end;flex-wrap:wrap;padding:12px 18px;border-top:1px solid var(--line);background:#141923}@media(max-width:1050px){.status-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.ai{grid-template-columns:1fr}}@media(max-width:680px){header{align-items:flex-start;flex-wrap:wrap}h1{width:100%}main{padding:12px}.status-grid{grid-template-columns:1fr}.job-head{flex-direction:column}.job-badges{flex-direction:row;align-items:center;flex-wrap:wrap}.progress-row{align-items:flex-start;flex-wrap:wrap}.progress-label{width:100%}.progress{min-width:180px}.job-tabs{padding-left:12px}.job-list{padding:10px}.actions{align-items:stretch}.actions button,.actions select{flex:1 1 auto}.export-body label{flex:1 1 100%;flex-wrap:wrap}.actions .export-body select{flex:1 1 100%;max-width:none}.export-body input{flex:1}.cleanup-toolbar button{flex:1 1 100%}.cleanup-table-wrap{border:0}.cleanup-table thead{display:none}.cleanup-table tr,.cleanup-table td{display:block}.cleanup-table tr{padding:8px 0;border-bottom:1px solid #273142}.cleanup-table td{padding:3px 0;border:0}.cleanup-table td::before{content:attr(data-label) ": ";color:#8f9db0;font-weight:650}.cleanup-scroll{padding:12px}.cleanup-actions{padding:10px 12px}.cleanup-actions button{flex:1}}
 </style></head><body><header><h1>BiliFlow Control Center</h1><span class="pill" id="worker">Đang tải</span><span class="pill" id="resource"></span></header>
-<main><div id="notice" class="notice" role="status" title="Bấm để ẩn" onclick="this.className='notice'"></div><div class="bar"><button class="green" onclick="scheduler(false)">Chạy hàng đợi</button><button class="warn" onclick="scheduler(true)">Tạm dừng scheduler</button><button onclick="location.reload()">Làm mới</button><button class="danger" onclick="shutdown('after_stage')">Tắt sau bước hiện tại</button><button class="danger" onclick="shutdown('immediate')">Dừng ngay và tắt</button><span class="muted">Đóng tab không làm dừng xử lý. Muốn tắt hẳn, dùng nút Tắt hoặc Stop-BiliFlow.cmd.</span></div><section class="bar ai"><div><div class="job-title">AI Supervisor</div><div id="ai-message" class="muted">Đang kiểm tra Codex…</div><div class="detail muted">AI JSON không gửi media. Visual AI chỉ gửi tối đa 36 thumbnail sau khi bạn xác nhận cho từng video; không gửi video/âm thanh. Mọi lượt audit dùng chung một session AI Supervisor và được chạy tuần tự. Dùng hạn mức ChatGPT, API key và model GPT-6 bị chặn.</div></div><div class="ai-controls"><label><input type="checkbox" id="ai-enabled"> Bật</label><select id="ai-model"><option value="gpt-5.6-luna">GPT-5.6 Luna — mặc định</option><option value="gpt-5.6-terra">GPT-5.6 Terra — cân bằng</option><option value="gpt-5.6-sol">GPT-5.6 Sol — mạnh hơn</option></select><select id="ai-effort"><option value="low">Low — tiết kiệm</option><option value="medium">Medium — mặc định</option><option value="high">High — tối đa</option></select><button onclick="saveAI()">Lưu cấu hình</button><button onclick="checkAI()">Kiểm tra kết nối</button><button class="green" onclick="loginAI()">Đăng nhập Codex</button><a href="https://learn.chatgpt.com/docs/auth" target="_blank" rel="noopener" class="muted">Hướng dẫn chính thức</a></div></section><section class="workspace"><div class="workspace-head"><div class="workspace-title">Video</div><div class="workspace-subtitle">Theo dõi video theo từng giai đoạn: chờ xử lý, chờ chạy cảnh, đang chạy cảnh, chờ duyệt, xuất video và hoàn tất.</div></div><nav id="job-tabs" class="job-tabs" aria-label="Trạng thái video"></nav><section id="jobs" class="job-list"></section></section></main>
+<main><div id="notice" class="notice" role="status" title="Bấm để ẩn" onclick="this.className='notice'"></div><div class="bar"><button class="green" onclick="scheduler(false)">Chạy hàng đợi</button><button class="warn" onclick="scheduler(true)">Tạm dừng scheduler</button><button onclick="location.reload()">Làm mới</button><button class="danger" onclick="shutdown('after_stage')">Tắt sau bước hiện tại</button><button class="danger" onclick="shutdown('immediate')">Dừng ngay và tắt</button><span class="muted">Đóng tab không làm dừng xử lý. Muốn tắt hẳn, dùng nút Tắt hoặc Stop-BiliFlow.cmd.</span></div><section class="bar ai"><div><div class="job-title">AI Supervisor</div><div id="ai-message" class="muted">Đang kiểm tra Codex…</div><div class="detail muted">AI JSON không gửi media. Visual AI chỉ gửi tối đa 36 thumbnail sau khi bạn xác nhận cho từng video; không gửi video/âm thanh. Mọi lượt audit dùng chung một session AI Supervisor và được chạy tuần tự. Dùng hạn mức ChatGPT, API key và model GPT-6 bị chặn.</div></div><div class="ai-controls"><label><input type="checkbox" id="ai-enabled"> Bật</label><select id="ai-model"><option value="gpt-5.6-luna">GPT-5.6 Luna — mặc định</option><option value="gpt-5.6-terra">GPT-5.6 Terra — cân bằng</option><option value="gpt-5.6-sol">GPT-5.6 Sol — mạnh hơn</option></select><select id="ai-effort"><option value="low">Low — tiết kiệm</option><option value="medium">Medium — mặc định</option><option value="high">High — tối đa</option></select><button onclick="saveAI()">Lưu cấu hình</button><button onclick="checkAI()">Kiểm tra kết nối</button><button class="green" onclick="loginAI()">Đăng nhập Codex</button><a href="https://learn.chatgpt.com/docs/auth" target="_blank" rel="noopener" class="muted">Hướng dẫn chính thức</a></div></section><section class="workspace"><div class="workspace-head"><div class="workspace-title">Video</div><div class="workspace-subtitle">Theo dõi video theo từng giai đoạn: chờ xử lý, chờ chạy cảnh, đang chạy cảnh, chờ duyệt, xuất video và hoàn tất.</div></div><nav id="job-tabs" class="job-tabs" aria-label="Trạng thái video"></nav><section id="jobs" class="job-list"></section></section></main><dialog id="cleanup-dialog" aria-labelledby="cleanup-title"><form class="cleanup-form" method="dialog" onsubmit="return false"><h2 id="cleanup-title">Chuyển video gốc vào Thùng rác</h2><div id="cleanup-dialog-body" class="cleanup-scroll"></div><div class="cleanup-actions"><button type="button" id="cleanup-cancel" onclick="closeCleanupDialog()">Hủy</button><button type="button" class="danger" id="cleanup-confirm" onclick="confirmCleanup()" disabled>Chuyển vào Thùng rác</button></div></form></dialog>
 <script>
-__EXPORT_DIALOG_JS__const SOURCE_MISSING_MESSAGE='__SOURCE_MISSING_MESSAGE__';
-let token='';let status={};let aiState={ready:false,config:{},message:'Đang kiểm tra Codex…'};let noticeTimer=null;let activeJobTab=null;const DRAFT_PREFIX='biliflow.jobDraft.';const LAST_SCOPE_KEY='biliflow.lastDetectorScope';const SENSITIVE_DETECTORS=['adult','gore','violence'];const detectorDrafts={};const metadataDrafts={};const ocrDrafts={};const speedDrafts={};const draftJobKeys={};const rerunPanelDrafts={};const exportPanelDrafts={};const startingJobs=new Set();const skippingJobs=new Set();const unskippingJobs=new Set();const exportingJobs=new Set();let loadSeq=0,appliedSeq=0,jobsPointerDown=false,lastJobsInteraction=0,jobsRenderTimer=null;
+__EXPORT_DIALOG_JS__const SOURCE_MISSING_MESSAGE='__SOURCE_MISSING_MESSAGE__';const SOURCE_CLEANED_MESSAGE='__SOURCE_CLEANED_MESSAGE__';
+let token='';let status={};let aiState={ready:false,config:{},message:'Đang kiểm tra Codex…'};let noticeTimer=null;let activeJobTab=null;const DRAFT_PREFIX='biliflow.jobDraft.';const LAST_SCOPE_KEY='biliflow.lastDetectorScope';const SENSITIVE_DETECTORS=['adult','gore','violence'];const detectorDrafts={};const metadataDrafts={};const ocrDrafts={};const speedDrafts={};const draftJobKeys={};const rerunPanelDrafts={};const exportPanelDrafts={};const startingJobs=new Set();const skippingJobs=new Set();const unskippingJobs=new Set();const exportingJobs=new Set();let loadSeq=0,appliedSeq=0,jobsPointerDown=false,lastJobsInteraction=0,jobsRenderTimer=null;const cleanupSelection=new Set();let cleanupPreview=null,cleanupOpening=false,cleanupPosting=false;
 function storageGet(key){try{const raw=window.localStorage.getItem(key);return raw==null?null:JSON.parse(raw)}catch(e){return null}}
 function storageSet(key,value){try{if(value==null)window.localStorage.removeItem(key);else window.localStorage.setItem(key,JSON.stringify(value))}catch(e){}}
 function forgetDraftMemory(id){delete detectorDrafts[id];delete metadataDrafts[id];delete ocrDrafts[id];delete speedDrafts[id];delete draftJobKeys[id]}
@@ -370,7 +342,7 @@ function clearDraft(id){forgetDraftMemory(id);storageSet(DRAFT_PREFIX+id,null)}
 function dropForeignDrafts(){(status.jobs||[]).forEach(j=>{if(draftJobKeys[j.id]&&j.job_key&&draftJobKeys[j.id]!==j.job_key)forgetDraftMemory(j.id)})}
 loadStoredDrafts();try{window.addEventListener('storage',e=>{const id=draftId(e.key);if(id===null)return;let draft=null;try{draft=e.newValue?JSON.parse(e.newValue):null}catch(_){}applyStoredDraft(id,draft)})}catch(e){}
 async function refreshToken(){const r=await fetch('/api/session',{cache:'no-store'});if(!r.ok)throw Error('Không lấy được phiên Control Center');token=(await r.json()).token;return token}
-async function json(url,opt={},retry=true){opt.headers={...(opt.headers||{}),'X-BiliFlow-Token':token,'Content-Type':'application/json'};const r=await fetch(url,opt);if(r.status===403&&retry){await refreshToken();return json(url,opt,false)}const v=await r.json();if(!r.ok)throw Error(v.error||r.statusText);return v}
+async function json(url,opt={},retry=true){opt.headers={...(opt.headers||{}),'X-BiliFlow-Token':token,'Content-Type':'application/json'};const r=await fetch(url,opt);if(r.status===403&&retry){await refreshToken();return json(url,opt,false)}const v=await r.json();if(!r.ok){const e=Error(v.error||r.statusText);e.status=r.status;e.code=v.code||null;e.body=v;throw e}return v}
 const post=(url,body={})=>json(url,{method:'POST',body:JSON.stringify(body)});
 function esc(v){return String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
 function notify(message,isError=false){const e=document.getElementById('notice');if(!e)return;e.textContent=message;e.className=`notice show${isError?' error':''}`;if(noticeTimer)clearTimeout(noticeTimer);noticeTimer=setTimeout(()=>{e.className='notice'},6000)}
@@ -391,7 +363,7 @@ function selectedOcrBatch(id){return Number(document.getElementById(`ocr-${id}`)
 function selectedFastScan(id){return document.getElementById(`fast-${id}`)?.checked===true}
 function speedPicker(j){const value=speedDrafts[j.id]??j.fast_scan??true;return `<label title="Ghép OCR xuyên nhiều frame, detect chữ FP16, tính routing logo song song trong lúc OCR, model an toàn hoạt hình và model bạo lực phim người đóng FP16. Không giảm mật độ quét; mục review đã kiểm chứng giống chế độ thường trên cả phim (vài track chữ credits hoặc ảnh xem trước có thể lệch nhẹ). Khác profile Nhanh (giảm mật độ quét)."><input type="checkbox" id="fast-${j.id}" ${value?'checked':''} onchange="speedDrafts[${j.id}]=this.checked;saveDraft(${j.id})"> Tăng tốc xử lý</label>`}
 function ocrPicker(j){const value=ocrDrafts[j.id]??j.ocr_recognition_batch_size??1;return `<label title="Chỉ áp dụng OCR trong nhóm Quảng cáo/logo; không đổi mật độ quét.">OCR <select id="ocr-${j.id}" onchange="ocrDrafts[${j.id}]=Number(this.value);saveDraft(${j.id})"><option value="1" ${value===1?'selected':''}>Chuẩn</option><option value="8" ${value===8?'selected':''}>Tăng tốc (thử nghiệm)</option></select></label>`}
-function controls(j){const id=j.id;let a=[];if(j.state==='NEEDS_METADATA'||j.state==='DISCOVERED'){const metadata=metadataSelection(j);a.push(`${detectorPicker(j)}${ocrPicker(j)}${speedPicker(j)}<select id="style-${id}" onchange="captureMetadataDraft(${id})"><option value="animation" ${metadata.content_style==='animation'?'selected':''}>Hoạt hình</option><option value="live_action" ${metadata.content_style==='live_action'?'selected':''}>Phim thực tế</option><option value="mixed" ${metadata.content_style==='mixed'?'selected':''}>Hỗn hợp</option></select><select id="profile-${id}" onchange="captureMetadataDraft(${id})"><option value="careful" ${metadata.profile==='careful'?'selected':''}>Tỉ mỉ</option><option value="fast" ${metadata.profile==='fast'?'selected':''}>Nhanh</option></select><button class="green" onclick="start(${id},this)" ${startingJobs.has(id)?'disabled':''}>${startingJobs.has(id)?'Đang bắt đầu…':'Bắt đầu'}</button>`)}if(['PAUSED','FAILED','INTERRUPTED_RECOVERABLE'].includes(j.state))a.push(`<button class="green" onclick="act(${id},'resume')">Tiếp tục</button>`);if(['QUEUED','PREFLIGHT','SCANNING_SAFETY','SCANNING_TEXT','SCANNING_LOGO','LOCALIZING_REGIONS','BUILDING_REVIEW','RENDERING'].includes(j.state)){a.push(`<button class="warn" onclick="act(${id},'stop-after-stage')">Dừng sau bước</button><button class="warn" onclick="act(${id},'pause')">Dừng ngay</button>`)}if(j.active_queue_path){a.push(`<button onclick="location.href='/review/${id}'">Duyệt cảnh</button>${j.ai_audit?.state==='RUNNING'?'<button disabled>Visual AI đang kiểm tra…</button>':aiState.ready?`<button class="green" onclick="audit(${id},true)">Visual AI Audit</button>`:`<button disabled title="${esc(aiState.message||'AI Supervisor chưa sẵn sàng')}">AI chưa sẵn sàng</button>`}`)}else{a.push('<button disabled title="Video cần quét xong và có review queue trước">AI: chờ queue</button>')}if(j.state==='FAILED')a.push(`<button onclick="act(${id},'retry')">Thử lại bước lỗi</button>`);if(j.state==='READY_TO_EXPORT'&&j.review_summary?.skip_eligible)a.push(`<button class="warn" onclick="skipJob(${id},this)" ${skippingJobs.has(id)?'disabled':''} title="${esc(skipReasonText(j))} Đánh dấu xong mà không tạo bản xuất; report và video gốc được giữ nguyên.">Bỏ qua (không xuất)</button>`);if(j.state==='SKIPPED')a.push(`<button class="green" onclick="unskipJob(${id},this)" ${unskippingJobs.has(id)?'disabled':''}>Mở lại để xuất</button>`);if(!['COMPLETED','SKIPPED','CANCELLED'].includes(j.state))a.push(`<button class="danger" onclick="act(${id},'cancel')">Hủy</button>`);if(j.state==='READY_TO_EXPORT')a.push(exportPanel(j));if(['WAITING_REVIEW','READY_TO_EXPORT','COMPLETED','SKIPPED','CANCELLED','FAILED','PAUSED','INTERRUPTED_RECOVERABLE'].includes(j.state))a.push(`<details class="rerun-panel" data-job-id="${id}" ${rerunPanelDrafts[id]?'open':''}><summary>Chạy lại kiểm tra</summary><div class="rerun-body">${detectorPicker(j)}${ocrPicker(j)}${speedPicker(j)}<button class="warn" onclick="rerun(${id})">Chạy lại với phạm vi đã chọn</button></div></details>`);return a.join('')}
+function controls(j){const id=j.id;let a=[];if(j.state==='NEEDS_METADATA'||j.state==='DISCOVERED'){const metadata=metadataSelection(j);a.push(`${detectorPicker(j)}${ocrPicker(j)}${speedPicker(j)}<select id="style-${id}" onchange="captureMetadataDraft(${id})"><option value="animation" ${metadata.content_style==='animation'?'selected':''}>Hoạt hình</option><option value="live_action" ${metadata.content_style==='live_action'?'selected':''}>Phim thực tế</option><option value="mixed" ${metadata.content_style==='mixed'?'selected':''}>Hỗn hợp</option></select><select id="profile-${id}" onchange="captureMetadataDraft(${id})"><option value="careful" ${metadata.profile==='careful'?'selected':''}>Tỉ mỉ</option><option value="fast" ${metadata.profile==='fast'?'selected':''}>Nhanh</option></select><button class="green" onclick="start(${id},this)" ${startingJobs.has(id)?'disabled':''}>${startingJobs.has(id)?'Đang bắt đầu…':'Bắt đầu'}</button>`)}if(['PAUSED','FAILED','INTERRUPTED_RECOVERABLE'].includes(j.state))a.push(`<button class="green" onclick="act(${id},'resume')">Tiếp tục</button>`);if(['QUEUED','PREFLIGHT','SCANNING_SAFETY','SCANNING_TEXT','SCANNING_LOGO','LOCALIZING_REGIONS','BUILDING_REVIEW','RENDERING'].includes(j.state)){a.push(`<button class="warn" onclick="act(${id},'stop-after-stage')">Dừng sau bước</button><button class="warn" onclick="act(${id},'pause')">Dừng ngay</button>`)}if(j.active_queue_path){a.push(`<button onclick="location.href='/review/${id}'">Duyệt cảnh</button>${j.ai_audit?.state==='RUNNING'?'<button disabled>Visual AI đang kiểm tra…</button>':aiState.ready?`<button class="green" onclick="audit(${id},true)">Visual AI Audit</button>`:`<button disabled title="${esc(aiState.message||'AI Supervisor chưa sẵn sàng')}">AI chưa sẵn sàng</button>`}`)}else{a.push('<button disabled title="Video cần quét xong và có review queue trước">AI: chờ queue</button>')}if(j.state==='FAILED')a.push(`<button onclick="act(${id},'retry')">Thử lại bước lỗi</button>`);if(j.state==='READY_TO_EXPORT'&&j.review_summary?.skip_eligible)a.push(`<button class="warn" onclick="skipJob(${id},this)" ${skippingJobs.has(id)?'disabled':''} title="${esc(skipReasonText(j))} Đánh dấu xong mà không tạo bản xuất; report và video gốc được giữ nguyên.">Bỏ qua (không xuất)</button>`);if(j.state==='SKIPPED')a.push(isSourceCleaned(j)?`<button class="green" disabled title="${esc(SOURCE_CLEANED_MESSAGE)}">Mở lại để xuất</button>`:`<button class="green" onclick="unskipJob(${id},this)" ${unskippingJobs.has(id)?'disabled':''}>Mở lại để xuất</button>`);if(!['COMPLETED','SKIPPED','CANCELLED'].includes(j.state))a.push(`<button class="danger" onclick="act(${id},'cancel')">Hủy</button>`);if(j.state==='READY_TO_EXPORT')a.push(exportPanel(j));if(cleanupEligible(j))a.push(cleanupControls(j));if(['WAITING_REVIEW','READY_TO_EXPORT','COMPLETED','SKIPPED','CANCELLED','FAILED','PAUSED','INTERRUPTED_RECOVERABLE'].includes(j.state))a.push(isSourceCleaned(j)?cleanedRerun(j):`<details class="rerun-panel" data-job-id="${id}" ${rerunPanelDrafts[id]?'open':''}><summary>Chạy lại kiểm tra</summary><div class="rerun-body">${detectorPicker(j)}${ocrPicker(j)}${speedPicker(j)}<button class="warn" onclick="rerun(${id})">Chạy lại với phạm vi đã chọn</button></div></details>`);return a.join('')}
 function auditText(j){const a=j.ai_audit;if(!a)return 'Visual AI: chưa chạy';if(a.state==='COMPLETED')return `Visual AI: ${a.result||'DONE'} — ${a.summary||''}`;return `Visual AI: ${a.message||a.state}`}
 function structureText(j){const a=j.structure_audit;if(!a)return 'Kiểm tra cấu trúc: chờ tạo queue';return `Kiểm tra cấu trúc cục bộ: ${a.result||'DONE'} — ${a.summary||''} · không dùng quota`}
 const JOB_TABS=[['waiting','Đang chờ xử lý'],['scan_queue','Đang chờ chạy cảnh để duyệt'],['scanning','Đang chạy cảnh'],['review','Đang chờ duyệt'],['export','Đang chạy xuất video'],['completed','Hoàn tất']];
@@ -419,16 +391,34 @@ function visualStatus(j){const a=j.ai_audit;if(!a)return{value:'Chưa chạy',de
 function shortDuration(seconds){const value=Number(seconds);if(!Number.isFinite(value)||value<0)return 'đang tính';const rounded=Math.ceil(value/60);if(rounded<60)return `khoảng ${Math.max(1,rounded)} phút`;const hours=Math.floor(rounded/60),minutes=rounded%60;return `khoảng ${hours} giờ${minutes?` ${minutes} phút`:''}`}
 function formatStamp(value){if(!value)return '';const date=new Date(value);if(Number.isNaN(date.getTime()))return '';return new Intl.DateTimeFormat('vi-VN',{hour:'2-digit',minute:'2-digit',second:'2-digit',day:'2-digit',month:'2-digit',year:'numeric'}).format(date)}
 function completedAt(value){const stamp=formatStamp(value);return stamp?`Hoàn thành lúc ${stamp}`:'Đã hoàn tất và qua bước kiểm tra cuối.'}
-function exportStatus(j){if(j.state==='COMPLETED')return{value:'100% · Đã xuất video',detail:completedAt(j.updated_at),tone:'complete',percent:100};if(j.state==='SKIPPED'){const stamp=formatStamp(j.skip?.skipped_at||j.updated_at);return{value:'Không xuất video',detail:`Đã bỏ qua${stamp?` lúc ${stamp}`:''}; video gốc, report và quyết định duyệt được giữ nguyên.`,tone:'complete'}}if(j.state==='RENDERING'){const p=j.render_progress||{};if(p.state==='VERIFYING')return{value:'100% · đang kiểm tra',detail:'Đã render xong; đang xác nhận hình, tiếng và thời lượng.',tone:'running',percent:100};const percent=Math.max(0,Math.min(99.9,Number(p.percent)||0)),speed=p.speed_text?`Tốc độ ${p.speed_text}`:'Đang khởi tạo FFmpeg',eta=p.eta_seconds!=null?` · còn ${shortDuration(p.eta_seconds)}`:'';return{value:`${percent.toFixed(1)}% · đang xuất`,detail:`${speed}${eta}`,tone:'running',percent}}if(j.state==='VERIFYING')return{value:'100% · đang kiểm tra',detail:'Đang xác nhận hình, tiếng và thời lượng.',tone:'running',percent:100};if(queueKind(j)==='export')return{value:'Chờ xuất video',detail:queuePausedNote()||(j.queue_position?`${queueLine(j)}; xuất video và quét cảnh chạy lần lượt theo thứ tự bấm.`:'Lệnh xuất đã nằm trong hàng đợi.'),tone:'waiting',percent:0};if(j.current_stage==='render'&&j.state==='FAILED')return{value:'Xuất video bị lỗi',detail:'Xem lỗi bên dưới rồi chọn thử lại.',tone:'error'};if(j.state==='READY_TO_EXPORT')return j.source_present===false?{value:'Thiếu video gốc',detail:SOURCE_MISSING_MESSAGE,tone:'error'}:{value:'Sẵn sàng xuất',detail:'Duyệt xong; bấm “Xuất video” trên thẻ hoặc trong trang duyệt cảnh.',tone:'waiting'};if(j.state==='WAITING_REVIEW')return{value:'Chưa xuất',detail:'Cần hoàn tất duyệt cảnh trước.',tone:'waiting'};return{value:'Chưa tới bước xuất',detail:'Output chỉ được tạo sau khi duyệt.',tone:'waiting'}}
+function exportStatus(j){if(j.state==='COMPLETED')return{value:'100% · Đã xuất video',detail:completedAt(j.updated_at),tone:'complete',percent:100};if(j.state==='SKIPPED'){const stamp=formatStamp(j.skip?.skipped_at||j.updated_at);return{value:'Không xuất video',detail:isSourceCleaned(j)?`Đã bỏ qua${stamp?` lúc ${stamp}`:''}; report và quyết định duyệt được giữ nguyên; video gốc đã được dọn vào Thùng rác.`:`Đã bỏ qua${stamp?` lúc ${stamp}`:''}; video gốc, report và quyết định duyệt được giữ nguyên.`,tone:'complete'}}if(j.state==='RENDERING'){const p=j.render_progress||{};if(p.state==='VERIFYING')return{value:'100% · đang kiểm tra',detail:'Đã render xong; đang xác nhận hình, tiếng và thời lượng.',tone:'running',percent:100};const percent=Math.max(0,Math.min(99.9,Number(p.percent)||0)),speed=p.speed_text?`Tốc độ ${p.speed_text}`:'Đang khởi tạo FFmpeg',eta=p.eta_seconds!=null?` · còn ${shortDuration(p.eta_seconds)}`:'';return{value:`${percent.toFixed(1)}% · đang xuất`,detail:`${speed}${eta}`,tone:'running',percent}}if(j.state==='VERIFYING')return{value:'100% · đang kiểm tra',detail:'Đang xác nhận hình, tiếng và thời lượng.',tone:'running',percent:100};if(queueKind(j)==='export')return{value:'Chờ xuất video',detail:queuePausedNote()||(j.queue_position?`${queueLine(j)}; xuất video và quét cảnh chạy lần lượt theo thứ tự bấm.`:'Lệnh xuất đã nằm trong hàng đợi.'),tone:'waiting',percent:0};if(j.current_stage==='render'&&['PAUSED','INTERRUPTED_RECOVERABLE'].includes(j.state))return{value:'Xuất video tạm dừng',detail:'Bấm “Tiếp tục” để xuất tiếp; lệnh xuất giữ vị trí cũ trong hàng đợi.',tone:'waiting'};if(j.current_stage==='render'&&j.state==='CANCELLED')return{value:'Đã hủy xuất video',detail:'Mở “Duyệt cảnh” rồi bấm “Hoàn tất duyệt và xuất video” để xếp lệnh xuất mới.',tone:'waiting'};if(j.current_stage==='render'&&j.state==='FAILED')return{value:'Xuất video bị lỗi',detail:'Xem lỗi bên dưới rồi chọn thử lại.',tone:'error'};if(j.state==='READY_TO_EXPORT')return j.source_present===false?{value:'Thiếu video gốc',detail:SOURCE_MISSING_MESSAGE,tone:'error'}:{value:'Sẵn sàng xuất',detail:'Duyệt xong; bấm “Xuất video” trên thẻ hoặc trong trang duyệt cảnh.',tone:'waiting'};if(j.state==='WAITING_REVIEW')return{value:'Chưa xuất',detail:'Cần hoàn tất duyệt cảnh trước.',tone:'waiting'};return{value:'Chưa tới bước xuất',detail:'Output chỉ được tạo sau khi duyệt.',tone:'waiting'}}
 function statusBox(title,value){const progress=Number.isFinite(Number(value.percent))?`<div class="mini-progress" aria-label="${esc(title)} ${Math.round(Number(value.percent))}%"><i style="width:${Math.max(0,Math.min(100,Number(value.percent)))}%"></i></div>`:'';return `<div class="status-box tone-${value.tone}"><div class="status-kicker">${esc(title)}</div><div class="status-value">${esc(value.value)}</div><div class="status-detail">${esc(value.detail)}</div>${progress}</div>`}
 function videoName(j){const parts=String(j.source_path||j.job_key||'Video').split(/[\\\\/]/);return parts[parts.length-1]||j.job_key||'Video'}
-function jobCard(j,labels){const stateInfo=statePresentation(j),bucket=jobTab(j),percent=Math.max(0,Math.min(100,Math.round(100*(Number(j.progress)||0)))),groups=(j.detector_groups||[]).map(x=>labels[x]||x).join(', ')||'Chưa chọn';return `<article class="job" data-bucket="${bucket}"><div class="job-head"><div class="job-identity"><div class="job-title">#${j.id} · ${esc(videoName(j))}</div><div class="job-key">${esc(j.job_key)}</div><div class="job-path">${esc(j.source_path)}</div></div><div class="job-badges"><span class="state-badge tone-${stateInfo.tone}">${esc(stateInfo.label)}</span>${j.queue_position?`<span class="queue-badge" title="Quét cảnh và xuất video dùng chung một hàng đợi, chạy lần lượt theo thứ tự bấm.">Thứ tự chờ: #${j.queue_position}</span>`:''}</div></div><div class="job-body"><div class="progress-row"><div class="progress-label">Tiến trình phân tích</div><div class="progress" aria-label="Tiến trình ${percent}%"><i style="width:${percent}%"></i></div><div class="progress-value">${percent}%</div></div><div class="status-grid">${statusBox('Phân tích cảnh',scanStatus(j))}${statusBox('Cấu trúc cục bộ',structureStatus(j))}${statusBox('Visual AI Audit',visualStatus(j))}${statusBox('Xuất video',exportStatus(j))}</div>${j.error?`<div class="job-error">${esc(j.error)}</div>`:''}</div><div class="job-footer"><div class="scope-line"><strong>Phạm vi kiểm tra:</strong> ${esc(groups)} · <strong>Chế độ:</strong> ${esc(j.profile)} · ${esc(j.content_style)} · OCR: ${j.ocr_recognition_batch_size===8?'Tăng tốc (thử nghiệm)':'Chuẩn'}${j.fast_scan?' · Tăng tốc xử lý':''}</div><div class="actions">${controls(j)}</div></div></article>`}
+const CLEANUP_LIMIT=50;const CLEANUP_RUNNING_TITLE='Đang dọn video gốc; chờ lượt hiện tại xong.';
+function formatBytes(n){const v=Number(n);if(n==null||n===''||!Number.isFinite(v)||v<0)return '';if(v<1073741824)return `${Math.round(v/1048576).toLocaleString('vi-VN')} MB`;return `${(v/1073741824).toLocaleString('vi-VN',{minimumFractionDigits:1,maximumFractionDigits:1})} GB`}
+function isSourceCleaned(j){return !!j&&(j.source_cleaned===true||['PENDING','RECYCLED'].includes(j.source_cleanup?.state))}
+function cleanupEligible(j){return !!j&&['COMPLETED','SKIPPED'].includes(j.state)&&j.cleanup?.eligible===true&&!isSourceCleaned(j)}
+function cleanupSize(j){const v=Number(j.cleanup?.size_bytes??j.source_size_bytes);return Number.isFinite(v)&&v>0?v:0}
+function sourceLineInfo(j){const c=j.source_cleanup;if(c?.state==='RECYCLED'){const stamp=formatStamp(c.finished_at);return[`Đã dọn video gốc · ${formatBytes(c.size_bytes)}${stamp?` · lúc ${stamp}`:''} (đang ở Thùng rác)${c.verified===false?' · Windows chưa xác nhận bản ghi trong Thùng rác; hãy kiểm tra Thùng rác.':''}`,c.verified===false?'waiting':'complete']}if(c?.state==='PENDING')return['Đang dọn video gốc…','running'];if(c?.state==='RESTORED'){const stamp=formatStamp(c.restored_at);return[`Đã khôi phục video gốc (SHA-256 khớp)${stamp?` lúc ${stamp}`:''}`,'complete']}if(c?.state==='FAILED'&&j.source_present!==false)return[`Lần dọn trước không thành công: ${c.error||''}`,'error'];if(j.source_present===false)return['Không còn video gốc trong input','error'];if(['COMPLETED','SKIPPED'].includes(j.state)&&j.cleanup&&!j.cleanup.eligible&&j.cleanup.reason)return[`Chưa dọn được: ${j.cleanup.reason}`,'waiting'];return null}
+function sourceLine(j){const line=sourceLineInfo(j);return line?`<div class="source-line tone-${line[1]}">${esc(line[0])}</div>`:''}
+function cleanupControls(j){const id=j.id,running=!!status.source_cleanup_running;return `<label class="cleanup-pick"><input type="checkbox" data-cleanup-job="${id}" ${cleanupSelection.has(id)?'checked':''} onchange="toggleCleanup(${id},this.checked)"> Chọn để dọn</label><button class="warn" onclick="openCleanup([${id}],this)" ${running?`disabled title="${esc(CLEANUP_RUNNING_TITLE)}"`:''}>Dọn video gốc</button>`}
+function cleanedRerun(j){return `<button disabled title="${esc(SOURCE_CLEANED_MESSAGE)}">Chạy lại kiểm tra</button><span class="cleanup-note">Chép lại video gốc vào input để chạy lại (đúng tên: ${esc(j.source_cleanup?.file_name||videoName(j))})</span>`}
+function cleanupGroup(){return (status.jobs||[]).filter(j=>jobTab(j)==='completed')}
+function cleanupCounts(items){const eligible=items.filter(cleanupEligible),chosen=eligible.filter(j=>cleanupSelection.has(j.id));return{eligible,chosen,bytes:chosen.reduce((sum,j)=>sum+cleanupSize(j),0)}}
+function cleanupSummaryText(c){return `Dọn video gốc: ${c.eligible.length} video dọn được · đã chọn ${c.chosen.length} (${formatBytes(c.bytes)})`}
+function cleanupToolbar(items){const c=cleanupCounts(items),running=!!status.source_cleanup_running;return `<div class="cleanup-toolbar" role="group" aria-label="Dọn video gốc"><span class="cleanup-summary" id="cleanup-summary">${esc(cleanupSummaryText(c))}</span><button id="cleanup-all" onclick="selectAllCleanup()" ${c.eligible.length?'':'disabled'}>Chọn tất cả video dọn được</button><button id="cleanup-none" onclick="clearCleanupSelection()" ${c.chosen.length?'':'disabled'}>Bỏ chọn</button><button id="cleanup-run" class="danger" onclick="openSelectedCleanup(this)" ${!c.chosen.length||running?'disabled':''} title="${running?esc(CLEANUP_RUNNING_TITLE):''}">Dọn video gốc đã chọn (${c.chosen.length})</button><span class="cleanup-note">Chỉ chuyển vào Thùng rác của Windows, không xóa vĩnh viễn.</span></div>`}
+function updateCleanupToolbar(){const c=cleanupCounts(cleanupGroup()),running=!!status.source_cleanup_running,summary=document.getElementById('cleanup-summary'),run=document.getElementById('cleanup-run'),none=document.getElementById('cleanup-none');if(summary)summary.textContent=cleanupSummaryText(c);if(run){run.textContent=`Dọn video gốc đã chọn (${c.chosen.length})`;run.disabled=!c.chosen.length||running}if(none)none.disabled=!c.chosen.length}
+function pruneCleanupSelection(jobs){cleanupSelection.forEach(id=>{if(!cleanupEligible(jobs.find(x=>x.id===id)))cleanupSelection.delete(id)})}
+function toggleCleanup(id,checked){if(checked)cleanupSelection.add(id);else cleanupSelection.delete(id);updateCleanupToolbar()}
+function selectAllCleanup(){const eligible=cleanupGroup().filter(cleanupEligible).sort(byId);cleanupSelection.clear();eligible.slice(0,CLEANUP_LIMIT).forEach(j=>cleanupSelection.add(j.id));if(eligible.length>CLEANUP_LIMIT)notify('Mỗi lần dọn tối đa 50 video; đã chọn 50 video đầu tiên.');renderJobs(true)}
+function clearCleanupSelection(){cleanupSelection.clear();renderJobs(true)}
+function jobCard(j,labels){const stateInfo=statePresentation(j),bucket=jobTab(j),percent=Math.max(0,Math.min(100,Math.round(100*(Number(j.progress)||0)))),groups=(j.detector_groups||[]).map(x=>labels[x]||x).join(', ')||'Chưa chọn';return `<article class="job" data-bucket="${bucket}"><div class="job-head"><div class="job-identity"><div class="job-title">#${j.id} · ${esc(videoName(j))}</div><div class="job-key">${esc(j.job_key)}</div><div class="job-path">${esc(j.source_path)}</div></div><div class="job-badges"><span class="state-badge tone-${stateInfo.tone}">${esc(stateInfo.label)}</span>${j.queue_position?`<span class="queue-badge" title="Quét cảnh và xuất video dùng chung một hàng đợi, chạy lần lượt theo thứ tự bấm.">Thứ tự chờ: #${j.queue_position}</span>`:''}</div></div><div class="job-body"><div class="progress-row"><div class="progress-label">Tiến trình phân tích</div><div class="progress" aria-label="Tiến trình ${percent}%"><i style="width:${percent}%"></i></div><div class="progress-value">${percent}%</div></div><div class="status-grid">${statusBox('Phân tích cảnh',scanStatus(j))}${statusBox('Cấu trúc cục bộ',structureStatus(j))}${statusBox('Visual AI Audit',visualStatus(j))}${statusBox('Xuất video',exportStatus(j))}</div>${j.error?`<div class="job-error">${esc(j.error)}</div>`:''}</div><div class="job-footer"><div class="scope-line"><strong>Phạm vi kiểm tra:</strong> ${esc(groups)} · <strong>Chế độ:</strong> ${esc(j.profile)} · ${esc(j.content_style)} · OCR: ${j.ocr_recognition_batch_size===8?'Tăng tốc (thử nghiệm)':'Chuẩn'}${j.fast_scan?' · Tăng tốc xử lý':''}</div>${sourceLine(j)}<div class="actions">${controls(j)}</div></div></article>`}
 function phaseSection(label,items,labels){if(!items.length)return '';return `<section class="phase-group"><div class="phase-heading">${esc(label)} <span>${items.length}</span></div>${items.map(j=>jobCard(j,labels)).join('')}</section>`}
 function byQueue(a,b){return (a.queue_position||1e9)-(b.queue_position||1e9)||a.id-b.id}
 function byId(a,b){return a.id-b.id}
 function byRecent(a,b){return String(b.updated_at||'').localeCompare(String(a.updated_at||''))||b.id-a.id}
 function tabSections(tab,items){if(tab==='waiting')return[['Cần thiết lập',items.filter(needsSetup).sort(byId)],['Tạm dừng / lỗi / có thể tiếp tục',items.filter(j=>!needsSetup(j)&&j.state!=='CANCELLED')],['Đã hủy',items.filter(j=>j.state==='CANCELLED')]];if(tab==='review')return[['Cần duyệt cảnh',items.filter(j=>j.state==='WAITING_REVIEW').sort(byId)],['Đã duyệt xong — chờ xuất hoặc bỏ qua',items.filter(j=>j.state==='READY_TO_EXPORT').sort(byId)]];if(tab==='export')return[['Đang xuất',items.filter(j=>j.state!=='QUEUED')],['Chờ xuất',items.filter(j=>j.state==='QUEUED').sort(byQueue)]];if(tab==='completed')return[['Đã xuất video',items.filter(j=>j.state==='COMPLETED').sort(byRecent)],['Đã bỏ qua (không xuất)',items.filter(j=>j.state==='SKIPPED').sort(byRecent)]];if(tab==='scan_queue')return[[null,items.slice().sort(byQueue)]];return[[null,items]]}
-function renderJobs(force=false){if(!force&&jobsInteracting()){deferJobsRender();return}dropForeignDrafts();captureRerunPanelDrafts();captureExportPanelDrafts();const jobs=status.jobs||[];startingJobs.forEach(id=>{const j=jobs.find(x=>x.id===id);if(!j||!needsSetup(j))startingJobs.delete(id)});Object.keys(exportPanelDrafts).forEach(id=>{const j=jobs.find(x=>String(x.id)===String(id));if(!j||j.state!=='READY_TO_EXPORT')delete exportPanelDrafts[id]});const labels=Object.fromEntries((status.detector_options||[]).map(x=>[x.id,x.label])),groups=Object.fromEntries(JOB_TABS.map(([key])=>[key,[]]));jobs.forEach(j=>groups[jobTab(j)].push(j));const known=JOB_TABS.some(([key])=>key===activeJobTab),tab=known?activeJobTab:defaultJobTab(groups);if(!known&&Array.isArray(status.jobs))activeJobTab=tab;document.getElementById('job-tabs').innerHTML=JOB_TABS.map(([key,label])=>`<button class="job-tab ${tab===key?'active':''}" data-tab="${key}" aria-pressed="${tab===key}" onclick="selectJobTab('${key}')"><span>${label}</span><span class="tab-count">${groups[key].length}</span></button>`).join('');const content=tabSections(tab,groups[tab]).map(([label,items])=>label?phaseSection(label,items,labels):items.map(j=>jobCard(j,labels)).join('')).join('');document.getElementById('jobs').innerHTML=content||`<div class="empty">${jobs.length?'Không có video trong mục này.':'Chưa có video trong input.'}</div>`}
+function renderJobs(force=false){if(!force&&jobsInteracting()){deferJobsRender();return}dropForeignDrafts();captureRerunPanelDrafts();captureExportPanelDrafts();const jobs=status.jobs||[];pruneCleanupSelection(jobs);startingJobs.forEach(id=>{const j=jobs.find(x=>x.id===id);if(!j||!needsSetup(j))startingJobs.delete(id)});Object.keys(exportPanelDrafts).forEach(id=>{const j=jobs.find(x=>String(x.id)===String(id));if(!j||j.state!=='READY_TO_EXPORT')delete exportPanelDrafts[id]});const labels=Object.fromEntries((status.detector_options||[]).map(x=>[x.id,x.label])),groups=Object.fromEntries(JOB_TABS.map(([key])=>[key,[]]));jobs.forEach(j=>groups[jobTab(j)].push(j));const known=JOB_TABS.some(([key])=>key===activeJobTab),tab=known?activeJobTab:defaultJobTab(groups);if(!known&&Array.isArray(status.jobs))activeJobTab=tab;document.getElementById('job-tabs').innerHTML=JOB_TABS.map(([key,label])=>`<button class="job-tab ${tab===key?'active':''}" data-tab="${key}" aria-pressed="${tab===key}" onclick="selectJobTab('${key}')"><span>${label}</span><span class="tab-count">${groups[key].length}</span></button>`).join('');const content=(tab==='completed'&&groups.completed.length?cleanupToolbar(groups.completed):'')+tabSections(tab,groups[tab]).map(([label,items])=>label?phaseSection(label,items,labels):items.map(j=>jobCard(j,labels)).join('')).join('');document.getElementById('jobs').innerHTML=content||`<div class="empty">${jobs.length?'Không có video trong mục này.':'Chưa có video trong input.'}</div>`}
 function render(){const waiting=status.queue?.length||0;document.getElementById('worker').textContent=status.active?`Đang chạy #${status.active.job_id}: ${status.active.stage}${waiting?` · ${waiting} việc đang chờ`:''}`:(status.scheduler_paused?`Scheduler tạm dừng${waiting?` · ${waiting} việc giữ nguyên thứ tự`:''}`:waiting?`Đang chờ · ${waiting} việc trong hàng đợi`:'Đang chờ');const r=status.resources||{};document.getElementById('resource').textContent=`CPU ${Math.round(r.cpu_percent||0)}% · RAM ${Math.round(r.memory?.percent||0)}% · GPU ${r.gpu?Math.round(r.gpu.utilization_percent)+'%':'N/A'}`;syncHeaderHeight();renderJobs()}
 function discardPendingLoads(){appliedSeq=Math.max(appliedSeq,loadSeq)}
 async function load(){const seq=++loadSeq;const next=await json('/api/status');if(seq<=appliedSeq)return false;appliedSeq=seq;status=next;render();return true}
@@ -439,25 +429,40 @@ async function checkAI(){try{aiState=await post('/api/ai/check');renderAI();noti
 async function loginAI(){try{aiState=await post('/api/ai/login');renderAI();alert('Codex đang mở luồng đăng nhập ChatGPT trong trình duyệt. Hoàn tất đăng nhập rồi bấm Kiểm tra kết nối.')}catch(e){alert(e.message)}}
 function sameDetectorScope(a,b){const x=[...new Set(a||[])].sort(),y=[...new Set(b||[])].sort();return x.length===y.length&&x.every((v,i)=>v===y[i])}
 function confirmStartScope(id,detectors){const previous=storageGet(LAST_SCOPE_KEY);const ask=Array.isArray(previous)?!sameDetectorScope(previous,detectors):detectors.some(x=>SENSITIVE_DETECTORS.includes(x));if(!ask)return true;const labels=Object.fromEntries((status.detector_options||[]).map(x=>[x.id,x.label])),job=(status.jobs||[]).find(x=>x.id===id);return confirm(`Bắt đầu #${id} ${job?videoName(job):''} với các nhóm: ${detectors.map(x=>labels[x]||x).join(', ')}?`)}
-async function start(id,button){if(startingJobs.has(id))return;startingJobs.add(id);const release=()=>{startingJobs.delete(id);if(button&&button.isConnected){button.disabled=false;button.textContent='Bắt đầu'}};if(button){button.disabled=true;button.textContent='Đang bắt đầu…'}captureMetadataDraft(id);const metadata=metadataDrafts[id],detectors=selectedDetectors(id);if(!detectors||!metadata||!confirmStartScope(id,detectors)){release();return}try{await post(`/api/jobs/${id}/start`,{content_style:metadata.content_style,profile:metadata.profile,detectors,ocr_recognition_batch_size:selectedOcrBatch(id),fast_scan:selectedFastScan(id)})}catch(e){release();await load().catch(()=>{});const job=(status.jobs||[]).find(x=>x.id===id);if(job&&!needsSetup(job)){clearDraft(id);notify(`Video #${id} không còn chờ thiết lập (${statePresentation(job).label}); không cần bắt đầu lại.`)}else notify(`Không thể bắt đầu #${id}: ${e.message}`,true);return}discardPendingLoads();clearDraft(id);storageSet(LAST_SCOPE_KEY,detectors);await load()}
+async function start(id,button){if(startingJobs.has(id))return;startingJobs.add(id);const release=()=>{startingJobs.delete(id);if(button&&button.isConnected){button.disabled=false;button.textContent='Bắt đầu'}};if(button){button.disabled=true;button.textContent='Đang bắt đầu…'}captureMetadataDraft(id);const metadata=metadataDrafts[id],detectors=selectedDetectors(id);if(!detectors||!metadata||!confirmStartScope(id,detectors)){release();return}try{await post(`/api/jobs/${id}/start`,{content_style:metadata.content_style,profile:metadata.profile,detectors,ocr_recognition_batch_size:selectedOcrBatch(id),fast_scan:selectedFastScan(id)})}catch(e){release();await load().catch(()=>{});const job=(status.jobs||[]).find(x=>x.id===id);if(job&&!needsSetup(job)){clearDraft(id);notify(`Video #${id} không còn chờ thiết lập (${statePresentation(job).label}); không cần bắt đầu lại.`)}else notify(`Không thể bắt đầu #${id}: ${e.message}`,true);return}discardPendingLoads();clearDraft(id);storageSet(LAST_SCOPE_KEY,detectors);await load();const job=(status.jobs||[]).find(x=>x.id===id),n=status.queue?.length||0;notify(`Đã xếp #${id} ${job?videoName(job):''} vào hàng đợi quét cảnh${job&&job.queue_position?` (lượt ${job.queue_position}/${n})`:''}.`)}
 async function act(id,name){try{await post(`/api/jobs/${id}/${name}`);discardPendingLoads();await load()}catch(e){alert(e.message)}}
 async function skipJob(id,button){if(skippingJobs.has(id))return;const j=(status.jobs||[]).find(x=>x.id===id);if(!j)return;skippingJobs.add(id);if(button)button.disabled=true;try{if(!confirm(`Đánh dấu #${id} ${videoName(j)} là xong mà không xuất video?\\n${skipReasonText(j)} Không tạo bản xuất; video gốc, report và quyết định duyệt được giữ nguyên. Video sẽ chuyển sang mục “Hoàn tất”; có thể bấm “Mở lại để xuất” sau.`))return;await post(`/api/jobs/${id}/skip`);discardPendingLoads();await load().catch(()=>{});notify(`Đã đánh dấu #${id} xong (không xuất video). Video đã chuyển sang mục “Hoàn tất”.`)}catch(e){notify(`Không thể bỏ qua #${id}: ${e.message}`,true)}finally{skippingJobs.delete(id);if(button&&button.isConnected)button.disabled=false}}
 async function unskipJob(id,button){if(unskippingJobs.has(id))return;const j=(status.jobs||[]).find(x=>x.id===id);if(!j)return;unskippingJobs.add(id);if(button)button.disabled=true;try{if(!confirm(`Mở lại #${id} ${videoName(j)} để xuất video?\\nVideo sẽ quay về mục “Đang chờ duyệt” (Đã duyệt xong — chờ xuất hoặc bỏ qua).`))return;await post(`/api/jobs/${id}/unskip`);discardPendingLoads();await load().catch(()=>{});notify(`Đã mở lại #${id}; video nằm ở mục “Đang chờ duyệt”.`)}catch(e){notify(`Không thể mở lại #${id}: ${e.message}`,true)}finally{unskippingJobs.delete(id);if(button&&button.isConnected)button.disabled=false}}
 async function exportVideo(id,button){if(exportingJobs.has(id))return;const j=(status.jobs||[]).find(x=>x.id===id);if(!j)return;exportingJobs.add(id);const release=()=>{exportingJobs.delete(id);if(button&&button.isConnected){button.disabled=false;button.textContent='Hoàn tất duyệt và xuất video'}};if(button){button.disabled=true;button.textContent='Đang gửi lệnh xuất…'}const fail=message=>{exportPanelDrafts[id]={...(exportPanelDrafts[id]||{}),error:message,open:true};release();setExportPanelOpen(id,true);renderJobs();notify(message,true)};if(exportPanelDrafts[id])delete exportPanelDrafts[id].error;if(!j.review_summary||j.review_summary.status!=='READY_FOR_EDIT_PLAN'){release();alert(EXPORT_GATE_MESSAGE);return}if(j.source_present===false){fail(SOURCE_MISSING_MESSAGE);return}captureExportPanelDrafts();const draft=exportPanelDrafts[id]||{},choice=exportPolicyChoice(j.review_summary.export_size_policy);let selection;try{selection=exportSizeSelection(draft.mode||choice.mode,draft.gb!=null?draft.gb:choice.gb)}catch(e){fail(e.message);return}if(!confirm(exportConfirmText(selection))){release();return}setExportPanelOpen(id,false);let result;try{result=await post(`/api/jobs/${id}/review/finalize`,selection)}catch(e){fail(`Không gửi được lệnh xuất: ${e.message}`);return}exportingJobs.delete(id);delete exportPanelDrafts[id];discardPendingLoads();await load().catch(()=>{});if(result&&result.status==='COMPLETED'){notify(`Video #${id} đã có bản xuất: ${result.output||''}.`);return}const job=(status.jobs||[]).find(x=>x.id===id),n=status.queue?.length||0;notify(`Đã xếp #${id} vào hàng đợi xuất video${job&&job.queue_position?` (lượt ${job.queue_position}/${n})`:''}. Theo dõi ở mục “Đang chạy xuất video”.`)}
-async function rerun(id){const detectors=selectedDetectors(id);if(!detectors)return;if(!confirm('Chạy lại video với các nhóm kiểm tra đang chọn? Report và quyết định cũ vẫn được giữ; lượt mới dùng thư mục revision riêng.'))return;try{await post(`/api/jobs/${id}/rerun`,{detectors,ocr_recognition_batch_size:selectedOcrBatch(id),fast_scan:selectedFastScan(id)});discardPendingLoads();clearDraft(id);delete rerunPanelDrafts[id];await load();notify('Đã xếp video chạy lại theo phạm vi mới trong một revision riêng.')}catch(e){notify(`Không thể chạy lại: ${e.message}`,true)}}
+async function rerun(id){const detectors=selectedDetectors(id);if(!detectors)return;if(!confirm('Chạy lại video với các nhóm kiểm tra đang chọn? Report và quyết định cũ vẫn được giữ; lượt mới dùng thư mục revision riêng.'))return;try{await post(`/api/jobs/${id}/rerun`,{detectors,ocr_recognition_batch_size:selectedOcrBatch(id),fast_scan:selectedFastScan(id)});discardPendingLoads();clearDraft(id);delete rerunPanelDrafts[id];await load();const job=(status.jobs||[]).find(x=>x.id===id),n=status.queue?.length||0;notify(`Đã xếp #${id} chạy lại theo phạm vi mới trong một revision riêng${job&&job.queue_position?` (lượt ${job.queue_position}/${n})`:''}.`)}catch(e){notify(`Không thể chạy lại: ${e.message}`,true)}}
+function openSelectedCleanup(button){openCleanup([...cleanupSelection],button)}
+function showCleanupDialog(){const d=document.getElementById('cleanup-dialog');if(!d)return;if(!d.open){if(typeof d.showModal==='function')d.showModal();else d.setAttribute('open','')}const cancel=document.getElementById('cleanup-cancel');if(cancel&&cancel.focus)cancel.focus()}
+async function openCleanup(ids,button){if(cleanupOpening||cleanupPosting)return;const list=[...new Set((ids||[]).map(Number))].filter(x=>Number.isInteger(x)&&x>0).sort((a,b)=>a-b);if(!list.length)return;cleanupOpening=true;if(button)button.disabled=true;try{const p=await json(`/api/source-cleanup/preview?ids=${list.join(',')}`);renderCleanupDialog(p,'');showCleanupDialog()}catch(e){notify(`Không lấy được danh sách dọn video gốc: ${e.message}`,true)}finally{cleanupOpening=false;if(button&&button.isConnected)button.disabled=!!status.source_cleanup_running}}
+function cleanupRow(x){const skipped=x.kind==='SKIPPED',output=skipped?'Đã bỏ qua (không xuất)':`${x.output_name||''}${x.output_bytes!=null?` (${formatBytes(x.output_bytes)})`:''}`,when=skipped?`Bỏ qua lúc ${formatStamp(x.skipped_at)}`:formatStamp(x.exported_at);return `<tr><td data-label="Video gốc">${esc(`#${x.job_id} ${x.file_name||x.name||''}`)}</td><td data-label="Dung lượng">${esc(formatBytes(x.size_bytes))}</td><td data-label="Video đã xuất">${esc(output)}</td><td data-label="Xuất lúc">${esc(when)}</td></tr>`}
+function renderCleanupDialog(p,message){cleanupPreview=p||null;const eligible=(p&&p.eligible)||[],ineligible=(p&&p.ineligible)||[],rb=p&&p.recycle_bin,blocked=p&&p.blocked,n=eligible.length,parts=['<p>Các video gốc dưới đây sẽ được chuyển vào Thùng rác của Windows (không xóa vĩnh viễn). Report, quyết định duyệt, bộ nhớ logo/studio và video đã xuất được giữ nguyên. Dung lượng chỉ được giải phóng khi bạn dọn sạch Thùng rác; trước đó bạn có thể khôi phục video từ Thùng rác.</p>'];if(message)parts.push(`<p class="cleanup-alert" role="alert">${esc(message)}</p>`);if(n){parts.push(`<div class="cleanup-table-wrap"><table class="cleanup-table"><thead><tr><th>Video gốc</th><th>Dung lượng</th><th>Video đã xuất</th><th>Xuất lúc</th></tr></thead><tbody>${eligible.map(cleanupRow).join('')}</tbody></table></div>`);parts.push(`<p class="cleanup-summary">${esc(`Tổng cộng: ${n} video · ${formatBytes(p.total_bytes)} sẽ được giải phóng sau khi dọn sạch Thùng rác.`)}</p>`)}else parts.push('<p class="cleanup-alert">Không có video nào dọn được trong lựa chọn này.</p>');if(rb)parts.push(`<p class="cleanup-bin">${esc(`Thùng rác của ổ ${rb.volume} đang chứa ${formatBytes(rb.used_bytes)} / giới hạn ${formatBytes(rb.max_bytes)}; sau khi chuyển: ${formatBytes(rb.after_bytes)}.`)}</p>`);if(blocked)parts.push(`<p class="cleanup-block" role="alert">${esc(blocked)}</p>`);if(ineligible.length)parts.push(`<div class="cleanup-ineligible"><p>Không thể dọn:</p><ul>${ineligible.map(x=>`<li>${esc(`#${x.job_id} ${x.name||''} — ${x.reason||''}`)}</li>`).join('')}</ul></div>`);parts.push(`<p class="cleanup-note" id="cleanup-wait" ${cleanupPosting?'':'hidden'}>Có thể mất vài phút với nhiều video; đừng tắt BiliFlow.</p>`);const body=document.getElementById('cleanup-dialog-body'),confirmButton=document.getElementById('cleanup-confirm'),cancel=document.getElementById('cleanup-cancel');if(body)body.innerHTML=parts.join('');if(confirmButton){confirmButton.textContent=`Chuyển ${n} video vào Thùng rác`;confirmButton.disabled=!!blocked||!n||!(p&&p.preview_id)}if(cancel)cancel.disabled=false}
+function closeCleanupDialog(){if(cleanupPosting)return;const d=document.getElementById('cleanup-dialog');if(d){if(typeof d.close==='function'){if(d.open)d.close()}else d.removeAttribute('open')}cleanupPreview=null}
+function watchCleanupDialog(){try{const d=document.getElementById('cleanup-dialog');if(!d||!d.addEventListener)return;d.addEventListener('cancel',e=>{if(cleanupPosting)e.preventDefault()});d.addEventListener('close',()=>{if(cleanupPosting){showCleanupDialog();return}cleanupPreview=null})}catch(e){}}
+function cleanupResultText(result){const results=(result&&result.results)||[],n=Number(result&&result.recycled_count)||0;let text=n?`Đã chuyển ${n} video gốc vào Thùng rác (${formatBytes(result.recycled_bytes)}). Dung lượng được giải phóng khi bạn dọn sạch Thùng rác.`:'Không chuyển được video gốc nào vào Thùng rác.';results.forEach(x=>{if(['FAILED','PENDING','NOT_RUN'].includes(x.status))text+=` Không dọn được #${x.job_id}: ${x.message||''}`;else if(x.status==='UNVERIFIED')text+=` #${x.job_id}: đã chuyển nhưng Windows chưa xác nhận bản ghi trong Thùng rác; hãy kiểm tra Thùng rác.`});return text}
+async function confirmCleanup(){if(cleanupPosting)return;const p=cleanupPreview,ids=((p&&p.eligible)||[]).map(x=>x.job_id);if(!p||!p.preview_id||p.blocked||!ids.length)return;cleanupPosting=true;const confirmButton=document.getElementById('cleanup-confirm'),cancel=document.getElementById('cleanup-cancel'),wait=document.getElementById('cleanup-wait');if(confirmButton){confirmButton.disabled=true;confirmButton.textContent='Đang kiểm tra SHA-256 và chuyển vào Thùng rác…'}if(cancel)cancel.disabled=true;if(wait)wait.hidden=false;let result;try{result=await post('/api/source-cleanup',{job_ids:ids,preview_id:p.preview_id})}catch(e){cleanupPosting=false;const fresh=e.body&&e.body.preview;if(e.code==='preview_changed'&&fresh)renderCleanupDialog(fresh,'Danh sách đã thay đổi, hãy xem lại.');else if(['bin_capacity','bin_unavailable','busy'].includes(e.code))renderCleanupDialog(fresh||p,e.message);else renderCleanupDialog(p,`Không dọn được: ${e.message}`);showCleanupDialog();return}cleanupPosting=false;closeCleanupDialog();const results=(result&&result.results)||[];results.forEach(x=>{if(['RECYCLED','UNVERIFIED'].includes(x.status))cleanupSelection.delete(x.job_id)});discardPendingLoads();await load().catch(()=>{});notify(cleanupResultText(result),!results.length||results.some(x=>x.status!=='RECYCLED'))}
 async function audit(id,visual=false){if(visual&&!confirm('Visual AI Audit sẽ gửi tối đa 36 ảnh thumbnail của riêng video này cho Codex bằng tài khoản ChatGPT. Video và âm thanh gốc không được gửi. Tiếp tục?'))return;try{await post(`/api/jobs/${id}/ai-audit`,{visual});alert(visual?'Visual AI Audit đã được xếp chạy. AI chỉ đưa đề xuất; bạn vẫn duyệt mọi thay đổi.':'AI JSON audit đã được xếp chạy.')}catch(e){alert(e.message)}}
 async function scheduler(paused){await post('/api/scheduler',{paused});discardPendingLoads();await load()}
 async function shutdown(mode){if(!confirm(mode==='immediate'?'Dừng bước hiện tại và tắt Control Center?':'Tắt sau khi bước hiện tại hoàn tất?'))return;document.body.innerHTML='<main><div class="empty"><div class="name" id="shutdown-state">Đang gửi lệnh tắt BiliFlow…</div><p class="muted">Tab sẽ được giữ lại để hiển thị kết quả.</p></div></main>';try{await post('/api/shutdown',{mode});document.getElementById('shutdown-state').textContent=mode==='immediate'?'Đang dừng job và tắt backend…':'Đang chờ bước hiện tại hoàn tất rồi tắt…';for(let i=0;i<120;i++){await new Promise(r=>setTimeout(r,500));try{await fetch('/healthz',{cache:'no-store'})}catch(_){document.getElementById('shutdown-state').textContent='BiliFlow đã tắt hoàn toàn. Bạn có thể đóng tab.';return}}document.getElementById('shutdown-state').textContent='Lệnh tắt đã được nhận nhưng backend vẫn đang hoàn tất bước hiện tại.'}catch(e){document.getElementById('shutdown-state').textContent=`Không xác nhận được trạng thái tắt: ${e.message}`}}
-(async()=>{watchJobsInteraction();watchHeaderHeight();await refreshToken();await Promise.all([load(),loadAI()]);setInterval(()=>load().catch(e=>notify(`Mất kết nối dashboard: ${e.message}`,true)),3000);setInterval(()=>{if(aiState.login_running)loadAI().catch(()=>{})},3000)})().catch(e=>notify(e.message,true));
+watchCleanupDialog();(async()=>{watchJobsInteraction();watchHeaderHeight();await refreshToken();await Promise.all([load(),loadAI()]);setInterval(()=>load().catch(e=>notify(`Mất kết nối dashboard: ${e.message}`,true)),3000);setInterval(()=>{if(aiState.login_running)loadAI().catch(()=>{})},3000)})().catch(e=>notify(e.message,true));
 </script></body></html>"""
     return (
         page.replace("__EXPORT_DIALOG_JS__", EXPORT_DIALOG_JS)
         .replace("__EXPORT_CUSTOM_GB__", EXPORT_CUSTOM_GB_ATTRIBUTES)
         .replace("__SOURCE_MISSING_MESSAGE__", SOURCE_MISSING_MESSAGE)
+        .replace("__SOURCE_CLEANED_MESSAGE__", SOURCE_CLEANED_MESSAGE)
     )
 
 
 class ControlCenter:
+    # Dọn video gốc (batch 3): no real default. A stub built with __new__ (tests)
+    # gets these, which refuse; only __init__ binds the Windows Recycle Bin.
+    recycler = staticmethod(_unconfigured_recycler)
+    bin_info = staticmethod(_unconfigured_bin_info)
+
     def __init__(self, root: Path, *, host: str = "127.0.0.1", port: int = 8765,
                  stable_seconds: float = 60.0, import_existing: bool = True):
         self.root = root.resolve(strict=True)
@@ -467,6 +472,14 @@ class ControlCenter:
         self.lock = SingleInstanceLock(self.root / "state" / "control-center.lock")
         self.store = JobStore(self.root / "state" / "control-center.sqlite3")
         self.recovered = self.store.recover_interrupted()
+        # A cleanup interrupted by a crash or a closed window: settle its PENDING
+        # rows on every start, whether or not existing reports are imported.
+        self.cleanup_reconciled = source_cleanup.reconcile_pending_cleanups(
+            self.root, self.store, finder=recycle_bin.find_recycle_record,
+        )
+        # The only place that binds the real Recycle Bin functions.
+        self.recycler = recycle_bin.send_to_recycle_bin
+        self.bin_info = recycle_bin.volume_bin_info
         if import_existing:
             import_existing_project(self.root, self.store)
         self.scheduler = JobScheduler(self.root, self.store)
@@ -476,6 +489,9 @@ class ControlCenter:
         self.watcher = InputWatcher(self.root, self.store, stable_seconds=stable_seconds)
         self.server: ThreadingHTTPServer | None = None
         self._stopping = threading.Event()
+        # Set when stop() has finished (store and lock closed); serve() waits
+        # for it so the process outlives an /api/shutdown stop thread.
+        self._stopped = threading.Event()
         # Scope audits to the active queue revision because reruns keep the job id.
         self._audit_jobs: dict[int, str] = {}
         self._audit_lock = threading.Lock()
@@ -495,6 +511,9 @@ class ControlCenter:
         jobs = self.store.list_jobs()
         # The same order the worker uses, so "Thứ tự chờ" is the real run order.
         order = {item["job_id"]: item for item in self.scheduler.queue_order()}
+        # One read of every job's latest cleanup row; the hints never hash and
+        # never query the Recycle Bin (they re-read a queue only when it changed).
+        cleanups = self.store.latest_source_cleanups()
         for job in jobs:
             place = order.get(int(job["id"]))
             job["queue_position"] = place["position"] if place else None
@@ -512,6 +531,10 @@ class ControlCenter:
             job["skip"] = (
                 self.store.setting(f"skip:{int(job['id'])}") if job["state"] == "SKIPPED" else None
             )
+            row = cleanups.get(int(job["id"]))
+            job["source_cleanup"] = source_cleanup.cleanup_row_summary(row)
+            job["source_cleaned"] = bool(row and row["state"] in ("PENDING", "RECYCLED"))
+            job["cleanup"] = self._cleanup_hint(job, row)
         return {
             "version": __version__, "started": True, "recovered_jobs": self.recovered,
             "scheduler_paused": self.store.setting("scheduler_paused", False),
@@ -524,7 +547,44 @@ class ControlCenter:
             "detector_options": [
                 {"id": key, **value} for key, value in DETECTOR_GROUPS.items()
             ],
+            "source_cleanup_running": source_cleanup.cleanup_running(),
         }
+
+    def _cleanup_hint(
+        self, job: dict[str, Any], row: dict[str, Any] | None,
+    ) -> dict[str, Any] | None:
+        """The "Dọn video gốc" hint of a card; an error only marks that card, never status()."""
+        try:
+            return source_cleanup.cleanup_hint(
+                self.root, self.store, self.scheduler, job, latest_row=row,
+            )
+        except Exception as error:  # noqa: BLE001 - one unreadable job must not break the Dashboard
+            return {
+                "eligible": False, "kind": None, "reason": f"Không kiểm tra được: {error}",
+                "size_bytes": None, "output_name": None, "output_bytes": None,
+                "exported_at": None, "skipped_at": None,
+            }
+
+    def source_cleanup_preview(self, job_ids: Any) -> dict[str, Any]:
+        """GET /api/source-cleanup/preview: read-only (no hash, no write, no recycler)."""
+        return source_cleanup.preview_cleanup(
+            self.root, self.store, self.scheduler, source_cleanup.parse_job_ids(job_ids),
+            bin_info=self.bin_info,
+        )
+
+    def source_cleanup_run(self, job_ids: Any, preview_id: Any) -> dict[str, Any]:
+        """POST /api/source-cleanup: move the confirmed sources to the Recycle Bin.
+
+        Raises ValueError for a bad request (400) and CleanupConflict when
+        nothing may start (409). Stops between videos once BiliFlow shuts down.
+        """
+        if not isinstance(job_ids, list):
+            raise ValueError(source_cleanup.JOB_IDS_MESSAGE)
+        return source_cleanup.execute_cleanup(
+            self.root, self.store, self.scheduler, job_ids, preview_id,
+            recycler=self.recycler, bin_info=self.bin_info,
+            should_stop=getattr(self, "_stopping", threading.Event()).is_set,
+        )
 
     def review_summary_for(self, job: dict[str, Any]) -> dict[str, Any] | None:
         """Counts of the active review queue, only for jobs whose card needs them."""
@@ -712,8 +772,12 @@ class ControlCenter:
 
         The path never comes from the request: it is the job row's path, and it
         must match the queue source and the size/mtime recorded at import.
+        A source cleaned into the Recycle Bin (or on its way there) answers 410,
+        so no new stream or frame opens it while the shell moves it.
         """
         job = self.store.get_job(job_id)
+        if self.store.source_cleaned(job_id):
+            raise ReviewMediaError(410, SOURCE_CLEANED_MEDIA_MESSAGE)
         recorded = Path(str(job["source_path"]))
         source = queue.get("source") or {}
 
@@ -757,7 +821,10 @@ class ControlCenter:
             status = getattr(error, "status", 404)
             evidence["video"] = {
                 "available": False, "mime": None,
-                "reason": "source_changed" if status == 409 else "source_missing",
+                "reason": (
+                    "source_cleaned" if status == 410
+                    else "source_changed" if status == 409 else "source_missing"
+                ),
             }
         return evidence
 
@@ -790,6 +857,8 @@ class ControlCenter:
         An export waiting or running and any in-process job keep their state.
         A skipped job stays skipped while its review still allows a skip;
         otherwise it goes back to the review flow and the skip record ends.
+        A job that moves retires an old export request (a paused, failed or
+        interrupted render stage) so Tiếp tục can never render the old plan.
         """
         state = "READY_TO_EXPORT" if queue.get("status") == "READY_FOR_EDIT_PLAN" else "WAITING_REVIEW"
         job = self.store.get_job(job_id)
@@ -807,30 +876,33 @@ class ControlCenter:
                 payload={"state": state, "queue_status": queue.get("status"), "skip": record},
             )
             return
-        self.store.update_job_if(job_id, exclude=SYNC_KEEP_STATES, state=state, error=None)
+        value = self.store.update_job_if(job_id, exclude=SYNC_KEEP_STATES, state=state, error=None)
+        if value is not None:
+            # Reentrant: the review routes already hold job_action_lock.
+            self.scheduler.retire_render_request(job_id, "review_changed", clear_current_stage=True)
 
     def _export_in_flight(self, job: dict[str, Any]) -> bool:
+        """True while the job's export waits in the queue or runs (export_guards.render_in_flight)."""
         job_id = int(job["id"])
-        if job["state"] in {"RENDERING", "VERIFYING"} or (
-            job["state"] == "QUEUED" and job.get("current_stage") == "render"
-        ):
-            return True
-        if self.scheduler.is_busy(job_id) and job.get("current_stage") == "render":
-            return True
-        if job["state"] != "QUEUED":
-            return False
-        pending = self.store.next_pending_stage(job_id)
-        return pending is not None and pending["name"] == "render"
+        pending = (
+            (self.store.next_pending_stage(job_id) or {}).get("name")
+            if job["state"] == "QUEUED" else None
+        )
+        return render_in_flight(job, pending, worker_busy=self.scheduler.is_busy(job_id))
 
     def ensure_review_editable(self, job_id: int) -> None:
-        """Refuse a decision edit while an export waits or runs.
+        """Refuse a decision edit while an export waits or runs, or once the source is cleaned.
 
         The render uses the plan fixed at finalize, so an edit then would not
-        reach the output. Call it inside _REVIEW_QUEUE_IO and the scheduler's
-        job_action_lock, before the queue is written.
+        reach the output. A video whose source is in the Recycle Bin (or on
+        its way there) is read-only until the watcher sees the same file back
+        in input (product default, batch 3). Call it inside _REVIEW_QUEUE_IO
+        and the scheduler's job_action_lock, before the queue is written.
         """
         if self._export_in_flight(self.store.get_job(job_id)):
             raise ValueError(REVIEW_EDIT_IN_FLIGHT_MESSAGE)
+        if self.store.source_cleaned(job_id):
+            raise ValueError(SOURCE_CLEANED_REVIEW_REFUSAL)
 
     def finalize(
         self, job_id: int, *, size_mode: str = "default",
@@ -839,29 +911,36 @@ class ControlCenter:
         # Every guard runs before anything is written (queue policy, plan, render).
         with _REVIEW_QUEUE_IO, self.scheduler.job_action_lock:
             job = self.store.get_job(job_id)
-            if job["state"] == "SKIPPED":
-                raise ValueError(SKIPPED_REFUSAL)
-            if self._export_in_flight(job):
-                raise ValueError(EXPORT_IN_FLIGHT_MESSAGE)
-            if (
-                job["state"] == "QUEUED" or job["state"] in IN_PROCESS_STATES
-                or self.scheduler.is_busy(job_id)
-            ):
-                raise ValueError(
-                    f"Video #{job_id} đang trong hàng đợi hoặc đang được xử lý; chờ xong rồi hãy xuất."
-                )
+            # Skipped, export in flight, then queued or busy.
+            refusal = export_state_refusal(
+                job, in_flight=self._export_in_flight(job),
+                worker_busy=self.scheduler.is_busy(job_id),
+            )
+            if refusal:
+                raise ValueError(refusal)
             queue_path = self.queue_path(job_id)
             queue = _read_json(queue_path)
             if queue.get("status") != "READY_FOR_EDIT_PLAN":
-                raise ValueError("Vẫn còn mục chưa có quyết định cuối cùng")
-            if not Path(str(job["source_path"])).is_file():
-                raise ValueError(SOURCE_MISSING_MESSAGE)
+                raise ValueError(QUEUE_NOT_READY_MESSAGE)
+            # Source cleaned into the Recycle Bin, then source missing.
+            refusal = export_source_refusal(
+                Path(str(job["source_path"])), cleaned=self.store.source_cleaned(job_id),
+            )
+            if refusal:
+                raise ValueError(refusal)
             policy = normalize_output_size_policy(size_mode, max_output_gb)
             queue["export_size_policy"] = policy
             _write_json(queue_path, queue)
             plan_path, output_path, _ = review_export_paths(self.root, queue)
             if output_path.exists():
-                self.store.update_job(job_id, state="COMPLETED", progress=1.0)
+                # The export of this review already exists: no render, and an
+                # old request left by a paused or failed export is retired.
+                self.store.update_job(
+                    job_id, state="COMPLETED", progress=1.0, current_stage=None, stop_mode=None,
+                )
+                self.scheduler.retire_render_request(
+                    job_id, "output_exists", clear_current_stage=True,
+                )
                 return {
                     "status": "COMPLETED",
                     "output": output_path.relative_to(self.root).as_posix(),
@@ -886,15 +965,20 @@ class ControlCenter:
     def skip_export(self, job_id: int) -> dict[str, Any]:
         """Bỏ qua (không xuất): mark a reviewed video done without an export.
 
-        Writes only the job state, the skip:{id} setting and an event; the
-        queue, decisions, reports, source and outputs are never touched.
+        Writes only the job state, the skip:{id} setting, its events and the
+        retirement of an old render stage; the queue, decisions, reports,
+        source and outputs are never touched.
         """
         with _REVIEW_QUEUE_IO, self.scheduler.job_action_lock:
+            # A cleaned video stays in "Hoàn tất" as it is.
+            if self.store.source_cleaned(job_id):
+                raise ValueError(SOURCE_CLEANED_MESSAGE)
             job = self.store.get_job(job_id)
             if job["state"] == "SKIPPED":
                 raise ValueError(f"Video #{job_id} đã được đánh dấu bỏ qua.")
-            # A render stage left PENDING by a cancelled, paused or interrupted
-            # export is not in flight: only a QUEUED or RENDERING job exports.
+            # An old export request (a render stage a paused, failed or
+            # interrupted export left behind) is not in flight: only a QUEUED or
+            # RENDERING job exports. The skip retires that request below.
             if self._export_in_flight(job):
                 raise ValueError(f"Video #{job_id} đang chờ xuất hoặc đang xuất; không thể bỏ qua.")
             if (
@@ -936,11 +1020,15 @@ class ControlCenter:
                 "Đánh dấu xong mà không xuất video; video gốc, report và quyết định duyệt giữ nguyên",
                 payload=record,
             )
+            self.scheduler.retire_render_request(job_id, "skipped", clear_current_stage=True)
             return value
 
     def unskip_export(self, job_id: int) -> dict[str, Any]:
         """Mở lại để xuất: undo a skip; the job returns to its review state."""
         with _REVIEW_QUEUE_IO, self.scheduler.job_action_lock:
+            # A cleaned video stays in "Hoàn tất" as it is.
+            if self.store.source_cleaned(job_id):
+                raise ValueError(SOURCE_CLEANED_MESSAGE)
             job = self.store.get_job(job_id)
             if job["state"] != "SKIPPED":
                 raise ValueError(f"Video #{job_id} không ở trạng thái Đã bỏ qua.")
@@ -1174,8 +1262,20 @@ class ControlCenter:
                         state_path.unlink()
                     except OSError:
                         pass
+                # A running cleanup stops between videos (_stopping); let the
+                # current one settle its row before the store closes.
+                source_cleanup.wait_idle(timeout=90.0)
                 self.store.close()
                 self.lock.close()
+            else:
+                # /api/shutdown runs stop() on a daemon thread, and its
+                # server.shutdown() is what ended serve_forever above. Keep
+                # this (main) thread alive until stop() has waited for a
+                # running cleanup and closed the store; otherwise the process
+                # exits and kills that thread, and the recycle thread with it.
+                stopped = getattr(self, "_stopped", None)
+                if stopped is not None:
+                    stopped.wait(timeout=STOP_WAIT_SECONDS)
 
     def stop(self, *, immediate: bool = False) -> None:
         if self._stopping.is_set():
@@ -1190,14 +1290,22 @@ class ControlCenter:
                 self.server.shutdown()
                 self.server.server_close()
         finally:
-            state_path = self.root / "state" / "control-center.json"
-            if state_path.exists():
-                try:
-                    state_path.unlink()
-                except OSError:
-                    pass
-            self.store.close()
-            self.lock.close()
+            try:
+                state_path = self.root / "state" / "control-center.json"
+                if state_path.exists():
+                    try:
+                        state_path.unlink()
+                    except OSError:
+                        pass
+                # A running cleanup stops between videos (_stopping); let the
+                # current one settle its row before the store closes.
+                source_cleanup.wait_idle(timeout=90.0)
+                self.store.close()
+                self.lock.close()
+            finally:
+                stopped = getattr(self, "_stopped", None)
+                if stopped is not None:
+                    stopped.set()
 
 
 def _handler_class(center: ControlCenter) -> type[BaseHTTPRequestHandler]:
@@ -1333,6 +1441,12 @@ def _handler_class(center: ControlCenter) -> type[BaseHTTPRequestHandler]:
                             "output": outputs[-1]["path"] if outputs else None,
                             "error": job["error"] if job["state"] == "FAILED" else None,
                             "render_progress": center.render_progress_summary(job),
+                            # The review page is read-only once the source is cleaned.
+                            "source_cleaned": center.store.source_cleaned(job_id),
+                            "source_name": Path(str(job["source_path"])).name,
+                            "source_cleanup": source_cleanup.cleanup_row_summary(
+                                center.store.latest_source_cleanup(job_id)
+                            ),
                         }
                     self.send_json(200, value)
                 elif path.startswith("/media/"):
@@ -1340,6 +1454,16 @@ def _handler_class(center: ControlCenter) -> type[BaseHTTPRequestHandler]:
                     target = _inside(center.root / "reports", center.root / relative)
                     content_type = mimetypes.guess_type(target.name)[0] or "application/octet-stream"
                     self.send_bytes(200, target.read_bytes(), content_type)
+                elif path == "/api/source-cleanup/preview":
+                    # Read-only: no hash, no write, never the recycler. A bad id
+                    # list is the client's error (400), not a missing page (404).
+                    ids = urllib.parse.parse_qs(parsed.query).get("ids", [""])[0]
+                    try:
+                        value = center.source_cleanup_preview(ids)
+                    except ValueError as error:
+                        self.send_json(400, {"error": str(error)})
+                    else:
+                        self.send_json(200, value)
                 else:
                     self.send_json(404, {"error": "Không tìm thấy"})
             except (KeyError, ValueError, FileNotFoundError) as error:
@@ -1374,6 +1498,10 @@ def _handler_class(center: ControlCenter) -> type[BaseHTTPRequestHandler]:
                     threading.Thread(target=center.stop,
                                      kwargs={"immediate": mode == "immediate"}, daemon=True).start()
                     return
+                elif path == "/api/source-cleanup":
+                    # Host and token were checked above; the recycler is reached
+                    # only through execute_cleanup's own checks.
+                    result = center.source_cleanup_run(body.get("job_ids"), body.get("preview_id"))
                 elif match := re.fullmatch(r"/api/jobs/(\d+)/(start|resume|pause|stop-after-stage|cancel|retry|rerun|skip|unskip|ai-audit)", path):
                     job_id, action = int(match.group(1)), match.group(2)
                     if action == "start":
@@ -1456,6 +1584,13 @@ def _handler_class(center: ControlCenter) -> type[BaseHTTPRequestHandler]:
                 else:
                     self.send_json(404, {"error": "Không tìm thấy"}); return
                 self.send_json(200, result)
+            except source_cleanup.CleanupConflict as error:
+                # Before the ValueError branch (CleanupConflict is not one, but the
+                # order keeps a 409 a 409): nothing started, the dialog shows why.
+                self.send_json(409, {
+                    "error": str(error), "code": error.code,
+                    **({"preview": error.preview} if error.preview else {}),
+                })
             except (KeyError, TypeError, ValueError) as error:
                 self.send_json(400, {"error": str(error)})
             except Exception as error:

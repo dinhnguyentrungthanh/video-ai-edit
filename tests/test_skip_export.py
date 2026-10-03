@@ -1,5 +1,7 @@
 import hashlib
 import http.client
+import importlib
+import importlib.util
 import json
 import threading
 import unittest
@@ -9,6 +11,7 @@ from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
 from biliflow import control_center as cc
+from biliflow import export_guards
 from biliflow.control_center import (
     EXPORT_IN_FLIGHT_MESSAGE,
     REVIEW_EDIT_IN_FLIGHT_MESSAGE,
@@ -18,11 +21,48 @@ from biliflow.control_center import (
     review_summary,
     skip_refusal,
 )
+from biliflow.export_guards import (
+    QUEUE_NOT_READY_MESSAGE,
+    SOURCE_CLEANED_MEDIA_MESSAGE,
+    SOURCE_CLEANED_MESSAGE,
+    SOURCE_CLEANED_REVIEW_REFUSAL,
+)
 from biliflow.final_renderer import normalize_output_size_policy
 from biliflow.job_import import import_existing_project
 from biliflow.job_pipeline import PipelineStage
 from biliflow.job_store import JobStore
-from biliflow.scheduler import SKIPPED_REFUSAL, SKIPPED_STOP_REFUSAL, JobScheduler
+from biliflow.review_workflow import review_export_paths
+from biliflow.scheduler import (
+    EXPORT_RETIRE_MESSAGES,
+    RESUME_SETTLED_REFUSAL,
+    SKIPPED_REFUSAL,
+    SKIPPED_STOP_REFUSAL,
+    JobScheduler,
+)
+
+
+_SHELL_DELETE_PATCH = None
+
+
+def setUpModule():
+    """Contract R13: no test in this module may reach the real Windows Recycle Bin."""
+    global _SHELL_DELETE_PATCH
+    if importlib.util.find_spec("biliflow.recycle_bin") is None:  # batch 3 step A5 not landed yet
+        return
+    recycle_bin = importlib.import_module("biliflow.recycle_bin")
+
+    def refuse(*_args, **_kwargs):
+        raise AssertionError("real Recycle Bin call in a test")
+
+    _SHELL_DELETE_PATCH = patch.object(recycle_bin, "_shell_delete", refuse)
+    _SHELL_DELETE_PATCH.start()
+
+
+def tearDownModule():
+    global _SHELL_DELETE_PATCH
+    if _SHELL_DELETE_PATCH is not None:
+        _SHELL_DELETE_PATCH.stop()
+        _SHELL_DELETE_PATCH = None
 
 
 def item(item_id, decision=None):
@@ -110,6 +150,70 @@ class SkipFixture(unittest.TestCase):
     def events(self, job_id, kind):
         return [event for event in self.store.events(job_id) if event["event_type"] == kind]
 
+    def stage_state(self, job_id, name="render"):
+        return {x["name"]: x["state"] for x in self.store.stages(job_id)}.get(name)
+
+    # ----------------------------------------------- real HTTP on port 0
+    def serve(self):
+        if getattr(self, "server", None) is not None:
+            return
+        self.server = ThreadingHTTPServer(("127.0.0.1", 0), _handler_class(self.center))
+        self.server.daemon_threads = True
+        self.port = self.server.server_address[1]
+        thread = threading.Thread(target=self.server.serve_forever, daemon=True)
+        thread.start()
+        self.addCleanup(self.server.server_close)
+        self.addCleanup(self.server.shutdown)
+
+    def request(self, method, path, *, token="test-token", host=None, body=None):
+        self.serve()
+        connection = http.client.HTTPConnection("127.0.0.1", self.port, timeout=10)
+        try:
+            headers = {"Host": host or f"127.0.0.1:{self.port}", "Content-Type": "application/json"}
+            if token:
+                headers["X-BiliFlow-Token"] = token
+            payload = json.dumps(body or {}).encode() if method == "POST" else None
+            connection.request(method, path, body=payload, headers=headers)
+            response = connection.getresponse()
+            data = response.read()
+            if response.getheader("Content-Type", "").startswith("application/json"):
+                return response.status, json.loads(data or b"{}")
+            return response.status, data
+        finally:
+            connection.close()
+
+    def post(self, path, *, token="test-token", host=None, body=None):
+        return self.request("POST", path, token=token, host=host, body=body)
+
+    def get(self, path):
+        return self.request("GET", path)
+
+    def finalize(self, job_id, **kwargs):
+        with (
+            patch("biliflow.control_center.build_edit_plan", return_value={"status": "READY_FOR_PREVIEW"}),
+            patch("biliflow.control_center.authorize_final_from_resolved_review"),
+        ):
+            return self.center.finalize(job_id, **kwargs)
+
+    def finalize_queued(self, job_id):
+        self.assertEqual(self.finalize(job_id)["status"], "QUEUED")
+
+
+class SharedGuardTests(unittest.TestCase):
+    """B5: control_center uses export_guards, the same objects, under the old names."""
+
+    def test_control_center_shares_the_export_guards(self):
+        # One lock: source cleanup and the Control Center serialize the same queue IO.
+        self.assertIs(cc._REVIEW_QUEUE_IO, export_guards.REVIEW_QUEUE_IO)
+        for name in (
+            "DECISION_LABELS", "review_summary", "skip_refusal", "SOURCE_MISSING_MESSAGE",
+            "EXPORT_IN_FLIGHT_MESSAGE", "REVIEW_EDIT_IN_FLIGHT_MESSAGE", "QUEUE_NOT_READY_MESSAGE",
+            "SOURCE_CLEANED_MESSAGE", "SOURCE_CLEANED_REVIEW_REFUSAL", "SOURCE_CLEANED_MEDIA_MESSAGE",
+            "render_in_flight", "export_state_refusal", "export_source_refusal",
+        ):
+            with self.subTest(name=name):
+                self.assertIs(getattr(cc, name), getattr(export_guards, name))
+        self.assertIs(cc.SKIPPED_REFUSAL, export_guards.SKIPPED_REFUSAL)
 
 
 class SkipExportTests(SkipFixture):
@@ -196,25 +300,40 @@ class SkipExportTests(SkipFixture):
 
     def test_a_stale_pending_render_does_not_block_the_skip(self):
         # An export interrupted by a restart, cancelled or paused leaves its render
-        # stage PENDING; once the job is back in READY_TO_EXPORT nothing exports.
-        for name, stop in (
-            ("restart", lambda job_id: self.store.update_job(job_id, state="INTERRUPTED_RECOVERABLE")),
-            ("cancel", self.center.scheduler.cancel),
-            ("pause", self.center.scheduler.pause_now),
+        # stage behind. Hủy retires it at once; for the others the review sync
+        # that returns the job to READY_TO_EXPORT retires it (batch 3, B6), so
+        # Tiếp tục can never render the old plan and the skip is still allowed.
+        for name, stop, reason in (
+            ("restart", lambda job_id: self.store.update_job(job_id, state="INTERRUPTED_RECOVERABLE"),
+             "review_changed"),
+            ("cancel", self.center.scheduler.cancel, "cancel"),
+            ("pause", self.center.scheduler.pause_now, "review_changed"),
         ):
             with self.subTest(case=name):
                 job_id = self.make_job(name, [item("a", "KEEP")])
                 self.center.scheduler.queue_render(job_id, plan_path=self.root / "work" / f"{name}.json",
                                                    output_path=self.root / "output" / f"{name}.mp4")
+                render = self.store.setting(f"render:{job_id}")
                 self.assertTrue(self.store.claim_queued(job_id, "RENDERING", "render"))
                 stop(job_id)
                 queue = json.loads(self.queue_file(job_id).read_text(encoding="utf-8"))
                 self.center.sync_queue_state(job_id, queue)
-                self.assertEqual(self.store.get_job(job_id)["state"], "READY_TO_EXPORT")
-                self.assertEqual({x["name"]: x["state"] for x in self.store.stages(job_id)}["render"], "PENDING")
+                job = self.store.get_job(job_id)
+                self.assertEqual((job["state"], job["current_stage"]), ("READY_TO_EXPORT", None))
+                self.assertEqual(self.stage_state(job_id), "CANCELLED")
+                retired = self.events(job_id, "EXPORT_REQUEST_RETIRED")
+                self.assertEqual([event["payload"]["reason"] for event in retired], [reason])
+                self.assertEqual(retired[0]["message"], EXPORT_RETIRE_MESSAGES[reason])
+                self.assertEqual(retired[0]["payload"]["stage_state"], "PENDING")
+                # render:{id} stays as history; nothing waits in the queue.
+                self.assertEqual(retired[0]["payload"]["render"], render)
+                self.assertEqual(self.store.setting(f"render:{job_id}"), render)
+                self.assertEqual(self.center.scheduler.queue_order(), [])
                 # The card offers the button only when the server accepts it.
                 self.assertTrue(self.status_summary(job_id)["skip_eligible"])
                 self.assertEqual(self.center.skip_export(job_id)["state"], "SKIPPED")
+                # Nothing was left for the skip to retire.
+                self.assertEqual(len(self.events(job_id, "EXPORT_REQUEST_RETIRED")), 1)
 
     def test_status_never_offers_a_skip_the_server_refuses(self):
         ready = self.make_job("ready", [])
@@ -338,13 +457,6 @@ class SkipExportTests(SkipFixture):
         self.assertEqual(self.store.get_job(waiting)["state"], "WAITING_REVIEW")
 
     # ---------------------------------------------------------------- finalize
-    def finalize(self, job_id, **kwargs):
-        with (
-            patch("biliflow.control_center.build_edit_plan", return_value={"status": "READY_FOR_PREVIEW"}),
-            patch("biliflow.control_center.authorize_final_from_resolved_review"),
-        ):
-            return self.center.finalize(job_id, **kwargs)
-
     def test_finalize_stores_the_review_page_size_policy(self):
         for mode, gb in (("default", None), ("custom", 2.5), ("unlimited", None)):
             with self.subTest(mode=mode):
@@ -390,9 +502,22 @@ class SkipExportTests(SkipFixture):
         # An unfinished review is refused before the policy is written.
         unfinished = self.make_job("unfinished", [item("a")], state="WAITING_REVIEW")
         unfinished_before = self.queue_file(unfinished).read_bytes()
-        with self.assertRaisesRegex(ValueError, "Vẫn còn mục chưa có quyết định cuối cùng"):
+        with self.assertRaises(ValueError) as caught:
             self.finalize(unfinished)
+        self.assertEqual(str(caught.exception), "Vẫn còn mục chưa có quyết định cuối cùng")
+        self.assertEqual(str(caught.exception), QUEUE_NOT_READY_MESSAGE)
         self.assertEqual(self.queue_file(unfinished).read_bytes(), unfinished_before)
+        # A busy worker refuses with the same text as before batch 3 (export_guards).
+        busy = self.make_job("busy", [item("a", "BLUR")])
+        busy_before = self.queue_file(busy).read_bytes()
+        with patch.object(self.center.scheduler, "is_busy", return_value=True):
+            with self.assertRaises(ValueError) as caught:
+                self.finalize(busy)
+        self.assertEqual(
+            str(caught.exception),
+            f"Video #{busy} đang trong hàng đợi hoặc đang được xử lý; chờ xong rồi hãy xuất.",
+        )
+        self.assertEqual(self.queue_file(busy).read_bytes(), busy_before)
 
     # ------------------------------------------------------------------ status
     def test_status_reports_review_summary_source_and_skip(self):
@@ -455,25 +580,7 @@ class SkipHttpTests(SkipFixture):
 
     def setUp(self):
         super().setUp()
-        self.server = ThreadingHTTPServer(("127.0.0.1", 0), _handler_class(self.center))
-        self.server.daemon_threads = True
-        self.port = self.server.server_address[1]
-        thread = threading.Thread(target=self.server.serve_forever, daemon=True)
-        thread.start()
-        self.addCleanup(self.server.server_close)
-        self.addCleanup(self.server.shutdown)
-
-    def post(self, path, *, token="test-token", host=None, body=None):
-        connection = http.client.HTTPConnection("127.0.0.1", self.port, timeout=10)
-        try:
-            headers = {"Host": host or f"127.0.0.1:{self.port}", "Content-Type": "application/json"}
-            if token:
-                headers["X-BiliFlow-Token"] = token
-            connection.request("POST", path, body=json.dumps(body or {}).encode(), headers=headers)
-            response = connection.getresponse()
-            return response.status, json.loads(response.read() or b"{}")
-        finally:
-            connection.close()
+        self.serve()
 
     def test_skip_and_unskip_routes(self):
         job_id = self.make_job("tap30", [])
@@ -536,12 +643,248 @@ class SkipHttpTests(SkipFixture):
         self.assertEqual(clear.call_count, 1)
         self.assertEqual(self.store.get_job(queued)["state"], "WAITING_REVIEW")
 
-    def finalize_queued(self, job_id):
-        with (
-            patch("biliflow.control_center.build_edit_plan", return_value={"status": "READY_FOR_PREVIEW"}),
-            patch("biliflow.control_center.authorize_final_from_resolved_review"),
-        ):
-            self.assertEqual(self.center.finalize(job_id)["status"], "QUEUED")
+
+class StaleExportTests(SkipFixture):
+    """B6 (open item (b)): an old export request is retired when the review changes,
+    on a skip and when finalize finds the export already made."""
+
+    def paused_export(self, name, decisions=("BLUR",)):
+        job_id = self.make_job(name, [item(chr(97 + index), value) for index, value in enumerate(decisions)])
+        self.finalize_queued(job_id)
+        self.assertTrue(self.store.claim_queued(job_id, "RENDERING", "render"))
+        self.center.scheduler.pause_now(job_id)
+        job = self.store.get_job(job_id)
+        self.assertEqual((job["state"], job["current_stage"], job["stop_mode"]), ("PAUSED", "render", "PAUSED"))
+        self.assertEqual(self.stage_state(job_id), "PENDING")
+        return job_id
+
+    def test_a_decision_retires_a_paused_export(self):
+        job_id = self.paused_export("paused")
+        render = self.store.setting(f"render:{job_id}")
+        ready = {"status": "READY_FOR_EDIT_PLAN", "items": [item("a", "KEEP")]}
+        with patch("biliflow.control_center.record_review_decision", return_value=ready) as record:
+            status, payload = self.post(f"/api/jobs/{job_id}/review/decision",
+                                        body={"id": "a", "decision": "KEEP"})
+        self.assertEqual((status, record.call_count), (200, 1), payload)
+        job = self.store.get_job(job_id)
+        self.assertEqual((job["state"], job["current_stage"]), ("READY_TO_EXPORT", None))
+        self.assertEqual(self.stage_state(job_id), "CANCELLED")
+        retired = self.events(job_id, "EXPORT_REQUEST_RETIRED")
+        self.assertEqual([event["payload"]["reason"] for event in retired], ["review_changed"])
+        self.assertEqual(retired[0]["message"], EXPORT_RETIRE_MESSAGES["review_changed"])
+        self.assertEqual(self.store.setting(f"render:{job_id}"), render)
+        # A stale tab's Tiếp tục cannot render the old plan.
+        seq = self.store.get_job(job_id)["queue_seq"]
+        for action in (self.center.scheduler.resume, self.center.scheduler.retry):
+            with self.subTest(action=action.__name__):
+                with self.assertRaises(ValueError) as caught:
+                    action(job_id)
+                self.assertEqual(str(caught.exception), RESUME_SETTLED_REFUSAL.format(job_id=job_id))
+                self.assertEqual(self.store.get_job(job_id)["state"], "READY_TO_EXPORT")
+                self.assertEqual(self.store.get_job(job_id)["queue_seq"], seq)
+                self.assertEqual(self.stage_state(job_id), "CANCELLED")
+        self.assertEqual(self.center.scheduler.queue_order(), [])
+        # Xuất video queues a new request from the new decisions.
+        self.finalize_queued(job_id)
+        self.assertEqual(self.stage_state(job_id), "PENDING")
+        self.assertEqual(self.center.scheduler.queue_order()[-1]["kind"], "export")
+
+    def test_decisions_on_a_settled_job_write_no_retire_event(self):
+        job_id = self.make_job("ready", [item("a", "KEEP")])
+        queue = json.loads(self.queue_file(job_id).read_text(encoding="utf-8"))
+        self.center.sync_queue_state(job_id, queue)
+        self.assertEqual(self.store.get_job(job_id)["state"], "READY_TO_EXPORT")
+        self.assertIsNone(self.stage_state(job_id))
+        self.assertEqual(self.events(job_id, "EXPORT_REQUEST_RETIRED"), [])
+
+    def test_finalize_shortcut_retires_the_old_request(self):
+        job_id = self.paused_export("shortcut")
+        queue = json.loads(self.queue_file(job_id).read_text(encoding="utf-8"))
+        queue["export_size_policy"] = normalize_output_size_policy("default", None)
+        _plan, output, _job = review_export_paths(self.root, queue)
+        output.write_bytes(b"already exported")
+        result = self.finalize(job_id)
+        self.assertEqual(result["status"], "COMPLETED")
+        self.assertEqual(result["output"], output.relative_to(self.root).as_posix())
+        job = self.store.get_job(job_id)
+        self.assertEqual(
+            (job["state"], job["progress"], job["current_stage"], job["stop_mode"]),
+            ("COMPLETED", 1.0, None, None),
+        )
+        self.assertEqual(self.stage_state(job_id), "CANCELLED")
+        retired = self.events(job_id, "EXPORT_REQUEST_RETIRED")
+        self.assertEqual([event["payload"]["reason"] for event in retired], ["output_exists"])
+        self.assertEqual(retired[0]["message"], EXPORT_RETIRE_MESSAGES["output_exists"])
+        self.assertEqual(self.center.scheduler.queue_order(), [])
+        with self.assertRaises(ValueError) as caught:
+            self.center.scheduler.resume(job_id)
+        self.assertEqual(str(caught.exception), RESUME_SETTLED_REFUSAL.format(job_id=job_id))
+
+    def test_skip_retires_a_failed_render(self):
+        job_id = self.make_job("failed", [item("a", "KEEP")])
+        self.center.scheduler.queue_render(job_id, plan_path=self.root / "work" / "f.json",
+                                           output_path=self.root / "output" / "f.mp4")
+        # A render that failed before batch 3 and a job put back to READY_TO_EXPORT.
+        self.store.update_stage(job_id, "render", state="FAILED", error="ffmpeg failed")
+        self.store.update_job(job_id, state="READY_TO_EXPORT", current_stage="render")
+        value = self.center.skip_export(job_id)
+        self.assertEqual((value["state"], value["current_stage"]), ("SKIPPED", None))
+        self.assertEqual(self.stage_state(job_id), "CANCELLED")
+        retired = self.events(job_id, "EXPORT_REQUEST_RETIRED")
+        self.assertEqual([event["payload"]["reason"] for event in retired], ["skipped"])
+        self.assertEqual(retired[0]["payload"]["stage_state"], "FAILED")
+        self.assertEqual(retired[0]["message"], EXPORT_RETIRE_MESSAGES["skipped"])
+        job = self.store.get_job(job_id)
+        self.assertEqual((job["state"], job["current_stage"]), ("SKIPPED", None))
+
+
+class CleanedSourceHttpTests(SkipFixture):
+    """B7: a video whose source is in the Recycle Bin (or on its way there) is read-only.
+
+    Rows come from store.add_source_cleanup (+ finish_source_cleanup); no recycler is ever involved.
+    """
+
+    EDITS = (
+        ("decision", {"id": "b", "decision": "CUT"}),
+        ("clear", {"id": "a"}),
+        ("bulk-keep", {"filter": "pending"}),
+        ("bulk-accept", {"filter": "pending"}),
+    )
+
+    def clean(self, job_id, state, *, kind="EXPORTED"):
+        """Record a cleanup of the job's source; latest row in ``state`` (PENDING, RECYCLED or FAILED)."""
+        job = self.store.get_job(job_id)
+        source = Path(job["source_path"])
+        row = self.store.add_source_cleanup(
+            job_id=job_id, kind=kind, source_path=str(source.resolve()),
+            source_sha256=job["source_sha256"], size_bytes=job["source_size_bytes"],
+            mtime_ns=job["source_mtime_ns"],
+        )
+        if state != "PENDING":
+            self.store.finish_source_cleanup(row, state=state, verified=state == "RECYCLED",
+                                             error="Windows báo lỗi" if state == "FAILED" else None)
+        if state == "RECYCLED":
+            source.unlink()  # The shell moved it to the Recycle Bin.
+        self.assertEqual(self.store.latest_source_cleanup(job_id)["state"], state)
+        return row
+
+    def frozen(self, job_id):
+        job = self.store.get_job(job_id)
+        return {
+            "job": job, "skip": self.store.setting(f"skip:{job_id}"),
+            "render": self.store.setting(f"render:{job_id}"),
+            "queue": self.queue_file(job_id).read_bytes(),
+            "stages": self.store.stages(job_id), "output": tree_digest(self.root / "output"),
+            "work": tree_digest(self.root / "work"),
+        }
+
+    def refuse_writes(self):
+        """Every review writer fails the test if a refused route ever reaches it."""
+        stack = []
+        for name in ("record_review_decision", "clear_review_decision", "bulk_keep_review_items",
+                     "bulk_accept_suggested_decisions", "build_edit_plan",
+                     "authorize_final_from_resolved_review"):
+            patcher = patch(f"biliflow.control_center.{name}",
+                            side_effect=AssertionError(f"{name} reached on a cleaned video"))
+            patcher.start()
+            stack.append(patcher)
+        return stack
+
+    def test_a_cleaned_video_refuses_every_change(self):
+        for latest in ("RECYCLED", "PENDING"):
+            with self.subTest(latest=latest):
+                done = self.make_job(f"done-{latest}", [item("a", "KEEP"), item("b", "BLUR")],
+                                     state="COMPLETED")
+                skipped = self.make_job(f"skipped-{latest}", [item("a", "KEEP")])
+                self.center.skip_export(skipped)
+                self.clean(done, latest)
+                self.clean(skipped, latest, kind="SKIPPED")
+                expected = [
+                    (done, "review/finalize", {"size_mode": "unlimited"}, SOURCE_CLEANED_MESSAGE),
+                    (done, "skip", {}, SOURCE_CLEANED_MESSAGE),
+                    (skipped, "unskip", {}, SOURCE_CLEANED_MESSAGE),
+                    (skipped, "skip", {}, SOURCE_CLEANED_MESSAGE),
+                    (skipped, "review/finalize", {}, SKIPPED_REFUSAL),
+                ]
+                expected += [(done, f"review/{action}", body, SOURCE_CLEANED_REVIEW_REFUSAL)
+                             for action, body in self.EDITS]
+                expected += [(skipped, f"review/{action}", body, SOURCE_CLEANED_REVIEW_REFUSAL)
+                             for action, body in self.EDITS]
+                before = {job_id: self.frozen(job_id) for job_id in (done, skipped)}
+                patchers = self.refuse_writes()
+                try:
+                    for job_id, action, body, message in expected:
+                        with self.subTest(job=job_id, action=action):
+                            status, payload = self.post(f"/api/jobs/{job_id}/{action}", body=body)
+                            self.assertEqual((status, payload.get("error")), (400, message))
+                            self.assertEqual(self.frozen(job_id), before[job_id])
+                finally:
+                    for patcher in patchers:
+                        patcher.stop()
+                self.assertEqual(self.events(done, "EXPORT_QUEUED"), [])
+                # The direct calls refuse the same way.
+                for call, job_id, message in (
+                    (self.center.skip_export, done, SOURCE_CLEANED_MESSAGE),
+                    (self.center.unskip_export, skipped, SOURCE_CLEANED_MESSAGE),
+                    (self.center.ensure_review_editable, done, SOURCE_CLEANED_REVIEW_REFUSAL),
+                    (self.finalize, done, SOURCE_CLEANED_MESSAGE),
+                ):
+                    with self.assertRaises(ValueError) as caught:
+                        call(job_id)
+                    self.assertEqual(str(caught.exception), message)
+
+    def test_cleaned_media_answers_410_and_the_page_knows_why(self):
+        for latest in ("RECYCLED", "PENDING"):
+            with self.subTest(latest=latest):
+                job_id = self.make_job(f"tap12-{latest}", [item("a", "KEEP")], state="COMPLETED")
+                status, evidence = self.get(f"/api/jobs/{job_id}/review/evidence?item=a")
+                self.assertEqual((status, evidence["video"]["reason"]), (200, None))
+                frame_t = evidence["frames"][0]["t"]
+                self.clean(job_id, latest)
+                key = self.center.media_key(job_id)
+                status, body = self.get(f"/api/jobs/{job_id}/review/video?k={key}")
+                self.assertEqual((status, body), (410, {"error": SOURCE_CLEANED_MEDIA_MESSAGE}))
+                status, body = self.get(f"/api/jobs/{job_id}/review/frame?item=a&t={frame_t}&k={key}")
+                self.assertEqual((status, body), (410, {"error": SOURCE_CLEANED_MEDIA_MESSAGE}))
+                # The media key is still checked first.
+                self.assertEqual(self.get(f"/api/jobs/{job_id}/review/video?k=wrong")[0], 403)
+                status, evidence = self.get(f"/api/jobs/{job_id}/review/evidence?item=a")
+                self.assertEqual(status, 200)
+                self.assertEqual(evidence["video"], {"available": False, "mime": None, "reason": "source_cleaned"})
+                status, export = self.get(f"/api/jobs/{job_id}/review/export")
+                self.assertEqual(status, 200)
+                self.assertIs(export["source_cleaned"], True)
+                self.assertEqual(export["source_name"], f"tap12-{latest}.mp4")
+                self.assertEqual(export["status"], "COMPLETED")
+
+    def test_review_evidence_reasons(self):
+        job_id = self.make_job("reasons", [item("a", "KEEP")])
+        source = Path(self.store.get_job(job_id)["source_path"])
+        source.write_bytes(b"changed" * 100)
+        self.assertEqual(self.center.review_evidence(job_id, "a")["video"]["reason"], "source_changed")
+        source.unlink()
+        self.assertEqual(self.center.review_evidence(job_id, "a")["video"]["reason"], "source_missing")
+        self.clean(job_id, "PENDING")
+        self.assertEqual(self.center.review_evidence(job_id, "a")["video"]["reason"], "source_cleaned")
+
+    def test_a_failed_cleanup_locks_nothing(self):
+        job_id = self.make_job("failed", [item("a", "KEEP")])
+        self.clean(job_id, "FAILED")
+        self.assertFalse(self.store.source_cleaned(job_id))
+        status, export = self.get(f"/api/jobs/{job_id}/review/export")
+        self.assertEqual((status, export["source_cleaned"], export["source_name"]), (200, False, "failed.mp4"))
+        status, evidence = self.get(f"/api/jobs/{job_id}/review/evidence?item=a")
+        self.assertEqual((status, evidence["video"]["available"]), (200, True))
+        status, body = self.get(f"/api/jobs/{job_id}/review/video?k={self.center.media_key(job_id)}")
+        self.assertEqual((status, body), (200, b"failed" * 64))
+        self.center.ensure_review_editable(job_id)
+        ready = {"status": "READY_FOR_EDIT_PLAN", "items": [item("a", "KEEP")]}
+        with patch("biliflow.control_center.record_review_decision", return_value=ready) as record:
+            status, payload = self.post(f"/api/jobs/{job_id}/review/decision", body={"id": "a", "decision": "KEEP"})
+        self.assertEqual((status, record.call_count), (200, 1), payload)
+        self.assertEqual(self.center.skip_export(job_id)["state"], "SKIPPED")
+        self.assertEqual(self.center.unskip_export(job_id)["state"], "READY_TO_EXPORT")
+        self.assertEqual(self.finalize(job_id)["status"], "QUEUED")
 
 
 if __name__ == "__main__":

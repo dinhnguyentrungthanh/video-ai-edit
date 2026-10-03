@@ -26,6 +26,48 @@ QUEUE_COLUMNS = (("queue_seq", "INTEGER"), ("queued_at", "TEXT"))
 QUEUE_RELEASE_STATES = frozenset({
     "WAITING_REVIEW", "READY_TO_EXPORT", "COMPLETED", "SKIPPED", "CANCELLED",
 })
+# A render stage in one of these states is an export request that has not
+# finished: waiting, running, or failed and retryable.
+RENDER_REQUEST_STATES = ("PENDING", "RUNNING", "FAILED_RETRYABLE", "FAILED")
+# The only stage states retire_stage may change. RUNNING belongs to the worker
+# (pause and cancel handle it) and COMPLETED is history.
+RETIRABLE_STAGE_STATES = ("PENDING", "FAILED_RETRYABLE", "FAILED")
+# "Dọn video gốc" history: one row per attempt to move a job's source video to
+# the Windows Recycle Bin. Additive like the queue columns: the table is not in
+# the _migrate script, so older code runs its own script unchanged and never
+# sees it, and SCHEMA_VERSION stays 1.
+SOURCE_CLEANUP_SCHEMA = (
+    """CREATE TABLE IF NOT EXISTS source_cleanups (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        job_id INTEGER NOT NULL REFERENCES jobs(id),
+        kind TEXT NOT NULL CHECK(kind IN ('EXPORTED','SKIPPED')),
+        source_path TEXT NOT NULL,
+        source_sha256 TEXT NOT NULL,
+        size_bytes INTEGER NOT NULL,
+        mtime_ns INTEGER NOT NULL,
+        output_path TEXT,
+        output_sha256 TEXT,
+        output_bytes INTEGER,
+        exported_at TEXT,
+        skipped_at TEXT,
+        state TEXT NOT NULL CHECK(state IN ('PENDING','RECYCLED','FAILED','RESTORED')),
+        verified INTEGER NOT NULL DEFAULT 0,
+        recycle_record TEXT,
+        error TEXT,
+        created_at TEXT NOT NULL,
+        finished_at TEXT,
+        restored_at TEXT,
+        restored_mtime_ns INTEGER
+    )""",
+    "CREATE INDEX IF NOT EXISTS idx_source_cleanups_job ON source_cleanups(job_id, id)",
+    "CREATE INDEX IF NOT EXISTS idx_source_cleanups_state ON source_cleanups(state)",
+)
+SOURCE_CLEANUP_KINDS = frozenset({"EXPORTED", "SKIPPED"})
+# A finished attempt: the file left input/ (RECYCLED) or it is still there (FAILED).
+SOURCE_CLEANUP_FINISH_STATES = frozenset({"RECYCLED", "FAILED"})
+# The latest row of a job in one of these states locks every action on the job:
+# the source is in the Recycle Bin, or the shell call has not answered yet.
+SOURCE_CLEANED_STATES = ("PENDING", "RECYCLED")
 
 
 def now_iso() -> str:
@@ -171,7 +213,7 @@ class JobStore:
                 f"Unsupported Control Center database schema: {row['version']}"
             )
         self._connection.commit()
-        self._ensure_queue_columns()
+        self._ensure_additive_schema()
 
     def _backup(self, label: str) -> Path:
         """Copy the live database before a structural change (never overwrites)."""
@@ -192,18 +234,36 @@ class JobStore:
             copy.close()
         return target
 
-    def _ensure_queue_columns(self) -> None:
-        """Add queue_seq/queued_at to databases created before the FIFO queue.
+    def _ensure_additive_schema(self) -> None:
+        """Add the queue columns and the source_cleanups table to older databases.
 
-        The index is created only after the columns exist: an old database
-        would otherwise fail on the CREATE INDEX before the ALTER TABLE ran.
+        At most one backup per open, taken before the first change: a
+        database without the queue columns gets 'queue-order' (it also lacks
+        the table); one that has them but no source_cleanups table and at
+        least one job gets 'source-cleanup'. A new database has no job to
+        protect and gets none.
+
+        The queue index is created only after the columns exist: an old
+        database would otherwise fail on the CREATE INDEX before the ALTER
+        TABLE ran.
         """
         columns = {
             row["name"] for row in self._connection.execute("PRAGMA table_info(jobs)")
         }
+        tables = {
+            row["name"] for row in self._connection.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'"
+            )
+        }
+        has_rows = bool(self._connection.execute(
+            "SELECT EXISTS(SELECT 1 FROM jobs) AS value"
+        ).fetchone()["value"])
         missing = [(name, kind) for name, kind in QUEUE_COLUMNS if name not in columns]
         if missing:
             self._backup("queue-order")
+        elif "source_cleanups" not in tables and has_rows:
+            self._backup("source-cleanup")
+        if missing:
             for name, kind in missing:
                 try:
                     self._connection.execute(
@@ -230,6 +290,8 @@ class JobStore:
         self._connection.execute(
             "CREATE INDEX IF NOT EXISTS idx_jobs_queue ON jobs(state, priority, queue_seq, id)"
         )
+        for statement in SOURCE_CLEANUP_SCHEMA:
+            self._connection.execute(statement)
         self._connection.commit()
 
     @staticmethod
@@ -542,6 +604,45 @@ class JobStore:
             ).fetchone()
         return self._row(row)
 
+    def render_request(self, job_id: int) -> dict[str, Any] | None:
+        """The job's render stage while it is an unfinished export request, else None."""
+        marks = ",".join("?" * len(RENDER_REQUEST_STATES))
+        with self._lock:
+            row = self._connection.execute(
+                f"SELECT * FROM stages WHERE job_id=? AND name='render' AND state IN ({marks})",  # noqa: S608
+                (job_id, *RENDER_REQUEST_STATES),
+            ).fetchone()
+        return self._row(row)
+
+    def retire_stage(
+        self, job_id: int, name: str, *, error: str,
+        states: tuple[str, ...] = RETIRABLE_STAGE_STATES,
+    ) -> str | None:
+        """Cancel a stage that is still only a request; return its old state, else None.
+
+        One conditional UPDATE: a stage the worker is running (RUNNING) or
+        has finished (COMPLETED) is never changed, whatever ``states`` says.
+        """
+        states = tuple(states)
+        if not states or not set(states) <= set(RETIRABLE_STAGE_STATES):
+            raise ValueError(
+                f"retire_stage only changes {', '.join(RETIRABLE_STAGE_STATES)} stages"
+            )
+        marks = ",".join("?" * len(states))
+        with self._lock:
+            row = self._connection.execute(
+                "SELECT state FROM stages WHERE job_id=? AND name=?", (job_id, name)
+            ).fetchone()
+            if row is None or row["state"] not in states:
+                return None
+            cursor = self._connection.execute(
+                f"""UPDATE stages SET state='CANCELLED',pid=NULL,heartbeat_at=NULL,error=?
+                WHERE job_id=? AND name=? AND state IN ({marks})""",  # noqa: S608
+                (error, job_id, name, *states),
+            )
+            self._connection.commit()
+        return str(row["state"]) if cursor.rowcount == 1 else None
+
     def add_artifact(
         self, job_id: int, *, stage_name: str | None, kind: str, path: str,
         sha256: str | None = None, bytes_count: int | None = None,
@@ -689,6 +790,147 @@ class JobStore:
                 (job_id, now_iso(), str(path.resolve())),
             )
             self._connection.commit()
+
+    def reset_watched_file(self, path: Path) -> None:
+        """Forget what the watcher knew about a path whose file left input/.
+
+        A file copied back later then counts as new: it waits to be stable and
+        is hashed again. Only an UPDATE; the watcher row is never deleted.
+        """
+        stamp = now_iso()
+        with self._lock:
+            self._connection.execute(
+                """UPDATE watcher_files SET size_bytes=-1,mtime_ns=-1,imported_job_id=NULL,
+                stable_since=?,updated_at=? WHERE path=?""",
+                (stamp, stamp, str(Path(path).resolve(strict=False))),
+            )
+            self._connection.commit()
+
+    @staticmethod
+    def _cleanup_row(row: sqlite3.Row | None) -> dict[str, Any] | None:
+        if row is None:
+            return None
+        value = dict(row)
+        value["verified"] = bool(value["verified"])
+        return value
+
+    def add_source_cleanup(
+        self, *, job_id: int, kind: str, source_path: str, source_sha256: str,
+        size_bytes: int, mtime_ns: int, output_path: str | None = None,
+        output_sha256: str | None = None, output_bytes: int | None = None,
+        exported_at: str | None = None, skipped_at: str | None = None,
+    ) -> int:
+        """Record a cleanup about to call the Recycle Bin (state PENDING); return its id."""
+        if kind not in SOURCE_CLEANUP_KINDS:
+            raise ValueError(f"Unsupported source cleanup kind: {kind}")
+        with self._lock:
+            self.get_job(job_id)
+            try:
+                cursor = self._connection.execute(
+                    """INSERT INTO source_cleanups(
+                        job_id,kind,source_path,source_sha256,size_bytes,mtime_ns,
+                        output_path,output_sha256,output_bytes,exported_at,skipped_at,
+                        state,verified,created_at
+                    ) VALUES (?,?,?,?,?,?,?,?,?,?,?,'PENDING',0,?)""",
+                    (
+                        job_id, kind, str(source_path), str(source_sha256), int(size_bytes),
+                        int(mtime_ns), output_path, output_sha256, output_bytes,
+                        exported_at, skipped_at, now_iso(),
+                    ),
+                )
+                self._connection.commit()
+            except sqlite3.Error:
+                self._connection.rollback()
+                raise
+        return int(cursor.lastrowid)
+
+    def finish_source_cleanup(
+        self, row_id: int, *, state: str, verified: bool = False,
+        recycle_record: str | None = None, error: str | None = None,
+    ) -> dict[str, Any] | None:
+        """Settle a PENDING row as RECYCLED or FAILED; None when it is not PENDING (or unknown)."""
+        if state not in SOURCE_CLEANUP_FINISH_STATES:
+            raise ValueError(f"A cleanup can only finish as RECYCLED or FAILED, not {state}")
+        with self._lock:
+            cursor = self._connection.execute(
+                """UPDATE source_cleanups SET state=?,verified=?,recycle_record=?,error=?,
+                finished_at=? WHERE id=? AND state='PENDING'""",
+                (state, int(bool(verified)), recycle_record, error, now_iso(), row_id),
+            )
+            self._connection.commit()
+            if cursor.rowcount != 1:
+                return None
+            row = self._connection.execute(
+                "SELECT * FROM source_cleanups WHERE id=?", (row_id,)
+            ).fetchone()
+        return self._cleanup_row(row)
+
+    def latest_source_cleanup(self, job_id: int) -> dict[str, Any] | None:
+        with self._lock:
+            row = self._connection.execute(
+                "SELECT * FROM source_cleanups WHERE job_id=? ORDER BY id DESC LIMIT 1",
+                (job_id,),
+            ).fetchone()
+        return self._cleanup_row(row)
+
+    def _latest_cleanup_rows(self, state: str | None = None) -> list[dict[str, Any]]:
+        query = """SELECT * FROM source_cleanups
+            WHERE id IN (SELECT MAX(id) FROM source_cleanups GROUP BY job_id)"""
+        params: tuple = ()
+        if state is not None:
+            query += " AND state=?"
+            params = (state,)
+        with self._lock:
+            rows = self._connection.execute(query + " ORDER BY id", params).fetchall()
+        return [self._cleanup_row(row) for row in rows]
+
+    def latest_source_cleanups(self) -> dict[int, dict[str, Any]]:
+        """The latest cleanup row of every job that has one, keyed by job id (one query)."""
+        return {int(row["job_id"]): row for row in self._latest_cleanup_rows()}
+
+    def source_cleaned(self, job_id: int) -> bool:
+        """True while the job's source is in the Recycle Bin or on its way there."""
+        row = self.latest_source_cleanup(job_id)
+        return row is not None and row["state"] in SOURCE_CLEANED_STATES
+
+    def recycled_cleanups(self) -> list[dict[str, Any]]:
+        """Jobs whose latest row is RECYCLED (the watcher may see the source come back)."""
+        return self._latest_cleanup_rows("RECYCLED")
+
+    def pending_source_cleanups(self) -> list[dict[str, Any]]:
+        """Jobs whose latest row is still PENDING (reconciled at startup)."""
+        return self._latest_cleanup_rows("PENDING")
+
+    def mark_source_restored(self, row_id: int, *, mtime_ns: int) -> dict[str, Any] | None:
+        """A RECYCLED source is back in input/ with its SHA-256: unlock the job.
+
+        One transaction: the row becomes RESTORED and the job takes the new
+        mtime, so the review page accepts the file again. None when the row
+        is not RECYCLED (or unknown).
+        """
+        stamp = now_iso()
+        with self._lock:
+            try:
+                cursor = self._connection.execute(
+                    """UPDATE source_cleanups SET state='RESTORED',restored_at=?,restored_mtime_ns=?
+                    WHERE id=? AND state='RECYCLED'""",
+                    (stamp, int(mtime_ns), row_id),
+                )
+                if cursor.rowcount != 1:
+                    self._connection.rollback()
+                    return None
+                row = self._connection.execute(
+                    "SELECT * FROM source_cleanups WHERE id=?", (row_id,)
+                ).fetchone()
+                self._connection.execute(
+                    "UPDATE jobs SET source_mtime_ns=?,updated_at=? WHERE id=?",
+                    (int(mtime_ns), stamp, row["job_id"]),
+                )
+                self._connection.commit()
+            except sqlite3.Error:
+                self._connection.rollback()
+                raise
+        return self._cleanup_row(row)
 
     def recover_interrupted(self) -> int:
         """Convert stale in-process states into resumable stage-level states."""

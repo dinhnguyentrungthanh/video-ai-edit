@@ -1,4 +1,6 @@
+import hashlib
 import json
+import os
 import sys
 import time
 import unittest
@@ -7,8 +9,21 @@ from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
 from biliflow.job_pipeline import PipelineStage, StageCommand
-from biliflow.job_store import JobStore
-from biliflow.scheduler import JobScheduler
+from biliflow.job_store import JobStore, sha256_file
+from biliflow.scheduler import (
+    EXPORT_RETIRE_MESSAGES,
+    RESUME_SETTLED_REFUSAL,
+    RESUME_STALE_EXPORT_REFUSAL,
+    SKIPPED_REFUSAL,
+    SKIPPED_STOP_REFUSAL,
+    SOURCE_CLEANED_MESSAGE,
+    SOURCE_CLEANED_STOP_REFUSAL,
+    SOURCE_RESTORE_REJECTED_MESSAGE,
+    SOURCE_RESTORE_WRONG_PATH_MESSAGE,
+    SOURCE_RESTORED_MESSAGE,
+    InputWatcher,
+    JobScheduler,
+)
 from biliflow.final_renderer import render_progress_path
 
 
@@ -347,8 +362,8 @@ class SchedulerTests(unittest.TestCase):
 
 
 
-class QueueOrderTests(unittest.TestCase):
-    """Click-order (FIFO) queue shared by scans and exports, with one worker."""
+class SchedulerFixture(unittest.TestCase):
+    """A temp root with a real JobStore and JobScheduler and a patched stage list."""
 
     def setUp(self):
         temp = TemporaryDirectory()
@@ -397,6 +412,10 @@ class QueueOrderTests(unittest.TestCase):
             self.store.update_job(job["id"], state="COMPLETED", current_stage=None)
             taken.append(int(job["id"]))
         return taken
+
+
+class QueueOrderTests(SchedulerFixture):
+    """Click-order (FIFO) queue shared by scans and exports, with one worker."""
 
     def test_scans_and_exports_share_one_queue_in_click_order(self):
         a, b, c, d = (self.job(name) for name in "abcd")
@@ -732,6 +751,563 @@ class QueueOrderTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "không còn bước nào"):
             self.scheduler.resume(a)
         self.assertEqual(self.store.get_job(a)["state"], "PAUSED")
+
+
+class StaleExportRequestTests(SchedulerFixture):
+    """Open item (b): a stopped or superseded export never leaves a render request behind."""
+
+    def render_state(self, job_id):
+        return self.store.stage(job_id, "render")["state"]
+
+    def retired_events(self, job_id):
+        return [event for event in self.store.events(job_id) if event["event_type"] == "EXPORT_REQUEST_RETIRED"]
+
+    def snapshot(self, job_id):
+        job = self.store.get_job(job_id)
+        return (
+            {key: job[key] for key in ("state", "current_stage", "queue_seq", "stop_mode", "updated_at")},
+            self.store.stages(job_id), self.store.setting(f"render:{job_id}"),
+        )
+
+    def test_messages_are_verbatim(self):
+        self.assertEqual(EXPORT_RETIRE_MESSAGES, {
+            "cancel": "Đã hủy lệnh xuất video.",
+            "review_changed": "Lệnh xuất cũ hết hiệu lực vì quyết định duyệt đã đổi; "
+                              "bấm “Xuất video” để xuất lại.",
+            "skipped": "Lệnh xuất cũ hết hiệu lực vì video đã được đánh dấu bỏ qua.",
+            "output_exists": "Bản xuất của lần duyệt này đã có; không cần render lại.",
+        })
+        self.assertEqual(RESUME_STALE_EXPORT_REFUSAL,
+                         "Lệnh xuất cũ không còn hiệu lực; bấm “Xuất video” để xuất lại.")
+        self.assertEqual(
+            RESUME_SETTLED_REFUSAL.format(job_id=12),
+            "Video #12 đã có kết quả duyệt; dùng “Xuất video” hoặc “Chạy lại kiểm tra” thay vì Tiếp tục.",
+        )
+
+    def test_cancelling_a_waiting_export_retires_its_render(self):
+        a, b = self.job("a"), self.job("b")
+        self.export(a)
+        self.start(b)
+        render = self.store.setting(f"render:{a}")
+        self.scheduler.cancel(a)
+        job = self.store.get_job(a)
+        self.assertEqual((job["state"], job["current_stage"], job["stop_mode"]), ("CANCELLED", "render", "CANCELLED"))
+        stage = self.store.stage(a, "render")
+        self.assertEqual((stage["state"], stage["error"]), ("CANCELLED", EXPORT_RETIRE_MESSAGES["cancel"]))
+        self.assertIsNone(self.store.render_request(a))
+        events = self.retired_events(a)
+        self.assertEqual(len(events), 1)
+        self.assertEqual(events[0]["message"], "Đã hủy lệnh xuất video.")
+        self.assertEqual(events[0]["payload"], {"reason": "cancel", "stage_state": "PENDING", "render": render})
+        # render:{id} stays as history; the worker and the queue never see the export again.
+        self.assertEqual(self.store.setting(f"render:{a}"), render)
+        self.assertEqual(self.order(), [(b, "scan")])
+        with self.assertRaisesRegex(ValueError, "không còn bước nào"):
+            self.scheduler.resume(a)
+        self.assertEqual(self.drain(), [b])
+
+    def test_cancelling_a_running_render_keeps_the_existing_path(self):
+        a = self.job("a")
+        self.export(a)
+        self.assertTrue(self.store.claim_queued(a, "RENDERING", "render"))
+        self.store.update_stage(a, "render", state="RUNNING", pid=4321)
+        self.scheduler.cancel(a)
+        stage = self.store.stage(a, "render")
+        self.assertEqual((stage["state"], stage["pid"], stage["error"]), ("CANCELLED", None, "Cancelled by user"))
+        self.assertEqual(self.store.get_job(a)["state"], "CANCELLED")
+        self.assertEqual(self.retired_events(a), [])
+
+    def test_a_paused_export_still_resumes_as_an_export(self):
+        a, b = self.job("a"), self.job("b")
+        self.export(a)
+        self.start(b)
+        self.scheduler.pause_now(a)
+        self.assertEqual(self.render_state(a), "PENDING")
+        self.scheduler.resume(a)
+        self.assertEqual(self.order(), [(a, "export"), (b, "scan")])
+        self.scheduler.stop_after_stage(a)
+        self.assertEqual(self.store.get_job(a)["state"], "PAUSED")
+        self.scheduler.resume(a)
+        self.assertEqual(self.order(), [(a, "export"), (b, "scan")])
+        self.assertEqual(self.retired_events(a), [])
+
+    def test_resume_refuses_a_job_whose_review_is_settled(self):
+        a = self.job("a")
+        self.start(a)
+        self.store.update_stage(a, "preflight", state="COMPLETED")
+        for state in ("READY_TO_EXPORT", "WAITING_REVIEW", "COMPLETED"):
+            with self.subTest(state=state):
+                self.store.update_job(a, state=state, current_stage=None)
+                # Even an old render request left PENDING never makes it resumable.
+                self.store.ensure_stage(a, "render")
+                self.store.update_stage(a, "render", state="PENDING")
+                before = self.snapshot(a)
+                for action in (self.scheduler.resume, self.scheduler.retry):
+                    with self.assertRaises(ValueError) as caught:
+                        action(a)
+                    self.assertEqual(str(caught.exception), RESUME_SETTLED_REFUSAL.format(job_id=a))
+                    self.assertEqual(self.snapshot(a), before)
+                self.assertEqual(self.order(), [])
+
+    def test_retry_refuses_a_settled_job_before_resetting_its_failed_stage(self):
+        a = self.job("a")
+        self.export(a)
+        self.store.update_stage(a, "render", state="FAILED_RETRYABLE", error="boom")
+        self.store.update_job(a, state="READY_TO_EXPORT", current_stage=None)
+        before = self.snapshot(a)
+        with self.assertRaisesRegex(ValueError, "đã có kết quả duyệt"):
+            self.scheduler.retry(a)
+        self.assertEqual(self.snapshot(a), before)
+        self.assertEqual(self.render_state(a), "FAILED_RETRYABLE")
+
+    def test_resume_refuses_a_stale_render_of_a_cancelled_job(self):
+        a = self.job("a")
+        self.start(a)
+        self.store.update_stage(a, "preflight", state="COMPLETED")
+        self.store.update_job(a, state="CANCELLED", stop_mode="CANCELLED", current_stage=None)
+        # Inserted directly, as older code left it after a cancel.
+        self.store.ensure_stage(a, "render")
+        before = self.snapshot(a)
+        with self.assertRaises(ValueError) as caught:
+            self.scheduler.resume(a)
+        self.assertEqual(str(caught.exception), RESUME_STALE_EXPORT_REFUSAL)
+        self.assertEqual(self.snapshot(a), before)
+        # Thử lại on a failed render of a cancelled job is refused before the stage reset.
+        self.store.update_stage(a, "render", state="FAILED")
+        before = self.snapshot(a)
+        with self.assertRaisesRegex(ValueError, "Lệnh xuất cũ không còn hiệu lực"):
+            self.scheduler.retry(a)
+        self.assertEqual(self.snapshot(a), before)
+        self.assertEqual(self.order(), [])
+
+    def test_a_failed_export_is_still_retried(self):
+        a = self.job("a")
+        self.export(a)
+        self.assertTrue(self.store.claim_queued(a, "RENDERING", "render"))
+        self.store.update_stage(a, "render", state="FAILED_RETRYABLE", error="boom")
+        self.store.update_job(a, state="FAILED", error="boom", current_stage="render")
+        self.scheduler.retry(a)
+        self.assertEqual(self.order(), [(a, "export")])
+        self.assertEqual(self.render_state(a), "PENDING")
+
+    def test_retire_render_request_skips_waiting_and_running_jobs(self):
+        a = self.job("a")
+        self.export(a)
+        before = self.snapshot(a)
+        self.assertFalse(self.scheduler.retire_render_request(a, "review_changed", clear_current_stage=True))
+        self.assertEqual(self.snapshot(a), before)
+        self.assertTrue(self.store.claim_queued(a, "RENDERING", "render"))
+        self.store.update_stage(a, "render", state="RUNNING")
+        before = self.snapshot(a)
+        for reason in EXPORT_RETIRE_MESSAGES:
+            self.assertFalse(self.scheduler.retire_render_request(a, reason, clear_current_stage=True))
+        self.assertEqual(self.snapshot(a), before)
+        # A RUNNING render is never retired, even when the job row says otherwise.
+        self.store.update_job(a, state="PAUSED")
+        self.assertFalse(self.scheduler.retire_render_request(a, "cancel"))
+        self.assertEqual(self.render_state(a), "RUNNING")
+        self.assertEqual(self.retired_events(a), [])
+        with self.assertRaises(KeyError):
+            self.scheduler.retire_render_request(a, "unknown")
+
+    def test_retire_render_request_clears_the_render_marker(self):
+        a = self.job("a")
+        self.export(a)
+        self.store.update_job(a, state="READY_TO_EXPORT")
+        self.assertEqual(self.store.get_job(a)["current_stage"], "render")
+        self.assertTrue(self.scheduler.retire_render_request(a, "review_changed", clear_current_stage=True))
+        job = self.store.get_job(a)
+        self.assertEqual((job["state"], job["current_stage"]), ("READY_TO_EXPORT", None))
+        self.assertEqual(self.render_state(a), "CANCELLED")
+        self.assertEqual(self.retired_events(a)[0]["payload"]["reason"], "review_changed")
+        # Nothing left to retire: False, but the marker is still cleared.
+        self.store.update_job(a, current_stage="render")
+        self.assertFalse(self.scheduler.retire_render_request(a, "skipped", clear_current_stage=True))
+        self.assertIsNone(self.store.get_job(a)["current_stage"])
+        self.assertEqual(len(self.retired_events(a)), 1)
+        # Without clear_current_stage the marker stays (Hủy keeps "Đã hủy xuất video").
+        self.store.update_stage(a, "render", state="FAILED")
+        self.store.update_job(a, current_stage="render")
+        self.assertTrue(self.scheduler.retire_render_request(a, "output_exists"))
+        self.assertEqual(self.store.get_job(a)["current_stage"], "render")
+        self.assertEqual(self.retired_events(a)[0]["payload"]["stage_state"], "FAILED")
+        # A finished render is history and stays COMPLETED.
+        self.store.update_stage(a, "render", state="COMPLETED")
+        self.assertFalse(self.scheduler.retire_render_request(a, "output_exists"))
+        self.assertEqual(self.render_state(a), "COMPLETED")
+
+
+class CleanedSourceLockTests(SchedulerFixture):
+    """A source moved to the Recycle Bin (latest row PENDING or RECYCLED) locks every action."""
+
+    def exported(self, name):
+        job_id = self.job(name)
+        self.export(job_id)
+        self.assertTrue(self.store.claim_queued(job_id, "RENDERING", "render"))
+        self.store.update_stage(job_id, "render", state="COMPLETED", progress=1.0)
+        self.store.update_job(job_id, state="COMPLETED", current_stage=None, progress=1.0)
+        self.store.set_setting(f"skip:{job_id}", {"decisions": {"KEEP": 1}})
+        return job_id
+
+    def clean(self, job_id, state="RECYCLED"):
+        job = self.store.get_job(job_id)
+        row_id = self.store.add_source_cleanup(
+            job_id=job_id, kind="EXPORTED", source_path=job["source_path"],
+            source_sha256=job["source_sha256"], size_bytes=job["source_size_bytes"],
+            mtime_ns=job["source_mtime_ns"], output_path=f"output/{job_id}.mp4",
+        )
+        if state != "PENDING":
+            self.store.finish_source_cleanup(row_id, state=state, verified=state == "RECYCLED")
+        return row_id
+
+    def snapshot(self, job_id):
+        settings = {
+            key: self.store.setting(f"{key}:{job_id}")
+            for key in ("render", "skip", "pipeline_key", "detector_groups", "ocr_batch_size", "fast_scan")
+        }
+        return (self.store.get_job(job_id), self.store.stages(job_id), settings,
+                len(self.store.events(job_id, limit=1000)), self.order())
+
+    def actions(self, job_id):
+        return {
+            "start_job": lambda: self.start(job_id),
+            "rerun": lambda: self.scheduler.rerun(job_id, detector_groups=["gore"]),
+            "resume": lambda: self.scheduler.resume(job_id),
+            "retry": lambda: self.scheduler.retry(job_id),
+            "queue_render": lambda: self.scheduler.queue_render(
+                job_id, plan_path=self.root / "work" / "new.json", output_path=self.root / "output" / "new.mp4",
+            ),
+            "stop_after_stage": lambda: self.scheduler.stop_after_stage(job_id),
+            "pause_now": lambda: self.scheduler.pause_now(job_id),
+            "cancel": lambda: self.scheduler.cancel(job_id),
+        }
+
+    def assert_refused(self, job_id, expected):
+        for name, action in self.actions(job_id).items():
+            with self.subTest(action=name):
+                before = self.snapshot(job_id)
+                with self.assertRaises(ValueError) as caught:
+                    action()
+                self.assertEqual(str(caught.exception), expected[name])
+                self.assertEqual(self.snapshot(job_id), before)
+
+    def test_every_action_refuses_a_recycled_source(self):
+        a = self.exported("a")
+        other = self.job("other")
+        self.start(other)
+        self.clean(a)
+        self.assert_refused(a, {
+            **dict.fromkeys(("start_job", "rerun", "resume", "retry", "queue_render"), SOURCE_CLEANED_MESSAGE),
+            **dict.fromkeys(("stop_after_stage", "pause_now", "cancel"), SOURCE_CLEANED_STOP_REFUSAL),
+        })
+        self.assertEqual(self.order(), [(other, "scan")])
+
+    def test_a_pending_cleanup_already_locks_the_job(self):
+        a = self.exported("a")
+        self.clean(a, state="PENDING")
+        self.assert_refused(a, {
+            **dict.fromkeys(("start_job", "rerun", "resume", "retry", "queue_render"), SOURCE_CLEANED_MESSAGE),
+            **dict.fromkeys(("stop_after_stage", "pause_now", "cancel"), SOURCE_CLEANED_STOP_REFUSAL),
+        })
+
+    def test_a_skipped_job_keeps_its_skip_refusal_first(self):
+        a = self.exported("a")
+        self.store.update_job(a, state="SKIPPED")
+        self.clean(a)
+        self.assert_refused(a, {
+            "start_job": SOURCE_CLEANED_MESSAGE, "rerun": SOURCE_CLEANED_MESSAGE,
+            "queue_render": SOURCE_CLEANED_MESSAGE,
+            "resume": SKIPPED_REFUSAL, "retry": SKIPPED_REFUSAL,
+            "stop_after_stage": SKIPPED_STOP_REFUSAL, "pause_now": SKIPPED_STOP_REFUSAL,
+            "cancel": SKIPPED_STOP_REFUSAL,
+        })
+
+    def test_the_cleaned_message_comes_before_every_other_refusal(self):
+        # A video still waiting for setup (impossible in practice) gets the cleaned
+        # message, not "không xếp hàng lại", and a failed stage is never reset.
+        a = self.job("a")
+        self.clean(a)
+        with self.assertRaises(ValueError) as caught:
+            self.start(a)
+        self.assertEqual(str(caught.exception), SOURCE_CLEANED_MESSAGE)
+        b = self.exported("b")
+        self.store.update_stage(b, "render", state="FAILED_RETRYABLE", error="boom")
+        self.store.update_job(b, state="FAILED")
+        self.clean(b)
+        before = self.snapshot(b)
+        with self.assertRaises(ValueError) as caught:
+            self.scheduler.retry(b)
+        self.assertEqual(str(caught.exception), SOURCE_CLEANED_MESSAGE)
+        self.assertEqual(self.snapshot(b), before)
+        self.assertEqual(self.store.stage(b, "render")["state"], "FAILED_RETRYABLE")
+
+    def test_a_failed_cleanup_does_not_lock_and_a_restore_unlocks(self):
+        a = self.exported("a")
+        self.clean(a, state="FAILED")
+        self.assertEqual(self.scheduler.rerun(a)["state"], "QUEUED")
+        self.store.update_job(a, state="COMPLETED", current_stage=None)
+        row_id = self.clean(a)
+        with self.assertRaisesRegex(ValueError, "Thùng rác"):
+            self.scheduler.rerun(a)
+        self.assertIsNotNone(self.store.mark_source_restored(row_id, mtime_ns=99))
+        value = self.scheduler.rerun(a, detector_groups=["gore"])
+        self.assertEqual(value["state"], "QUEUED")
+        self.assertIsNone(self.store.setting(f"render:{a}"))
+        self.assertIsNone(self.store.setting(f"skip:{a}"))
+        self.assertEqual(self.order(), [(a, "scan")])
+
+
+class InputWatcherRestoreTests(unittest.TestCase):
+    """A7: a cleaned source comes back only at its path with its SHA-256.
+
+    The watcher never moves a cleaned job's source_path, hashes each
+    (path, size, mtime) once, and a file vanishing mid-scan is skipped.
+    """
+
+    def setUp(self):
+        temp = TemporaryDirectory()
+        self.addCleanup(temp.cleanup)
+        self.root = Path(temp.name).resolve()
+        for name in ("input", "fake-recycle-bin", "reports/jobs", "logs", "work", "output"):
+            (self.root / name).mkdir(parents=True, exist_ok=True)
+        self.store = JobStore(self.root / "state" / "control-center.sqlite3")
+        self.addCleanup(self.store.close)
+        for target, value in (("probe_video", {}), ("duration_seconds", 12.0)):
+            patcher = patch(f"biliflow.scheduler.{target}", return_value=value)
+            patcher.start()
+            self.addCleanup(patcher.stop)
+        patcher = patch("biliflow.scheduler.pipeline_stages",
+                        side_effect=lambda **_: [PipelineStage("preflight", "PREFLIGHT", tuple())])
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        # Counts every hash the watcher makes (the real function still runs).
+        patcher = patch("biliflow.scheduler.sha256_file", side_effect=sha256_file)
+        self.hasher = patcher.start()
+        self.addCleanup(patcher.stop)
+        self.scheduler = JobScheduler(self.root, self.store)
+        self.watcher = InputWatcher(self.root, self.store, stable_seconds=0)
+        self.source = self.root / "input" / "Tập 11.mp4"
+        self.original = b"original source bytes"
+        self.digest = sha256_of(self.original)
+        self.source.write_bytes(self.original)
+        self.assertEqual(self.watcher.scan_once(), 1)
+        self.job_id = int(self.store.list_jobs()[0]["id"])
+        self.store.update_job(self.job_id, state="COMPLETED", content_style="live_action", progress=1.0)
+        self.mtime_ns = self.source.stat().st_mtime_ns
+        self.hasher.reset_mock()
+
+    def recycle(self, *, reset=True, finish=True):
+        """What execute_cleanup does: PENDING row, the file leaves input/, RECYCLED, watcher reset."""
+        job = self.store.get_job(self.job_id)
+        row_id = self.store.add_source_cleanup(
+            job_id=self.job_id, kind="EXPORTED", source_path=str(self.source.resolve()),
+            source_sha256=job["source_sha256"], size_bytes=job["source_size_bytes"],
+            mtime_ns=job["source_mtime_ns"], output_path="output/tap-11-reviewed.mp4",
+        )
+        if not finish:
+            return row_id
+        self.binned = self.root / "fake-recycle-bin" / "$RABC123.mp4"
+        os.replace(self.source, self.binned)
+        self.assertIsNotNone(self.store.finish_source_cleanup(row_id, state="RECYCLED", verified=True))
+        if reset:
+            self.store.reset_watched_file(self.source)
+        self.assertEqual(self.watcher.scan_once(), 0)  # nothing in input/ yet
+        return row_id
+
+    def copy_back(self, path, data, *, mtime_ns=None):
+        path.write_bytes(data)
+        if mtime_ns is not None:
+            os.utime(path, ns=(mtime_ns, mtime_ns))
+
+    def scans(self, count=3):
+        return [self.watcher.scan_once() for _ in range(count)]
+
+    def events(self, event_type):
+        return [event for event in self.store.events(limit=1000) if event["event_type"] == event_type]
+
+    def assert_still_locked(self, row_id):
+        row = self.store.latest_source_cleanup(self.job_id)
+        self.assertEqual((row["id"], row["state"]), (row_id, "RECYCLED"))
+        self.assertTrue(self.store.source_cleaned(self.job_id))
+        with self.assertRaises(ValueError) as caught:
+            self.scheduler.rerun(self.job_id, detector_groups=["gore"])
+        self.assertEqual(str(caught.exception), SOURCE_CLEANED_MESSAGE)
+
+    def assert_old_job_kept(self):
+        job = self.store.get_job(self.job_id)
+        self.assertEqual(
+            (job["source_path"], job["source_sha256"], job["source_size_bytes"], job["state"]),
+            (str(self.source.resolve()), self.digest, len(self.original), "COMPLETED"),
+        )
+        return job
+
+    def test_the_same_bytes_back_at_the_same_path_restore_the_job(self):
+        row_id = self.recycle()
+        self.assert_still_locked(row_id)
+        # A Recycle Bin restore keeps the old mtime: only the reset makes it new.
+        self.copy_back(self.source, self.original, mtime_ns=self.mtime_ns)
+        self.assertEqual(self.scans(), [0, 0, 0])
+        self.assertEqual(self.hasher.call_count, 1)
+        row = self.store.latest_source_cleanup(self.job_id)
+        self.assertEqual((row["id"], row["state"], row["restored_mtime_ns"]), (row_id, "RESTORED", self.mtime_ns))
+        self.assertIsNotNone(row["restored_at"])
+        self.assertFalse(self.store.source_cleaned(self.job_id))
+        self.assertEqual(self.assert_old_job_kept()["source_mtime_ns"], self.mtime_ns)
+        restored = self.events("SOURCE_RESTORED")
+        self.assertEqual(len(restored), 1)
+        self.assertEqual(
+            (restored[0]["job_id"], restored[0]["level"], restored[0]["message"]),
+            (self.job_id, "INFO", "Đã khôi phục video gốc (SHA-256 khớp)"),
+        )
+        self.assertEqual(SOURCE_RESTORED_MESSAGE, restored[0]["message"])
+        self.assertEqual(restored[0]["payload"], {
+            "path": str(self.source.resolve()), "size_bytes": len(self.original), "sha256": self.digest,
+        })
+        self.assertEqual(len(self.store.list_jobs()), 1)
+        self.assertEqual(len(self.events("INPUT_DISCOVERED")), 1)
+        self.assertEqual(self.events("SOURCE_RESTORE_WRONG_PATH") + self.events("SOURCE_RESTORE_REJECTED"), [])
+        self.assertEqual(self.scheduler.rerun(self.job_id, detector_groups=["gore"])["state"], "QUEUED")
+
+    def test_a_copy_with_a_new_mtime_restores_and_the_job_takes_the_new_mtime(self):
+        row_id = self.recycle()
+        new_mtime = self.mtime_ns + 5_000_000_000
+        self.copy_back(self.source, self.original, mtime_ns=new_mtime)
+        self.assertEqual(self.scans(), [0, 0, 0])
+        self.assertEqual(self.hasher.call_count, 1)
+        row = self.store.latest_source_cleanup(self.job_id)
+        self.assertEqual((row["id"], row["state"], row["restored_mtime_ns"]), (row_id, "RESTORED", new_mtime))
+        self.assertEqual(self.store.get_job(self.job_id)["source_mtime_ns"], new_mtime)
+
+    def test_different_bytes_at_the_old_path_are_rejected_once_and_become_a_new_job(self):
+        row_id = self.recycle()
+        other = b"a different video at the same name"
+        self.copy_back(self.source, other)
+        self.assertEqual(self.scans(), [1, 0, 0])
+        self.assertEqual(self.hasher.call_count, 1)
+        rejected = self.events("SOURCE_RESTORE_REJECTED")
+        self.assertEqual(len(rejected), 1)
+        self.assertEqual(
+            (rejected[0]["job_id"], rejected[0]["level"], rejected[0]["message"]),
+            (self.job_id, "WARNING", "File mới ở đường dẫn cũ có SHA-256 khác video gốc; không dùng để chạy lại."),
+        )
+        self.assertEqual(SOURCE_RESTORE_REJECTED_MESSAGE, rejected[0]["message"])
+        stat = self.source.stat()
+        self.assertEqual(rejected[0]["payload"], {
+            "path": str(self.source.resolve()), "size_bytes": len(other), "mtime_ns": stat.st_mtime_ns,
+            "sha256": sha256_of(other), "expected_sha256": self.digest,
+        })
+        self.assert_still_locked(row_id)
+        self.assert_old_job_kept()
+        new_jobs = [job for job in self.store.list_jobs() if int(job["id"]) != self.job_id]
+        self.assertEqual(len(new_jobs), 1)
+        self.assertEqual(
+            (new_jobs[0]["state"], new_jobs[0]["source_path"], new_jobs[0]["source_sha256"]),
+            ("NEEDS_METADATA", str(self.source.resolve()), sha256_of(other)),
+        )
+        self.assertEqual(self.events("SOURCE_RESTORED"), [])
+
+    def test_the_same_bytes_under_another_name_only_explain_the_right_name(self):
+        row_id = self.recycle()
+        renamed = self.root / "input" / "Tập 11 (1).mp4"
+        self.copy_back(renamed, self.original)
+        self.assertEqual(self.scans(), [0, 0, 0])
+        self.assertEqual(self.hasher.call_count, 1)
+        wrong = self.events("SOURCE_RESTORE_WRONG_PATH")
+        self.assertEqual(len(wrong), 1)
+        self.assertEqual(
+            (wrong[0]["job_id"], wrong[0]["level"], wrong[0]["message"]),
+            (self.job_id, "WARNING", "Đã thấy video gốc ở tên khác; hãy chép lại đúng tên “Tập 11.mp4” vào input."),
+        )
+        self.assertEqual(SOURCE_RESTORE_WRONG_PATH_MESSAGE.format(file_name="Tập 11.mp4"), wrong[0]["message"])
+        self.assertEqual(wrong[0]["payload"], {
+            "path": str(renamed.resolve()), "expected_path": str(self.source.resolve()), "sha256": self.digest,
+        })
+        self.assertEqual(len(self.store.list_jobs()), 1)
+        self.assert_old_job_kept()
+        self.assert_still_locked(row_id)
+        # Copying it under the right name then restores the job.
+        self.copy_back(self.source, self.original, mtime_ns=self.mtime_ns)
+        self.assertEqual(self.scans(), [0, 0, 0])
+        self.assertEqual(self.hasher.call_count, 2)
+        self.assertEqual(self.store.latest_source_cleanup(self.job_id)["state"], "RESTORED")
+        self.assertEqual(len(self.events("SOURCE_RESTORE_WRONG_PATH")), 1)
+
+    def test_a_restored_file_waits_until_it_is_stable(self):
+        row_id = self.recycle()
+        self.watcher.stable_seconds = 60
+        self.copy_back(self.source, self.original, mtime_ns=self.mtime_ns)
+        self.assertEqual(self.scans(), [0, 0, 0])
+        self.assertEqual(self.hasher.call_count, 0)
+        self.assert_still_locked(row_id)
+        self.assertEqual(self.events("SOURCE_RESTORED"), [])
+        self.watcher.stable_seconds = 0  # the file has now been stable long enough
+        self.assertEqual(self.scans(), [0, 0, 0])
+        self.assertEqual(self.hasher.call_count, 1)
+        self.assertEqual(self.store.latest_source_cleanup(self.job_id)["state"], "RESTORED")
+
+    def test_a_restore_is_still_seen_when_the_watcher_row_was_never_reset(self):
+        # A crash between finish RECYCLED and reset_watched_file: the restored
+        # file has the size and mtime the watcher already marked as imported.
+        row_id = self.recycle(reset=False)
+        os.replace(self.binned, self.source)
+        self.assertEqual(self.source.stat().st_mtime_ns, self.mtime_ns)
+        self.assertEqual(self.scans(), [0, 0, 0])
+        self.assertEqual(self.hasher.call_count, 1)
+        row = self.store.latest_source_cleanup(self.job_id)
+        self.assertEqual((row["id"], row["state"]), (row_id, "RESTORED"))
+        self.assertEqual(len(self.events("SOURCE_RESTORED")), 1)
+
+    def test_a_pending_cleanup_only_marks_a_copy_of_its_source(self):
+        row_id = self.recycle(finish=False)
+        copy = self.root / "input" / "copy.mp4"
+        self.copy_back(copy, self.original)
+        self.assertEqual(self.scans(), [0, 0, 0])
+        self.assertEqual(self.hasher.call_count, 1)  # the original is still marked: not hashed
+        row = self.store.latest_source_cleanup(self.job_id)
+        self.assertEqual((row["id"], row["state"]), (row_id, "PENDING"))
+        self.assertEqual(len(self.store.list_jobs()), 1)
+        self.assert_old_job_kept()
+        for event_type in ("SOURCE_RESTORED", "SOURCE_RESTORE_WRONG_PATH", "SOURCE_RESTORE_REJECTED"):
+            self.assertEqual(self.events(event_type), [], event_type)
+
+    def test_a_file_vanishing_mid_scan_is_skipped_and_the_scan_goes_on(self):
+        gone_at_stat = self.root / "input" / "a gone at stat.mp4"
+        gone_at_hash = self.root / "input" / "b gone at hash.mp4"
+        stays = self.root / "input" / "c stays.mp4"
+        for path in (gone_at_stat, gone_at_hash, stays):
+            path.write_bytes(path.name.encode())
+        real_stat = Path.stat
+        calls = []
+
+        def flaky_stat(path, *args, **kwargs):
+            # is_file() still sees the file; the explicit stat() right after does not.
+            if path.name == gone_at_stat.name:
+                calls.append(path.name)
+                if len(calls) > 1:
+                    raise FileNotFoundError(2, "The system cannot find the file specified", str(path))
+            return real_stat(path, *args, **kwargs)
+
+        def vanishing_hash(path):
+            if Path(path).name == gone_at_hash.name:
+                Path(path).unlink()  # deleted between observe and the hash
+            return sha256_file(path)
+
+        self.hasher.side_effect = vanishing_hash
+        # One loop of the real watcher thread body: WATCHER_ERROR is logged there.
+        with patch.object(Path, "stat", flaky_stat), \
+                patch.object(self.watcher._stop, "wait", side_effect=lambda _timeout: self.watcher._stop.set()):
+            self.watcher._run()
+        self.assertGreater(len(calls), 1)
+        self.assertEqual(self.events("WATCHER_ERROR"), [])
+        discovered = {Path(job["source_path"]).name for job in self.store.list_jobs()}
+        self.assertEqual(discovered, {"Tập 11.mp4", "c stays.mp4"})
+        # The file that only looked gone is picked up by the next scan.
+        self.assertEqual(self.watcher.scan_once(), 1)
+        self.assertIn("a gone at stat.mp4", {Path(job["source_path"]).name for job in self.store.list_jobs()})
+
+
+def sha256_of(data: bytes) -> str:
+    return hashlib.sha256(data).hexdigest()
 
 
 if __name__ == "__main__":
