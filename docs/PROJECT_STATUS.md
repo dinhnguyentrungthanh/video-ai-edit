@@ -103,7 +103,10 @@
 
 - Nhất Âu Xuân Tập 10/15/18/19 (site Motchill): the corner watermark and the faint "cập nhật nhanh nhất tại MOTCHILLV" line were missed (Tập 10 export unblurred) or merged into one 839x483 box (Tập 18 export blurred over most of the frame). Fixed in build-review only (`promote_fixed_text_overlays`, text merge distance guard); Golden queues identical; 655/655 tests. Integrated into the main tree on the user's instruction while jobs ran (build-review runs in its own process; scan caches unaffected).
 - Reruns queued 2026-10-02 13:56 for jobs 40, 45, 48, 49 (Tập 10, 15, 18, 19). Tập 11, 16, 17, 20 have no watermark (queues unchanged by the fix). Tập 12-14 build their queues with the fix.
-- The gore C1 patch (`temp/gore-c1.patch`) waits: it edits `cli.py`, which is in every scan stage's cache key, so integrating it would force full rescans.
+- The gore C1 patch (`temp/gore-c1.patch`) waits: it edits `cli.py`, which is in every scan stage's cache key, so integrating it would force full rescans. Update 2026-10-03, to be handled later:
+  - The `fix/export-identity-http` merge already changed `cli.py`, so the scan caches are invalidated anyway.
+  - The patch still applies except for review_workflow.py, which needs a manual re-merge.
+  - See SESSION_HANDOFF, item 10.
 
 ## Task B (2026-10-02): exact-output speedups, uncommitted
 

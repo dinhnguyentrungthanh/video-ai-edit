@@ -64,6 +64,7 @@ Always confirm this section with `git status` and `git log` because it becomes s
   - Noted, not changed: a custom limit larger than the free disk space is refused before rendering, and short exports are marked H.264 level 6.2, the same as before the fix.
 - Merged into `main` at the user's request (2026-10-03, about 21:40; fast-forward, no job running, not pushed).
   - The main tree's uncommitted Dashboard V2 work from another session was kept as uncommitted changes: `dashboard_v2/`, `docs/DASHBOARD_V2_UPDATE_GUIDE.md`, and its notes in CHANGELOG, PROJECT_STATUS and SESSION_HANDOFF.
+- Side effect found after the merge: the `--host` check changed `cli.py`, which every scan stage's cache fingerprint hashes. Cached scan results therefore no longer match, and the next rescan of an already-scanned video recomputes every stage (see item 10, Gore C1). To be handled later, as the user asked.
 - Next: a Control Center restart, so that it runs this code. Ask the user first, and restart only with no job running. Until then, do not start a new scan or export: stages run as separate processes and would load the new code under the old Control Center.
 
 ## Current work — 2026-10-03 dashboard batch 4: platform logos → BLUR, logo memory page, archive/restore, UI fixes (committed 6a8a59c; integrated into the main tree ~17:05; the user restarted the Control Center on it at 18:01:50)
@@ -545,10 +546,22 @@ Status: items 4-7 and 7c-7d are done, in batches 1-2 (commits 27dc000, 1b6ad90, 
    - Example: Tập 14 37:05, a torch scene where Qwen said YES and nothing was located. It is 1 card across all current queues.
    - Measure together with item 8, since more windows mean more chances of such false alarms.
    - Options: a second-opinion prompt, or advisory routing (the user must approve).
-10. **Gore C1** (temp/wt-gore, off by default).
-    - The patch no longer applies cleanly: review_workflow.py needs a re-merge.
-    - Integrate only when a full scan-cache invalidation is acceptable, because it changes cli.py.
-    - Enabling it needs the user's Conan gore decisions and a third anime film.
+10. **Gore C1** (temp/wt-gore, off by default). Checked on 2026-10-03, after the `fix/export-identity-http` merge; the user said to handle it later.
+    - What it is: steps 1-3 of `docs/ANIME_GORE_PLAN.md`.
+      - The animation safety scanner records tag evidence for each gore interval.
+      - Every gore card shows a hint: blood, injury only, or corpse.
+      - Rule C1 (no blood tag and no corpse tag) may move an undecided ANIMATION gore card to "Ứng viên phụ". It never deletes a card, and `GORE_TRIAGE_LEVEL = "off"` by default.
+      - Plan figures: Conan 20 goes from 40 to 32 cards, Conan 21 from 35 to 28, and no real blood is moved.
+    - Where it is: uncommitted in the worktree `temp/wt-gore` (base 68a5a7e, written 2026-10-02 12:03-12:31), and saved byte-identical as `temp/gore-c1.patch`. It touches 7 files, +1078/-8 lines, of which 554 are tests. None of it is in `main`.
+    - Against `main` 738b944 (`git apply --check`):
+      - It still applies to animation_policy, animation_safety_scanner, intervals, cli.py, the new gore_triage.py and its tests.
+      - It no longer applies to review_workflow.py. That file gained +1160/-146 lines over 7 commits since 68a5a7e, the export-identity merge among them, so the patch's 243-line part there needs a manual re-merge.
+    - Scan caches: integrating it was held back because it edits cli.py, and every stage's cache fingerprint hashes cli.py (`cache_dependencies.stage_source_paths`).
+      - The 2026-10-03 merge already edited cli.py (the `--host` check). Every cached scan stage therefore no longer matches: up to 99 entries for 22 videos, about 487 MB. The next rescan of those videos recomputes all their stages.
+      - Results, exports and new videos are not affected.
+      - Integrating Gore C1 before many new scans therefore costs little extra.
+      - Moving the `--host` check out of cli.py would restore the old fingerprints wherever nothing else changed; the servers keep their own loopback check. Measure this before doing it.
+    - Enabling it still needs the user's Conan gore decisions (the second test set) and a third anime film (plan §4.6-4.7 and §7).
 
 ### D. Later
 11. Carry reviewed decisions across a rerun (stash@{0}, paused 2026-10-01).
