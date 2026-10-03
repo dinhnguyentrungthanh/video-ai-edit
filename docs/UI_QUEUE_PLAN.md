@@ -1,5 +1,5 @@
 # Kế hoạch cải tiến bảng điều khiển và hàng đợi (02/10/2026)
-Yêu cầu của người dùng: docs/SESSION_HANDOFF.md, "Remaining work", mục 4-7d. Lập kế hoạch chỉ đọc gồm 2 người lập kế hoạch và 1 người phản biện. Kết quả đầy đủ (JSON) nằm ở `temp/ui-plan/plan-workflow-output.json`. Chưa thi công. Người dùng đã trả lời các câu hỏi (xem "Quyết định của người dùng").
+Yêu cầu của người dùng: docs/SESSION_HANDOFF.md, "Remaining work", mục 4-7d. Lập kế hoạch chỉ đọc gồm 2 người lập kế hoạch và 1 người phản biện. Kết quả đầy đủ (JSON) nằm ở `temp/ui-plan/plan-workflow-output.json`. Trạng thái thi công: xem mục cuối file. Người dùng đã trả lời các câu hỏi (xem "Quyết định của người dùng").
 ## Lỗi có sẵn phát hiện khi lập kế hoạch (cần sửa cùng hàng đợi)
 - Khi Control Center khởi động lại, `job_import.import_existing_project` ghi đè trạng thái job (QUEUED, PAUSED, FAILED, CANCELLED → READY_TO_EXPORT/WAITING_REVIEW/COMPLETED). Lệnh chạy lại hoặc xuất đang xếp hàng vì thế **bị mất âm thầm**. Trước khi sửa: chỉ khởi động lại khi không có job nào đang chờ hay đang chạy.
 - `recover_interrupted` không xử lý BUILDING_REVIEW, nên job bị treo nếu tắt máy đúng bước này.
@@ -79,3 +79,171 @@ Mặc định đã nêu, người dùng không đổi:
 - Video 4, 37, 38 (bản xuất là của lần duyệt cũ) chưa được dọn cho tới khi xuất lại.
 - Khi dọn, chỉ chấp nhận video gốc chép lại đúng đường dẫn và đúng SHA-256.
 - Video đã hủy ở lại tab "Đang chờ xử lý".
+
+## Trạng thái thi công (cập nhật 03/10/2026)
+
+Ký hiệu trạng thái:
+- **DONE**: đã xong và Control Center đang chạy bản này trên cây chính.
+- **DONE (đợt 3)**: code và test đã qua các cổng G1-G4 và đã đưa vào cây chính (commit d90c8f3). Control Center chạy bản này từ 03/10 12:19:55; lúc 12:21 bạn đã dọn 21 video gốc (job 40-60, Nhất Âu Xuân Tập 10-30) vào Thùng rác.
+- **DONE (đợt 4)**: code và test đã qua kiểm thử, rà soát code và rà soát bảo mật, đã đưa vào cây chính lúc khoảng 17:05 ngày 03/10 (commit 6a8a59c). Control Center chạy bản này từ 03/10 18:01:50; bạn đã xem giao diện mới và thấy ổn.
+- **PARTIAL**: còn việc chưa làm.
+
+Kế hoạch đợt 3 nằm ở `temp/ui-plan/batch3/plan.md`, hợp đồng giao diện ở `temp/ui-plan/batch3/contract.md`, còn log và bằng chứng ở `temp/ui-plan/batch3/`.
+
+### Theo đợt
+- Đợt 1 (bước 1-4): **DONE**.
+  - Commit 27dc000.
+  - Control Center chạy bản này từ 03/10 00:18. Bản sao lưu DB: `state/backups/control-center-before-queue-order-20261003-001806.sqlite3`.
+- Đợt 2 (bước 5-7): **DONE**.
+  - Commit 1b6ad90, tài liệu ở c0a20cc.
+  - Control Center chạy bản này từ 03/10 06:59.
+- Đợt 3: **DONE (đợt 3)**.
+  - Phạm vi: bước 8-9, phần đợt 3 của bước 10, hai mục mở (a) và (b) còn lại sau đợt 2, và các phần còn dở của đợt 1-2.
+  - Code, test, tài liệu và AGENTS.md đã đưa vào cây chính ngày 03/10/2026 (code và AGENTS.md ở commit d90c8f3; tài liệu được commit cùng đợt 4).
+  - G1: full suite trong worktree 963 test đạt; `cache_check` CLEAN; nâng cấp DB trên bản sao DB thật đạt 20/20 điểm.
+  - G2: 2 người kiểm tra chéo tìm 7 lỗi (0 nặng, 2 vừa, 5 nhẹ), đã sửa hết, mỗi lỗi có test; sau đó 970 test đạt. Lỗi nhẹ còn sót sau lượt kiểm tra lại cũng đã sửa: chạy lại cho ra đúng các quyết định cũ thì bản xuất vẫn dọn được. Ngoài ra, trang duyệt của video đã dọn không còn nhắc “Bấm Xuất video”.
+  - G3: kiểm giao diện trên mock ở màn rộng và 375x812, không gửi lệnh nào tới Control Center thật.
+  - G4: lần thử Thùng rác thật duy nhất đạt (11:57).
+  - G5: full suite trên cây chính **972 test đạt** (1 test bỏ qua là test Thùng rác thật, vì đã chạy rồi).
+- Đợt 4: **DONE (đợt 4)**. Kế hoạch và quyết định ở `temp/ui-plan/batch4/` (`plan.md`, `plan-4a.md`, `plan-4cd.md`). Commit 6a8a59c; Control Center chạy bản này từ 03/10 18:01:50 (bản sao lưu DB: `state/backups/control-center-before-source-archive-20261003-180150.sqlite3`).
+  - 4a, logo nền tảng: quy tắc tên nền tảng từ OCR (iQIYI kể cả “iOlYI/iOIYI”, Youku, Tencent Video/WeTV, Mango TV, Sohu, PPTV; loại trừ Bilibili) tạo thẻ chính “Logo nền tảng …” đề xuất Làm mờ, vùng đo theo điểm ảnh logo, thời gian bám điểm cắt cảnh. Thêm thẻ bắt buộc “Kiểm tra đoạn kết” (6 giây cuối). Thẻ bắt buộc không còn bị cách ly sai (lỗi Tập 21/30). Bộ nhớ “logo nền tảng — làm mờ & nhớ” và trang “Bộ nhớ logo”.
+  - 4c, giao diện: đổi tab tự cuộn tới video đầu tiên; “Hủy” hỏi xác nhận, không hủy hai lần; nhóm “Đã hủy (N)”, “Ẩn khỏi danh sách”, nhóm “Đã ẩn (N)” với “Hiện lại”; Thùng rác chờ thử lại khi tìm `$I` và nút “Kiểm tra lại Thùng rác”.
+  - 4d, lưu trữ: “Lưu trữ” chuyển video gốc vào `archive\sources\<job>\` (kiểm SHA-256, kèm `archive-manifest.json`) và bản xuất vào Thùng rác; “Khôi phục bản xuất” đưa video gốc về `input\` để xuất lại.
+  - Kiểm thử: full suite trong worktree 1130 test đạt; trên cây chính sau khi tích hợp **1130 test đạt** (2 test bỏ qua). Quét thử bản sao bản xuất Tập 17 trên GPU: hai thẻ iQIYI (8,00-13,00 s và 2699,68-2703,68 s) đề xuất Làm mờ, 12/12 điểm kiểm tra đạt ở cả 3 kịch bản, dữ liệu thật không đổi. Kiểm giao diện trên mock ở 1280 px và 375 px. Rà soát bảo mật: 0 lỗi nặng/cao, 1 lỗi vừa và 5 lỗi nhẹ đã sửa.
+  - Bộ nhớ thật (theo kế hoạch bạn duyệt, Control Center đang tắt, đã sao lưu trước): 3 bản ghi iQIYI chuyển thành logo nền tảng (Làm mờ), thêm 1 bản ghi iQIYI cuối tập lấy từ bản xuất Tập 17; 3 bản ghi thẻ giấy phép giữ nguyên.
+
+### Lỗi có sẵn phát hiện khi lập kế hoạch
+1. Import ghi đè trạng thái job khi khởi động lại: **DONE** (đợt 1). Đợt 3 thêm: import bỏ qua đường dẫn và SHA-256 của video đã dọn, nên không dời job đã dọn và không nhận size/mtime của file khác.
+2. `recover_interrupted` thiếu BUILDING_REVIEW: **DONE** (đợt 1).
+3. Kẽ hở giữa `_select` và `_execute`: **DONE** (đợt 1, `claim_queued`).
+4. Dashboard không nhận ra job đang chờ xuất: **DONE** (đợt 1).
+5. Job 1, 2, 5 "Sẵn sàng xuất" nhưng mất video gốc:
+   - Phần Control Center: **DONE** (đợt 2). Nút xuất bị khóa kèm lý do, finalize từ chối trước khi ghi.
+   - Phần còn lại: **DONE (đợt 3)**. Trang `review-ui` chạy riêng cũng từ chối khi mất video gốc, và không bao giờ xuất video thuộc Control Center. Thẻ của mọi trạng thái hiện dòng “Không còn video gốc trong input”. Job 1-6 không bao giờ được đề nghị dọn.
+
+### Các bước
+1. Thanh tab sticky: **DONE** (đợt 1). Đã kiểm lại ở 375x812 cùng thanh công cụ dọn và hộp thoại (G3, mock).
+2. An toàn khi khởi động lại: **DONE** (đợt 1).
+3. Hàng đợi theo thứ tự bấm:
+   - Phần hàng đợi: **DONE** (đợt 1).
+   - Thông báo vị trí sau “Bắt đầu” và “Chạy lại kiểm tra”: **DONE (đợt 3)**. Ví dụ: “Đã xếp #46 Tập 46.mp4 vào hàng đợi quét cảnh (lượt 3/3).”
+4. Bảng xuất trên trang duyệt (7d): **DONE** (đợt 1).
+5. Bỏ qua (không xuất):
+   - Nút và trạng thái SKIPPED: **DONE** (đợt 2).
+   - **DONE (đợt 3)**: “Bỏ qua (không xuất)” và “Mở lại để xuất” từ chối video đã dọn.
+   - **DONE (đợt 3)**: video đã bỏ qua chỉ dọn được khi bản ghi bỏ qua còn khớp với queue, revision và quyết định hiện tại.
+6. Tab theo giai đoạn: **DONE** (đợt 2).
+7. Nút “Xuất video” trên thẻ (7c) và chốt chặn finalize:
+   - Nút và chốt chặn: **DONE** (đợt 2).
+   - **DONE (đợt 3)**: finalize chặn video đã dọn.
+   - **DONE (đợt 3)**: thẻ có thêm nhãn “Xuất video tạm dừng” và “Đã hủy xuất video”.
+8. Dọn video gốc (7b), phần backend: **DONE (đợt 3)**. Gồm:
+   - `recycle_bin.py`, `source_cleanup.py` và `export_guards.py`.
+   - Bảng `source_cleanups`.
+   - Khóa video đã dọn trong scheduler.
+   - Khôi phục qua InputWatcher.
+   - Import bỏ qua video đã dọn.
+9. Dọn video gốc (7b), giao diện và tài liệu bất biến: **DONE (đợt 3)**.
+   - API và trạng thái: GET `/api/source-cleanup/preview`, POST `/api/source-cleanup`, và các trường mới trong `/api/status`.
+   - Tab “Hoàn tất”: ô “Chọn để dọn”, nút “Dọn video gốc”, thanh công cụ với “Chọn tất cả video dọn được” và “Dọn video gốc đã chọn (N)”, cùng hộp thoại xác nhận.
+   - Thẻ đã dọn hiện “Đã dọn video gốc · … (đang ở Thùng rác)”. Nút “Chạy lại kiểm tra” bị khóa, kèm ghi chú “Chép lại video gốc vào input để chạy lại (đúng tên: …)”.
+   - Trang duyệt của video đã dọn chỉ để xem.
+   - AGENTS.md, README và SESSION_HANDOFF được sửa trong cùng thay đổi.
+10. Tích hợp, cổng và tài liệu: **PARTIAL**.
+    - Đợt 1-2: xong (795 test, OK).
+    - Đợt 3: tài liệu đã viết. Các cổng G1 (full suite, cache check, migration trên bản sao DB thật), G2 (hai người kiểm tra chéo), G3 (mock giao diện), G4 (một lần thử Thùng rác thật) và G5 (tích hợp, khởi động lại, kiểm chỉ đọc) chưa chạy.
+
+### Vấn đề phản biện
+- A/P3, Tiếp tục/Thử lại giữ chỗ: **DONE** (đợt 1).
+- A/P3, race giữa `_select` và `_execute`: **DONE** (đợt 1).
+- A/P3, rerun bấm đúp và cửa sổ reset: **DONE** (đợt 1).
+- A/P3, manifest ghi đè khi import (job 4/37/38): **DONE** (đợt 1).
+- A/P3, `recover_interrupted`: **DONE** (đợt 1).
+- A/P3, migration:
+  - **DONE** (đợt 1).
+  - **DONE (đợt 3)**: bảng `source_cleanups` dùng chung đúng một lần sao lưu, file `control-center-before-source-cleanup-<ts>.sqlite3`.
+  - Đã kiểm trên bản sao DB thật (G1): 20/20 điểm đạt, số dòng mọi bảng không đổi, đúng một bản sao lưu, mở lần hai không làm gì thêm.
+- A/P4, tab theo giai đoạn và harness:
+  - **DONE** (đợt 2).
+  - Thông báo vị trí sau Bắt đầu: **DONE (đợt 3)**.
+- A/P4b và B/4, cache đếm cho status:
+  - **DONE** (đợt 2).
+  - **DONE (đợt 3)**: gợi ý dọn trên thẻ có cache riêng theo (đường dẫn, mtime, size). Gợi ý không băm, không gọi Thùng rác, và lỗi chỉ đánh dấu thẻ đó.
+- A/P4b, chặn skip và độ bền bản ghi:
+  - **DONE** (đợt 2).
+  - Chặn video đã dọn: **DONE (đợt 3)**.
+- B/4, chỗ đặt khóa:
+  - **DONE** (đợt 2).
+  - **DONE (đợt 3)**: chỉ có một thứ tự khóa, `REVIEW_QUEUE_IO` rồi `job_action_lock`, dùng cho cả đoạn kiểm lại và ghi PENDING khi dọn. Không giữ khóa nào khi băm SHA-256 hoặc khi gọi shell.
+- B/4, đường thay thế skip: **DONE** (đợt 2).
+- A/P7c, video gốc bị mất:
+  - **DONE** (đợt 2) cho Control Center.
+  - **DONE (đợt 3)** cho `review-ui` chạy riêng và dòng trạng thái trên mọi thẻ.
+- A/P7c, harness chưa mô phỏng focus:
+  - **DONE** (đợt 2).
+  - **DONE (đợt 3)**: harness mô phỏng ô INPUT đang được focus. Danh sách không bị dựng lại khi đang gõ, và được dựng lại sau khi rời ô.
+- A/P7c và B/7d, JS xuất dùng chung: **DONE** (đợt 2).
+- B/7b, điều kiện dọn với video đã xuất: **DONE (đợt 3)**, siết hơn kế hoạch gốc. Bản xuất phải ứng với lần duyệt đang hoạt động, manifest phải đầy đủ, bản xuất phải mới hơn mọi quyết định duyệt, edit plan (nếu còn) phải trỏ đúng queue, và SHA-256 của bản xuất được kiểm lại lúc dọn.
+- B/7b, an toàn khi gọi Thùng rác: **DONE (đợt 3)**.
+  - Kiểm tra trước khi gọi: ổ cố định, cấu hình Thùng rác, “xóa ngay” đang tắt, chính sách Windows, dung lượng, tối đa 259 ký tự, không liên kết.
+  - Gọi SHFileOperationW với FOF_ALLOWUNDO trên luồng COM STA, timeout 60 giây.
+  - Ghi PENDING trước khi gọi, xác minh qua bản ghi `$I`/`$R`.
+  - Mỗi video độc lập. Hàng PENDING được đối soát mỗi lần khởi động.
+- B/7b, agent và test không đụng Thùng rác thật:
+  - **DONE (đợt 3)**: không có recycler mặc định; `send_to_recycle_bin` chỉ nhận thư mục `input` của bản cài đặt; mọi module test liên quan vá `_shell_delete` thành lỗi.
+  - Lần thử thật duy nhất (G4) đã chạy ngày 03/10/2026 lúc 11:57: file 1 KB do test tự tạo đã vào Thùng rác và được xác nhận qua bản ghi `$I`.
+- Cả hai, an toàn cache key:
+  - **DONE (đợt 3)**: `tests/test_cache_dependencies.py` thêm ba module mới.
+  - `cache_check` ở G1: CLEAN cho cả 10 stage có cache.
+
+### Quyết định của người dùng
+1. Tiếp tục/Thử lại giữ vị trí cũ: **DONE** (đợt 1).
+2. Nút “Bỏ qua (không xuất)” cho video 0 cảnh chính và video mọi quyết định đều là Giữ nguyên: **DONE** (đợt 2).
+3. Chặn khi vượt dung lượng Thùng rác: **DONE (đợt 3)**.
+   - Điều kiện chặn: phần đang chứa cộng phần chọn vượt giới hạn trừ 64 MiB.
+   - Giới hạn của ổ E: 49 741 MiB = 52 157 218 816 B (≈ 48,58 GiB).
+   - Khi bị chặn, hộp thoại hiện lý do và khóa nút xác nhận. Server cũng từ chối (409 `bin_capacity`).
+4. Một lần kiểm tra thật với file tạm 1 KB: **DONE (đợt 3)**.
+   - Test `RealRecycleBinTest` chỉ chạy khi bật BILIFLOW_TEST_RECYCLE_BIN=1 và khi chưa có marker `ran-once.json`.
+   - Lần chạy duy nhất (G4): 03/10/2026 11:57, đạt. Thùng rác ổ E: từ 7 lên 8 mục, tăng đúng 1 024 byte. Marker nằm ở `temp/recycle-bin-test/ran-once.json` nên test không tự chạy lại.
+
+### Mặc định
+- Xuất video và chạy cảnh dùng chung một hàng đợi: **DONE** (đợt 1).
+- “Sẵn sàng xuất” nằm trong tab “Đang chờ duyệt”: **DONE** (đợt 2).
+- Video đã bỏ qua phải bấm “Mở lại để xuất” trước khi xuất: **DONE** (đợt 2). Sau khi dọn, nút này bị khóa.
+- Video 4, 37, 38 chưa được dọn cho tới khi xuất lại: **DONE (đợt 3)**.
+  - Lý do hiện trên thẻ 37 và 38: “Không thấy bản xuất trong thư mục output (đã bị dời hoặc đổi tên?)”. Kiểm tra chỉ đọc (đợt sửa sau phản biện): bản xuất ghi trong artifact của hai job này chính là bản xuất của lần duyệt hiện tại, nhưng file không còn trong `output/`. Đưa file đó về `output/` (hoặc xuất lại) thì dọn được.
+  - Job 4 cũng không còn video gốc trong `input`. Giống job 3, thẻ của nó hiện “Không còn video gốc trong input”, còn lý do trong `/api/status` là “Video gốc không còn trong thư mục input”.
+  - Kiểm lại trên Dashboard thật sau khi khởi động lại Control Center (chờ bạn cho phép khởi động lại).
+- Chỉ nhận lại video gốc ở đúng đường dẫn và đúng SHA-256: **DONE (đợt 3)**.
+  - Cùng file nhưng khác tên: chỉ ghi event nhắc đúng tên.
+  - File khác đặt ở đường dẫn cũ: thành một video mới, phải bấm “Bắt đầu”, và không bao giờ dùng cho job cũ.
+- Video đã hủy ở lại tab “Đang chờ xử lý”: **DONE** (đợt 2).
+- Mặc định mới của đợt 3, không cần hỏi lại: sau khi dọn, trang duyệt của video đó chỉ để xem (không sửa quyết định, không xuất), và video vẫn ở “Hoàn tất”. Muốn đổi thì bỏ một dòng trong `ensure_review_editable`.
+
+### Hai mục mở còn lại sau đợt 2
+- (a) Trang `review-ui` chạy riêng xuất video mà không qua chốt chặn: **DONE (đợt 3)**.
+  - Không xuất video nào có job trong Control Center. Cũng không xuất khi không đọc được `state/control-center.sqlite3`.
+  - Không cho sửa quyết định khi video đang chờ xuất hoặc đang xuất, còn lệnh xuất tạm dừng/lỗi/gián đoạn mà “Tiếp tục” hoặc “Thử lại” sẽ chạy (bấm “Hủy” để bỏ lệnh đó), đã dọn, hoặc đã bỏ qua.
+  - Đây là thay đổi hành vi có chủ đích.
+- (b) Lệnh xuất bị dừng hoặc hủy để lại stage render PENDING: **DONE (đợt 3)**.
+  - Các trường hợp sau đều chuyển stage đó sang CANCELLED và ghi event EXPORT_REQUEST_RETIRED: hủy, đổi quyết định, bỏ qua, và finalize thấy bản xuất đã có.
+  - “Tiếp tục” từ một tab cũ bị từ chối thay vì render lại kế hoạch cũ. Đây là thay đổi hành vi có chủ đích.
+
+### Việc người dùng tự làm sau khi tích hợp đợt 4
+1. Cho phép khởi động lại Control Center khi không có job chạy (Stop-BiliFlow.cmd rồi Start-BiliFlow.cmd). Lần mở đầu tự sao lưu DB vào `state/backups/control-center-before-source-archive-<thời gian>.sqlite3`. Bạn đã làm lúc 18:01:50 ngày 03/10 (bản sao lưu `control-center-before-source-archive-20261003-180150.sqlite3`) và thấy giao diện mới ổn.
+2. Tùy chọn: bấm “Kiểm tra lại Thùng rác” trên thẻ job 43 và 47 (Tập 13, 17) để xác nhận lại bản ghi Thùng rác.
+3. Tập Nhất Âu Xuân mới tiếp theo: kiểm tra có hai thẻ “Logo nền tảng iQIYI” đề xuất Làm mờ và thẻ “Kiểm tra đoạn kết”.
+
+### Việc người dùng tự làm sau khi tích hợp đợt 3 (đã xong)
+1. Cho phép khởi động lại Control Center khi hàng đợi trống: chạy Stop-BiliFlow.cmd rồi Start-BiliFlow.cmd, không dùng RefreshExisting. Đã làm lúc 12:19:55 ngày 03/10.
+2. Tự dọn thử một tập đã xuất. Đề xuất: job 59, Nhất Âu Xuân Tập 29, 240 474 614 B. Bạn đã dọn 21 video (job 40-60) lúc 12:21.
+   - Thao tác: Dashboard → “Hoàn tất” → thẻ #59 → “Dọn video gốc” → đọc hộp thoại → “Chuyển 1 video vào Thùng rác”.
+   - Agent chỉ đọc để kiểm tra trước và sau, không bấm gì.
+3. Tùy chọn: khôi phục video từ Thùng rác. Khoảng 60 giây sau, thẻ sẽ hiện “Đã khôi phục video gốc (SHA-256 khớp) lúc …”.
+
+Lưu ý: mục C.8/C.9 trong SESSION_HANDOFF còn cần một số video Nhất Âu Xuân. Video đã dọn vẫn khôi phục được từ Thùng rác cho tới khi bạn dọn sạch Thùng rác.
+
+### Ngoài kế hoạch này
+- 7b (c), xuất gần bitrate nguồn: còn mở. Cần đo SSIM/VMAF trước, vì thay đổi này đổi hành vi xuất.
+- Các mục C (chất lượng phát hiện) và D (việc sau) trong `docs/SESSION_HANDOFF.md`.

@@ -1,6 +1,6 @@
 # BiliFlow session handoff
 
-Updated: 2026-10-02 (Asia/Bangkok)
+Updated: 2026-10-03 (Asia/Bangkok)
 
 This is the short, authoritative starting point for a new Codex account or chat. It complements the detailed history in `PROJECT_STATUS.md` and `CHANGELOG.md`.
 
@@ -25,13 +25,45 @@ The improvement sequence now present on local `main` is:
 
 Always confirm this section with `git status` and `git log` because it becomes stale after new work.
 
-## Current work — 2026-10-03 dashboard batch 2 (uncommitted, integrated in the main tree)
+## Current work — 2026-10-03 dashboard batch 4: platform logos → BLUR, logo memory page, archive/restore, UI fixes (committed 6a8a59c; integrated into the main tree ~17:05; the user restarted the Control Center on it at 18:01:50)
+
+- Plans and evidence: `temp/ui-plan/batch4/` (`plan.md` = user decisions, `plan-4a.md`, `plan-4cd.md`, `progress-4a.md`, `progress-4cd.md`, `hooks-4a.md`, `e2e-4a/`, `mock_server.py` + `mock-README.md` on port 8793, `full-suite-*.log`, `pre-integration-backup/` = the 23 main-tree files as they were before the copy). Worktree `temp/wt-batch4` (detached c0a20cc; batch 3 staged in its index as baseline tree 1f523d1, batch 4 unstaged) and `temp/wt-batch3` can be removed now that both batches are committed.
+- New modules: `platform_names.py`, `platform_logos.py`, `platform_cards.py`, `platform_memory.py`, `logo_memory_admin.py`, `source_archive.py`, `source_archive_files.py`, `source_archive_restore.py`; scripts `platform_logo_convert.py`, `platform_logo_e2e.py`. Changed: `textscan.py` (platform tracks survive truncation → text cache key changes once), `review_workflow.py` (platform/ending cards, forced-card protection, safe remember/forget, platform choice, archived lock), `control_center.py` (routes, dashboard, logo-memory hooks, framing headers), `job_store.py` (`hidden_at`, `recycle_checks`, `source_archives`, one `source-archive` backup), `recycle_bin.py` (verify retry, `send_export_to_recycle_bin`), `source_cleanup.py` (shared lock, archive-aware assessment, bin re-check), `scheduler.py` (cancel guard, archived locks), `export_guards.py`, `job_import.py`, AGENTS.md (two user-triggered exceptions).
+- Verified: worktree 1130 OK (skipped=25); main tree 1130 OK (skipped=2); e2e scan of a COPY of the Tập 17 export: iQIYI [8.00, 13.00] and [2699.68, 2703.68] as MAIN BLUR cards, 12/12 checks × 3 scenarios, production unchanged; mocks at 1280 px and 375 px; security review 0 critical/high (1 medium + 5 low fixed).
+- Real state changed in this session (Control Center stopped, user-approved plan): `state/studio-logo-memory.json` — 3 iQIYI records → `platform_logo` BLUR, 1 iQIYI end-ident record seeded from the Tập 17 export; licence-card records unchanged; backups `state/backups/studio-logo-memory-20261003-170730.json` and `…-170743.json`. Nothing else in `state/`, `input/`, `output/` or `archive/` was touched by the agent.
+- Done: the user restarted the Control Center at 18:01:50 (log `logs/control-center/control-center-20261003-180150.out.log`; migration backup `state/backups/control-center-before-source-archive-20261003-180150.sqlite3`; `jobs.hidden_at`, `recycle_checks` and `source_archives` present; 30 jobs intact: 24 COMPLETED, 1 SKIPPED, 5 CANCELLED) and found the new dashboard fine. Committed at the user's request: d90c8f3 (batch 3 code = baseline tree 1f523d1 without its docs), 6a8a59c (batch 4 code), then the docs of both batches. Checked read-only the same day: the 18+/violence cards of jobs 46, 47, 52 and 55 come from scans started with all four detector groups by the pre-236fb06 dashboard (picker race; 52/55 were started at 20:21 on the process started at 17:29); all 9 of their main cards are KEEP, so the exports are unaffected; no scan has been queued since the fix went live (last JOB_QUEUED: #60 at 2026-10-02 20:22:51). Next: the first new Nhất Âu Xuân episode should show the two iQIYI BLUR cards and the “Kiểm tra đoạn kết” card. Jobs 43/47 can be re-checked with “Kiểm tra lại Thùng rác”. Offered, not decided: default a new job's detector scope to the last started scope instead of all groups.
+
+## Previous work — 2026-10-03 dashboard batch 3: Dọn video gốc (committed d90c8f3; integrated into the main tree after gates G1-G4; the user restarted the Control Center at 12:19:55 and cleaned jobs 40–60 at 12:21)
+
+- Scope: the rest of docs/UI_QUEUE_PLAN.md. This covers steps 8-9 ("Dọn video gốc" to the Windows Recycle Bin), the batch-3 part of step 10, the two open items left by batch 2, and the batch 1-2 leftovers. Plan `temp/ui-plan/batch3/plan.md`, contract `temp/ui-plan/batch3/contract.md`, evidence and logs `temp/ui-plan/batch3/` (per-track focused/full-suite logs, `ta3-mutation/`, `tb1-mock-dashboard.html`).
+- Files:
+  - New: `src/biliflow/export_guards.py` (the shared queue lock `REVIEW_QUEUE_IO`, every refusal message, the shared export/edit guards and a read-only Control Center DB reader), `src/biliflow/recycle_bin.py` (pre-checks, SHFileOperationW on a COM STA thread with a 60 s timeout, `$I`/`$R` verification) and `src/biliflow/source_cleanup.py` (eligibility, preview, execute, reconcile). Tests: `tests/test_export_guards.py`, `tests/test_recycle_bin.py`, `tests/test_source_cleanup.py`, `tests/test_source_cleanup_http.py`.
+  - Changed: `job_store.py` (table `source_cleanups` with one backup `control-center-before-source-cleanup-<ts>.sqlite3`, `retire_stage`, `render_request`, `reset_watched_file`). `scheduler.py` (cleaned-source locks, `retire_render_request`, `resume` refusals, InputWatcher restore and per-file FileNotFoundError). `job_import.py` (skips cleaned paths/SHA-256). `control_center.py` (guards from export_guards, cleaned-source refusals, 410 media, status keys `source_cleanup`/`source_cleaned`/`cleanup`/`source_cleanup_running`, GET `/api/source-cleanup/preview`, POST `/api/source-cleanup` with 409 codes, reconcile at every start, the Hoàn tất toolbar/checkboxes/dialog, start/rerun queue notices). `review_workflow.py` (standalone review-ui guards, view-only page for a cleaned source). Also `tests/fixtures/dashboard_harness.js` and the tests of these modules.
+- Closes batch 2's open items:
+  - (a) The standalone review server (`serve_review_ui`) now fails closed. It does not export any video with a Control Center job, nor when the DB is unreadable. It refuses decision edits while the video's export is in flight or still requested (paused, failed or interrupted, until Hủy retires it), after its source was cleaned, and while it is skipped.
+  - (b) A paused, cancelled, superseded or already-exported export no longer keeps a live PENDING render. Cancel, a changed decision, a skip and the finalize shortcut retire the stage (EXPORT_REQUEST_RETIRED), and "Tiếp tục" refuses a settled job or an old export. `render:{id}` stays as history.
+- G2 fix pass (evidence `temp/ui-plan/batch3/fix/`: focused log, mutation summary, read-only identity probe, Esc mock): cleanup eligibility of an export now compares the manifest's `operations` with `review_workflow.approved_operations(current queue)` (decision fields only); review-ui also refuses edits while a paused/failed/interrupted export still holds a render request; `serve()` waits for an API `stop()`; Esc cannot close the cleanup dialog mid-POST; skipped+cleaned card text. Deferred: the finalize shortcut still marks COMPLETED when only the blur edge mode changed (review_export_paths does not hash it); cleanup now refuses such an export with a "move the old file out of output/ first" reason.
+- Defaults applied without asking (from the plan): after cleanup the review page is view-only (no decision edits, no export) and the job stays in "Hoàn tất". A different file at the old path becomes a new job that needs "Bắt đầu".
+- Safety: no default recycler anywhere. Every test module that can reach cleanup patches `recycle_bin._shell_delete` to raise. `send_to_recycle_bin` refuses every folder except `<install>\input` (plus `<install>\temp\recycle-bin-test` only with BILIFLOW_TEST_RECYCLE_BIN=1). The workers' rules forbid any POST to 8765 and any access to `input/`; the G2 reviewers re-check this.
+- Gates done (evidence `temp/ui-plan/batch3/`):
+  - G1: worktree full suite 963 OK; cache-key check CLEAN; migration on a copy of the live DB 20/20 (row counts unchanged, one `source-cleanup` backup, second open a no-op, schema version 1).
+  - G2: 7 findings (0 high, 2 medium, 5 low), all fixed; 970 OK. Lead follow-ups after the recheck: a rerun with the same decisions keeps its export cleanable, and the cleaned review page no longer tells the user to export.
+  - G3: static mocks at desktop and 375x812 (no live POST).
+  - G4: the single real Recycle Bin test passed on 2026-10-03 11:57 (1 KB file it created; `$I` verified; E: bin 7 → 8 items). Marker `temp/recycle-bin-test/ran-once.json`; never run it again without the user's consent.
+  - G5: integrated into the main tree on 2026-10-03; main-tree full suite 972 OK (skipped=1). The running Control Center (started 06:59) still serves the batch 2 code until restarted.
+- User steps after integration:
+  1. Approve a Control Center restart while the queue is idle (Stop-BiliFlow.cmd, then Start-BiliFlow.cmd; no RefreshExisting).
+  2. Clean one exported episode yourself: Dashboard → "Hoàn tất" → #59 Nhất Âu Xuân Tập 29 → "Dọn video gốc" → read the dialog → "Chuyển 1 video vào Thùng rác". The agent only checks read-only before and after.
+  3. Optional: restore it from the Recycle Bin and check that the card shows "Đã khôi phục video gốc (SHA-256 khớp)" after about 60 s.
+- Keep in mind: items C.8/C.9 below need some Nhất Âu Xuân sources (C.9's example is Tập 14 37:05, and the studio-logo upgrade reads sources). A cleaned video stays restorable from the Recycle Bin until the user empties it.
+
+## Current work — 2026-10-03 dashboard batch 2 (committed 1b6ad90 (+c0a20cc docs), integrated in the main tree)
 
 - control_center (skip/unskip endpoints, jobTab stage tabs, card export panel, finalize guards, review_summary cache, source_present), scheduler (job_action_lock, SKIPPED handling, is_busy, _after_success no requeue after pause/cancel), job_store (update_job_if), review_workflow (shared export dialog, SKIPPED text), new export_dialog.py; tests test_skip_export, test_export_dialog (incl. node --check of every inline script). Evidence: temp/ui-plan/batch2/.
 - Done 2026-10-03 06:59: Control Center started with batch 2 (it was already stopped); 30 jobs intact.
-- Open (low): the standalone review server (serve_review_ui) has its own finalize without the new guards; a paused/cancelled export keeps a PENDING render stage and render:{id} until the next finalize or rerun.
+- Open (low), closed by batch 3 once integrated: the standalone review server (serve_review_ui) has its own finalize without the new guards; a paused/cancelled export keeps a PENDING render stage and render:{id} until the next finalize or rerun.
 
-## Current work — 2026-10-03 dashboard batch 1 (uncommitted, integrated in the main tree)
+## Current work — 2026-10-03 dashboard batch 1 (committed 27dc000, integrated in the main tree)
 
 - job_store (IN_PROCESS_STATES, claim_queued, mark_queued, queued_jobs, queue_seq/queued_at migration), scheduler (FIFO _select, start/rerun/export reseq, resume keeps place, _executing_job_id guard), job_import (no overwrite of settled jobs), control_center (sticky tabs, queue badges, status queue_position/queue_kind), review_workflow (export panel closes on confirm, #export-notice). Evidence: temp/ui-plan/batch1/.
 - Done 2026-10-03 00:18: Control Center restarted with batch 1; jobs table migrated (queue_seq/queued_at), backup state/backups/control-center-before-queue-order-20261003-001806.sqlite3 (30 jobs). Next: batch 2 and batch 3 per docs/UI_QUEUE_PLAN.md.
@@ -412,14 +444,17 @@ This run skipped `adult`, `gore`, and `violence`. It validates advertisement/log
 
 ## Remaining work in priority order
 
-Updated 2026-10-02 evening (after commits 53cd9a6..f997dde). The user's requests are quoted in Vietnamese.
+Updated 2026-10-03 (after commits 53cd9a6..c0a20cc and the uncommitted batch 3 in temp/wt-batch3). The user's requests are quoted in Vietnamese.
 
 ### A. Pending user steps
-1. Restart the Control Center while the queue is idle, so it serves the dashboard and structure-audit fixes of 236fb06 (the running process still has the old page).
-2. Export Nhất Âu Xuân Tập 14 (job 44). It is reviewed (2 x KEEP) and READY_TO_EXPORT.
+1. Done: the Control Center was restarted with batch 1 (2026-10-03 00:18) and with batch 2 (06:59), so it serves 236fb06 and both batches. Next restart: batch 3, after integration and only with the user's approval (see "Current work — dashboard batch 3").
+2. Done: Nhất Âu Xuân Tập 14 (job 44) was exported. A read-only GET of /api/status on 2026-10-03 shows it COMPLETED.
 3. Optional: re-run the local structure audit for jobs 40-50. Their stored structure-audit.json still says BLOCK, which the new dashboard labels "quy tắc cũ".
+4. After the batch 3 restart: clean one exported episode yourself (suggested job 59, Tập 29), and optionally restore it from the Recycle Bin.
 
-### B. Dashboard / workflow requests from the user (2026-10-02, not started)
+### B. Dashboard / workflow requests from the user (2026-10-02)
+Status: items 4-7 and 7c-7d are done, in batches 1-2 (commits 27dc000, 1b6ad90, docs c0a20cc). Item 7b is implemented in batch 3 and integrated into the main tree after gates G1-G4 (committed d90c8f3; the user restarted the Control Center at 12:19:55 and cleaned jobs 40–60 at 12:21). Only 7b (c), an export near the source bitrate, is still open. Details: docs/UI_QUEUE_PLAN.md, "Trạng thái thi công". The original requests are kept below for reference.
+
 4. **Skip button for videos with nothing to review.** User request: "đối với video mà không có cảnh nào để duyệt khi chạy cảnh để duyệt thì có thêm một nút bỏ qua".
    - Today such a job goes straight to READY_TO_EXPORT (e.g. Tập 13), and the only way to finish it is to export a re-encoded copy with the same content.
    - Add "Bỏ qua (không xuất)", which marks the job done without rendering. Keep reports and never touch the source.
@@ -443,12 +478,13 @@ Updated 2026-10-02 evening (after commits 53cd9a6..f997dde). The user's requests
      - A "Dọn video gốc" action in "Hoàn tất", per video and for all selected.
      - It lists each input with its size, export file and export time, and the total space freed, then asks for one confirmation.
      - It offers only jobs whose final export exists and passed its manifest check, or that the user skipped.
-     - It never touches reports, state, decisions, brand/studio memory or outputs.
+     - It never touches reports, state, decisions, brand/studio memory or outputs. (As built: it only adds its own `source_cleanups` rows and SOURCE_* events to state and resets the watcher row of the moved file; see AGENTS.md.)
      - It records an event with path, size and SHA-256.
      - User decision (2026-10-02): move to the Windows **Recycle Bin**, not a permanent delete ("chuyển vào thùng rác thôi"). Space is freed when the user empties the bin; tell them so in the dialog. Use the Windows shell API (SHFileOperation/IFileOperation with FOF_ALLOWUNDO) or Microsoft.VisualBasic FileSystem.DeleteFile(..., SendToRecycleBin) through PowerShell. Add no new dependency without a license check.
      - Afterwards the job shows "Đã dọn video gốc". "Chạy lại kiểm tra" is disabled with the message "Chép lại video gốc vào input để chạy lại". A re-added file is accepted only if its SHA-256 matches.
      - Discovery must not recreate a job for a cleaned file.
      - Agents never run the cleanup themselves.
+   - Implemented in batch 3 (see "Current work — 2026-10-03 dashboard batch 3"), with stricter eligibility than these notes. The export must belong to the active review revision and have been rendered from the current decisions (the manifest's operations), and a skip record must still match the review. The bin capacity is blocked rather than warned. AGENTS.md carries the exception in the same change.
    - Still open, as a user decision: (c) export near the source bitrate. Exports are about 1.75x their source (Tập 12: 240 MB at 0.67 Mbps in, 422 MB at 1.05 Mbps out), so this would save about 180 MB per episode. Measure SSIM/VMAF first; it changes export behaviour.
 
 7c. **"Xuất video" button on the dashboard job card.** User request (2026-10-02): "bổ sung thêm một button xuất video bên ngoài … đối với những video đã duyệt cảnh rồi, logic y chang bên trong duyệt cảnh nút xuất video".
@@ -477,11 +513,11 @@ Updated 2026-10-02 evening (after commits 53cd9a6..f997dde). The user's requests
 11. Carry reviewed decisions across a rerun (stash@{0}, paused 2026-10-01).
 12. 18+ "balanced" triage level (needs a second live-action film).
 13. Speed: shared decode / T2-T3, only after measurement.
-14. Merge into `main` or push only with the user's explicit authorization. Commits 53cd9a6..f997dde are local on `improve/scan-performance-metrics`.
+14. Merge into `main` or push only with the user's explicit authorization. Commits 53cd9a6..c0a20cc are local on `improve/scan-performance-metrics`.
 
 ## Safety and product constraints
 
-- Source videos are immutable.
+- Source videos are immutable. Only exception: the user-triggered “Dọn video gốc” moves an exported or skipped input video to the Windows Recycle Bin after the user confirms it (never a permanent delete); agents never run it (see AGENTS.md).
 - No automatic KEEP, BLUR, CUT, upload, or publish.
 - All models must be free to run locally and commercially usable under the recorded policy.
 - AI Supervisor is optional. Deterministic local Structure Audit uses no ChatGPT quota. Visual AI Audit sends only explicitly approved thumbnails and never source video/audio.
@@ -503,5 +539,5 @@ Start or stop the dashboard with `Start-BiliFlow.cmd` and `Stop-BiliFlow.cmd`. D
 ## Prompt to paste into a new chat
 
 ```text
-Làm việc trong E:\DungChung\BiliFlow. Trước khi sửa, hãy đọc AGENTS.md, docs/SESSION_HANDOFF.md và docs/SCAN_PERFORMANCE.md, sau đó kiểm tra git status và 8 commit gần nhất. Tiếp tục trên nhánh improve/scan-performance-metrics; chưa merge/push nếu tôi chưa yêu cầu. Hãy đối chiếu mọi kết luận với report/job thực tế, giữ nguyên nguyên tắc video nguồn bất biến, model local miễn phí/commercial-safe và mọi edit phải qua người duyệt. Sau khi nắm trạng thái, tóm tắt ngắn: việc đã hoàn tất, bằng chứng kiểm chứng mới nhất, việc còn lại theo ưu tiên và bước tiếp theo bạn sẽ làm.
+Làm việc trong E:\DungChung\BiliFlow. Trước khi sửa, hãy đọc AGENTS.md, docs/SESSION_HANDOFF.md và docs/SCAN_PERFORMANCE.md, sau đó kiểm tra git status và 8 commit gần nhất. Tiếp tục trên nhánh improve/scan-performance-metrics; chưa merge/push nếu tôi chưa yêu cầu. Hãy đối chiếu mọi kết luận với report/job thực tế, giữ nguyên nguyên tắc video nguồn bất biến (trừ nút “Dọn video gốc” do tôi bấm, chỉ chuyển vào Thùng rác), model local miễn phí/commercial-safe và mọi edit phải qua người duyệt. Sau khi nắm trạng thái, tóm tắt ngắn: việc đã hoàn tất, bằng chứng kiểm chứng mới nhất, việc còn lại theo ưu tiên và bước tiếp theo bạn sẽ làm.
 ```

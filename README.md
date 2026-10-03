@@ -6,7 +6,7 @@ BiliFlow là hệ thống local-first hỗ trợ quét, review, xử lý và sau
 
 ## Nguyên tắc an toàn
 
-- Không sửa hoặc xóa video nguồn.
+- Không sửa hoặc xóa video nguồn. Chỉ có hai ngoại lệ, đều do bạn bấm và xác nhận trong Control Center: “Dọn video gốc” chuyển video gốc đã xuất (đúng lần duyệt mới nhất) hoặc đã bỏ qua vào Thùng rác Windows, không xóa vĩnh viễn; “Lưu trữ” / “Khôi phục bản xuất” chuyển video gốc vào kho `archive\` (đổi tên cùng ổ, kiểm SHA-256) và trả về `input\`.
 - Không tự upload hoặc publish.
 - Model quét media chạy local. AI Supervisor mặc định chỉ nhận JSON/log; Visual AI Audit chỉ gửi thumbnail sau khi người dùng xác nhận riêng cho từng video, tối đa 36 ảnh và không gửi video hoặc audio nguồn.
 - Không dùng API trả phí/theo lượt; model phải vượt kiểm tra giấy phép trước khi chạy.
@@ -24,6 +24,14 @@ Double-click [`Start-BiliFlow.cmd`](Start-BiliFlow.cmd) để mở dashboard t�
 Đóng tab trình duyệt không dừng backend. Dùng nút **Tắt** trên dashboard hoặc [`Stop-BiliFlow.cmd`](Stop-BiliFlow.cmd) để tắt watcher, scheduler, worker và cổng web. BiliFlow không cài service và không tự chạy cùng Windows.
 
 SQLite WAL ở `state/control-center.sqlite3` giữ trạng thái job/stage/revision/artifact/event. Khi máy hoặc ứng dụng dừng bất ngờ, stage đang chạy trở về `INTERRUPTED_RECOVERABLE`; source và stage đã hoàn tất được giữ nguyên. Một GPU worker xử lý tuần tự để phù hợp RTX 2060 6 GB, còn nhiều video vẫn có thể nằm trong queue và review web hoạt động đồng thời.
+
+Tab **Hoàn tất** có **Dọn video gốc** cho từng video hoặc nhiều video đã chọn (tối đa 50 video mỗi lần). Hộp thoại liệt kê từng video gốc, dung lượng, video đã xuất và tổng dung lượng; chỉ khi bạn bấm xác nhận thì video gốc mới được chuyển vào Thùng rác Windows, không xóa vĩnh viễn. Chỉ video đã xuất đúng lần duyệt mới nhất (manifest khớp, bản xuất làm đúng theo các quyết định duyệt hiện tại) hoặc đã “Bỏ qua (không xuất)” mới được đề nghị. BiliFlow từ chối nếu Thùng rác của ổ có thể vượt giới hạn, vì khi đó Windows có thể xóa vĩnh viễn các mục cũ nhất. Report, quyết định duyệt, bộ nhớ logo/studio và video đã xuất được giữ nguyên; dung lượng chỉ được giải phóng khi bạn dọn sạch Thùng rác. Sau khi dọn, trang duyệt của video đó chỉ để xem, còn chạy lại, xuất lại và sửa quyết định đều bị khóa. Muốn dùng lại video, hãy khôi phục nó từ Thùng rác hoặc chép lại đúng file với đúng tên vào `input`: BiliFlow chỉ nhận lại khi SHA-256 khớp, còn một file khác đặt ở đường dẫn cũ sẽ thành một video mới.
+
+Tab **Hoàn tất** cũng có **Lưu trữ** (từng video hoặc “Lưu trữ đã chọn”): video gốc được đổi tên vào `archive\sources\<job>\` trên cùng ổ (không nén, không giảm chất lượng), kiểm SHA-256, kèm `archive-manifest.json` ghi quyết định duyệt, edit plan và manifest bản xuất; bản xuất (MP4 và manifest) của video đã xuất được chuyển vào Thùng rác Windows. Video gốc + quyết định chỉ chiếm khoảng 57% dung lượng bản xuất. **Khôi phục bản xuất** đưa video gốc về `input\` (kiểm SHA-256), video về “Đang chờ duyệt” để bạn sửa quyết định nếu cần rồi xuất lại. Lưu trữ và Dọn video gốc loại trừ nhau; đường dẫn dài hơn 259 ký tự bị từ chối. Nút **Kiểm tra lại Thùng rác** chỉ đọc Thùng rác và ghi thêm một bản ghi kiểm tra khi Windows ghi bản ghi `$I` chậm hơn lần xác minh đầu.
+
+Nút **Hủy** hỏi xác nhận trước (khác “Dừng” chỉ tạm dừng và “Bỏ qua (không xuất)” dành cho video đã duyệt xong) và không hủy hai lần. Video đã hủy nằm trong nhóm thu gọn **Đã hủy (N)** cuối tab “Đang chờ xử lý”; **Ẩn khỏi danh sách** chỉ đặt cờ ẩn (không xóa gì), mục **Đã ẩn (N)** có **Hiện lại**. Đổi tab tự cuộn tới video đầu tiên của tab.
+
+**Logo nền tảng** (iQIYI, Youku, Tencent Video/WeTV, Mango TV, Sohu, PPTV; Bilibili được loại trừ): khi OCR đọc được tên nền tảng (kể cả các biến thể OCR như “iOlYI”) hoặc khung hình khớp một logo nền tảng đã nhớ, danh sách duyệt có thẻ chính “Logo nền tảng …” đề xuất **Làm mờ** vùng logo, thời gian bám theo điểm cắt cảnh. 6 giây cuối mỗi video luôn có thẻ “Kiểm tra đoạn kết”, giống thẻ 5 giây đầu. Trên trang duyệt, “Đây là logo nền tảng — làm mờ & nhớ” ghi nhớ logo cho các tập sau (ngược với “Đây là logo hãng phim — giữ & nhớ”). Trang **Bộ nhớ logo** (link trên đầu dashboard) cho xem ảnh từng logo đã nhớ, đổi loại hoặc xóa; mọi thay đổi đều sao lưu bộ nhớ trước vào `state\backups`, ảnh của bản ghi bị xóa được dời vào đó chứ không xóa.
 
 AI Supervisor là kiểm tra tư vấn theo yêu cầu. Dashboard có khu vực kết nối, nút mở luồng `codex login`, kiểm tra trạng thái và cấu hình model. Cấu hình portable nằm tại `config/ai_supervisor.json`; mặc định dùng `gpt-5.6-luna` + reasoning `medium`, chỉ cho chọn model thuộc dòng GPT-5.6 và Low/Medium/High. GPT-6, API key, XHigh/Max/Ultra và fast service tier đều bị chặn để tránh dùng nhầm mức tiêu hao cao hoặc phát sinh phí API ngoài gói ChatGPT. JSON audit không gửi media. Visual AI Audit phải được xác nhận cho từng job, chỉ nhận thumbnail giới hạn trong reports, không được tự duyệt KEEP/BLUR/CUT hay khởi động render. Nếu Codex không sẵn sàng, pipeline local và review vẫn hoạt động.
 
@@ -108,6 +116,8 @@ Với phim người thật, dùng `scan-content` trước rồi chạy `confirm-
 ```
 
 Trong giao diện mới, các mục tin cậy có nhãn `Đề xuất: BLUR/CUT` và có thể được nhận cùng lúc bằng `Duyệt tất cả đề xuất đang lọc`. Bạn xử lý các mục còn lại rồi nhấn `Hoàn tất duyệt và xuất video`; không cần quay lại chat để duyệt thêm một lần. Trạng thái render được cập nhật ngay trên trang.
+
+Trang `review-ui` chạy riêng không xuất video nào đã có job trong Control Center, và cũng không xuất khi không đọc được `state/control-center.sqlite3`. Với video thuộc Control Center, trang này cũng không cho đổi quyết định khi video đang chờ xuất, đang xuất hoặc còn lệnh xuất tạm dừng/lỗi chưa hủy, đã dọn video gốc, hoặc đã được đánh dấu bỏ qua. Hãy xuất và duyệt các video đó trên Dashboard để giữ đúng hàng đợi, trạng thái bỏ qua và việc dọn video gốc.
 
 Edit plan chỉ được tạo khi toàn bộ candidate đã được giải quyết. Mặc định bản xuất đặt mục tiêu khoảng 3,3 GB và bị từ chối nếu vượt 3,5 GB. Mỗi video có thể chọn trần GB khác hoặc chế độ không giới hạn; mọi chế độ đều phải giải mã toàn bộ thành công trước khi đổi tên từ file tạm thành output chính thức. Video nguồn không bị sửa. Các lệnh preview thủ công bên trên vẫn được giữ cho trường hợp cần kiểm tra kỹ một operation. Chi tiết nằm tại [`docs/REVIEW_WORKFLOW.md`](docs/REVIEW_WORKFLOW.md).
 
