@@ -13,7 +13,7 @@
 - `contracts.js` records current endpoint/state/payload mappings. `docs/DASHBOARD_V2_UPDATE_GUIDE.md` documents every existing action, backend fields, transport/auth requirements, integration gates and rollback. Existing review page is retained for future integration.
 - Demo server on `127.0.0.1:8794` serves whitelisted frontend assets only; API/file escape paths return 404 and POST returns 405. CSP blocks network transport. No production API writes, video processing, model/dependency changes or live UI integration.
 - Verified: 18 contract checks, 22 Browser checks, 6 HTTP isolation checks; 1280 px desktop and 375 px mobile without horizontal overflow. All 64 production Python source hashes match the pre-work snapshot. Evidence: `temp/dashboard-v2-evidence/`.
-- Runtime version unchanged. No commit, merge, push or Control Center restart performed for this prototype.
+- Runtime version unchanged. Committed on branch `feat/dashboard-v2` (from `main` f6996bb) and pushed at the user's request on 2026-10-03. It is not merged into `main`, and the Control Center was not restarted. The integration continues in a Claude cloud session that follows `docs/DASHBOARD_V2_CLOUD_PLAN.md`; the local machine then tests what the cloud cannot.
 
 # Unreleased — export identity from the render, reuse only a proven export, HTTP request limits, short-export rate cap — 2026-10-03
 

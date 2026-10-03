@@ -13,7 +13,10 @@
 - Feedback revision checks: 9 focused Browser checks pass (hover backdrop, grouped scan/export actions, cancel confirmation, closing drawer, desktop/mobile layout); contract checks 18/18 rerun; demo server syntax and theme response verified. Production source hashes still 64/64 unchanged. Evidence: `light-ui-checks.json`, `light-processing.png`, `light-list.png`, `light-mobile.png`, `light-mobile-detail.png` in the evidence directory.
 - Detailed mapping, schemas, payloads, integration sequence, gates and rollback: `docs/DASHBOARD_V2_UPDATE_GUIDE.md`. The future live version must retain `/review/{id}` and its full existing review workflow.
 - Verified: 18 contract checks, 22 Browser checks, 6 static-server isolation checks; 1280 px desktop and 375 px mobile; all 64 Python production hashes unchanged. Logs and screenshots: `temp/dashboard-v2-evidence/`.
-- Next: user evaluates the prototype and gives design feedback. Integrate only on a later explicit request; no commit/push/merge yet.
+- 2026-10-03: committed on branch `feat/dashboard-v2` and pushed at the user's request; not merged.
+- Next: a Claude cloud session follows `docs/DASHBOARD_V2_CLOUD_PLAN.md`.
+  - Its work: mapping, the adapter, an opt-in `/dashboard-v2` route, and the cloud-safe tests marked in its checklist.
+  - The local machine then tests the remaining items before any merge.
 
 ## Export identity, proven-export reuse, HTTP request limits, short-export rate cap (2026-10-03) — branch `fix/export-identity-http`, merged into `main`; needs a Control Center restart
 

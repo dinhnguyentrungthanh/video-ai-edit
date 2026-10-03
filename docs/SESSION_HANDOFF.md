@@ -7,6 +7,9 @@ This is the short, authoritative starting point for a new Codex account or chat.
 ## Repository state
 
 - Project root: `E:\DungChung\BiliFlow`
+- Branch `feat/dashboard-v2` (from `main` f6996bb, pushed 2026-10-03) holds the Dashboard V2 prototype and its integration plan.
+  - A session working on this branch, including a Claude cloud session, starts with `docs/DASHBOARD_V2_CLOUD_PLAN.md`.
+  - `main` and the running Control Center do not have V2.
 - Active branch: `main`. On 2026-10-03 the user asked to merge `improve/scan-performance-metrics` (everything since `7f5a9fb`: the scan-performance work, detector/review fixes and dashboard batches 1-4) into `main` and run it there. `main` was fast-forwarded to the branch tip (the commit that carries this note) and the working tree, which the Control Center runs from, was switched to `main` with no file change. The branch is kept.
 - Pushed at the user's request on 2026-10-03: `origin/main` (GitHub `dinhnguyentrungthanh/video-ai-edit`) moved `9155cd7..23aa1e4`. Local `main` has moved on since (the merge below); push again only when the user asks.
 - Merged at the user's request on 2026-10-03 at about 21:40, with no job running: branch `fix/export-identity-http` (worktree `temp/wt-export-fix`) was fast-forwarded into `main`. It brings export identity from the render, reuse of only a proven export, HTTP request limits and the short-export rate cap (see Current work). Not pushed: `origin/main` is still 23aa1e4. The running Control Center keeps the code it started with until it is restarted (ask the user first).
@@ -26,7 +29,7 @@ Since 2026-10-03 local `main` also holds everything from `improve/scan-performan
 
 Always confirm this section with `git status` and `git log` because it becomes stale after new work.
 
-## Current work — 2026-10-03 Dashboard V2 prototype (uncommitted, independent)
+## Current work — 2026-10-03 Dashboard V2 prototype (branch `feat/dashboard-v2`, pushed; integration planned for a cloud session)
 
 - Latest requested revision: multi-download UI at `#downloads`. Each task has independent ID/state/progress/sample log; multiline input validates an entire batch before adding (max 20/batch, 100/tab, duplicate URL rejection). FIFO with default 2 download slots, adjustable 1–3; lowering slots lets current tasks finish. Global pause, per-task pause/cancel/retry/failure simulation and filters. Resume needs a free slot. Keep downloads separate from production scan/export queues; no shell/downloader has been run or integrated.
 - Verified: 25 contract checks and 16 Browser checks, 375px light/dark and desktop; 64 production hashes unchanged. Evidence `multi-download-ui-checks.json` and `multi-download-*.png`. Command/PowerShell integration sequence and event/cancel/resume contracts are now documented in the V2 guide; they are future design, not existing API claims. Current demo open light with three paused sample tasks; click Tiếp tục tất cả to watch it. No demo or production restart.
@@ -42,6 +45,11 @@ Always confirm this section with `git status` and `git log` because it becomes s
 - Verified: 18 contract checks, 22 Browser interaction checks, 6 HTTP isolation checks; desktop 1280 and mobile 375; 64 production Python source hashes unchanged. Evidence, server PID and screenshots in `temp/dashboard-v2-evidence/`.
 - The independent static demo was started hidden with Python `-B`; its launcher is `dashboard_v2/Start-Demo.cmd`. No real cleanup/archive/export actions were triggered; no Control Center restart.
 - Next: collect user feedback. Do not wire mock mutations to live APIs. Any future integration follows the guide and preserves token, source/export guards, FIFO, current review workflow and rollback route.
+- 2026-10-03: committed on `feat/dashboard-v2` and pushed at the user's request, for a Claude cloud session.
+  - Its plan and checklist: `docs/DASHBOARD_V2_CLOUD_PLAN.md`.
+    - It does cloud-safe work first: mapping, the adapter with a fake transport, and an opt-in `/dashboard-v2` route.
+    - It marks what it tested and leaves live-data checks to the local machine.
+  - Before merging into `main`, drop the untracked `dashboard_v2/` copy and the uncommitted V2 notes in the main tree; they are identical to the branch.
 
 ## Current work — 2026-10-03 export identity, proven-export reuse, HTTP request limits, short-export rate cap (branch `fix/export-identity-http`, merged into `main`; Control Center restart pending)
 
