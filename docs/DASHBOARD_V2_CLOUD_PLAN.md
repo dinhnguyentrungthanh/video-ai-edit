@@ -153,7 +153,7 @@ Bảng ở mục 7 có hai cột kết quả: **Cloud** và **Máy thật**.
 
 | ID | Hạng mục | Cloud | Máy thật | Bằng chứng |
 | --- | --- | --- | --- | --- |
-| A1 | `node dashboard_v2/verify.cjs` đạt | [x] | [ ] | `node dashboard_v2/verify.cjs` → `{"passed":25,"failed":0}` |
+| A1 | `node dashboard_v2/verify.cjs` đạt | [x] | [ ] | `node dashboard_v2/verify.cjs` → `{"passed":25,"failed":0}` (Pha 0); sau Pha 2: 28/28 |
 | A2 | `node --check` cho mọi file `.js` / `.cjs` trong `dashboard_v2/` | [x] | [ ] | `node --check` đạt cả 5 file (app, contracts, download-demo, mock-data, verify.cjs) |
 | A3 | Các test Python chạy được trên Linux: `tests.test_http_guards`, `tests.test_export_identity`, `tests.test_control_center` (cần node). Ghi rõ module nào chạy được, module nào `[-]` và vì sao | [x] | [ ] | `tests.test_export_identity` 28/28 OK. `tests.test_control_center` 52/53: 1 lỗi `test_status_exposes_the_workers_queue_order` do thiếu PowerShell (`job_pipeline._powershell`) → `[-]` riêng test này. `tests.test_http_guards` `[-]`: import `cli.py` cần torch/timm. Chạy thêm: `test_source_cleanup_http` 20 OK, `test_source_archive_http` 8 OK, `test_export_dialog` 5 OK, `test_skip_export` 26/30 (4 lỗi cùng nguyên nhân PowerShell, `[-]`) |
 | A4 | Fingerprint cache: `stage_cache._tree_fingerprint(root, stage)` của cả 10 stage trong `CACHEABLE_STAGES` phải **giống hệt** giữa commit gốc f6996bb và đầu nhánh. Lệnh mẫu ở cuối mục này | [x] | [ ] | Lệnh mẫu (worktree f6996bb vs đầu nhánh 65803f7): 10 stage, `fingerprint changed for: none` |
@@ -183,12 +183,12 @@ Bảng ở mục 7 có hai cột kết quả: **Cloud** và **Máy thật**.
 
 | ID | Hạng mục | Cloud | Máy thật | Bằng chứng |
 | --- | --- | --- | --- | --- |
-| D1 | GET `/dashboard-v2` và asset theo whitelist; asset ngoài whitelist trả 404; không liệt kê thư mục | [ ] | [ ] | |
-| D2 | `/` (dashboard cũ) và `/review/{id}` trả nội dung **như trước**, có test so sánh | [ ] | [ ] | |
-| D3 | CSP của route V2 có `connect-src 'self'`; giữ `frame-ancestors` và chống framing như route cũ | [ ] | [ ] | |
-| D4 | Test Python với thư mục gốc tạm, theo mẫu `tests/test_control_center.py`: route trả 200, POST thiếu token vẫn 403 | [ ] | [ ] | |
-| D5 | Chạy lại các test cũ liên quan Control Center (`tests.test_control_center`, `tests.test_source_cleanup_http`, …): không test nào đổi kết quả | [ ] | [ ] | |
-| D6 | Lặp lại A4 sau khi sửa `control_center.py`: fingerprint cache không đổi | [ ] | [ ] | |
+| D1 | GET `/dashboard-v2` và asset theo whitelist; asset ngoài whitelist trả 404; không liệt kê thư mục | [x] | [ ] | `python -m unittest tests.test_dashboard_v2_route` → 9 OK. `/dashboard-v2` → 301 `/dashboard-v2/` (asset tương đối cần dấu `/`, CSP `base-uri 'none'` cấm `<base>`); `/dashboard-v2/` = `live.html`; 12 asset whitelist đúng byte; 18 đường dẫn ngoài whitelist (index.html, mock-data, demo-store, serve.py, `..`, `%2e%2e`, thư mục `assets/`, NUL, chữ hoa…) → 404 JSON, không HTML. Asset đọc từ `<code>/dashboard_v2`, không đọc gì trong project root. Thêm: Chromium mở `/dashboard-v2/` trên **handler thật** (root tạm, 4 job SQLite tạm): 4 dòng job, 0 lỗi JS, 0 vi phạm CSP, 0 POST (script `temp/real_handler_*`, không commit) |
+| D2 | `/` (dashboard cũ) và `/review/{id}` trả nội dung **như trước**, có test so sánh | [x] | [ ] | Cùng file test: body `/` và `/review/1` có SHA-256 và độ dài **trùng** bản gốc f6996bb (`tests/fixtures/dashboard_v2_classic_pages.json`, tính từ worktree f6996bb); header CSP vẫn chỉ `frame-ancestors 'self'` |
+| D3 | CSP của route V2 có `connect-src 'self'`; giữ `frame-ancestors` và chống framing như route cũ | [x] | [ ] | Trang V2 có thêm header CSP đầy đủ (`connect-src 'self'`, `frame-ancestors 'self'`, không `*`); header chung `frame-ancestors 'self'` và `X-Frame-Options: SAMEORIGIN` vẫn có trên trang và asset; `Cache-Control: no-store`, `nosniff`, `Referrer-Policy: no-referrer` |
+| D4 | Test Python với thư mục gốc tạm, theo mẫu `tests/test_control_center.py`: route trả 200, POST thiếu token vẫn 403 | [x] | [ ] | Cùng file test: route 200; POST `/api/scheduler` thiếu token → 403 và setting không đổi; có token → 200; Host lạ → 403; POST vào `/dashboard-v2/` → 403 |
+| D5 | Chạy lại các test cũ liên quan Control Center (`tests.test_control_center`, `tests.test_source_cleanup_http`, …): không test nào đổi kết quả | [x] | [ ] | Sau khi sửa: test_control_center 52/53 (1 lỗi PowerShell, như Pha 0); test_source_cleanup_http 20 OK; test_source_archive_http 8 OK; test_skip_export 26/30 (4 lỗi PowerShell, như Pha 0); test_export_identity 28 OK; test_export_dialog 5 OK; test_source_archive 37 OK; test_logo_memory_admin 14 OK (1 skip); test_review_workflow 111 OK. test_source_cleanup 47/49: 2 lỗi đường dẫn Windows (UNC, `\`) trên Linux, **giống hệt** khi chạy ở worktree f6996bb → `[-]` cho 2 test này |
+| D6 | Lặp lại A4 sau khi sửa `control_center.py`: fingerprint cache không đổi | [x] | [ ] | Lệnh mẫu A4 sau khi sửa: 10 stage, `fingerprint changed for: none`. `control_center.py` và `dashboard_v2/` không nằm trong 33 file nguồn của `stage_source_paths` |
 
 ### E. Máy thật (cloud không làm)
 
@@ -222,12 +222,35 @@ git worktree remove ../bf-base
 
 ## 8. Câu hỏi cho người dùng (cloud ghi thêm vào đây)
 
-- (chưa có)
+1. **E9 đã thay đổi:** nhánh nay có thêm file V2 mới (`adapter.js`, `demo-store.js`, `live.html`, `verify-adapter.cjs`, `browser-check.cjs`) và đã sửa `app.js`, `index.html`, `verify.cjs`, `serve.py`. Bản `dashboard_v2/` chưa track trong `E:\DungChung\BiliFlow` **không còn giống** bản trên nhánh. Trước khi checkout/merge, hãy dời bản đó ra ngoài repo (không xóa, nếu bạn muốn giữ). Bạn đồng ý không?
+2. **Nơi đọc asset:** route đọc `dashboard_v2/` cạnh mã nguồn (`src/biliflow/../../dashboard_v2`, đúng khi `PYTHONPATH=src` như `scripts/env.ps1`), không đọc từ project root/dữ liệu. Thiếu thư mục thì trả 404, không lỗi. Giữ như vậy?
+3. **`render_request` ở bản live** được suy ra từ `current_stage === "render"` + state PAUSED/FAILED/INTERRUPTED_RECOVERABLE, chỉ để khóa nút (backend vẫn quyết định; 409/400 được hiển thị). Guide cũ dặn “không invent render request”. Chấp nhận cách suy ra này, hay muốn bỏ (chỉ dựa vào 409)?
+4. **Trang Tải video:** đang để hiện ở bản live với badge “MÔ PHỎNG” và khung cảnh báo, không ẩn sau cờ. Muốn ẩn hẳn khỏi bản live không?
+5. **Fixture trang cũ** (`tests/fixtures/dashboard_v2_classic_pages.json`) khóa SHA-256 của `/` và `/review/1` theo f6996bb. Nếu sau này `main` cố ý sửa dashboard cũ hay trang duyệt, test này sẽ báo và cần cập nhật fixture. Chấp nhận?
+6. **403 vì Host sai** (không phải token) cũng làm adapter lấy token mới và gửi lại đúng một lần trước khi báo lỗi. Hai lần 403 là vô hại vì backend từ chối trước khi chạy gì. Giữ, hay muốn phân biệt theo nội dung lỗi?
 
 ## 9. Nhật ký cloud (mục mới nhất ở trên cùng)
 
+**Tóm tắt phiên cloud 2026-10-03 (Pha 0–3 xong; Pha 4 chưa làm, V2 chưa được coi là đã tích hợp):**
+
+- **Đã khớp (đã test trên cloud):**
+  - 52/52 endpoint của `contracts.js` có route thật, đúng method;
+  - 20 state job vào đúng một nhóm, trùng dashboard cũ;
+  - adapter: token, 403 làm mới một lần, không lặp lệnh ghi, 409 `code`/`preview`, 400/408/500, chống response cũ, bấm đúp một POST;
+  - presenter chỉ đọc snapshot; draft quét/xuất/AI giữ qua polling;
+  - route `/dashboard-v2/` có whitelist và CSP; `/` và `/review/{id}` trùng byte với f6996bb; fingerprint cache không đổi.
+- **Còn thiếu / chưa kiểm:**
+  - mọi thứ trên dữ liệu và Control Center thật (nhóm E, cột Máy thật);
+  - full suite trên Windows (torch, PowerShell, đường dẫn Windows);
+  - hiệu năng polling 3 s với số job thật.
+- **Vẫn là mô phỏng:**
+  - trang Tải video (cả hai bản);
+  - trong bản demo (`index.html`): toàn bộ dữ liệu, cảnh duyệt minh họa, tình huống kiểm thử.
+  - Bản live không có cảnh duyệt; nút Duyệt cảnh mở `/review/{id}` cũ.
+
 | Ngày | Commit | Việc đã làm | Test đã chạy | Còn lại |
 | --- | --- | --- | --- | --- |
+| 2026-10-03 | (pha 3) | Route `/dashboard-v2/` trong `control_center.py` (+53 dòng: whitelist 12 asset, CSP riêng, 301 khi thiếu `/`), `tests/test_dashboard_v2_route.py`, fixture hash trang cũ; tóm tắt phiên, câu hỏi mục 8 | test_dashboard_v2_route 9 OK; D5: các test Control Center như Pha 0; D6 không đổi; Chromium trên handler thật OK | Pha 4 (máy thật): toàn bộ cột Máy thật, nhóm E |
 | 2026-10-03 | (pha 2) | Tách DemoStore, viết ControlCenterAdapter + live store, `live.html`, gate `verify-adapter.cjs`, `browser-check.cjs` (API giả), `tests/test_dashboard_v2_frontend.py`; sửa 2 lỗi do browser-check tìm ra (focus drawer, `gpu` null) | verify.cjs 28/28; verify-adapter 15/15; browser-check 14/14; test_dashboard_v2_frontend + contract 9 OK | Pha 3 (route `/dashboard-v2/`). Push pha 0–1 bị 403 (GitHub), commit vẫn ở local |
 | 2026-10-03 | (pha 0–1) | Pha 0: chạy nền A1–A4. Pha 1: đối chiếu route/schema/state với code, thêm `tests/test_dashboard_v2_contract.py`, guide mục 8, sửa guide mục 4 và 7 | verify.cjs 25/25; node --check; test_dashboard_v2_contract 6 OK; test_export_identity 28 OK; test_control_center 52/53 (1 lỗi thiếu PowerShell); A4 không đổi | Pha 2 (frontend), Pha 3 (route) |
 

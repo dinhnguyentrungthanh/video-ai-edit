@@ -103,6 +103,27 @@ UNCONFIGURED_RECYCLE_BIN_MESSAGE = "Chưa cấu hình Thùng rác cho Control Ce
 # serve_forever returned: stop() waits up to 90 s for a running cleanup.
 STOP_WAIT_SECONDS = 120.0
 
+# Dashboard V2 preview (opt-in route /dashboard-v2/). The classic dashboard at "/" is
+# unchanged. Only these files of <code>/dashboard_v2 are served: never the demo page,
+# fixtures, scripts, a directory listing or anything outside the folder.
+DASHBOARD_V2_DIR = Path(__file__).resolve().parents[2] / "dashboard_v2"
+DASHBOARD_V2_PAGE = "live.html"
+DASHBOARD_V2_FILES = frozenset({
+    "styles.css", "theme.css", "contracts.js", "adapter.js", "download-demo.js", "app.js",
+    "assets/mark.svg", "assets/poster-amber.svg", "assets/poster-blue.svg",
+    "assets/poster-rose.svg", "assets/poster-sage.svg", "assets/poster-violet.svg",
+})
+DASHBOARD_V2_TYPES = {
+    ".html": "text/html; charset=utf-8", ".css": "text/css; charset=utf-8",
+    ".js": "text/javascript; charset=utf-8", ".svg": "image/svg+xml",
+}
+# connect-src 'self' replaces the demo's 'none' on this route only; framing stays same-origin.
+DASHBOARD_V2_CSP = (
+    "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; "
+    "img-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'none'; "
+    "form-action 'none'; frame-ancestors 'self'"
+)
+
 
 def _unconfigured_recycler(*_args: Any, **_kwargs: Any) -> Any:
     """ControlCenter.recycler until __init__ binds the real one (stubs and tests never reach the shell)."""
@@ -1620,6 +1641,36 @@ def _handler_class(center: ControlCenter) -> type[BaseHTTPRequestHandler]:
             except Exception as error:
                 self.send_json(500, {"error": str(error)})
 
+        def dashboard_v2(self, path: str) -> None:
+            """GET /dashboard-v2/ (live.html) and its whitelisted assets; read-only."""
+            if path == "/dashboard-v2":
+                # Relative asset URLs need the trailing slash (base-uri 'none' forbids <base>).
+                self.send_response(301)
+                self.send_header("Location", "/dashboard-v2/")
+                self.send_header("Content-Length", "0")
+                self.send_header("Cache-Control", "no-store")
+                self.end_headers()
+                return
+            name = path.removeprefix("/dashboard-v2/") or DASHBOARD_V2_PAGE
+            if name != DASHBOARD_V2_PAGE and name not in DASHBOARD_V2_FILES:
+                self.send_json(404, {"error": "Không tìm thấy"})
+                return
+            target = DASHBOARD_V2_DIR / name
+            if not target.is_file():
+                self.send_json(404, {"error": "Không tìm thấy"})
+                return
+            body = target.read_bytes()
+            self.send_response(200)
+            self.send_header("Content-Type", DASHBOARD_V2_TYPES[target.suffix])
+            self.send_header("Content-Length", str(len(body)))
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("X-Content-Type-Options", "nosniff")
+            self.send_header("Referrer-Policy", "no-referrer")
+            if name == DASHBOARD_V2_PAGE:
+                self.send_header("Content-Security-Policy", DASHBOARD_V2_CSP)
+            self.end_headers()
+            self.wfile.write(body)
+
         def do_GET(self) -> None:
             if not self.host_allowed():
                 return
@@ -1630,6 +1681,8 @@ def _handler_class(center: ControlCenter) -> type[BaseHTTPRequestHandler]:
                     self.review_media(int(match.group(1)), match.group(2), parsed.query)
                 elif path == "/":
                     self.send_bytes(200, _dashboard_html().encode(), "text/html; charset=utf-8")
+                elif path == "/dashboard-v2" or path.startswith("/dashboard-v2/"):
+                    self.dashboard_v2(path)
                 elif path == "/healthz":
                     self.send_json(200, {"status": "ok", "version": __version__})
                 elif path == "/api/session":

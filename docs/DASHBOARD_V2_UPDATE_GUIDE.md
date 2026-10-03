@@ -4,7 +4,9 @@ Ngày: 2026-10-03. Đối chiếu ban đầu với Control Center 0.7.24, commit
 
 ## 1. Trạng thái bàn giao
 
-**Hiện tại là prototype độc lập, có tương tác bằng dữ liệu mẫu. Chưa tích hợp vào Control Center.**
+**Cập nhật 2026-10-03 (cloud, Pha 0–3):** đã có adapter, bản live `live.html` và route xem thử `/dashboard-v2/`, test bằng transport/API giả và handler thật với dữ liệu tạm. **Chưa test trên Control Center và dữ liệu thật của máy người dùng, nên chưa được coi là đã tích hợp.** Bản demo độc lập bên dưới vẫn giữ nguyên.
+
+**Bản demo: prototype độc lập, có tương tác bằng dữ liệu mẫu.**
 
 - Mã demo: `E:\DungChung\BiliFlow\dashboard_v2\`.
 - Demo: `http://127.0.0.1:8794/`. Dashboard thật vẫn ở cổng riêng `8765`.
@@ -360,3 +362,11 @@ Tình trạng: **khớp** (endpoint, body và khóa đã khớp code), **một p
 - Mọi request đi qua một adapter duy nhất; token chỉ ở bộ nhớ, không ghi URL, localStorage hay log.
 - Trường hiển thị adapter tự thêm (`normalizeJob`): `name` = tên file của `source_path`, `duration` từ `duration_seconds`, `palette` (ảnh minh họa), `output_path` = `cleanup.output_name`/`archive.output_name` do backend trả (không tự tính), `render_request` = `current_stage === "render"` và state PAUSED/FAILED/INTERRUPTED_RECOVERABLE (chỉ để khóa nút; backend vẫn là nguồn thẩm quyền và 409/400 được hiển thị).
 - Polling: `/api/status` mỗi 3 s (như dashboard cũ); `/api/ai` khi mở trang và khi đang đăng nhập; `/api/logo-memory` khi mở trang Bộ nhớ logo và sau mỗi thao tác logo.
+
+### 8.4. Route xem thử `/dashboard-v2/` (Pha 3)
+
+- `GET /dashboard-v2` → 301 đến `/dashboard-v2/` (asset dùng đường dẫn tương đối; CSP `base-uri 'none'` cấm `<base>`).
+- `GET /dashboard-v2/` → `dashboard_v2/live.html`; `GET /dashboard-v2/<file>` chỉ cho 12 file trong `DASHBOARD_V2_FILES` (`control_center.py`). Mọi đường dẫn khác → 404 JSON, không liệt kê thư mục, không phục vụ `index.html`, fixture hay script kiểm tra.
+- Trang có header CSP riêng `DASHBOARD_V2_CSP` (`connect-src 'self'`, `frame-ancestors 'self'`), cộng header chung `frame-ancestors 'self'` + `X-Frame-Options: SAMEORIGIN` của mọi response.
+- `/`, `/review/{id}`, mọi `/api/...`, token, mã lỗi giữ nguyên (test so byte với f6996bb).
+- Rollback: không mở `/dashboard-v2/` là đủ; route không ghi dữ liệu. Gỡ hẳn: bỏ nhánh `elif` và các hằng `DASHBOARD_V2_*` trong `control_center.py` (không ảnh hưởng cache quét).
