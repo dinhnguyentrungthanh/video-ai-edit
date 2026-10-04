@@ -29,8 +29,9 @@ JOB_STATES = [
 
 
 def _node(script: str) -> str:
+    # Node writes UTF-8; without an explicit encoding Windows decodes it as cp1252.
     return subprocess.run([NODE, "-e", script], cwd=ROOT, check=True, capture_output=True,
-                          text=True, timeout=60).stdout
+                          text=True, encoding="utf-8", timeout=60).stdout
 
 
 def _routes() -> tuple[list[str], list[str]]:

@@ -18,8 +18,9 @@ NODE = shutil.which("node")
 @unittest.skipUnless(NODE, "node is required for the Dashboard V2 gates")
 class DashboardV2NodeGates(unittest.TestCase):
     def run_gate(self, script: str) -> dict:
+        # Node writes UTF-8; without an explicit encoding Windows decodes it as cp1252.
         completed = subprocess.run([NODE, str(ROOT / "dashboard_v2" / script)], cwd=ROOT,
-                                   capture_output=True, text=True, timeout=120)
+                                   capture_output=True, text=True, encoding="utf-8", timeout=120)
         self.assertEqual(completed.returncode, 0, completed.stdout + completed.stderr)
         summary = json.loads(completed.stdout.strip().splitlines()[-1])
         self.assertEqual(summary["failed"], 0)
@@ -34,7 +35,8 @@ class DashboardV2NodeGates(unittest.TestCase):
     def test_every_javascript_file_parses(self) -> None:
         for path in sorted((ROOT / "dashboard_v2").glob("*.*js")):
             with self.subTest(file=path.name):
-                completed = subprocess.run([NODE, "--check", str(path)], capture_output=True, text=True, timeout=60)
+                completed = subprocess.run([NODE, "--check", str(path)], capture_output=True, text=True,
+                                           encoding="utf-8", timeout=60)
                 self.assertEqual(completed.returncode, 0, completed.stderr)
 
 

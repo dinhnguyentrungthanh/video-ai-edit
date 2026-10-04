@@ -386,8 +386,10 @@ class PhoneModeTests(unittest.TestCase):
                 factory = Mock(side_effect=AssertionError("nothing may be bound"))
                 with self.assertRaises(ValueError):
                     access.enable(factory)
+                # lan is stubbed too: address=None falls back to lan(), and the real one finds the
+                # Wi-Fi address of the PC running the test, which is a valid address to bind.
                 with self.assertRaises(ValueError):
-                    phone_access.PhoneAccess().enable(factory, address=bad)
+                    phone_access.PhoneAccess(lan=lambda: bad).enable(factory, address=bad)
                 factory.assert_not_called()
                 self.assertFalse(access.enabled)
         for port in (0, 80, 1023, 8765, 70000, "8767", True):
