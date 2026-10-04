@@ -812,7 +812,9 @@ $Mine | Where-Object { $_.Action -eq "Block" -or ($_.Action -eq "Allow" -and "$(
 | M2 | Hướng dẫn Firewall: chọn bản vá theo số; rule có kiểm tra và chạy lại được; câu về junction; thứ tự Private → rule → thử → dọn; dọn rule bằng lệnh đúng phạm vi | [ ] | [ ] | |
 | M3 | Listener điện thoại trả 400 khi body POST bị cắt | [ ] | [ ] | |
 
-### 15.4. Thêm vào đợt 5 (người dùng yêu cầu, 2026-10-04): nút "Quay lại Dashboard" của trang duyệt về lại V2
+### 15.4. M4: nút "Quay lại Dashboard" của trang duyệt về lại V2 (chuyển sang phase trang duyệt V2; cloud KHÔNG làm ở đợt 5)
+
+Người dùng quyết định (2026-10-04): gộp việc này vào trang duyệt kiểu V2, làm sau merge với plan riêng. Phần dưới giữ lại làm yêu cầu cho phase đó. Tới lúc đó, nút Back của trình duyệt vẫn về đúng V2.
 
 - Hiện tại: trang duyệt cũ có `<button class="back" type="button" onclick="location.href='/'">← Quay lại Dashboard</button>` (`review_workflow.py`); đây là chỗ duy nhất của trang điều hướng về `/`. Mở trang duyệt từ V2 trên PC rồi bấm nút này thì về dashboard cũ `/`. Qua listener điện thoại, `/` đã chuyển sang V2 (câu 11).
 - **M4. Sửa:**
@@ -829,6 +831,6 @@ $Mine | Where-Object { $_.Action -eq "Block" -or ($_.Action -eq "Allow" -and "$(
 
 | ID | Hạng mục | Cloud | Máy thật | Bằng chứng |
 | --- | --- | --- | --- | --- |
-| M4 | Nút Quay lại Dashboard của trang duyệt mở từ V2 về lại V2; `/review/{id}` không tham số vẫn trùng byte | [ ] | [ ] | |
+| M4 | Nút Quay lại Dashboard của trang duyệt mở từ V2 về lại V2; `/review/{id}` không tham số vẫn trùng byte | — | — | Chuyển sang phase trang duyệt V2 (người dùng, 2026-10-04) |
 
 **Sau đợt 5:** máy thật kéo về kiểm nhanh (test liên quan, full suite, fingerprint; không chạy review dài); người dùng chuyển thư mục chính sang bản mới và test đầy đủ PC + điện thoại + laptop; chỉ merge vào `main` khi người dùng yêu cầu.
