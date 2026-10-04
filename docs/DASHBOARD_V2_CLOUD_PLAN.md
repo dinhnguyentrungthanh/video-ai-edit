@@ -355,6 +355,7 @@ Nhật ký đợt 1:
 
 | Ngày | Commit | Việc đã làm | Kết quả | Còn lại |
 | --- | --- | --- | --- | --- |
+| 2026-10-04 | 111bad5 (đợt 4 + U1) | Kéo đợt 4 (eb29eb6) và U1 (111bad5) về. Full suite trên 901ed71; node gates; fingerprint; kiểm U1 bằng trình duyệt trên bản xem thử chỉ đọc; một agent riêng review bảo mật đợt 4 (chỉ đọc code, chạy class thật với socket giả). Agent lỡ gọi thật 3 lệnh sửa Firewall; Windows từ chối vì agent không có quyền admin; máy thật kiểm lại: số rule và các rule Python không đổi, không có rule mới | Full suite 1265 OK (25 skip) ngay lần đầu; verify 28/28; verify-adapter 17/17; `node --check` 9/9; 68 test V2 OK trên 111bad5; fingerprint 10 stage `none` (`fingerprint-batch4.txt`); fixture D2 không đổi; launcher ASCII; chỉ sửa file phần điện thoại, launcher, tài liệu, test và `app.js`. U1 đạt. Review bảo mật: không có lỗi nghiêm trọng, cao hay trung bình; 4 lỗi thấp (dưới bảng) | Đợt 5 (mục 15), rồi người dùng test đầy đủ PC + điện thoại + laptop |
 | 2026-10-04 | 869dcf5 (code) | Người dùng test phần PC (bước 3–4) trên dữ liệu thật. Máy thật tái hiện lỗi cuộn trên bản xem thử chỉ đọc (dữ liệu giả, POST bị chặn), xong thì tắt và xóa root tạm | E5 đạt. E4: trang duyệt cũ, đúng thiết kế; người dùng giữ trang cũ cho lần merge này. Tìm được U1 (14.4) | Các bước PC còn lại; U1 giao cloud (14.4) |
 | 2026-10-04 | 869dcf5 (đợt 3) | Kéo đợt 3 về. Một agent riêng review bảo mật lại (chỉ đọc code, chạy handler thật với socket giả, không mở cổng). Chạy thử H5 bằng server giả trên 127.0.0.1. Làm E9 (mục 7), rồi cho thư mục chính chạy thử `869dcf5` (detached) để người dùng test; `main` vẫn f6996bb | Full suite 1259 OK (25 skip) ngay lần đầu; verify 28/28; verify-adapter 17/17; `node --check` 9/9; fingerprint 10 stage `none` (`fingerprint-batch3.txt`); fixture D2 không đổi; không file cấm nào bị sửa. H5 11/11. Review bảo mật: không có lỗi nghiêm trọng, cao hay trung bình; 3 lỗi thấp (L1–L3) và 2 chỗ sai trong hướng dẫn (dưới bảng) | Người dùng test trên PC, điện thoại và laptop (E2–E8, P6–P9); đợt 4 (mục 14), người dùng đã đồng ý |
 | 2026-10-04 | 949f935 (đợt 2) | Kéo đợt 2 về. Sửa 2 lỗi chỉ có trong test và chỉ lộ ra trên Windows (dưới bảng). Một agent riêng review bảo mật chế độ điện thoại; nó chỉ đọc code và không mở cổng nào | Full suite 1236 OK (25 skip) sau khi sửa test; verify 28/28; verify-adapter 17/17; fingerprint 10 stage `none`; không file cấm nào bị sửa. Review bảo mật: không có lỗi nghiêm trọng hay cao; 2 trung bình, 4 thấp (S1–S6 dưới bảng) | P6–P9 trên máy thật; sửa S1–S6 |
@@ -432,6 +433,27 @@ Nên sửa ở đợt sau:
 - Hướng dẫn `docs/DASHBOARD_V2_PHONE.md` có 2 chỗ sai:
   - mục 2 bước 4 bảo có thể bấm **Cancel**, trong khi ghi chú ngay dưới nói Cancel tạo rule Block cho Python, và rule Block thắng rule Allow của cổng 8767;
   - mục 7 ghi kết nối chưa có cookie "bị đóng sau 5 s": chỉ đúng với kết nối im lặng (L1).
+
+**Review bảo mật đợt 4 (máy thật, 2026-10-04).** Một agent riêng đọc diff 7a41a2b..eb29eb6 và chạy `_PhoneServer`, `PhoneAccess`, `PhoneHandler` thật với socket giả và store tạm; không bind cổng. Kết luận: không có lỗi nghiêm trọng, cao hay trung bình; đợt 4 an toàn để test trên thiết bị thật.
+
+- Đã thử, đạt:
+  - bộ đếm theo IP và slot được trả đúng một lần trên mọi nhánh (request thường, kết nối rỗng, lỗi handler, `SystemExit`, lỗi tạo thread, lỗi `Timer.start()`, bị từ chối); giới hạn 32 giữ đúng; 3000 kết nối từ 3000 IP không làm map phình; không còn thread Timer;
+  - cookie tới trước hạn chót thì request được phục vụ; 400 lần đua giữa cookie và Timer không có lỗi trong thread;
+  - 2000 lần từ chối → 1 event; 1000 lần đăng nhập từ một IP → 1 event; không event nào chứa mã, cookie, chữ đã gõ hay khóa mở;
+  - `disable()` không giữ khóa khi cắt socket, trả về trong 16 ms với 3 luồng đang mở; luồng PC không bị cắt; 150 lần bật/tắt không rò thread;
+  - hồi quy: cổng cookie, Host/Origin, danh sách POST cho phép, chặn Visual AI Audit, `/api/phone-mode` chỉ-PC và `extend` vẫn đúng; listener PC không đổi.
+- Còn lại, đều mức thấp:
+  - **LOW-1. Giới hạn 6 kết nối mỗi IP bằng đúng số kết nối song song của trình duyệt.** Listener trả lời kiểu HTTP/1.0 (mỗi request một kết nối), `live.html` tải khoảng 10 request lúc mở, và slot chỉ được trả sau khi thread đóng socket. Kết nối thứ 7 có thể bị đóng ngay, làm thiếu file JS/CSS; vài video tạm dừng cũng giữ hết 6 slot. Khung trên PC sẽ báo "Từ chối kết nối" cho chính điện thoại của người dùng. → M1.
+  - **LOW-2. Hướng dẫn Firewall có 4 chỗ chưa chính xác** (các lệnh tạo/xóa rule vẫn đúng phạm vi):
+    - lệnh kiểm `Get-Process … .Path` in đường dẫn junction `cpython-3.11-windows-x86_64-none`, khác `$Python` dù cùng file; Firewall dùng đường dẫn thật `cpython-3.11.<bản vá>`;
+    - `Sort-Object Name` so chuỗi nên `3.11.9` đứng trên `3.11.16`;
+    - `$Python` rỗng vẫn có thể tạo rule không gắn chương trình; chạy lại thì tạo rule trùng;
+    - bước dọn rule chỉ làm bằng giao diện, dễ chọn nhầm rule `python` khác; tắt rule Public trước khi đổi Wi-Fi sang Private làm điện thoại mất kết nối.
+
+    → M2.
+  - **LOW-3. Cách `shutdown()` đánh thức thread trên Windows.** Agent không bind cổng nên không thử được. Máy thật đã chạy `Batch4LowFindings` trên socket loopback thật của Windows trong full suite: 6/6 đạt. Không cần sửa.
+  - **LOW-4. POST bị cắt mất body chạy như `{}`** (có từ trước): `json.loads(self.rfile.read(length) or b"{}")` ở `control_center.py:1706`. Ví dụ `rerun` chỉ nhóm watermark mà bị cắt body sẽ quét lại mọi nhóm. Hiếm. → M3.
+  - Ghi chú, không bắt buộc: `cut()` của Timer và `close_connections()` có khe rất nhỏ trùng lúc handler đang đóng socket; event giới hạn ghi SQLite trên thread nhận kết nối (tối đa 1 lần mỗi phút); giới hạn event là chung cho mọi IP.
 
 ## 12. Đợt 2 (giao ngày 2026-10-04): việc cho phiên cloud tiếp theo
 
@@ -682,10 +704,10 @@ Người dùng đồng ý làm đợt 4 trước khi test trên điện thoại 
 
 | ID | Hạng mục | Cloud | Máy thật | Bằng chứng |
 | --- | --- | --- | --- | --- |
-| L1 | Giới hạn kết nối theo IP; hạn chót thật 5 s trước khi có cookie; event khi bị giới hạn | [x] | [ ] | `tests.test_dashboard_v2_phone_hardening.Batch4LowFindings` (listener 127.0.0.1, `lan` giả, IP giả qua `process_request` với socketpair): IP đã có 2/2 kết nối → kết nối thứ 3 của IP đó bị đóng ngay (< 1 s), IP khác vẫn nhận 401 bình thường; kết nối gửi 1 byte mỗi 0,3 s bị cắt khoảng `GATE_TIMEOUT_SECONDS` (test đặt 1 s) sau lúc kết nối (< 2,5 s) và slot được trả lại; kết nối có cookie không bị hạn chót cắt (test H1 cũ: body tới sau 1,6 s vẫn 200); 6 lần bị từ chối → 1 event `PHONE_CONNECTIONS_LIMITED` (`ip`, `limit: per_ip`), khung PC thấy, hết khoảng thời gian thì ghi thêm 1. Hằng số 6 và 60 s kiểm trong test |
-| L2 | Event `PHONE_LOGIN` có giới hạn | [x] | [ ] | Cùng file: 4 lần nhập đúng từ 127.0.0.1 + 2 lần từ 10.0.0.9 → đúng 2 event `PHONE_LOGIN`; bật lại → thiết bị được ghi lại 1 lần |
-| L3 | Tắt chế độ đóng cả kết nối đang mở, kể cả video đang phát | [x] | [ ] | Cùng file: video 256 MB (file thưa) đang tải qua listener điện thoại và qua `127.0.0.1` cùng lúc; tắt chế độ → luồng điện thoại kết thúc < 2 s và số kết nối về 0; luồng PC vẫn nhận dữ liệu |
-| L4 | Hướng dẫn: không bấm Cancel; rule Firewall gắn Python và cổng 8767; mục 7 ghi đúng; dòng in của launcher | [x] | [ ] | `docs/DASHBOARD_V2_PHONE.md` mục 2: khung “Không bấm Cancel”; rule `-Program $Python -Protocol TCP -LocalPort 8767 -Profile Private -RemoteAddress LocalSubnet`, `$Python` tìm bằng `cpython-3.11.*-windows-x86_64-none` (không ghi cứng bản vá, bỏ qua junction) + lệnh kiểm tiến trình đang nghe 8767; dọn rule Block, rule Public của Python và rule chỉ theo cổng cũ; mục 7 ghi đúng giới hạn sau L1–L3. Launcher (ASCII) in “KHONG bam Cancel” và cách tạo rule. Test L4 kiểm các điểm này. Máy thật cần thử rule trước khi chốt |
+| L1 | Giới hạn kết nối theo IP; hạn chót thật 5 s trước khi có cookie; event khi bị giới hạn | [x] | [x] | `tests.test_dashboard_v2_phone_hardening.Batch4LowFindings` (listener 127.0.0.1, `lan` giả, IP giả qua `process_request` với socketpair): IP đã có 2/2 kết nối → kết nối thứ 3 của IP đó bị đóng ngay (< 1 s), IP khác vẫn nhận 401 bình thường; kết nối gửi 1 byte mỗi 0,3 s bị cắt khoảng `GATE_TIMEOUT_SECONDS` (test đặt 1 s) sau lúc kết nối (< 2,5 s) và slot được trả lại; kết nối có cookie không bị hạn chót cắt (test H1 cũ: body tới sau 1,6 s vẫn 200); 6 lần bị từ chối → 1 event `PHONE_CONNECTIONS_LIMITED` (`ip`, `limit: per_ip`), khung PC thấy, hết khoảng thời gian thì ghi thêm 1. Hằng số 6 và 60 s kiểm trong test **Máy thật** (Windows, 2026-10-04, 901ed71): full suite 1265 OK (25 skip) ngay lần đầu; `Batch4LowFindings` 6/6 trên socket loopback thật của Windows. Review bảo mật đợt 4 (mục 11): đúng trên mọi nhánh đã thử, nhưng giới hạn 6 kết nối mỗi IP có thể chặn chính điện thoại của người dùng khi tải trang → M1 (mục 15) |
+| L2 | Event `PHONE_LOGIN` có giới hạn | [x] | [x] | Cùng file: 4 lần nhập đúng từ 127.0.0.1 + 2 lần từ 10.0.0.9 → đúng 2 event `PHONE_LOGIN`; bật lại → thiết bị được ghi lại 1 lần **Máy thật** (Windows, 2026-10-04, 901ed71): cùng full suite, đạt. Review bảo mật đợt 4: 1000 lần đăng nhập từ một IP → 1 event; tập IP được xóa khi bật/tắt |
+| L3 | Tắt chế độ đóng cả kết nối đang mở, kể cả video đang phát | [x] | [x] | Cùng file: video 256 MB (file thưa) đang tải qua listener điện thoại và qua `127.0.0.1` cùng lúc; tắt chế độ → luồng điện thoại kết thúc < 2 s và số kết nối về 0; luồng PC vẫn nhận dữ liệu **Máy thật** (Windows, 2026-10-04, 901ed71): cùng full suite, đạt (luồng điện thoại bị cắt, luồng PC vẫn chạy, trên socket thật của Windows). Review bảo mật đợt 4: không giữ khóa khi cắt socket; 150 lần bật/tắt không rò thread |
+| L4 | Hướng dẫn: không bấm Cancel; rule Firewall gắn Python và cổng 8767; mục 7 ghi đúng; dòng in của launcher | [x] | [ ] | `docs/DASHBOARD_V2_PHONE.md` mục 2: khung “Không bấm Cancel”; rule `-Program $Python -Protocol TCP -LocalPort 8767 -Profile Private -RemoteAddress LocalSubnet`, `$Python` tìm bằng `cpython-3.11.*-windows-x86_64-none` (không ghi cứng bản vá, bỏ qua junction) + lệnh kiểm tiến trình đang nghe 8767; dọn rule Block, rule Public của Python và rule chỉ theo cổng cũ; mục 7 ghi đúng giới hạn sau L1–L3. Launcher (ASCII) in “KHONG bam Cancel” và cách tạo rule. Test L4 kiểm các điểm này. Máy thật cần thử rule trước khi chốt **Máy thật** (2026-10-04): test L4 đạt trên Windows. Review bảo mật đợt 4: các lệnh tạo/xóa rule đúng phạm vi, nhưng còn 4 chỗ chưa chính xác → M2 (mục 15). Người dùng thử rule khi test điện thoại |
 
 ### 14.4. Lỗi giao diện từ lần test PC của người dùng (giao thêm sau khi L1–L4 đã push)
 
@@ -717,6 +739,77 @@ Người dùng test phần PC trên `869dcf5` với dữ liệu thật (2026-10-
 
 | ID | Hạng mục | Cloud | Máy thật | Bằng chứng |
 | --- | --- | --- | --- | --- |
-| U1 | Tải lại không đóng mục gập, không đóng ô chọn đang mở, không đẩy màn hình | [x] | [ ] | Chỉ sửa `dashboard_v2/app.js`: mục gập có `data-fold` (`cancelled`/`hidden`/`archived`, `phone-events`), trạng thái mở được giữ qua `render()` và `refreshList()`, khôi phục trước `window.scrollTo`; `onSnapshot()` bỏ qua lần dựng lại khi markup mới giống hệt markup đang hiển thị; `<select>` trong `#main` đang có focus thì chỉ cập nhật thanh điều hướng/drawer. `node dashboard_v2/browser-check.cjs` → 18/18, thêm check U1 (1280×640, `#videos`): mở “Đã hủy”, cuộn xuống cuối; snapshot giống hệt → `.list-section` giữ nguyên node; dữ liệu đổi → dựng lại, mục gập vẫn mở, `scrollY` giữ nguyên; `#sort` có focus → không bị thay, vẫn focus; mất focus → dựng lại, mục gập vẫn mở |
+| U1 | Tải lại không đóng mục gập, không đóng ô chọn đang mở, không đẩy màn hình | [x] | [x] | Chỉ sửa `dashboard_v2/app.js`: mục gập có `data-fold` (`cancelled`/`hidden`/`archived`, `phone-events`), trạng thái mở được giữ qua `render()` và `refreshList()`, khôi phục trước `window.scrollTo`; `onSnapshot()` bỏ qua lần dựng lại khi markup mới giống hệt markup đang hiển thị; `<select>` trong `#main` đang có focus thì chỉ cập nhật thanh điều hướng/drawer. `node dashboard_v2/browser-check.cjs` → 18/18, thêm check U1 (1280×640, `#videos`): mở “Đã hủy”, cuộn xuống cuối; snapshot giống hệt → `.list-section` giữ nguyên node; dữ liệu đổi → dựng lại, mục gập vẫn mở, `scrollY` giữ nguyên; `#sort` có focus → không bị thay, vẫn focus; mất focus → dựng lại, mục gập vẫn mở **Máy thật** (Windows, 2026-10-04, 111bad5): `node --check` 9/9, verify 28/28, verify-adapter 17/17, `tests.test_dashboard_v2_*` 68 OK; browser-check SKIP (máy không có Playwright). Chromium của máy thật trên bản xem thử chỉ đọc (dữ liệu giả, 1280×640, `#videos`): mở “Đã hủy”, cuộn xuống cuối (`scrollY` 820, cao 1460); 2 lần tải lại khi dữ liệu không đổi → cùng node, mục gập mở, `scrollY` 820; đổi dung lượng job #3 trong DB tạm → danh sách dựng lại (hiện “3,5 GB”), mục gập vẫn mở, cao 1460, `scrollY` 820. Người dùng thử lại trên dữ liệu thật khi test đầy đủ |
 
 **Sau đợt 4:** máy thật kéo về kiểm như đợt 3; người dùng test phần điện thoại và laptop (P7, P8, P9, câu 10–11) trên bản đã sửa; chỉ merge vào `main` khi người dùng yêu cầu.
+
+## 15. Đợt 5 (giao ngày 2026-10-04): 3 lỗi thấp trước khi test điện thoại
+
+Người dùng đồng ý sửa trước khi test đầy đủ (2026-10-04). Đọc trước: "Review bảo mật đợt 4" ở cuối mục 11.
+
+Ràng buộc của 12.3, 13 và 14 vẫn giữ nguyên:
+- không sửa file nằm trong fingerprint cache, không thêm thư viện;
+- `127.0.0.1:8765` giữ nguyên hành vi, D2 trùng byte;
+- không tự sửa Windows Firewall;
+- chế độ điện thoại mặc định tắt;
+- không test nào bind vào địa chỉ Wi-Fi thật.
+
+### 15.1. Việc cần làm
+
+- **M1 (LOW-1). Giới hạn theo IP chỉ tính kết nối chưa có cookie.**
+  - Một kết nối được tính vào giới hạn của IP từ lúc nhận tới lúc `opened()` (cookie hợp lệ) hoặc lúc đóng. Kết nối đã có cookie không còn tính vào giới hạn của IP, nhưng vẫn tính vào giới hạn chung 32.
+  - Giữ khoảng 6–8 kết nối chưa có cookie mỗi IP; hạn chót 5 s giữ nguyên.
+  - Nên làm: stream video qua listener điện thoại có timeout ghi hữu hạn (vd. 60 s); trình duyệt gửi lại Range khi tiếp tục phát. Stream trên `127.0.0.1:8765` giữ nguyên.
+  - Hướng dẫn mục 7: ghi rõ các thiết bị sau cùng một NAT dùng chung giới hạn.
+- **M2 (LOW-2). Sửa mục 2 của `docs/DASHBOARD_V2_PHONE.md`.**
+  - Chọn `$Python` theo số phiên bản, không theo chữ; dừng nếu không tìm thấy:
+
+```powershell
+$Dir = Get-ChildItem "E:\DungChung\BiliFlow\runtime\python" -Directory -Filter "cpython-3.11.*-windows-x86_64-none" |
+    Sort-Object { [version]($_.Name -replace '^cpython-(\d+\.\d+\.\d+)-.*$', '$1') } -Descending | Select-Object -First 1
+$Python = if ($Dir) { Join-Path $Dir.FullName "python.exe" } else { $null }
+$Python; if ($Python) { Test-Path -LiteralPath $Python -PathType Leaf }
+```
+
+  - Tạo rule có kiểm tra và chạy lại được (xóa rule cùng tên trước khi tạo):
+
+```powershell
+$RuleName = "BiliFlow phone mode (Python, TCP 8767)"
+if ($Python -and (Test-Path -LiteralPath $Python -PathType Leaf)) {
+    Get-NetFirewallRule -DisplayName $RuleName -ErrorAction SilentlyContinue | Remove-NetFirewallRule
+    New-NetFirewallRule -DisplayName $RuleName -Direction Inbound -Action Allow -Program $Python -Protocol TCP -LocalPort 8767 -Profile Private -RemoteAddress LocalSubnet
+} else { Write-Warning "python.exe not found; no rule created." }
+```
+
+  - Bỏ câu "phải trùng `$Python`" ở lệnh kiểm tiến trình. Thay bằng: Get-Process có thể in thư mục junction `cpython-3.11-windows-x86_64-none`; đó là cùng một file, còn Firewall dùng thư mục thật `cpython-3.11.<bản vá>` mà `$Python` đang giữ.
+  - Thứ tự: đổi Wi-Fi nhà sang Private → tạo rule → bật chế độ điện thoại và thử điện thoại vào được → **sau đó** mới tắt rule Block hoặc Public cũ của Python.
+  - Dọn rule bằng lệnh, đúng phạm vi chương trình, xem trước rồi mới tắt (tắt, không xóa; bật lại bằng `Enable-NetFirewallRule`):
+
+```powershell
+$Mine = Get-NetFirewallApplicationFilter | Where-Object { $_.Program -ieq $Python } | Get-NetFirewallRule | Where-Object { $_.Direction -eq "Inbound" }
+$Mine | Format-Table DisplayName, Action, Enabled, Profile -AutoSize
+$Mine | Where-Object { $_.Action -eq "Block" -or ($_.Action -eq "Allow" -and "$($_.Profile)" -match "Public|Any") } |
+    Where-Object { $_.DisplayName -notlike "BiliFlow phone mode*" } | Disable-NetFirewallRule
+```
+
+  - Thêm một câu: rule gắn với thư mục bản vá, nên khi nâng runtime Python thì làm lại bước 2–3.
+  - Dòng in của launcher (ASCII) khớp với hướng dẫn mới nếu cần.
+- **M3 (LOW-4). Listener điện thoại từ chối POST bị cắt body.** Chỉ trong `PhoneHandler`, không sửa handler PC (D2 và listener PC giữ nguyên): đọc body bằng một hàm riêng; nếu số byte đọc được khác `Content-Length` thì trả 400 "Request body was cut" và không chạy gì. Dùng cho cả `body()` lẫn nhánh `ai-audit`.
+
+### 15.2. Test
+
+- Theo mẫu `tests/test_dashboard_v2_phone_hardening.py` (listener 127.0.0.1, root tạm, `lan` giả):
+  - M1: một IP mở 10 kết nối đã có cookie cùng lúc → đều được phục vụ; kết nối chưa có cookie vượt giới hạn của IP → bị đóng ngay; IP khác không bị ảnh hưởng. Nếu làm timeout ghi: stream điện thoại bị đóng khi client ngừng đọc quá thời hạn, stream PC thì không.
+  - M2: test hướng dẫn kiểm các lệnh mới (sắp xếp theo `[version]`, `if ($Python -and (Test-Path …))`, xóa rule cùng tên trước khi tạo, `Disable-NetFirewallRule` lọc theo `-ieq $Python`), câu về junction, và thứ tự Private → rule → thử → dọn.
+  - M3: POST qua listener điện thoại có `Content-Length` 64 nhưng chỉ gửi 10 byte rồi đóng → 400, scheduler không được gọi; body đủ → chạy như cũ; listener PC không đổi.
+- Chạy lại như 13.2: node gates, `tests.test_dashboard_v2_*`, test Control Center liên quan, lệnh A4 (10 stage `none`).
+
+### 15.3. Checklist đợt 5
+
+| ID | Hạng mục | Cloud | Máy thật | Bằng chứng |
+| --- | --- | --- | --- | --- |
+| M1 | Giới hạn IP chỉ tính kết nối chưa có cookie; (nên) timeout ghi cho stream điện thoại | [ ] | [ ] | |
+| M2 | Hướng dẫn Firewall: chọn bản vá theo số; rule có kiểm tra và chạy lại được; câu về junction; thứ tự Private → rule → thử → dọn; dọn rule bằng lệnh đúng phạm vi | [ ] | [ ] | |
+| M3 | Listener điện thoại trả 400 khi body POST bị cắt | [ ] | [ ] | |
+
+**Sau đợt 5:** máy thật kéo về kiểm nhanh (test liên quan, full suite, fingerprint; không chạy review dài); người dùng chuyển thư mục chính sang bản mới và test đầy đủ PC + điện thoại + laptop; chỉ merge vào `main` khi người dùng yêu cầu.
