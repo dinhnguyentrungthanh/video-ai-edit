@@ -15,6 +15,8 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
+from biliflow.blur_filter import COVER_METHOD, cover_sigma
+from biliflow.blur_filter import COVER_METHOD, cover_sigma
 from biliflow.export_dialog import EXPORT_DIALOG_JS
 from biliflow.export_guards import (
     CONTROL_CENTER_JOB_MESSAGE,

@@ -1,3 +1,26 @@
+# Unreleased — stronger logo cover in exports (delogo, then blur) — 2026-10-04
+
+Status: on branch `feat/dashboard-v2`, made on the local machine at the user's request. The user found a blurred platform logo still readable in an export. They compared six ways to hide it on real frames and chose "F. Xóa logo rồi mờ" (remove the logo, then blur). The Control Center uses it after the main folder moves to this commit and the Control Center restarts. Not merged into `main`.
+
+- Problem: a regional BLUR applied `gblur=sigma=28` to the region only. A bright logo on a dark frame stayed readable. On a real episode end card, the region's maximum luma was 73–75 after the blur, against 0 around it.
+- New method `delogo_blur_v1` (`blur_filter.COVER_METHOD`):
+  - It crops the region with up to 8 px of picture around it, fills the region from that picture with FFmpeg `delogo`, crops back, then blurs.
+  - The blur grows with the region (`cover_sigma`: 0.6 × the shorter side, never below 28).
+  - The feathered edge fades into the cleaned region, never into the logo.
+  - FFmpeg refuses a delogo rectangle on the image edge. So where a region touches the frame edge, one pixel row stays inside; that row is only blurred.
+- `build_edit_plan` now writes `blur.method = "delogo_blur_v1"` and the region's sigma for every regional BLUR.
+  - Full-frame blurs and edit plans without `method` render as before, byte for byte (72 graph combinations compared with the previous code).
+  - The renderer passes the probed frame size so the cover can read picture on every side; a probe without width and height reads no picture past the right and bottom.
+  - A cover and a plain blur of the same region are never merged or pruned against each other.
+  - The review preview uses the same filter.
+- Export identity unchanged. The blur method and sigma are not review decisions (`export_identity.RENDER_FIELDS`), so an export made before this change still proves the current decisions. "Dọn video gốc" and "Lưu trữ" treat it as before, and "Xuất video" reuses it. To give an already exported video the cover, the user moves its old export (the `.mp4` and its `.manifest.json` in `output\`) to the Recycle Bin, then exports again.
+- Verified:
+  - Focused tests: `tests/test_blur_filter.py`, which includes real FFmpeg renders: a bright box on black and regions on every frame edge and with an odd size. The cover test was also added to `test_final_renderer` and `test_review_workflow`. 140 OK; full suite 1288 OK (25 skipped).
+  - Real video, read-only, with the two BLUR operations of a real edit plan (538×108 and 318×168 regions, 1280×534):
+    - every frame of both windows has maximum luma 0 in the region with the cover, against 73–75 with the old blur;
+    - on two film frames with a website watermark, the result matches the approved sample F (mean difference 0.1/255).
+  - No new model or dependency (FFmpeg `delogo` is part of the bundled build); detector thresholds unchanged.
+
 # Unreleased — Dashboard V2 standalone prototype — 2026-10-03
 
 - Multi-download UI revision: multiline batch entry (20 links/batch, 100 tasks/tab), atomic validation/deduplication, independent per-task progress/status, FIFO waiting, 1–3 download slots, global/individual pause, cancel/retry and escaped sample logs. New batches can be added while others run. Expanded logs, list scroll and form/select interaction are retained across timer updates. All tasks remain synthetic; no shell commands or downloader run, no processing queue change. Added a future command/PowerShell adapter guide with task/attempt events, exit/verification gates and backend-confirmed cancellation/resume.
