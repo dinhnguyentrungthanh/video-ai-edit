@@ -361,6 +361,7 @@ Nhật ký đợt 1:
 
 | Ngày | Commit | Việc đã làm | Kết quả | Còn lại |
 | --- | --- | --- | --- | --- |
+| 2026-10-04 | 26c680d (thư mục chính) | Đợt 6 chỉ đổi `dashboard_v2/app.js`, `browser-check.cjs` và tài liệu; lúc đó có job đang quét nên máy thật **không** khởi động lại Control Center, chỉ chuyển thư mục chính sang `26c680d` (V2 phục vụ `app.js` mới từ đĩa ngay; job đang quét không bị ảnh hưởng vì không file Python nào đổi). Người dùng tải lại trang và test U2. Máy thật đọc `/api/status` (chỉ đọc) để đếm video chọn được ở "Hoàn tất" | U2 người dùng xác nhận đạt. Tìm được U3 (mục 17): 25 video hoàn tất/bỏ qua đều không dọn hay lưu trữ được, nhưng thanh chọn không nói lý do | Cloud làm U3 (đợt 7) |
 | 2026-10-04 | d1bc18a (đợt 6) | Kéo đợt 6 về (code ở b547180, chỉ `dashboard_v2/app.js` và `browser-check.cjs`). Kiểm nhanh: test V2, A4, đọc diff; kiểm U2 bằng trình duyệt trên bản xem thử chỉ đọc (handler thật, root tạm, job giả; đổi % tiến độ của job giả đang quét trong DB của root tạm giữa hai lần poll), xong thì tắt và xóa root tạm | `tests.test_dashboard_v2_*` 72 OK (gồm node gates, D2 trùng byte); A4: không file nào trong 42 đường dẫn được băm đổi so với `main` (10 stage `none`); không có dòng attribution. U2 đạt ở cả 3 ca (16.3) | Hỏi người dùng rồi dừng và mở lại Control Center sang bản mới; người dùng test tiếp |
 | 2026-10-04 | 634669a (thư mục chính) | Theo yêu cầu người dùng, máy thật dừng Control Center bằng `Stop-BiliFlow.cmd` khi không có job chạy (cổng 8765 và 8767 đóng, file trạng thái được dọn), chuyển thư mục chính sang `634669a` (detached; `main` vẫn f6996bb), mở lại bằng `Start-BiliFlow-Phone.cmd` trong cửa sổ riêng (14:03; chế độ điện thoại bật; V2 phục vụ đúng `app.js` mới). Người dùng test trên PC, laptop và điện thoại. Máy thật tái hiện lỗi người dùng báo trên bản xem thử chỉ đọc | Tìm được U2 (mục 16): "Chi tiết" bị kéo lên đầu sau mỗi lần tải lại, với mọi job | Cloud sửa U2 (đợt 6); người dùng test tiếp |
 | 2026-10-04 | c91746f (đợt 5) | Kéo đợt 5 về (code và tài liệu ở be79454, c91746f sửa dòng nhật ký). Kiểm nhanh, không review dài (người dùng muốn nhanh): full suite, đọc diff code, fingerprint, launcher, cú pháp các lệnh Firewall trong hướng dẫn (không chạy lệnh Firewall nào) | Full suite 1269 OK (25 skip) ngay lần đầu, 235 s, gồm node gates; `Batch5` 4/4 trên socket thật của Windows; D2 trùng byte; fingerprint: không file nào trong 42 đường dẫn được băm của 10 stage đổi so với `main` f6996bb (10 stage `none`); launcher ASCII, parse 0 lỗi; 4 khối PowerShell mục 2 parse 0 lỗi, khối 1 chọn đúng `cpython-3.11.16`; không có dòng attribution. Đọc diff M1/M3: không thấy lỗi. Ghi chú nhỏ: code đợt 5 nằm trong commit tên `docs:` (be79454); không viết lại lịch sử | Người dùng dừng Control Center; máy thật chuyển thư mục chính sang c91746f (detached); người dùng mở lại bằng `Start-BiliFlow-Phone.cmd` rồi test đầy đủ PC + điện thoại + laptop (mục 7, 12.4, 13.3, 14.4); Firewall theo mục 2 mới (tùy chọn, người dùng tự chạy) |
@@ -899,8 +900,64 @@ Ràng buộc của 12.3, 13, 14 và 15 vẫn giữ nguyên:
 
 | ID | Hạng mục | Cloud | Máy thật | Bằng chứng |
 | --- | --- | --- | --- | --- |
-| U2 | "Chi tiết" giữ vị trí cuộn, mục gập và focus qua các lần tải lại; không dựng lại khi nội dung không đổi | [x] | [x] | b547180, chỉ `dashboard_v2/app.js` và `browser-check.cjs`: `refreshDrawer()` lưu/trả `scrollTop` của `aside.drawer` (phần tử cuộn thật; giữ cả `.drawer-body` phòng khi CSS đổi); HTML drawer tách thành `drawerHtml(j)`, giống chuỗi đang hiển thị thì không đụng DOM; đổi thì dựng lại rồi trả cuộn, mục gập, focus. Nội dung, thứ tự, nút thao tác, khóa chỉ-PC không đổi (cùng chuỗi HTML). browser-check 19/19, check U2 ở 1440×900 và 390×844: job 106 (không đổi) mở mọi mục gập, focus một nút, `.drawer.scrollTop = 400` → sau 2 lần poll vẫn cùng node, cuộn ±2 px, mục gập và focus giữ nguyên; job 102 (đang quét, server giả đổi 41% → 77%) → drawer được dựng lại, hiện 77%, cuộn ±2 px, mục gập và focus (cùng nút) giữ nguyên. Tái hiện lỗi: chạy check U2 với `app.js` cũ (04b4998) → "an unchanged drawer is not rebuilt" hỏng; bỏ qua kiểm tra cùng node thì "scrollTop 400 → 0", khớp với máy thật. Vùng cuộn khác: `#modal` không bị `onSnapshot` dựng lại; Cài đặt, Hàng đợi, Logo cuộn bằng cửa sổ, đã được U1 giữ (`window.scrollTo`, bỏ qua khi markup không đổi hoặc focus đang trong Cài đặt), nên không sửa thêm **Máy thật** (Windows, 2026-10-04, d1bc18a): trình duyệt trên bản xem thử chỉ đọc (handler thật, root tạm). Job không đổi → sau 2 lần poll vẫn cùng node, cuộn 400 giữ nguyên, 3 mục gập mở. Job đang quét đổi % trong DB của root tạm (55 → 68) → dựng lại, hiện 68%, cuộn 400 giữ nguyên, mục gập mở. Ở 375 px (68 → 80) → cuộn 600 giữ nguyên. `tests.test_dashboard_v2_*` 72 OK |
+| U2 | "Chi tiết" giữ vị trí cuộn, mục gập và focus qua các lần tải lại; không dựng lại khi nội dung không đổi | [x] | [x] | b547180, chỉ `dashboard_v2/app.js` và `browser-check.cjs`: `refreshDrawer()` lưu/trả `scrollTop` của `aside.drawer` (phần tử cuộn thật; giữ cả `.drawer-body` phòng khi CSS đổi); HTML drawer tách thành `drawerHtml(j)`, giống chuỗi đang hiển thị thì không đụng DOM; đổi thì dựng lại rồi trả cuộn, mục gập, focus. Nội dung, thứ tự, nút thao tác, khóa chỉ-PC không đổi (cùng chuỗi HTML). browser-check 19/19, check U2 ở 1440×900 và 390×844: job 106 (không đổi) mở mọi mục gập, focus một nút, `.drawer.scrollTop = 400` → sau 2 lần poll vẫn cùng node, cuộn ±2 px, mục gập và focus giữ nguyên; job 102 (đang quét, server giả đổi 41% → 77%) → drawer được dựng lại, hiện 77%, cuộn ±2 px, mục gập và focus (cùng nút) giữ nguyên. Tái hiện lỗi: chạy check U2 với `app.js` cũ (04b4998) → "an unchanged drawer is not rebuilt" hỏng; bỏ qua kiểm tra cùng node thì "scrollTop 400 → 0", khớp với máy thật. Vùng cuộn khác: `#modal` không bị `onSnapshot` dựng lại; Cài đặt, Hàng đợi, Logo cuộn bằng cửa sổ, đã được U1 giữ (`window.scrollTo`, bỏ qua khi markup không đổi hoặc focus đang trong Cài đặt), nên không sửa thêm **Máy thật** (Windows, 2026-10-04, d1bc18a): trình duyệt trên bản xem thử chỉ đọc (handler thật, root tạm). Job không đổi → sau 2 lần poll vẫn cùng node, cuộn 400 giữ nguyên, 3 mục gập mở. Job đang quét đổi % trong DB của root tạm (55 → 68) → dựng lại, hiện 68%, cuộn 400 giữ nguyên, mục gập mở. Ở 375 px (68 → 80) → cuộn 600 giữ nguyên. `tests.test_dashboard_v2_*` 72 OK **Người dùng** (2026-10-04, `26c680d`): tải lại trang trên PC, laptop và điện thoại, test lại: đạt |
 
 **Sau đợt 6:** máy thật kéo về kiểm nhanh và kiểm U2 bằng trình duyệt trên bản xem thử chỉ đọc. Khi người dùng đồng ý và
 không có job chạy, máy thật dừng Control Center, chuyển thư mục chính sang bản mới rồi mở lại. Người dùng test tiếp phần còn
 lại; chỉ merge vào `main` khi người dùng yêu cầu. **Đã kiểm ở d1bc18a** (mục 11, 2026-10-04): đạt.
+
+## 17. Đợt 7 (giao ngày 2026-10-04): ô chọn ở mục "Hoàn tất"
+
+Ràng buộc như mục 16.
+
+### 17.1. Việc cần làm
+
+- **U3. Mục "Hoàn tất" có thanh chọn nhưng không có ô tick nào, và người dùng không biết vì sao.**
+  - Người dùng thấy: ở "Hoàn tất" có "0 video đã chọn", "Chọn tối đa 50", "Bỏ chọn", "Dọn video gốc", "Lưu trữ", nhưng
+    các dòng không có ô tick nên không chọn được.
+  - Ẩn ô tick là đúng quy tắc an toàn:
+    - ô tick chỉ hiện khi `C.eligible(j,'cleanup')` hoặc `C.eligible(j,'archive')` (`app.js:100`, `contracts.js:31`),
+      do máy chủ tính;
+    - dữ liệu thật (đọc `/api/status`, 2026-10-04): 25 video hoàn tất/bỏ qua, 0 video dọn hoặc lưu trữ được. Lý do:
+      21 "Video gốc đã được dọn trước đó", 2 "Không thấy bản xuất trong thư mục output…", 2 "Video gốc không còn trong
+      thư mục input".
+
+    Lỗi nằm ở giao diện: không nói lý do, và thanh chọn vẫn hiện như thể chọn được.
+  - Sửa, chỉ trong `dashboard_v2/app.js` (và CSS nếu cần). **Không đổi quy tắc chọn**, không đổi server, không đổi luồng
+    dọn/lưu trữ:
+    - ở "Hoàn tất", mọi dòng có cột chọn:
+      - video chọn được → ô tick như cũ;
+      - video không chọn được → ô tick mờ (`disabled`), có lý do của máy chủ (`cleanup.reason`, hoặc `archive.reason` nếu
+        khác) trong `title` và `aria-label`;
+      - trên màn cảm ứng không có tooltip: nếu lý do chưa hiện ở dòng trạng thái của video thì hiện thêm thành chữ nhỏ;
+    - thanh chọn:
+      - khi danh sách không có video nào chọn được: hiện "Không có video nào dọn hoặc lưu trữ được", kèm số theo lý do
+        (vd. "21 đã dọn · 2 thiếu bản xuất · 2 không còn video gốc"), và làm mờ "Chọn tối đa 50", "Bỏ chọn";
+      - khi có: hiện "N video chọn được";
+    - "Chọn tối đa 50" chọn video dọn **hoặc** lưu trữ được, cùng quy tắc với ô tick. Hiện nay nút này chỉ chọn video dọn
+      được (`app.js:433`).
+  - Không đổi: khóa chỉ-PC trên điện thoại (dọn/lưu trữ vẫn bị chặn qua điện thoại), hộp xác nhận trước khi dọn/lưu trữ,
+    giới hạn 50.
+
+### 17.2. Test
+
+- `verify.cjs` hoặc `browser-check.cjs`:
+  - "Hoàn tất" toàn video không chọn được → không ô tick nào bật; mỗi dòng có ô tick mờ kèm lý do; thanh chọn báo không có
+    video nào chọn được; "Chọn tối đa 50" mờ;
+  - danh sách lẫn → chỉ video chọn được có ô tick bật; "Chọn tối đa 50" chọn đúng video dọn hoặc lưu trữ được, tối đa 50;
+  - bấm ô tick mờ không đổi gì; qua điện thoại (remote) dọn/lưu trữ vẫn bị khóa.
+- Chạy lại gate như 16.2: node gates, `tests.test_dashboard_v2_*`, A4, D2.
+
+### 17.3. Checklist đợt 7
+
+| ID | Hạng mục | Cloud | Máy thật | Bằng chứng |
+| --- | --- | --- | --- | --- |
+| U3 | "Hoàn tất": mọi dòng có cột chọn, video không chọn được có ô mờ kèm lý do; thanh chọn nói rõ khi không có video nào chọn được; "Chọn tối đa 50" theo cùng quy tắc với ô tick | [ ] | [ ] | |
+
+**Sau đợt 7:** máy thật kéo về kiểm nhanh. Nếu đợt này chỉ đổi file giao diện thì chuyển thư mục chính sang bản mới mà không
+khởi động lại Control Center; người dùng tải lại trang và test.
+
+**Ghi nhận cho sau merge (chưa làm).** Người dùng có thể muốn mở trang ra Internet để vào bằng 3G (2026-10-04). Việc này
+cần một phase bảo mật riêng, có plan và người dùng duyệt trước khi làm: HTTPS, đăng nhập mạnh, giới hạn truy cập, không mở
+cổng trần ra Internet (ví dụ đi qua VPN). Hướng dẫn Firewall ở `docs/DASHBOARD_V2_PHONE.md` mục 2 hiện là tùy chọn;
+người dùng bỏ qua phần này (2026-10-04).
