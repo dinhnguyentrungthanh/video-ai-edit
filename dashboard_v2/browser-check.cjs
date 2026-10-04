@@ -461,6 +461,125 @@ async function check(name, fn) { await fn(); passed++; results.push(name); proce
       await page.setViewportSize({width: 1280, height: 900});
     });
 
+    await check('U3: "Hoàn tất" shows a box on every row, the reason when it cannot be ticked, and PC-only on the phone', async () => {
+      const NONE = 'Không có video nào dọn hoặc lưu trữ được';
+      const MOVED = 'Không thấy bản xuất trong thư mục output (đã bị dời hoặc đổi tên?)';
+      const MISSING = 'Video gốc không còn trong thư mục input';
+      const OTHER_VOLUME = 'Kho lưu trữ không cùng ổ đĩa với thư mục input; không lưu trữ';
+      const done = () => jobs.filter(j => ['COMPLETED', 'SKIPPED'].includes(j.state));
+      const saved = new Map(jobs.map(j => [j.id, {cleanup: j.cleanup, archive: j.archive}]));
+      const restore = () => jobs.forEach(j => { if (saved.has(j.id)) Object.assign(j, saved.get(j.id)); });
+      const openCompleted = async (tag, width) => {
+        await page.setViewportSize({width, height: 900});
+        await Promise.all([page.waitForResponse(r => r.url().endsWith('/api/phone-mode')), page.goto(base + '/dashboard-v2/?u3-' + tag + '#videos')]);
+        await page.waitForSelector('#search');
+        await page.locator('[data-action="filter"][data-filter="completed"]').first().click();
+        await page.waitForSelector('.bulk-toolbar');
+      };
+      const boxes = () => page.evaluate(() => [...document.querySelectorAll('#list-body .job-row')].map(r => {
+        const box = r.querySelector('.video-cell input.select-job');
+        return {id: Number(r.dataset.job), box: !!box, disabled: !!box && box.disabled, checked: !!box && box.checked,
+          title: box ? box.title : '', label: box ? box.getAttribute('aria-label') : '',
+          status: r.querySelector('.status-cell').textContent, why: (r.querySelector('.select-reason') || {}).textContent || ''};
+      }));
+      const toolbar = () => page.evaluate(() => {
+        const t = document.querySelector('.bulk-toolbar'), b = a => t.querySelector('[data-action="' + a + '"]');
+        return {label: t.querySelector('.bulk-label').textContent, pick: b('select-all').disabled, clear: b('deselect').disabled,
+          clean: b('bulk-cleanup').disabled, archive: b('bulk-archive').disabled, cleanTitle: b('bulk-cleanup').title, archiveTitle: b('bulk-archive').title};
+      });
+      try {
+        // 1. Nothing can be cleaned or archived: every row has a disabled box with the server's reason.
+        for (const j of done()) {
+          if (!j.cleanup && !j.archive) continue; // already cleaned/archived fixtures: the reason comes from their state
+          j.cleanup = {eligible: false, reason: MOVED}; j.archive = {eligible: false, reason: MOVED};
+        }
+        jobs.find(j => j.id === 109).cleanup = {eligible: false, reason: MISSING};
+        jobs.find(j => j.id === 109).archive = {eligible: false, reason: OTHER_VOLUME};
+        await openCompleted('none', 1440);
+        const rows = await boxes();
+        assert.ok(rows.length >= 4, JSON.stringify(rows.map(r => r.id)));
+        for (const r of rows) {
+          assert.ok(r.box && r.disabled && !r.checked, 'row ' + r.id + ' has a disabled box');
+          assert.ok(r.title && r.label.includes(r.title), 'row ' + r.id + ' reason in title and aria-label: ' + JSON.stringify(r));
+          assert.ok(r.status.includes(r.title), 'row ' + r.id + ' shows the reason without a tooltip: ' + r.status);
+        }
+        const r109 = rows.find(r => r.id === 109), r105 = rows.find(r => r.id === 105);
+        assert.equal(r109.title, 'Dọn: ' + MISSING + ' · Lưu trữ: ' + OTHER_VOLUME, 'archive.reason is added when it differs');
+        assert.equal(r105.title, MOVED, 'one reason when cleanup and archive agree');
+        assert.equal(r105.why, 'Không chọn được: ' + MOVED);
+        const bar = await toolbar();
+        assert.ok(bar.label.startsWith(NONE), bar.label);
+        assert.match(bar.label, /\d+ thiếu bản xuất/);
+        assert.match(bar.label, /1 không còn video gốc/);
+        assert.deepEqual([bar.pick, bar.clear, bar.clean, bar.archive], [true, true, true, true], JSON.stringify(bar));
+        // Clicking a disabled box changes nothing.
+        const before = posts.length;
+        await page.locator('#list-body .job-row[data-job="105"] input.select-job').click({force: true});
+        assert.deepEqual(await boxes(), rows, 'a disabled box does not change');
+        assert.equal((await toolbar()).label, bar.label);
+        assert.equal(posts.length, before);
+        await noOverflow('U3 none 1440');
+
+        // 2. Mixed list: only selectable videos have an active box; "Chọn tối đa 50" picks cleanable OR archivable ones.
+        restore();
+        const template = jobs.find(j => j.id === 105);
+        for (let i = 0; i < 55; i++) jobs.push({...template, id: 300 + i, job_key: 'demo-video-' + (300 + i),
+          source_path: 'E:\\DungChung\\BiliFlow\\input\\Lưu trữ ' + i + '.mp4', updated_at: template.updated_at,
+          cleanup: {eligible: false, reason: 'Bản ghi bỏ qua không ứng với lần duyệt hiện tại'}, archive: {eligible: true}});
+        await openCompleted('mixed', 1440);
+        const total = done().filter(j => (j.cleanup?.eligible || j.archive?.eligible) && !j.source_cleaned && !j.source_archived && j.source_present !== false
+          && !['PENDING', 'RECYCLED'].includes(j.source_cleanup?.state)).length;
+        let bar2 = await toolbar();
+        assert.equal(bar2.label, '0 video đã chọn · ' + total + ' video chọn được');
+        assert.equal(bar2.pick, false);
+        await page.locator('[data-action="select-all"]').click();
+        bar2 = await toolbar();
+        assert.equal(bar2.label, '50 video đã chọn · ' + total + ' video chọn được', 'at most 50, archive-only videos included');
+        assert.equal(bar2.archive, false);
+        const picked = await page.evaluate(() => [...document.querySelectorAll('#list-body input.select-job:checked')].map(b => b.dataset.select));
+        assert.ok(picked.length > 0 && picked.every(Boolean), 'only active boxes are ticked');
+        for (const r of await boxes()) {
+          const j = jobs.find(x => x.id === r.id), eligible = (j.cleanup?.eligible || j.archive?.eligible) && !j.source_cleaned && !j.source_archived && j.source_present !== false
+            && !['PENDING', 'RECYCLED'].includes(j.source_cleanup?.state);
+          assert.equal(r.disabled, !eligible, 'row ' + r.id + ' box follows C.eligible');
+        }
+        await page.locator('[data-action="deselect"]').click();
+        assert.equal((await toolbar()).label, '0 video đã chọn · ' + total + ' video chọn được');
+        jobs.splice(jobs.findIndex(j => j.id === 300), 55);
+
+        // 3. Through the phone, even with selectable videos: PC-only, no preview.
+        remoteMode = true;
+        await openCompleted('remote', 390);
+        await page.waitForFunction(() => document.querySelector('.bulk-toolbar .bulk-label').textContent === 'Dọn và lưu trữ chỉ làm trên PC');
+        const bar3 = await toolbar();
+        assert.deepEqual([bar3.pick, bar3.clear, bar3.clean, bar3.archive], [true, true, true, true], JSON.stringify(bar3));
+        assert.match(bar3.cleanTitle, /^Chỉ làm trên PC: dọn, lưu trữ/);
+        assert.equal(bar3.archiveTitle, bar3.cleanTitle);
+        for (const r of await boxes()) {
+          assert.ok(r.box && r.disabled && !r.checked, 'phone row ' + r.id);
+          assert.equal(r.title, bar3.cleanTitle);
+          assert.equal(r.why, '', 'no per-row reason on the phone: the toolbar says PC only');
+        }
+        const previews = [];
+        const onRequest = r => { if (/source-(cleanup|archive)/.test(r.url())) previews.push(r.url()); };
+        page.on('request', onRequest);
+        await page.locator('[data-action="bulk-cleanup"]').click({force: true});
+        await page.locator('[data-action="bulk-archive"]').click({force: true});
+        await page.locator('#list-body .job-row[data-job="105"] input.select-job').click({force: true});
+        await page.waitForTimeout(300);
+        page.off('request', onRequest);
+        assert.deepEqual(previews, [], 'no preview is opened from the phone');
+        assert.equal(await page.evaluate(() => document.getElementById('modal').open), false);
+        await noOverflow('U3 remote 390');
+      } finally {
+        remoteMode = false;
+        restore();
+        const extra = jobs.findIndex(j => j.id === 300);
+        if (extra >= 0) jobs.splice(extra, 55);
+        await page.setViewportSize({width: 1280, height: 900});
+      }
+    });
+
     await check('No page error and no request outside the origin', async () => {
       assert.deepEqual(errors, []);
       assert.deepEqual(external, []);

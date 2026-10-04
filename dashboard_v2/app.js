@@ -92,23 +92,54 @@ function hero(){
   return '<div class="hero-grid"><section class="active-card"><div class="eyebrow"><span class="live-dot"></span>'+(j?exporting?'ĐANG XUẤT VIDEO':'ĐANG QUÉT CẢNH':'WORKER ĐANG CHỜ')+'</div><h2>'+esc(j?.name||'Sẵn sàng cho video tiếp theo')+'</h2><p>'+esc(j?({animation:'Hoạt hình',live_action:'Phim người thật',mixed:'Nội dung hỗn hợp'})[j.content_style]+' · '+j.duration+' · '+(exporting?'Xuất theo các cảnh đã duyệt':j.detector_groups.length+' nhóm kiểm tra'):'Video trong hàng đợi sẽ giữ nguyên thứ tự bấm.')+'</p><div class="hero-status"><span>'+esc(step)+'</span><strong>'+progress+'%</strong></div><div class="meter"><i style="width:'+progress+'%"></i></div><div class="active-foot"><span>'+esc((j?'#'+j.id+' · ':'')+queueNote)+'</span>'+(j?'<button class="small" data-action="detail" data-id="'+j.id+'">Xem tiến trình '+icon('arrow')+'</button>':'')+'</div></section><section class="resources-card"><div class="section-top"><h2>Tài nguyên máy</h2><span class="live-dot"></span></div>'+[['cpu','CPU',r.cpu_percent],['ram','RAM',r.memory.percent],['gpu','GPU',r.gpu?r.gpu.utilization_percent:null]].map(([cls,label,n])=>'<div class="resource-row '+cls+'"><span>'+label+'</span><div class="meter"><i style="width:'+(Number(n)||0)+'%"></i></div><strong>'+(n==null?'N/A':Math.round(n)+'%')+'</strong></div>').join('')+'<div class="resource-info"><span>'+esc(r.gpu?(r.gpu.name||'GPU'):'GPU · N/A')+'</span><span>'+(r.gpu&&Number.isFinite(r.gpu.memory_total_bytes)?'VRAM '+bytes(r.gpu.memory_used_bytes||0)+' / '+bytes(r.gpu.memory_total_bytes):'VRAM N/A')+'</span></div></section></div>';
 }
 function scope(j){return '<div class="scope-chips">'+Object.entries(C.detectors).map(([id,label])=>'<span class="scope-chip '+(j.detector_groups.includes(id)?'':'off')+'" title="'+esc(j.detector_groups.includes(id)?label+' đã chọn':label+' chưa kiểm tra')+'">'+({advertising:'Logo',adult:'18+',gore:'Máu me',violence:'Bạo lực'})[id]+'</span>').join('')+'</div>';}
+/* U3: in "Hoàn tất" every row has a selection box. Only a video the server lets clean or archive (C.eligible) can be
+   ticked; any other box is disabled with the server's reason (cleanup.reason, plus archive.reason when it differs).
+   Through the phone every box and the clean/archive buttons are disabled with C.PC_ONLY_REASON. */
+const SELECT_NONE='Không có video nào dọn hoặc lưu trữ được',SELECT_PC_ONLY='Dọn và lưu trữ chỉ làm trên PC';
+function selectable(j){return !state.remote&&(C.eligible(j,'cleanup')||C.eligible(j,'archive'));}
+function selectReasons(j){
+  const local=C.archived(j)?'Video gốc đã được lưu trữ':C.cleaned(j)?'Video gốc đã được dọn trước đó':j.source_present===false?'Video gốc không còn trong thư mục input':C.inFlight(j)?'Còn lệnh xuất video chưa xong':'Chưa dọn hay lưu trữ được video này';
+  const c=String(j.cleanup?.reason||''),a=String(j.archive?.reason||''),first=c||a||local;
+  return [first,a&&a!==first?a:''];
+}
+function selectReason(j){const [c,a]=selectReasons(j);return a?'Dọn: '+c+' · Lưu trữ: '+a:c;}
+function reasonShort(r){return r==='Video gốc đã được dọn trước đó'?'đã dọn':r.startsWith('Không thấy bản xuất')?'thiếu bản xuất':r==='Video gốc không còn trong thư mục input'?'không còn video gốc':r==='Video gốc đã được lưu trữ'?'đã lưu trữ':r;}
+function reasonCounts(jobs){
+  const counts=new Map();jobs.forEach(j=>{const k=reasonShort(selectReasons(j)[0]);counts.set(k,(counts.get(k)||0)+1);});
+  return [...counts].sort((x,y)=>y[1]-x[1]).map(([k,n])=>n+' '+k).join(' · ');
+}
+function selectBox(j){
+  if(state.remote)return '<input class="select-job" type="checkbox" disabled title="'+esc(C.PC_ONLY_REASON)+'" aria-label="'+esc('Chọn video '+j.id+': '+C.PC_ONLY_REASON)+'">';
+  if(!selectable(j)){const r=selectReason(j);return '<input class="select-job" type="checkbox" disabled title="'+esc(r)+'" aria-label="'+esc('Không chọn được video '+j.id+': '+r)+'">';}
+  return '<input class="select-job" type="checkbox" aria-label="Chọn video '+j.id+'" data-select="'+j.id+'" '+(selected.has(j.id)?'checked':'')+(state.source_cleanup_running||state.offline?' disabled':'')+'>';
+}
 function row(j){
-  const main=ops(j).find(a=>a.id===C.primary(j)),remaining=reviewRemaining(j),p=j.state==='RENDERING'?renderPercent(j):percent(j.progress),eligible=C.eligible(j,'cleanup')||C.eligible(j,'archive');
+  const main=ops(j).find(a=>a.id===C.primary(j)),remaining=reviewRemaining(j),p=j.state==='RENDERING'?renderPercent(j):percent(j.progress);
   const isExport=C.tab(j)==='export',progText=j.state==='VERIFYING'||j.render_progress?.state==='VERIFYING'?'Kiểm tra':isExport&&j.state==='QUEUED'?'Chờ xuất':p+'%';
   const src=C.sourceLine(j);
   const note=src&&src[1]==='error'?src[0]:C.archived(j)?'Đã lưu trữ video gốc':C.cleaned(j)?'Video gốc trong Thùng rác':j.state==='WAITING_REVIEW'?remaining+' cảnh cần duyệt':j.queue_position?'Lượt #'+j.queue_position:'Revision '+j.active_revision;
-  return '<article class="job-row" data-job="'+j.id+'"><div class="video-cell">'+(filter==='completed'&&eligible?'<input class="select-job" type="checkbox" aria-label="Chọn video '+j.id+'" data-select="'+j.id+'" '+(selected.has(j.id)?'checked':'')+(state.source_cleanup_running||state.offline?' disabled':'')+'>':'')+'<img class="poster" src="assets/poster-'+j.palette+'.svg" alt="" loading="lazy"><div class="video-text"><button class="video-title" data-action="detail" data-id="'+j.id+'" title="'+esc(j.name)+'">'+esc(j.name)+'</button><div class="video-meta"><span>#'+j.id+'</span><span>·</span><span>'+j.duration+'</span><span>·</span><span>'+bytes(j.source_size_bytes)+'</span></div></div></div><div class="status-cell">'+badge(j)+'<span class="cell-sub'+(src&&src[1]==='error'?' tone-error':'')+'">'+esc(note)+'</span></div><div class="scope-cell">'+scope(j)+'</div><div class="progress-cell"><div class="row-progress"><span>'+progText+'</span><div class="meter"><i style="width:'+p+'%"></i></div></div></div><div class="row-actions">'+(main?btn(j,{...main,label:main.id==='start'?'Thiết lập':main.id==='restore'?'Khôi phục':main.label},''): '<button class="secondary small" data-action="detail" data-id="'+j.id+'">Chi tiết</button>')+'<button class="icon-button" data-action="detail" data-id="'+j.id+'" aria-label="Thao tác video '+j.id+'" title="Thao tác video">⋯</button></div></article>';
+  const why=filter==='completed'&&!state.remote&&!selectable(j)?selectReason(j):'';
+  const whyLine=why&&!note.includes(why)?'<span class="cell-sub select-reason">Không chọn được: '+esc(why)+'</span>':'';
+  return '<article class="job-row" data-job="'+j.id+'"><div class="video-cell">'+(filter==='completed'?selectBox(j):'')+'<img class="poster" src="assets/poster-'+j.palette+'.svg" alt="" loading="lazy"><div class="video-text"><button class="video-title" data-action="detail" data-id="'+j.id+'" title="'+esc(j.name)+'">'+esc(j.name)+'</button><div class="video-meta"><span>#'+j.id+'</span><span>·</span><span>'+j.duration+'</span><span>·</span><span>'+bytes(j.source_size_bytes)+'</span></div></div></div><div class="status-cell">'+badge(j)+'<span class="cell-sub'+(src&&src[1]==='error'?' tone-error':'')+'">'+esc(note)+'</span>'+whyLine+'</div><div class="scope-cell">'+scope(j)+'</div><div class="progress-cell"><div class="row-progress"><span>'+progText+'</span><div class="meter"><i style="width:'+p+'%"></i></div></div></div><div class="row-actions">'+(main?btn(j,{...main,label:main.id==='start'?'Thiết lập':main.id==='restore'?'Khôi phục':main.label},''): '<button class="secondary small" data-action="detail" data-id="'+j.id+'">Chi tiết</button>')+'<button class="icon-button" data-action="detail" data-id="'+j.id+'" aria-label="Thao tác video '+j.id+'" title="Thao tác video">⋯</button></div></article>';
 }
 function allFiltered(){
   const needle=query.normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase();
   return state.jobs.filter(j=>C.overviewLabels[filter]?C.overviewMatch(j,filter):(C.hidden(j)?filter==='all'||filter==='waiting':filter==='all'||C.tab(j)===filter)).filter(j=>(j.name+' '+j.id+' '+j.source_path).normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase().includes(needle)).sort((a,b)=>sort==='queue'?(a.queue_position||1e6)-(b.queue_position||1e6)||a.id-b.id:sort==='name'?a.name.localeCompare(b.name,'vi'):b.updated_at.localeCompare(a.updated_at)||a.id-b.id);
 }
+function bulkToolbar(all,ids){
+  if(filter!=='completed')return '';
+  const n=all.filter(selectable).length,busy=state.source_cleanup_running||state.offline,off=t=>' disabled title="'+esc(t)+'"';
+  let label,pick='',clear='',clean,archive;
+  if(state.remote){label=SELECT_PC_ONLY;pick=clear=clean=archive=off(C.PC_ONLY_REASON);}
+  else if(!n){const counts=reasonCounts(all);label=SELECT_NONE+(counts?'<small class="bulk-reasons"> · '+esc(counts)+'</small>':'');pick=clear=off(SELECT_NONE);clean=archive=' disabled';}
+  else{label=selected.size+' video đã chọn · '+n+' video chọn được';clean=!ids.some(id=>C.eligible(getJob(id),'cleanup'))||busy?' disabled':'';archive=!ids.some(id=>C.eligible(getJob(id),'archive'))||busy?' disabled':'';}
+  return '<div class="bulk-toolbar"><span class="bulk-label">'+label+'</span><button class="small secondary" data-action="select-all"'+pick+'>Chọn tối đa 50</button><button class="small secondary" data-action="deselect"'+clear+'>Bỏ chọn</button><button class="small" data-action="bulk-cleanup"'+clean+'>Dọn video gốc</button><button class="small" data-action="bulk-archive"'+archive+'>Lưu trữ</button></div>';
+}
 function listBody(){
   const all=allFiltered(),folds=[['Đã hủy',all.filter(j=>j.state==='CANCELLED'&&!C.hidden(j)),'cancelled'],['Đã ẩn',all.filter(C.hidden),'hidden'],['Đã lưu trữ',all.filter(j=>C.archived(j)),'archived']];
   const regular=all.filter(j=>j.state!=='CANCELLED'&&!C.archived(j)),pages=Math.max(1,Math.ceil(regular.length/8));page=Math.min(page,pages);
-  const ids=[...selected].filter(id=>C.eligible(getJob(id),'cleanup')||C.eligible(getJob(id),'archive'));selected=new Set(ids);
-  const toolbar=filter==='completed'?'<div class="bulk-toolbar"><span>'+selected.size+' video đã chọn</span><button class="small secondary" data-action="select-all">Chọn tối đa 50</button><button class="small secondary" data-action="deselect">Bỏ chọn</button><button class="small" data-action="bulk-cleanup" '+(!ids.some(id=>C.eligible(getJob(id),'cleanup'))||state.source_cleanup_running||state.offline?'disabled':'')+'>Dọn video gốc</button><button class="small" data-action="bulk-archive" '+(!ids.some(id=>C.eligible(getJob(id),'archive'))||state.source_cleanup_running||state.offline?'disabled':'')+'>Lưu trữ</button></div>':'';
-  return toolbar+'<div class="jobs-head"><span>VIDEO</span><span>TRẠNG THÁI</span><span>PHẠM VI QUÉT</span><span>TIẾN ĐỘ</span><span style="text-align:right">THAO TÁC</span></div>'+regular.slice((page-1)*8,page*8).map(row).join('')+(all.length?'':'<div class="empty">'+icon('folder')+'<strong>Không có video phù hợp</strong>Thử đổi bộ lọc hoặc từ khóa tìm kiếm.</div>')+folds.filter(x=>x[1].length).map(([label,items,key])=>'<details class="fold" data-fold="'+key+'"><summary>'+label+' ('+items.length+')</summary>'+items.map(row).join('')+'</details>').join('')+'<div class="list-footer"><span>'+all.length+' video phù hợp · '+visibleJobs().length+' video trong không gian</span><div class="pages"><button data-action="prev" '+(page===1?'disabled':'')+' aria-label="Trang trước">‹</button><span>'+page+' / '+pages+'</span><button data-action="next" '+(page===pages?'disabled':'')+' aria-label="Trang sau">›</button></div></div>';
+  const ids=[...selected].filter(id=>selectable(getJob(id)));selected=new Set(ids);
+  return bulkToolbar(all,ids)+'<div class="jobs-head"><span>VIDEO</span><span>TRẠNG THÁI</span><span>PHẠM VI QUÉT</span><span>TIẾN ĐỘ</span><span style="text-align:right">THAO TÁC</span></div>'+regular.slice((page-1)*8,page*8).map(row).join('')+(all.length?'':'<div class="empty">'+icon('folder')+'<strong>Không có video phù hợp</strong>Thử đổi bộ lọc hoặc từ khóa tìm kiếm.</div>')+folds.filter(x=>x[1].length).map(([label,items,key])=>'<details class="fold" data-fold="'+key+'"><summary>'+label+' ('+items.length+')</summary>'+items.map(row).join('')+'</details>').join('')+'<div class="list-footer"><span>'+all.length+' video phù hợp · '+visibleJobs().length+' video trong không gian</span><div class="pages"><button data-action="prev" '+(page===1?'disabled':'')+' aria-label="Trang trước">‹</button><span>'+page+' / '+pages+'</span><button data-action="next" '+(page===pages?'disabled':'')+' aria-label="Trang sau">›</button></div></div>';
 }
 function list(){
   const visible=visibleJobs();
@@ -430,9 +461,9 @@ document.addEventListener('click',async event=>{
   else if(action==='next'){page++;refreshList();}
   else if(action==='job')jobAction(el.dataset.id,el.dataset.op);
   else if(action==='scheduler')showModal(state.scheduler_paused?'Tiếp tục hàng đợi':'Tạm dừng hàng đợi','<p>Giữ nguyên thứ tự quét và xuất. Bước đang chạy được giữ riêng; bạn có thể dừng nó trong Chi tiết video.</p>',async()=>{await mutate('scheduler',null,{paused:!state.scheduler_paused});toast(LIVE?'Đã gửi lệnh hàng đợi.':'Đã thay đổi hàng đợi mẫu.');return true;});
-  else if(action==='select-all'){selected=new Set(allFiltered().filter(j=>C.eligible(j,'cleanup')).slice(0,50).map(j=>j.id));refreshList();}
+  else if(action==='select-all'){if(state.remote)return;selected=new Set(allFiltered().filter(selectable).slice(0,50).map(j=>j.id));refreshList();}
   else if(action==='deselect'){selected.clear();refreshList();}
-  else if(action==='bulk-cleanup'||action==='bulk-archive')filePreview(action==='bulk-cleanup'?'cleanup':'archive',[...selected]);
+  else if((action==='bulk-cleanup'||action==='bulk-archive')&&!state.remote)filePreview(action==='bulk-cleanup'?'cleanup':'archive',[...selected]);
   else if(action==='logo-class'||action==='logo-delete')logoAction(el.dataset.key,action==='logo-delete');
   else if(action==='scene-decision'||action==='scene-clear')decideScene(el.dataset.scene,el.dataset.decision,action==='scene-clear');
   else if(action==='bulk-review'){
