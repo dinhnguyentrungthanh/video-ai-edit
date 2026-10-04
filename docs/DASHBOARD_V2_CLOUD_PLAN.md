@@ -970,6 +970,7 @@ Ràng buộc như mục 16.
 **Còn lại trước khi merge (2026-10-04):**
 
 - U3: cloud xong (10db89f), máy thật đã kiểm trên dữ liệu thật (652f207). Người dùng tải lại trang, xem lại "Hoàn tất" trên PC và qua điện thoại (thanh chọn phải ghi "Dọn và lưu trữ chỉ làm trên PC").
+- **Người dùng quyết định (2026-10-04):** E6 và E7 làm cùng lần thử trang duyệt mới (sau R4 của `docs/DASHBOARD_V2_REVIEW_PLAN.md`, bước 6 mục 8.3). Phase trang duyệt làm tiếp trên nhánh này, trước khi merge.
 - E6: người dùng xuất thật một video từ V2. Kiểm ba lựa chọn dung lượng, và kiểm draft xuất của C4: chọn dung lượng tùy chỉnh, chờ vài lần polling, giá trị không mất.
 - E7: người dùng mở hộp xem trước dọn/lưu trữ trong V2 rồi bấm Hủy. Video vừa xuất ở E6 sẽ chọn được ở "Hoàn tất"; dọn hay lưu trữ thật là tùy người dùng. Đây cũng là lần đầu thấy ô tick bật của U3 trên dữ liệu thật.
 

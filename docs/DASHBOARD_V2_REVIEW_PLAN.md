@@ -1,7 +1,7 @@
 # Plan trang duyệt giao diện V2
 
 Soạn ngày 2026-10-04 trên nhánh `feat/dashboard-v2`. Người dùng đã chọn hướng và trả lời các câu hỏi (mục 1).
-Chỉ bắt đầu sau khi `feat/dashboard-v2` đã merge vào `main` và người dùng giao đợt R0.
+**Đổi ngày 2026-10-04 (người dùng):** bắt đầu ngay, chưa merge. Làm tiếp trên nhánh `feat/dashboard-v2`. E6, E7 của Dashboard V2 sẽ test chung khi người dùng thử trang duyệt mới. Merge vào `main` một lần, sau khi người dùng test hết.
 
 Tài liệu kèm:
 - `docs/DASHBOARD_V2_REVIEW_INVENTORY.md`: bảng kê kỹ thuật (tiếng Anh) về trang duyệt cũ, API, bất biến, test và chỗ
@@ -39,7 +39,7 @@ Hiện trạng:
 - Nút "← Quay lại Dashboard" của trang cũ về `/`. Trên PC đó là dashboard cũ; trên listener điện thoại `/` chuyển sang V2.
 
 Quyết định của người dùng (2026-10-04):
-- Giữ trang duyệt cũ cho lần merge `feat/dashboard-v2`; làm trang duyệt V2 sau merge, theo plan này.
+- Trang duyệt cũ vẫn giữ. Trang duyệt V2 làm theo plan này. Ban đầu định làm sau merge; ngày 2026-10-04 người dùng đổi thành làm ngay trên `feat/dashboard-v2` rồi merge một lần.
 - M4 (nút quay lại về V2) chuyển vào phase này. Cloud đã viết code M4 ở đợt 5 và cất thành patch. Trên cloud patch đã
   qua D2 trùng byte, `view` lạ → `#overview`, listener điện thoại và browser-check 18/18.
 - **Q1, vị trí:** người dùng nhắc rằng V2 đã có UI duyệt. Trang duyệt mới chính là hộp "Duyệt cảnh" của bản mẫu, làm
@@ -330,7 +330,7 @@ PC:
 ## 7. Các đợt
 
 Mỗi đợt cloud làm xong thì push lên nhánh của phase rồi dừng. Máy thật kéo về kiểm (mục 8.2) và ghi cột Máy thật.
-Nhánh đề xuất: `feat/review-v2`, tạo từ `main` sau merge.
+Nhánh: `feat/dashboard-v2`, làm tiếp, chưa merge (người dùng quyết định 2026-10-04). Dashboard V2 xong ở `fb67b9e`, chỉ còn E6, E7. Nếu cần merge riêng Dashboard V2 thì chỉ merge tới commit đó.
 
 ### 7.1. R0: nền móng, hộp chỉ xem với ảnh thật, M4
 
@@ -506,5 +506,6 @@ Nhánh đề xuất: `feat/review-v2`, tạo từ `main` sau merge.
 
 | Ngày | Commit | Việc đã làm | Kết quả | Còn lại |
 | --- | --- | --- | --- | --- |
+| 2026-10-04 | (commit này) | Người dùng quyết định làm trang duyệt ngay, chưa merge; E6, E7 của Dashboard V2 test chung khi thử trang duyệt mới. Máy thật kiểm patch M4 trên file đã commit ở đầu nhánh: áp sạch (`git show HEAD:docs/patches/M4-review-back-to-v2.patch` rồi `git apply --check --cached`). Trên Windows, file patch checkout ra CRLF nên `git apply --check` trên thư mục làm việc báo lỗi; đó không phải lỗi của patch | Sẵn sàng giao R0 trên `feat/dashboard-v2` | Cloud làm R0 |
 | 2026-10-04 | (commit này) | Người dùng nhắc V2 đã có UI duyệt; máy thật mở bản demo (`serve.py`, chỉ file tĩnh) xem hộp "Duyệt cảnh" ở 1440 px và 375 px, rồi viết lại plan dựa trên hộp đó. Ghi các câu trả lời Q1–Q7 | Plan theo hộp "Duyệt cảnh" của bản mẫu | Merge `feat/dashboard-v2` khi người dùng test xong; giao R0 |
 | 2026-10-04 | (chưa commit) | Máy thật soạn bản đầu của plan và inventory từ 2 lượt đọc code chỉ đọc ở 18d3c18, kiểm lại số dòng phần điện thoại ở c91746f; thêm patch M4 của cloud (fbe0f89) vào R0 | Bản nháp, bố cục mới; người dùng không đồng ý vì V2 đã có UI duyệt | Viết lại theo hộp "Duyệt cảnh" (dòng trên) |
