@@ -172,18 +172,20 @@ function phonePanel(){
   const warn='<p class="muted">Chỉ dùng trong Wi-Fi nhà: kết nối là HTTP, không mã hóa; không dùng Wi-Fi công cộng. Lần đầu Windows hỏi cho Python qua tường lửa, chọn <strong>Private networks</strong>.</p>';
   if(!LIVE)return '<section class="panel phone-panel" style="margin-bottom:18px"><h2>Mở trên điện thoại</h2><p class="muted">Chỉ có ở bản live (/dashboard-v2/) trên PC.</p></section>';
   const p=state.phone;
-  if(state.remote)return '<section class="panel phone-panel" style="margin-bottom:18px"><h2>Đang mở qua điện thoại / laptop</h2><p class="pc-only-note">Các thao tác sau chỉ làm trên PC: dọn, lưu trữ, khôi phục video gốc, kiểm tra lại Thùng rác; tắt Control Center; cấu hình và đăng nhập AI; sửa hoặc xóa bộ nhớ logo; bật/tắt chế độ điện thoại.</p>'+warn+'</section>';
+  if(state.remote)return '<section class="panel phone-panel" style="margin-bottom:18px"><h2>Đang mở qua điện thoại / laptop</h2><p class="pc-only-note">Các thao tác sau chỉ làm trên PC: dọn, lưu trữ, khôi phục video gốc, kiểm tra lại Thùng rác; tắt Control Center; cấu hình và đăng nhập AI; Visual AI Audit (gửi ảnh ra ngoài máy); sửa hoặc xóa bộ nhớ logo; bật/tắt chế độ điện thoại. Duyệt cảnh ở đây vẫn có thể thêm hoặc bỏ logo đã nhớ.</p>'+warn+'</section>';
   if(!p)return '<section class="panel phone-panel" style="margin-bottom:18px"><h2>Mở trên điện thoại</h2><p class="muted">Đang tải trạng thái…</p></section>';
   if(p.unavailable)return '<section class="panel phone-panel" style="margin-bottom:18px"><h2>Mở trên điện thoại</h2><p class="notice">Control Center đang chạy chưa có chế độ điện thoại. Tắt bằng Stop-BiliFlow.cmd rồi mở lại bằng Start-BiliFlow-Phone.cmd.</p></section>';
   const body=p.enabled?
     '<div class="key-value"><span>Trạng thái</span><span><strong>Đang bật</strong>'+(p.locked?' · đã khóa nhập mã (sai '+p.failed_attempts+' lần)':p.failed_attempts?' · '+p.failed_attempts+'/'+p.max_failed_attempts+' lần nhập sai':'')+'</span></div>'+
     '<div class="key-value"><span>Mở trên điện thoại</span><span class="mono phone-link">'+esc(p.url)+'</span></div>'+
     '<div class="key-value"><span>Mã truy cập</span><span class="mono phone-code">'+esc(p.code)+'</span></div><p class="muted">Mở link trên điện thoại rồi gõ mã vào ô “Mã truy cập”.</p>'+
+    (p.expires_at?'<div class="key-value"><span>Tự tắt lúc</span><span>'+esc(new Date(p.expires_at*1000).toLocaleString('vi-VN'))+' (sau 8 giờ, hoặc khi địa chỉ Wi-Fi đổi)</span></div>':'')+
     (p.locked?'<p class="notice">Đã nhập sai mã quá nhiều lần nên nhập mã đang bị khóa. '+(p.unlock_locked?'Khóa mở đặc biệt cũng đã bị khóa; tắt rồi bật lại để có mã mới.':'Trên điện thoại có thể gỡ bằng khóa mở đặc biệt (còn '+Math.max(0,(p.max_unlocks||0)-(p.unlocks||0))+' lượt), sau đó vẫn phải nhập mã; hoặc tắt rồi bật lại để có mã mới.')+'</p>':'')+
     '<div class="action-grid"><button class="danger" data-action="phone-toggle" data-enabled="0">Tắt chế độ điện thoại</button></div>':
-    '<div class="key-value"><span>Trạng thái</span><span>Đang tắt</span></div><p class="muted">Bật để điện thoại hoặc laptop cùng Wi-Fi nhà mở được BiliFlow bằng link và mã. Mã đổi mỗi lần bật.</p>'+
+    '<div class="key-value"><span>Trạng thái</span><span>Đang tắt'+(p.last_disabled_reason_text?' · lần trước tắt vì '+esc(p.last_disabled_reason_text):'')+'</span></div><p class="muted">Bật để điện thoại hoặc laptop cùng Wi-Fi nhà mở được BiliFlow bằng link và mã. Mã đổi mỗi lần bật.</p>'+
     '<div class="action-grid"><button class="primary" data-action="phone-toggle" data-enabled="1">Bật chế độ điện thoại</button></div>';
-  return '<section class="panel phone-panel" style="margin-bottom:18px" aria-label="Mở trên điện thoại"><h2>Mở trên điện thoại</h2>'+body+warn+'</section>';
+  const events=Array.isArray(p.events)&&p.events.length?'<details class="detail-section phone-events"><summary>Nhật ký gần đây ('+p.events.length+')</summary><ul class="confirm-list">'+p.events.map(e=>'<li><strong>'+esc(e.message||e.type)+'</strong><small>'+esc(new Date((e.at||0)*1000).toLocaleString('vi-VN'))+(e.ip?' · '+esc(e.ip):'')+'</small></li>').join('')+'</ul></details>':'';
+  return '<section class="panel phone-panel" style="margin-bottom:18px" aria-label="Mở trên điện thoại"><h2>Mở trên điện thoại</h2>'+body+events+warn+'</section>';
 }
 function settingsView(){
   const ai=state.ai;
@@ -344,7 +346,7 @@ function showPreview(kind,ids,p,message){
   },kind==='cleanup'?'Chuyển '+chosen.length+' video vào Thùng rác':'Lưu trữ '+chosen.length+' video');
 }
 function auditModal(j){
-  showModal('Kiểm tra bằng AI Supervisor','<p><strong>#'+j.id+' · '+esc(j.name)+'</strong></p><label class="field"><span>Dữ liệu gửi kiểm tra</span><select id="audit-kind"><option value="json">JSON / báo cáo, không gửi ảnh</option><option value="visual">Visual AI Audit · có ảnh thumbnail</option></select></label><p>Chọn Visual AI Audit nghĩa là bạn đồng ý gửi tối đa 36 thumbnail của video này qua tài khoản ChatGPT. Video và âm thanh gốc không được gửi. AI chỉ đề xuất; bạn duyệt mọi quyết định.</p>',async()=>{await mutate('audit',j,{visual:$('#audit-kind').value==='visual'});toast(sent('AI audit #'+j.id));return true;},'Xác nhận kiểm tra');
+  showModal('Kiểm tra bằng AI Supervisor','<p><strong>#'+j.id+' · '+esc(j.name)+'</strong></p><label class="field"><span>Dữ liệu gửi kiểm tra</span><select id="audit-kind"><option value="json">JSON / báo cáo, không gửi ảnh</option><option value="visual"'+(state.remote?' disabled':'')+'>Visual AI Audit · có ảnh thumbnail'+(state.remote?' (chỉ làm trên PC)':'')+'</option></select></label>'+(state.remote?'<p class="pc-only-note">Chỉ làm trên PC: Visual AI Audit gửi ảnh ra ngoài máy.</p>':'')+'<p>Chọn Visual AI Audit nghĩa là bạn đồng ý gửi tối đa 36 thumbnail của video này qua tài khoản ChatGPT. Video và âm thanh gốc không được gửi. AI chỉ đề xuất; bạn duyệt mọi quyết định.</p>',async()=>{await mutate('audit',j,{visual:$('#audit-kind').value==='visual'});toast(sent('AI audit #'+j.id));return true;},'Xác nhận kiểm tra');
 }
 function sceneList(j){if(!sceneCache.has(j.id)){const scenes=Mock.scenes(j);if(!j.review_summary?.skip_eligible&&C.reviewStats(j).resolved>0&&scenes.length)scenes[0].decision='BLUR';sceneCache.set(j.id,scenes);}return sceneCache.get(j.id);}
 function readonlyReview(j){return C.locked(j)||C.inFlight(j)||j.state==='SKIPPED';}

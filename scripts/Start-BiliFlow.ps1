@@ -27,6 +27,19 @@ function Get-RunningUrl {
     } catch { return $null }
 }
 
+function Get-PhoneStatus([string]$Url) {
+    # GET /api/phone-mode (no token needed on 127.0.0.1); $null when the build has no phone mode.
+    try { return Invoke-RestMethod -Uri ($Url + 'api/phone-mode') -TimeoutSec 5 } catch { return $null }
+}
+
+function Show-PhoneNotice([string]$Url) {
+    # Start-BiliFlow.cmd reusing a Control Center whose phone mode is on says so (plan 13.1, H3).
+    $Status = Get-PhoneStatus $Url
+    if ($Status -and $Status.enabled) {
+        Write-Host "NOTE: phone mode is ON: $($Status.url) (turn it off in Dashboard V2 > Cai dat)."
+    }
+}
+
 function Enable-PhoneMode([string]$Url) {
     # Turns on the phone listener of the running Control Center (no restart) and prints link and code.
     $State = Get-Content -LiteralPath $StatePath -Raw | ConvertFrom-Json
@@ -43,7 +56,20 @@ function Enable-PhoneMode([string]$Url) {
                    'When no video is processing, stop it with Stop-BiliFlow.cmd, then run Start-BiliFlow-Phone.cmd again.')
         }
         $Detail = if ($_.ErrorDetails -and $_.ErrorDetails.Message) { $_.ErrorDetails.Message } else { $_.Exception.Message }
-        throw "Phone mode could not start: $Detail"
+        if ($null -eq $Status) {
+            # No HTTP answer (timeout, connection reset): the mode may still have been turned on (H5).
+            $Now = Get-PhoneStatus $Url
+            if ($Now -and $Now.enabled -and $Now.code) {
+                Write-Host "The request failed ($Detail), but the phone mode IS on:"
+                $Result = $Now
+            } elseif ($Now) {
+                throw "Phone mode is NOT on (the request failed: $Detail). Try Start-BiliFlow-Phone.cmd again."
+            } else {
+                throw "Phone mode state is unknown: the Control Center did not answer ($Detail)."
+            }
+        } else {
+            throw "Phone mode could not start: $Detail"
+        }
     }
     $Line = '=' * 64
     Write-Host $Line
@@ -52,6 +78,7 @@ function Enable-PhoneMode([string]$Url) {
     Write-Host "  Nhap ma truy cap:    $($Result.code)"
     Write-Host '  Lan dau Windows hoi cho Python qua tuong lua: chon Private networks (khong chon Public).'
     Write-Host '  Chi dung trong Wi-Fi nha: ket noi HTTP, khong ma hoa.'
+    Write-Host '  Tu tat sau 8 gio, hoac khi dia chi Wi-Fi cua PC doi.'
     Write-Host '  Tat: nut "Tat che do dien thoai" trong Dashboard V2 > Cai dat tren PC, hoac Stop-BiliFlow.cmd (tat ca hai).'
     Write-Host $Line
 }
@@ -82,7 +109,7 @@ try {
         if (-not $Url) {
             throw 'The existing BiliFlow launch did not become ready within 45 seconds.'
         }
-        if ($Phone) { Enable-PhoneMode $Url }
+        if ($Phone) { Enable-PhoneMode $Url } else { Show-PhoneNotice $Url }
         Open-Page $Url
         exit 0
     }
@@ -91,7 +118,7 @@ try {
     if ($ExistingUrl) {
         Write-Host "BiliFlow is already running: $ExistingUrl"
         # Reused as is: the phone mode is switched on in the running Control Center, never a second one.
-        if ($Phone) { Enable-PhoneMode $ExistingUrl }
+        if ($Phone) { Enable-PhoneMode $ExistingUrl } else { Show-PhoneNotice $ExistingUrl }
         Open-Page $ExistingUrl
         exit 0
     }

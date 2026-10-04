@@ -220,27 +220,27 @@ class PhoneModeTests(unittest.TestCase):
         self.enable()
         for round_ in range(phone_access.MAX_UNLOCKS):
             self.phone.locked = True
-            self.assertEqual(self.phone.try_code(phone_access.UNLOCK_KEY), "unlocked", round_)
+            self.assertEqual(self.phone.try_code(phone_access.UNLOCK_KEY)[0], "unlocked", round_)
         self.phone.locked = True
-        self.assertEqual(self.phone.try_code(phone_access.UNLOCK_KEY), "unlock_locked")
+        self.assertEqual(self.phone.try_code(phone_access.UNLOCK_KEY)[0], "unlock_locked")
         self.assertTrue(self.phone.status()["locked"])
         self.phone.disable()
         self.enable()
         self.phone.locked = True
-        self.assertEqual(self.phone.try_code(phone_access.UNLOCK_KEY), "unlocked")
+        self.assertEqual(self.phone.try_code(phone_access.UNLOCK_KEY)[0], "unlocked")
 
     def test_p1_the_special_key_counter_is_safe_under_parallel_attempts(self):
         self.enable()
         self.phone.locked = True
         outcomes = []
-        threads = [threading.Thread(target=lambda: outcomes.append(self.phone.try_code("9999"))) for _ in range(40)]
+        threads = [threading.Thread(target=lambda: outcomes.append(self.phone.try_code("9999")[0])) for _ in range(40)]
         for thread in threads:
             thread.start()
         for thread in threads:
             thread.join()
         self.assertEqual(self.phone.status()["unlock_failures"], phone_access.MAX_UNLOCK_ATTEMPTS)
         self.assertEqual(outcomes.count("wrong_unlock"), phone_access.MAX_UNLOCK_ATTEMPTS - 1)
-        self.assertEqual(self.phone.try_code(phone_access.UNLOCK_KEY), "unlock_locked")
+        self.assertEqual(self.phone.try_code(phone_access.UNLOCK_KEY)[0], "unlock_locked")
 
     def test_p1_the_code_form_works_with_the_origin_a_browser_sends(self):
         status = self.enable()
@@ -423,6 +423,15 @@ class PhoneModeTests(unittest.TestCase):
         self.enable()
         code, headers, body = request(self.pc_port, "/")
         self.assertEqual(code, 200)
+        notice = f"Đang mở cho điện thoại: http://127.0.0.1:{self.port}/".encode()
+        self.assertIn(notice, body, "H3: the classic page says the phone mode is on")
+        self.assertEqual(body.replace(re.search(rb'<div id="phone-mode-notice".*?</div>', body).group(0), b""),
+                         _dashboard_html().encode(), "only the notice line is added")
+        _, _, review = request(self.pc_port, "/review/1")
+        self.assertEqual(hashlib.sha256(review).hexdigest(), CLASSIC["review_job_1_token_test_sha256"],
+                         "/review/{id} on the PC stays byte for byte while the phone mode is on")
+        self.phone.disable()
+        code, headers, body = request(self.pc_port, "/")
         self.assertEqual(body, _dashboard_html().encode())
         self.assertEqual((len(body), hashlib.sha256(body).hexdigest()),
                          (CLASSIC["dashboard_bytes"], CLASSIC["dashboard_sha256"]))

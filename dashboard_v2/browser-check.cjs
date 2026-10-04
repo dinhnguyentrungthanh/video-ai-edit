@@ -41,7 +41,9 @@ let refuseNextCancel = false;
 let remoteMode = false, phoneOn = false, phoneCode = 'abcd2345';
 const phoneStatus = () => remoteMode ? {remote: true, enabled: true} : {remote: false, enabled: phoneOn,
   url: phoneOn ? 'http://192.168.1.23:8767/' : null, code: phoneOn ? phoneCode : null,
-  locked: false, failed_attempts: 0, max_failed_attempts: 10};
+  locked: false, failed_attempts: 0, max_failed_attempts: 10, expires_at: phoneOn ? 1790000000 : null,
+  last_disabled_reason_text: phoneOn ? null : 'hết 8 giờ',
+  events: phoneOn ? [{type: 'PHONE_CODE_WRONG', message: 'Thiết bị 192.168.1.50 nhập sai mã', at: 1789990000, ip: '192.168.1.50'}] : []};
 const PC_ONLY = ['/api/source-cleanup', '/api/source-archive', '/api/source-archive/restore', '/api/source-recycle-check',
   '/api/shutdown', '/api/ai/config', '/api/ai/login', '/api/logo-memory/class', '/api/logo-memory/delete', '/api/phone-mode'];
 const status = () => ({version: '0.7.24', started: true, scheduler_paused: false, queue: {length: 2, paused: false},
@@ -299,9 +301,12 @@ async function check(name, fn) { await fn(); passed++; results.push(name); proce
       await page.waitForSelector('.phone-code');
       const first = await page.locator('.phone-code').textContent();
       assert.match(await page.locator('.phone-panel').textContent(), /http:\/\/192\.168\.1\.23:8767\//);
+      assert.match(await page.locator('.phone-panel').textContent(), /Tự tắt lúc/);
+      assert.match(await page.locator('.phone-events').textContent(), /192\.168\.1\.50 nhập sai mã/);
       await page.locator('[data-action="phone-toggle"][data-enabled="0"]').click();
       await page.waitForSelector('[data-action="phone-toggle"][data-enabled="1"]');
       assert.equal(await page.locator('.phone-code').count(), 0);
+      assert.match(await page.locator('.phone-panel').textContent(), /lần trước tắt vì hết 8 giờ/);
       await page.locator('[data-action="phone-toggle"][data-enabled="1"]').click();
       await page.waitForSelector('.phone-code');
       assert.notEqual(await page.locator('.phone-code').textContent(), first, 'a new code each time');
@@ -338,6 +343,18 @@ async function check(name, fn) { await fn(); passed++; results.push(name); proce
       await page.goto(base + '/dashboard-v2/?remote3#logos');
       await page.waitForSelector('[data-action="logo-delete"]');
       assert.equal(await page.locator('[data-action="logo-delete"]').first().isDisabled(), true);
+      // H2: the visual audit option is locked on the phone; the JSON audit stays.
+      await Promise.all([page.waitForResponse(r => r.url().endsWith('/api/phone-mode')),
+        page.goto(base + '/dashboard-v2/?remote4#videos')]);
+      await page.waitForSelector('#search');
+      await openJob(101);
+      await page.locator('.drawer [data-op="audit"]').click();
+      await page.waitForSelector('#audit-kind');
+      assert.deepEqual(await page.evaluate(() => [...document.querySelectorAll('#audit-kind option')].map(o => [o.value, o.disabled])),
+        [['json', false], ['visual', true]]);
+      assert.match(await page.locator('#modal').textContent(), /Visual AI Audit gửi ảnh ra ngoài máy/);
+      await page.locator('#modal [data-action="close-modal"]').last().click();
+      await page.keyboard.press('Escape');
       remoteMode = false;
       await page.setViewportSize({width: 1280, height: 900});
     });

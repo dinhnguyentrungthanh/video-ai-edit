@@ -7,7 +7,9 @@ needs a cookie proving the random 8-character access code (HttpOnly, SameSite=St
 constant-time check); after MAX_FAILED_ATTEMPTS wrong codes, code entry stays locked until
 the next time the mode is turned on. The code is always typed into the code page, never put
 in a link (question 12), so it stays out of browser history. The Host header must be exactly <ip>:<port> (DNS
-rebinding). Writes still need the session token, and PC_ONLY_POSTS are refused there.
+rebinding). Writes still need the session token, and only PHONE_ALLOWED_POSTS are accepted there.
+Batch 3 (plan §13): bounded connections, short timeout before the cookie, one-line error log,
+auto-off after 8 hours or on a Wi-Fi address change, and events without the code or cookie.
 
 Imported only by control_center.py (outside the stage-cache fingerprint).
 """
@@ -17,9 +19,13 @@ import hashlib
 import hmac
 import http.cookies
 import ipaddress
+import re
 import secrets
 import socket
+import sys
 import threading
+import time
+from collections import deque
 from http.server import ThreadingHTTPServer
 from typing import Any, Callable
 
@@ -36,6 +42,19 @@ MAX_UNLOCK_ATTEMPTS = 5
 # would give unlimited code guesses (10 per unlock).
 MAX_UNLOCKS = 3
 COOKIE_NAME = "biliflow_phone"
+# Batch 3 (plan §13): the extra door closes by itself and cannot be held open by strangers.
+AUTO_OFF_SECONDS = 8 * 3600        # H3: turned off 8 hours after it was turned on
+ADDRESS_CHECK_SECONDS = 60          # H3: turned off when the PC's Wi-Fi address changes
+MAX_CONNECTIONS = 32                # H1: further connections are closed at once
+GATE_TIMEOUT_SECONDS = 5.0          # H1: a connection without the cookie is held at most this long
+ERROR_LOG_INTERVAL_SECONDS = 10.0   # H1: at most one error line per interval, with a skipped count
+RECENT_EVENTS = 20                  # H4: kept in memory for the PC panel (also written to the store)
+DISABLE_REASONS = {
+    "user": "người dùng tắt",
+    "expired": "hết 8 giờ",
+    "address_changed": "địa chỉ Wi-Fi của PC đổi",
+    "stopped": "Control Center dừng",
+}
 PRIVATE_NETWORKS = tuple(ipaddress.IPv4Network(net) for net in ("10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16"))
 
 NOT_PRIVATE_MESSAGE = (
@@ -70,6 +89,20 @@ PC_ONLY_POSTS = {
     "/api/logo-memory/delete": "Chỉ làm trên PC: không xóa bộ nhớ logo qua điện thoại.",
     "/api/phone-mode": "Chỉ làm trên PC: bật/tắt chế độ điện thoại chỉ làm trên PC.",
 }
+PC_ONLY_DEFAULT = "Chỉ làm trên PC: thao tác này không làm qua điện thoại."
+PC_ONLY_VISUAL_AUDIT = "Chỉ làm trên PC: Visual AI Audit gửi ảnh ra ngoài máy."
+# H2: the phone listener accepts only these POST routes (full match); everything else is PC-only
+# and refused before the body is read. ai-audit is allowed only with visual false (checked on
+# the body by the phone handler). tests/test_dashboard_v2_phone.py lists every do_POST route
+# and fails when one is in neither this list nor PC_ONLY_POSTS.
+PHONE_ALLOWED_POSTS = tuple(re.compile(pattern) for pattern in (
+    r"/api/scheduler",
+    r"/api/ai/check",
+    r"/api/jobs/\d+/(?:start|resume|pause|stop-after-stage|cancel|retry|rerun|skip|unskip|hide|unhide)",
+    r"/api/jobs/\d+/ai-audit",
+    r"/api/jobs/\d+/review/(?:decision|clear|bulk-keep|bulk-accept|finalize)",
+))
+AI_AUDIT_ROUTE = re.compile(r"/api/jobs/\d+/ai-audit")
 
 
 def is_private_ipv4(address: Any) -> bool:
@@ -110,29 +143,104 @@ def new_code() -> str:
     return "".join(secrets.choice(CODE_ALPHABET) for _ in range(CODE_LENGTH))
 
 
+def post_policy(path: str) -> tuple[bool, str | None, bool]:
+    """(allowed on the phone, refusal reason, explicitly classified) for a POST path."""
+    if any(pattern.fullmatch(path) for pattern in PHONE_ALLOWED_POSTS):
+        return True, None, True
+    if path in PC_ONLY_POSTS:
+        return False, PC_ONLY_POSTS[path], True
+    return False, PC_ONLY_DEFAULT, False
+
+
+def pc_only_reason(path: str) -> str | None:
+    """The 403 reason for a POST over the phone listener, or None when it is allowed."""
+    allowed, reason, _ = post_policy(path)
+    return None if allowed else reason
+
+
 class _PhoneServer(ThreadingHTTPServer):
     # Without SO_REUSEADDR a second listener on Windows fails to bind instead of sharing the port.
     allow_reuse_address = False
     daemon_threads = True
 
+    def __init__(self, address: tuple[str, int], handler: type, *, max_connections: int = MAX_CONNECTIONS):
+        self._slots = threading.BoundedSemaphore(max_connections)
+        self._error_lock = threading.Lock()
+        self._error_last = 0.0
+        self._error_skipped = 0
+        super().__init__(address, handler)
+
+    def process_request(self, request: Any, client_address: Any) -> None:
+        # H1: a bounded number of handler threads; a connection over the limit is closed at once.
+        if not self._slots.acquire(blocking=False):
+            self.shutdown_request(request)
+            return
+        try:
+            super().process_request(request, client_address)
+        except BaseException:
+            self._slots.release()
+            raise
+
+    def process_request_thread(self, request: Any, client_address: Any) -> None:
+        try:
+            super().process_request_thread(request, client_address)
+        finally:
+            self._slots.release()
+
+    def handle_error(self, request: Any, client_address: Any) -> None:
+        # H1: one short line, at most once per interval, never a traceback with request data.
+        now = time.monotonic()
+        with self._error_lock:
+            if now - self._error_last < ERROR_LOG_INTERVAL_SECONDS:
+                self._error_skipped += 1
+                return
+            skipped, self._error_skipped, self._error_last = self._error_skipped, 0, now
+        kind = type(sys.exc_info()[1]).__name__
+        print(f"BiliFlow phone listener: request error {kind} from {client_address[0] if client_address else '?'}"
+              + (f" ({skipped} more skipped)" if skipped else ""), file=sys.stderr, flush=True)
+
 
 class PhoneAccess:
     """State of the phone listener; every method is thread-safe."""
 
-    def __init__(self, *, lan: Callable[[], str] = lan_address):
+    def __init__(self, *, lan: Callable[[], str] = lan_address,
+                 on_event: Callable[[str, str, dict[str, Any]], None] | None = None):
         self._lock = threading.Lock()
         self._lan = lan
+        self.on_event = on_event  # (event_type, message, payload) -> stored as a Control Center event
         self._server: ThreadingHTTPServer | None = None
         self._thread: threading.Thread | None = None
+        self._watch_stop: threading.Event | None = None
         self.address: str | None = None
         self.port: int | None = None
         self._code: str | None = None
         self._secret: bytes | None = None
+        self.enabled_at: float | None = None
+        self.expires_at: float | None = None
+        self.last_disabled_reason: str | None = None
+        self.last_disabled_at: float | None = None
+        self.events: deque[dict[str, Any]] = deque(maxlen=RECENT_EVENTS)
+        self._reset_counters()
+
+    def _reset_counters(self) -> None:
         self.failed_attempts = 0
         self.locked = False
         self.unlock_failures = 0
         self.unlock_locked = False
         self.unlocks = 0
+
+    # ------------------------------------------------------------------ events (H4)
+    def _event(self, event_type: str, message: str, **payload: Any) -> None:
+        """Record one event. Payloads hold IPs, counts and reasons only: never the code or a cookie."""
+        entry = {"type": event_type, "message": message, "at": time.time(), **payload}
+        with self._lock:
+            self.events.append(entry)
+        callback = self.on_event
+        if callback is not None:
+            try:
+                callback(event_type, message, dict(payload))
+            except Exception:  # noqa: BLE001 - an event store problem must not break the listener
+                pass
 
     # ------------------------------------------------------------------ lifecycle
     @property
@@ -142,7 +250,10 @@ class PhoneAccess:
     def enable(self, handler_factory: Callable[["PhoneAccess"], type], *, port: int = DEFAULT_PORT,
                address: str | None = None,
                check_address: Callable[[str], None] = require_private_ipv4,
-               check_port: Callable[[Any], None] | None = None) -> dict[str, Any]:
+               check_port: Callable[[Any], None] | None = None,
+               lifetime_seconds: float = AUTO_OFF_SECONDS,
+               check_seconds: float = ADDRESS_CHECK_SECONDS,
+               max_connections: int = MAX_CONNECTIONS) -> dict[str, Any]:
         """Open the listener with a new code; already on: unchanged (same code)."""
         with self._lock:
             if self._server is not None:
@@ -152,31 +263,73 @@ class PhoneAccess:
             check_address(host)
             code, secret = new_code(), secrets.token_bytes(32)
             self.address, self._code, self._secret = host, code, secret
-            self.failed_attempts, self.locked = 0, False
-            self.unlock_failures, self.unlock_locked, self.unlocks = 0, False, 0
+            self._reset_counters()
             try:
-                server = _PhoneServer((host, port), handler_factory(self))
+                server = _PhoneServer((host, port), handler_factory(self), max_connections=max_connections)
             except OSError as error:
                 self.address = self._code = self._secret = None
                 raise ValueError(PORT_BUSY_MESSAGE.format(address=host, port=port, error=error)) from error
             self.port = int(server.server_address[1])
             self._server = server
+            self.enabled_at = time.time()
+            self.expires_at = self.enabled_at + lifetime_seconds
             self._thread = threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.5},
                                             name="biliflow-phone", daemon=True)
             self._thread.start()
-            return self._status(include_secret=True)
+            stop = self._watch_stop = threading.Event()
+            threading.Thread(target=self._watch, args=(server, stop, lifetime_seconds, check_seconds, host),
+                             name="biliflow-phone-watch", daemon=True).start()
+            status = self._status(include_secret=True)
+        self._event("PHONE_MODE_ENABLED", f"Bật chế độ điện thoại tại {host}:{self.port}",
+                    address=host, port=self.port, expires_in_seconds=int(lifetime_seconds))
+        return status
 
-    def disable(self) -> dict[str, Any]:
-        """Close the listener; the code and every cookie stop working at once."""
+    def _watch(self, server: Any, stop: threading.Event, lifetime: float, every: float, address: str) -> None:
+        """H3: turn the mode off after `lifetime` seconds, or when the PC's Wi-Fi address changes."""
+        deadline = time.monotonic() + lifetime
+        while not stop.is_set():
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                self.disable("expired", only=server)
+                return
+            if stop.wait(min(every, remaining)):
+                return
+            if time.monotonic() >= deadline:
+                continue
+            try:
+                current = self._lan()
+            except Exception:  # noqa: BLE001 - no route to the home network counts as a change
+                current = None
+            if current != address:
+                self.disable("address_changed", only=server, current_address=current)
+                return
+
+    def disable(self, reason: str = "user", *, only: Any = None, current_address: str | None = None) -> dict[str, Any]:
+        """Close the listener; the code and every cookie stop working at once.
+
+        `only`: the watchdog closes only the server it watches (never a newer one).
+        """
         with self._lock:
-            server, self._server = self._server, None
+            server = self._server
+            if server is None or (only is not None and server is not only):
+                return self._status(include_secret=True)
+            self._server = None
+            address, port = self.address, self.port
+            if self._watch_stop is not None:
+                self._watch_stop.set()
+            self._watch_stop = None
             self._code = self._secret = None
             self.address = self.port = None
-            self.failed_attempts, self.locked = 0, False
-            self.unlock_failures, self.unlock_locked, self.unlocks = 0, False, 0
-        if server is not None:
-            server.shutdown()
-            server.server_close()
+            self.enabled_at = self.expires_at = None
+            self.last_disabled_reason = reason if reason in DISABLE_REASONS else "user"
+            self.last_disabled_at = time.time()
+            self._reset_counters()
+        server.shutdown()
+        server.server_close()
+        extra = {"current_address": current_address} if reason == "address_changed" else {}
+        self._event("PHONE_MODE_DISABLED",
+                    f"Tắt chế độ điện thoại ({DISABLE_REASONS.get(reason, reason)})",
+                    reason=self.last_disabled_reason, address=address, port=port, **extra)
         return self.status(include_secret=True)
 
     # ------------------------------------------------------------------ status
@@ -187,6 +340,11 @@ class PhoneAccess:
             "address": self.address if on else None,
             "port": self.port if on else None,
             "url": f"http://{self.address}:{self.port}/" if on else None,
+            "enabled_at": self.enabled_at if on else None,
+            "expires_at": self.expires_at if on else None,
+            "last_disabled_reason": self.last_disabled_reason,
+            "last_disabled_reason_text": DISABLE_REASONS.get(self.last_disabled_reason or ""),
+            "last_disabled_at": self.last_disabled_at,
             "locked": self.locked,
             "failed_attempts": self.failed_attempts,
             "max_failed_attempts": MAX_FAILED_ATTEMPTS,
@@ -198,8 +356,9 @@ class PhoneAccess:
             "default_port": DEFAULT_PORT,
         }
         if include_secret:
-            # No link with the code in it (question 12): the code is always typed on the phone.
+            # PC listener only. No link with the code in it (question 12): the code is always typed.
             value["code"] = self._code if on else None
+            value["events"] = [dict(entry) for entry in list(self.events)[-10:]][::-1]
         return value
 
     def status(self, *, include_secret: bool = False) -> dict[str, Any]:
@@ -221,11 +380,8 @@ class PhoneAccess:
             return None
         return hmac.new(self._secret, self._code.encode("utf-8"), hashlib.sha256).hexdigest()
 
-    def set_cookie_header(self) -> str:
-        with self._lock:
-            value = self._cookie_value()
-        if value is None:
-            raise ValueError("Chế độ điện thoại đang tắt")
+    @staticmethod
+    def _cookie_header(value: str) -> str:
         # No Max-Age: a session cookie. No Secure: the listener is plain HTTP on the home Wi-Fi.
         return f"{COOKIE_NAME}={value}; HttpOnly; SameSite=Strict; Path=/"
 
@@ -240,38 +396,64 @@ class PhoneAccess:
             return False
         return morsel is not None and hmac.compare_digest(morsel.value.encode("utf-8"), expected.encode("utf-8"))
 
-    def try_code(self, given: Any) -> str:
-        """'ok', 'wrong', 'locked', 'unlocked', 'wrong_unlock' or 'unlock_locked'.
+    def try_code(self, given: Any, *, ip: str | None = None) -> tuple[str, str | None]:
+        """(outcome, Set-Cookie header or None), decided under one hold of the lock (H6).
 
-        Each wrong code counts; the 10th wrong one locks entry. While locked, only UNLOCK_KEY
-        is checked: it lifts the lock ('unlocked') but never opens anything by itself.
+        Outcomes: 'ok', 'wrong', 'locked', 'unlocked', 'wrong_unlock', 'unlock_locked'. Each wrong
+        code counts; the 10th wrong one locks entry. While locked, only UNLOCK_KEY is checked: it
+        lifts the lock ('unlocked') but never gives the cookie by itself.
         """
         text = str(given or "").strip().lower()[:64]
+        cookie: str | None = None
         with self._lock:
             if self._code is None:
-                return "wrong"
-            if self.locked:
+                outcome = "wrong"
+            elif self.locked:
                 if self.unlock_locked:
-                    return "unlock_locked"
-                if hmac.compare_digest(text.encode("utf-8"), UNLOCK_KEY.encode("utf-8")):
+                    outcome = "unlock_locked"
+                elif hmac.compare_digest(text.encode("utf-8"), UNLOCK_KEY.encode("utf-8")):
                     if self.unlocks >= MAX_UNLOCKS:
                         self.unlock_locked = True
-                        return "unlock_locked"
-                    self.unlocks += 1
-                    self.locked, self.failed_attempts = False, 0
-                    return "unlocked"
-                self.unlock_failures += 1
-                if self.unlock_failures >= MAX_UNLOCK_ATTEMPTS:
-                    self.unlock_locked = True
-                    return "unlock_locked"
-                return "wrong_unlock"
-            if hmac.compare_digest(text.encode("utf-8"), self._code.encode("utf-8")):
-                return "ok"
-            self.failed_attempts += 1
-            if self.failed_attempts >= MAX_FAILED_ATTEMPTS:
-                self.locked = True
-                return "locked"
-            return "wrong"
+                        outcome = "unlock_locked_now"
+                    else:
+                        self.unlocks += 1
+                        self.locked, self.failed_attempts = False, 0
+                        outcome = "unlocked"
+                else:
+                    self.unlock_failures += 1
+                    if self.unlock_failures >= MAX_UNLOCK_ATTEMPTS:
+                        self.unlock_locked = True
+                        outcome = "unlock_locked_now"
+                    else:
+                        outcome = "wrong_unlock"
+            elif hmac.compare_digest(text.encode("utf-8"), self._code.encode("utf-8")):
+                value = self._cookie_value()
+                cookie = self._cookie_header(value) if value else None
+                outcome = "ok" if cookie else "wrong"
+            else:
+                self.failed_attempts += 1
+                outcome = "locked_now" if self.failed_attempts >= MAX_FAILED_ATTEMPTS else "wrong"
+                if outcome == "locked_now":
+                    self.locked = True
+            counts = {"failed_attempts": self.failed_attempts, "unlock_failures": self.unlock_failures,
+                      "unlocks": self.unlocks}
+        # Events after the lock (they reach the store); never the text that was typed.
+        who = {"ip": ip or "?"}
+        if outcome == "ok":
+            self._event("PHONE_LOGIN", f"Thiết bị {who['ip']} nhập đúng mã", **who)
+        elif outcome == "wrong":
+            self._event("PHONE_CODE_WRONG", f"Thiết bị {who['ip']} nhập sai mã", **who, **counts)
+        elif outcome == "locked_now":
+            self._event("PHONE_CODE_LOCKED", f"Khóa nhập mã sau {MAX_FAILED_ATTEMPTS} lần sai (thiết bị {who['ip']})",
+                        **who, **counts)
+        elif outcome == "unlocked":
+            self._event("PHONE_UNLOCKED", f"Thiết bị {who['ip']} gỡ khóa bằng khóa mở", **who, **counts)
+        elif outcome == "wrong_unlock":
+            self._event("PHONE_UNLOCK_WRONG", f"Thiết bị {who['ip']} nhập sai khóa mở", **who, **counts)
+        elif outcome == "unlock_locked_now":
+            self._event("PHONE_UNLOCK_LOCKED", f"Khóa mở bị khóa (thiết bị {who['ip']})", **who, **counts)
+        public = {"locked_now": "locked", "unlock_locked_now": "unlock_locked"}.get(outcome, outcome)
+        return public, cookie
 
     def unlock_attempts_left(self) -> int:
         with self._lock:
@@ -280,7 +462,3 @@ class PhoneAccess:
     def attempts_left(self) -> int:
         with self._lock:
             return max(0, MAX_FAILED_ATTEMPTS - self.failed_attempts)
-
-
-def pc_only_reason(path: str) -> str | None:
-    return PC_ONLY_POSTS.get(path)

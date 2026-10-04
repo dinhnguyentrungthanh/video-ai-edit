@@ -173,6 +173,22 @@ REVIEW_PHONE_SCRIPT = (
 )
 
 
+def _with_phone_notice(html: str, center: Any) -> str:
+    """The classic dashboard with one line while the phone mode is on (H3); unchanged otherwise."""
+    phone = getattr(center, "phone", None)
+    if phone is None or not phone.enabled or "<body>" not in html:
+        return html
+    import html as _html
+    url = phone.status().get("url") or ""
+    notice = (
+        "<div id=\"phone-mode-notice\" role=\"status\" style=\"background:#3b2f12;color:#f5d58a;"
+        "border-bottom:1px solid #6b5420;padding:8px 16px;font:14px system-ui,sans-serif\">"
+        f"Đang mở cho điện thoại: {_html.escape(url)} "
+        "(tắt trong <a href=\"/dashboard-v2/#settings\" style=\"color:#ffe7a8\">Dashboard V2 → Cài đặt</a>)</div>"
+    )
+    return html.replace("<body>", "<body>" + notice, 1)
+
+
 def _review_page_for_phone(html: str) -> str:
     """The classic review page plus REVIEW_PHONE_STYLE/SCRIPT, for the phone listener only."""
     if "</head>" not in html or "</body>" not in html:
@@ -187,7 +203,14 @@ def _phone_access(center: Any) -> phone_access.PhoneAccess:
     with _PHONE_ACCESS_LOCK:
         value = getattr(center, "phone", None)
         if value is None:
-            value = phone_access.PhoneAccess()
+            store = getattr(center, "store", None)
+
+            def store_event(event_type: str, message: str, payload: dict[str, Any]) -> None:
+                if store is not None:
+                    level = "WARN" if event_type in ("PHONE_CODE_LOCKED", "PHONE_UNLOCK_LOCKED") else "INFO"
+                    store.add_event(None, event_type, message, level=level, payload=payload or None)
+
+            value = phone_access.PhoneAccess(on_event=store_event)
             center.phone = value
         return value
 
@@ -1578,7 +1601,7 @@ class ControlCenter:
             if not self._stopping.is_set():
                 self._stopping.set()
                 if getattr(self, "phone", None) is not None:
-                    self.phone.disable()
+                    self.phone.disable("stopped")
                 self.stop_ai_audits()
                 self.stop_ai_login()
                 self.watcher.shutdown()
@@ -1611,7 +1634,7 @@ class ControlCenter:
             return
         self._stopping.set()
         if getattr(self, "phone", None) is not None:
-            self.phone.disable()  # the phone code dies with the Control Center
+            self.phone.disable("stopped")  # the phone code dies with the Control Center
         try:
             self.stop_ai_audits()
             self.stop_ai_login()
@@ -1747,6 +1770,17 @@ def _handler_class(center: ControlCenter) -> type[BaseHTTPRequestHandler]:
             except Exception as error:
                 self.send_json(500, {"error": str(error)})
 
+        def parsed_path(self, *, drain: bool = False) -> Any:
+            """urlparse of the request path; a malformed one (e.g. ``http://[x/``) answers 400 (H1)."""
+            try:
+                return urllib.parse.urlparse(self.path)
+            except ValueError:
+                if drain:
+                    self.drain_body()
+                self.close_connection = True
+                self.send_json(400, {"error": "Đường dẫn không hợp lệ"})
+                return None
+
         def loopback_client(self) -> bool:
             """The request came over the 127.0.0.1 listener (never true on the phone listener)."""
             return not getattr(self, "phone_listener", False) and self.client_address[0] == "127.0.0.1"
@@ -1784,13 +1818,17 @@ def _handler_class(center: ControlCenter) -> type[BaseHTTPRequestHandler]:
         def do_GET(self) -> None:
             if not self.host_allowed():
                 return
-            parsed = urllib.parse.urlparse(self.path)
+            parsed = self.parsed_path()
+            if parsed is None:
+                return
             path = parsed.path
             try:
                 if match := re.fullmatch(r"/api/jobs/(\d+)/review/(evidence|frame|video)", path):
                     self.review_media(int(match.group(1)), match.group(2), parsed.query)
                 elif path == "/":
-                    self.send_bytes(200, _dashboard_html().encode(), "text/html; charset=utf-8")
+                    # Byte for byte the classic page, plus one notice line while the phone mode is on (H3).
+                    self.send_bytes(200, _with_phone_notice(_dashboard_html(), center).encode(),
+                                    "text/html; charset=utf-8")
                 elif path == "/dashboard-v2" or path.startswith("/dashboard-v2/"):
                     self.dashboard_v2(path)
                 elif path == "/api/phone-mode":
@@ -1892,7 +1930,10 @@ def _handler_class(center: ControlCenter) -> type[BaseHTTPRequestHandler]:
         def do_POST(self) -> None:
             if not self.host_allowed(drain=True):
                 return
-            path = urllib.parse.urlparse(self.path).path
+            parsed = self.parsed_path(drain=True)
+            if parsed is None:
+                return
+            path = parsed.path
             if not self.authorized():
                 self.drain_body()
                 self.send_json(403, {"error": "Phiên Control Center không hợp lệ"})
@@ -1949,7 +1990,7 @@ def _handler_class(center: ControlCenter) -> type[BaseHTTPRequestHandler]:
                         port = body.get("port", phone_access.DEFAULT_PORT)
                         result = phone.enable(lambda access: _phone_handler_class(center, access), port=port)
                     else:
-                        result = phone.disable()
+                        result = phone.disable("user")
                     result = {"remote": False, **result}
                 elif match := re.fullmatch(r"/api/jobs/(\d+)/(hide|unhide)", path):
                     result = center.set_job_hidden(int(match.group(1)), match.group(2) == "hide")
@@ -2073,6 +2114,30 @@ def _phone_handler_class(center: ControlCenter, phone: phone_access.PhoneAccess)
 
     class PhoneHandler(base):
         phone_listener = True
+        # H1: a connection that has not shown the cookie is held at most this long.
+        timeout = phone_access.GATE_TIMEOUT_SECONDS
+        _cached_body: dict[str, Any] | None = None
+
+        def opened(self) -> None:
+            """The cookie is valid: the usual request timeout from now on (video streams lift it)."""
+            self.timeout = REQUEST_TIMEOUT_SECONDS
+            with contextlib.suppress(OSError):
+                self.connection.settimeout(REQUEST_TIMEOUT_SECONDS)
+
+        def refuse_first(self, status: int, payload: dict[str, Any]) -> None:
+            """Answer before reading the body (H2); then drop what is left for at most 1 s and close."""
+            self.close_connection = True
+            self.send_json(status, payload)
+            with contextlib.suppress(OSError, ValueError):
+                self.wfile.flush()
+                self.connection.settimeout(1.0)
+                self.drain_body()
+
+        def body(self) -> dict[str, Any]:
+            # ai-audit: the phone handler already read the body to check `visual`.
+            if self._cached_body is not None:
+                return self._cached_body
+            return super().body()
 
         def host_allowed(self, *, drain: bool = False) -> bool:
             if phone.host_ok(self.headers.get("Host")):
@@ -2102,13 +2167,8 @@ def _phone_handler_class(center: ControlCenter, phone: phone_access.PhoneAccess)
 
         def answer_code(self, code: str) -> None:
             """Check one code attempt and answer with the hop to V2, the form again, or the lock."""
-            outcome = phone.try_code(code)
-            if outcome == "ok":
-                try:
-                    cookie = phone.set_cookie_header()
-                except ValueError:
-                    self.send_json(403, {"error": "Chế độ điện thoại đang tắt"})
-                    return
+            outcome, cookie = phone.try_code(code, ip=self.client_address[0])
+            if outcome == "ok" and cookie:
                 self.send_page(200, _phone_page("Đã xác nhận mã", "Đang mở BiliFlow…", form=False, redirect=V2),
                                cookie=cookie)
             elif outcome == "locked":
@@ -2140,11 +2200,14 @@ def _phone_handler_class(center: ControlCenter, phone: phone_access.PhoneAccess)
         def do_GET(self) -> None:
             if not self.host_allowed():
                 return
-            parsed = urllib.parse.urlparse(self.path)
+            parsed = self.parsed_path()
+            if parsed is None:
+                return
             if not self.has_access():
                 # The code is only typed into the form (question 12): a ?code= link is ignored.
                 self.refuse_without_access(parsed.path)
                 return
+            self.opened()
             if parsed.path in ("/", "/phone-login"):
                 # V2 is the phone page; the classic dashboard stays on the PC.
                 self.send_response(303)
@@ -2163,14 +2226,18 @@ def _phone_handler_class(center: ControlCenter, phone: phone_access.PhoneAccess)
             if parsed.path == "/api/phone-mode":
                 # No code, link or counters here: the phone only learns that it is the phone.
                 self.send_json(200, {"remote": True, "enabled": True,
-                                     "pc_only": sorted(set(phone_access.PC_ONLY_POSTS.values()))})
+                                     "pc_only": sorted(set(phone_access.PC_ONLY_POSTS.values())
+                                                       | {phone_access.PC_ONLY_VISUAL_AUDIT})})
                 return
             super().do_GET()
 
         def do_POST(self) -> None:
             if not self.host_allowed(drain=True):
                 return
-            path = urllib.parse.urlparse(self.path).path
+            parsed = self.parsed_path(drain=True)
+            if parsed is None:
+                return
+            path = parsed.path
             origin = self.headers.get("Origin")
             if origin is not None and origin != phone.origin:
                 self.drain_body()
@@ -2192,14 +2259,32 @@ def _phone_handler_class(center: ControlCenter, phone: phone_access.PhoneAccess)
                 self.answer_code(urllib.parse.parse_qs(raw).get("code", [""])[0])
                 return
             if not self.has_access():
-                self.drain_body()
-                self.send_json(401, {"error": "Cần mã truy cập của chế độ điện thoại"})
+                self.refuse_first(401, {"error": "Cần mã truy cập của chế độ điện thoại"})
                 return
+            self.opened()
+            # H2: only PHONE_ALLOWED_POSTS; anything else is refused before the body is used.
             reason = phone_access.pc_only_reason(path)
             if reason:
-                self.drain_body()
-                self.send_json(403, {"error": reason, "code": "pc_only"})
+                self.refuse_first(403, {"error": reason, "code": "pc_only"})
                 return
+            if phone_access.AI_AUDIT_ROUTE.fullmatch(path):
+                # Visual AI Audit sends thumbnails out of the PC: PC only (plan §12.7). JSON audit stays.
+                if not self.authorized():
+                    self.drain_body()
+                    self.send_json(403, {"error": "Phiên Control Center không hợp lệ"})
+                    return
+                try:
+                    body = super().body()
+                except TimeoutError:
+                    self.request_timed_out()
+                    return
+                except (ValueError, RecursionError) as error:
+                    self.send_json(400, {"error": str(error)})
+                    return
+                if bool(body.get("visual", False)):
+                    self.send_json(403, {"error": phone_access.PC_ONLY_VISUAL_AUDIT, "code": "pc_only"})
+                    return
+                self._cached_body = body
             super().do_POST()
 
     return PhoneHandler
