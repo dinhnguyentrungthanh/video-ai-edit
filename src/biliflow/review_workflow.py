@@ -73,8 +73,12 @@ from biliflow.platform_memory import (
 )
 from biliflow.platform_names import match_platform_texts
 from biliflow.blur_filter import (
+    COVER_METHOD,
+    DEFAULT_SIGMA,
     blur_feather_mode,
+    blur_method,
     blur_parameters,
+    cover_sigma,
     regional_blur_filters,
 )
 from biliflow.probe import duration_seconds, probe_video
@@ -4768,11 +4772,15 @@ def approved_operations(payload: dict) -> list[dict]:
                     if isinstance(region, dict) else 0
                 )
                 operation["blur"] = {
-                    "sigma": 28,
+                    "sigma": cover_sigma(region) if isinstance(region, dict) else DEFAULT_SIGMA,
                     "edge_feather_pixels": adaptive_feather,
                     "edge_feather_mode": item.get("decision_blur_edge_mode") or "all_edges",
                     "region_policy": "ocr_union_asymmetric_tight_v3",
                 }
+                if isinstance(region, dict):
+                    # A region (logo, text) is filled from the picture around it, then blurred
+                    # (blur_filter.COVER_METHOD); a whole-frame BLUR keeps the plain blur.
+                    operation["blur"]["method"] = COVER_METHOD
             operations.append(operation)
     cuts = sorted(
         (operation for operation in operations if operation["type"] == "cut"),
@@ -4924,6 +4932,7 @@ def render_edit_previews(
                     region=region, sigma=sigma, feather=feather,
                     feather_mode=feather_mode,
                     enable=f"enable='between(t,{relative_start:.3f},{relative_end:.3f})'",
+                    method=blur_method(operation), frame_size=(source_width, source_height),
                 ))
                 command = [
                     str(ffmpeg_path), "-hide_banner", "-loglevel", "error", "-y",

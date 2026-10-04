@@ -11,6 +11,7 @@ from pathlib import Path
 
 from biliflow.blur_filter import (
     blur_feather_mode,
+    blur_method,
     blur_parameters,
     regional_blur_filters,
 )
@@ -281,6 +282,7 @@ def _prune_redundant_blurs(blurs: list[dict]) -> list[dict]:
                 and _same_regional_blur_target(covering_region, candidate_region)
                 and blur_parameters(covering) == blur_parameters(candidate)
                 and blur_feather_mode(covering) == blur_feather_mode(candidate)
+                and blur_method(covering) == blur_method(candidate)
             ):
                 redundant = True
                 break
@@ -308,12 +310,23 @@ def _blur_group_key(blur: dict) -> tuple:
     else:
         region_key = region
     sigma, feather = blur_parameters(blur)
-    return region_key, sigma, feather, blur_feather_mode(blur)
+    return region_key, sigma, feather, blur_feather_mode(blur), blur_method(blur)
+
+
+def _frame_size(video_stream: dict) -> tuple[int, int] | None:
+    """The probed (width, height); None when the probe lacks them (the cover then reads no picture past the right and bottom of a region)."""
+    try:
+        width, height = int(video_stream["width"]), int(video_stream["height"])
+    except (KeyError, TypeError, ValueError):
+        return None
+    return (width, height) if width > 0 and height > 0 else None
 
 
 def build_final_filter_graph(
     *, operations: list[dict], duration: float, has_audio: bool,
+    frame_size: tuple[int, int] | None = None,
 ) -> tuple[str, float]:
+    """frame_size (source width, height) lets the cover method read picture on every side of a region."""
     cuts = _merge_cuts(operations, duration)
     segments = _kept_segments(cuts, duration)
     blurs = _prune_redundant_blurs([
@@ -365,7 +378,7 @@ def build_final_filter_graph(
                     input_label=current, output_label=output,
                     prefix=f"v{index}region{blur_index}", region=region,
                     sigma=sigma, feather=feather, feather_mode=feather_mode,
-                    enable=enable,
+                    enable=enable, method=blur_method(blur), frame_size=frame_size,
                 ))
                 current = output
             else:
@@ -543,6 +556,7 @@ def _render_final_output_unlocked(
         operations=plan.get("approved_operations", []),
         duration=duration,
         has_audio=audio_stream is not None,
+        frame_size=_frame_size(video_stream),
     )
     audio_bitrate = 384_000 if audio_stream is not None else 0
     overhead_fraction = 0.03

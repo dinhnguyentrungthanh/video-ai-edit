@@ -145,6 +145,32 @@ class FinalRendererTests(unittest.TestCase):
         self.assertIn("format=yuv420p", graph)
         self.assertIn("alphamerge", graph)
 
+    def test_cover_method_reads_picture_around_the_region_and_never_merges_with_a_plain_blur(self):
+        region = {"x": 377, "y": 203, "width": 538, "height": 108}
+        cover = {
+            "sigma": 65, "edge_feather_pixels": 0, "edge_feather_mode": "all_edges",
+            "method": "delogo_blur_v1",
+        }
+        graph, _ = build_final_filter_graph(
+            operations=[
+                {
+                    "id": "cover", "type": "blur", "start_seconds": 2, "end_seconds": 8,
+                    "region_source_pixels": region, "blur": cover,
+                },
+                {
+                    "id": "plain", "type": "blur", "start_seconds": 3, "end_seconds": 5,
+                    "region_source_pixels": dict(region), "blur": {**cover, "method": "gblur"},
+                },
+            ],
+            duration=10, has_audio=False, frame_size=(1280, 534),
+        )
+        self.assertIn(
+            "crop=554:124:369:195,delogo=x=8:y=8:w=538:h=108,crop=538:108:8:8,gblur=sigma=65",
+            graph,
+        )
+        self.assertEqual(graph.count("delogo="), 1)
+        self.assertEqual(graph.count("overlay="), 2)
+
     def test_persistent_region_removes_redundant_short_logo_blurs(self):
         graph, _ = build_final_filter_graph(
             operations=[

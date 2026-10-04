@@ -30,8 +30,11 @@ from pathlib import Path
 from typing import Any
 
 # The fields of an edit-plan operation that follow from the review decisions.
-# Of its "blur" settings only edge_feather_mode is a decision; sigma and
-# region_policy are code constants and edge_feather_pixels follows the region.
+# Of its "blur" settings only edge_feather_mode is a decision; sigma, method and
+# region_policy follow the code (and the region) and edge_feather_pixels follows the
+# region. So an export rendered before the cover method (blur_filter.COVER_METHOD,
+# 2026-10-04) still counts as rendered from the current decisions: the user re-exports
+# a video to hide its logos with the cover.
 RENDER_FIELDS = ("id", "type", "start_seconds", "end_seconds", "region_source_pixels")
 # Marks the operations hash apart from the legacy decision hash it replaced.
 IDENTITY_VERSION = 2
