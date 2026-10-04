@@ -112,6 +112,7 @@ DASHBOARD_V2_DIR = Path(__file__).resolve().parents[2] / "dashboard_v2"
 DASHBOARD_V2_PAGE = "live.html"
 DASHBOARD_V2_FILES = frozenset({
     "styles.css", "theme.css", "contracts.js", "adapter.js", "download-demo.js", "app.js",
+    "review.css", "review-core.js", "review-media.js", "review-cards.js", "review.js",
     "assets/mark.svg", "assets/poster-amber.svg", "assets/poster-blue.svg",
     "assets/poster-rose.svg", "assets/poster-sage.svg", "assets/poster-violet.svg",
 })

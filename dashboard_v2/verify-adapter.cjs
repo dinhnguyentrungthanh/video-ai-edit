@@ -259,6 +259,71 @@ test('Phone mode: a 403 pc_only refusal is shown, without token refresh or resen
   assert.equal(f.sessions().length, 1);
 });
 
+test('Review (R0): GETs of one job, encoded query strings, URL builders only, no write', async () => {
+  const f = fake({
+    'GET /api/jobs/12/review/session': {status: 200, body: {token: 'tok-review', media_key: 'k/1+2=='}},
+    'GET /api/jobs/12/review/queue': {status: 200, body: {items: [], status: 'READY_FOR_EDIT_PLAN'}},
+    'GET /api/jobs/12/review/evidence?item=visual_logo%3A1%20%26%20x': {status: 200, body: {frames: []}},
+  });
+  const a = adapterWith(f), r = a.review(12);
+  assert.equal(r.jobId, 12);
+  assert.deepEqual(await r.queue(), {items: [], status: 'READY_FOR_EDIT_PLAN'});
+  await Promise.all([r.session(), r.session()]);
+  assert.equal(f.calls.filter(c => c.path === '/api/jobs/12/review/session').length, 1, 'session is single-flight');
+  assert.equal(r.mediaKey(), 'k/1+2==');
+  assert.deepEqual(await r.session(), {media_key: 'k/1+2=='}, 'the token never leaves the adapter');
+  await r.resources(); await r.exportState();
+  await r.evidence('visual_logo:1 & x');
+  assert.deepEqual(f.calls.map(c => c.method + ' ' + c.path), ['GET /api/jobs/12/review/queue', 'GET /api/jobs/12/review/session',
+    'GET /api/jobs/12/review/session', 'GET /api/jobs/12/review/resources', 'GET /api/jobs/12/review/export',
+    'GET /api/jobs/12/review/evidence?item=visual_logo%3A1%20%26%20x']);
+  assert.equal(r.frameUrl('a/b?c#d', 12.5, 'k/1+2=='), '/api/jobs/12/review/frame?item=a%2Fb%3Fc%23d&t=12.5&k=k%2F1%2B2%3D%3D');
+  assert.equal(r.videoUrl('k/1+2=='), '/api/jobs/12/review/video?k=k%2F1%2B2%3D%3D');
+  assert.equal(r.mediaUrl('job/rev 1/ảnh#1.jpg'), '/media/' + encodeURIComponent('job/rev 1/ảnh#1.jpg'));
+  assert.equal(f.posts().length, 0, 'R0 is read-only');
+  await a.dispatch('scheduler', null, {paused: true});
+  assert.equal(f.posts()[0].headers['X-BiliFlow-Token'], 'tok-review', 'the review session refreshes the same token');
+  for (const bad of [0, -1, 1.5, '7x', '1e3', '', null, 'abc', 1e10]) assert.throws(() => a.review(bad), e => e.status === 400, String(bad));
+});
+
+test('Review (R0): probeVideo sends Range bytes=0-0 in raw mode and returns only the status', async () => {
+  let seen = null;
+  const f = fake({'GET /api/jobs/3/review/video?k=key': opts => { seen = opts; return {status: 410, body: null}; }});
+  const status = await adapterWith(f).review(3).probeVideo('key');
+  assert.equal(status, 410);
+  assert.equal(seen.headers.Range, 'bytes=0-0');
+  assert.equal(seen.raw, true, 'the transport is asked not to parse the body');
+  let parsed = false;
+  const raw = A.fetchTransport(async () => ({status: 206, body: {cancel: async () => {}}, text: async () => { parsed = true; return 'x'; }}));
+  assert.deepEqual(await raw('GET', '/v', {headers: {}, raw: true}), {status: 206, body: null});
+  assert.equal(parsed, false, 'a raw answer is never read');
+});
+
+test('Review (R0): contracts.request appends an encoded query and keeps the endpoint list', async () => {
+  assert.equal(C.request('evidence', {id: 4}, null, {item: 'x y', skip: null}).path, '/api/jobs/4/review/evidence?item=x%20y');
+  assert.equal(C.request('queue', {id: 4}).path, '/api/jobs/4/review/queue');
+  assert.equal(C.request('status', null, null, {}).path, '/api/status');
+  assert.throws(() => C.request('queue', {id: '4'}), /job id/);
+});
+
+test('Live store: pause() stops /api/status polling while the review dialog is open; resume() refreshes at once', async () => {
+  const f = fake({'GET /api/status': {status: 200, body: {version: 't', jobs: []}}});
+  const store = A.createLiveStore(adapterWith(f));
+  const statuses = () => f.calls.filter(c => c.path === '/api/status').length;
+  store.start(20);
+  await new Promise(r => setTimeout(r, 70));
+  store.pause();
+  await new Promise(r => setTimeout(r, 10));
+  const before = statuses();
+  await new Promise(r => setTimeout(r, 90));
+  assert.equal(statuses(), before, 'no poll while paused');
+  store.resume();
+  await new Promise(r => setTimeout(r, 5));
+  assert.equal(statuses(), before + 1, 'one refresh at once on resume');
+  store.stop();
+  assert.equal(typeof store.review(5).queue, 'function');
+});
+
 (async () => {
   for (const [name, fn] of tests) {
     await fn();

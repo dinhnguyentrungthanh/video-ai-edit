@@ -36,6 +36,34 @@
     }
     function changed() { previewVersion++; normalizeQueue(); emit(); }
 
+    /* Review dialog (R0): the adapter's review(jobId) interface on a synthetic in-memory queue.
+     * Images are the bundled poster SVGs; there is no video, frame or evidence in the demo. */
+    const reviews = new Map();
+    function review(jobId) {
+      const j = getJob(jobId);
+      if (!j) throw demoError(404, 'Không tìm thấy video.');
+      const asset = p => { const m = /^demo\/(poster-[a-z]+\.svg)$/.exec(String(p)); return m ? 'assets/' + m[1] : ''; };
+      return {
+        jobId: j.id,
+        async queue() {
+          online();
+          if (!j.active_queue_path) throw demoError(404, 'Video chưa có danh sách duyệt (đang quét hoặc quét lại).');
+          if (!reviews.has(j.id)) reviews.set(j.id, Mock.reviewQueue(j));
+          return structuredClone(reviews.get(j.id));
+        },
+        session: async () => ({media_key: 'demo-key'}),
+        mediaKey: () => 'demo-key',
+        resources: async () => ({source_bytes: j.source_size_bytes, report_bytes: 18e6, disk_free_bytes: 312e9, estimated_preview_seconds: 40, estimated_preview_megabytes_range: [180, 260]}),
+        exportState: async () => ({status: j.state, output: j.output_path || null, error: j.error || null, render_progress: j.render_progress || null,
+          source_cleaned: !!j.source_cleaned, source_archived: !!j.source_archived, source_name: j.name + '.mp4'}),
+        evidence: async () => ({frames: [], video: {available: false, reason: 'demo'}}),
+        probeVideo: async () => 404,
+        frameUrl: () => '',
+        videoUrl: () => '',
+        mediaUrl: asset,
+      };
+    }
+
     function apply(operation, j, body) {
       if (j) {
         if (operation === 'start' || operation === 'rerun') {
@@ -92,6 +120,9 @@
       loadPhone: () => Promise.resolve(state),
       start() {},
       stop() {},
+      pause() {},
+      resume() {},
+      review,
       async dispatch(operation, job, body) {
         online();
         conflict('Dữ liệu vừa thay đổi. Đóng hộp thoại và mở lại để kiểm tra; không tự gửi lại thao tác.', 'state_changed');
@@ -155,7 +186,7 @@
         else if (j.state === 'RENDERING') { j.state = 'SCANNING_LOGO'; delete j.render_progress; state.active = {job_id: 102, stage: 'visual_logo', pid: 12345}; }
         previewVersion++; emit();
       },
-      reset() { state = Mock.create(); conflictUsed = false; previewVersion++; emit(); },
+      reset() { state = Mock.create(); reviews.clear(); conflictUsed = false; previewVersion++; emit(); },
     };
   }
 

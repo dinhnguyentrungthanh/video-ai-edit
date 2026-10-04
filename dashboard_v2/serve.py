@@ -8,7 +8,8 @@ from urllib.parse import unquote, urlsplit
 
 ROOT = Path(__file__).resolve().parent
 # The demo server never serves adapter.js or live.html: those belong to /dashboard-v2/ of the Control Center.
-PUBLIC = {"index.html", "styles.css", "theme.css", "contracts.js", "mock-data.js", "demo-store.js", "download-demo.js", "app.js"}
+PUBLIC = {"index.html", "styles.css", "theme.css", "contracts.js", "mock-data.js", "demo-store.js", "download-demo.js", "app.js",
+          "review.css", "review-core.js", "review-media.js", "review-cards.js", "review.js"}
 PUBLIC.update(f"assets/{p.name}" for p in (ROOT / "assets").glob("*.svg"))
 
 

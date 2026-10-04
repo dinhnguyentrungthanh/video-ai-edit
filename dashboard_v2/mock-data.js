@@ -6,7 +6,7 @@
     return {...common,id,job_key:'demo-video-'+id,source_sha256:id.toString(16).padStart(64,'0'),source_path:'E:\\DungChung\\BiliFlow\\input\\'+name+'.mp4',source_size_bytes:245000000,state,active_revision:1,active_queue_path:'DEMO/revision-1/review-queue.json',review_summary:{status:'READY_FOR_EDIT_PLAN',total:5,resolved:5,needs_more_context:0,skip_eligible:false},structure_audit:{result:'PASS',summary:'Queue và phạm vi kiểm tra khớp.'},...extra,name};
   }
   const fixtures = [
-    job(101,'Shin · Thú cưng mới của mình đó nha','WAITING_REVIEW',{review_summary:{status:'WAITING_REVIEW',total:8,resolved:3,needs_more_context:1,skip_eligible:false},palette:'sage',duration:'07:26'}),
+    job(101,'Shin · Thú cưng mới của mình đó nha','WAITING_REVIEW',{review_summary:{status:'WAITING_REVIEW',total:30,resolved:25,needs_more_context:1,skip_eligible:false},palette:'sage',duration:'07:26'}),
     job(102,'Nhất Âu Xuân · Tập 31','SCANNING_LOGO',{progress:.64,current_stage:'visual_logo',active_queue_path:null,review_summary:null,structure_audit:null,palette:'rose',content_style:'live_action',duration:'45:12'}),
     job(103,'Shin · Bỏ lỡ tập phim siêu nhân Kamen','READY_TO_EXPORT',{palette:'blue',duration:'07:18'}),
     job(104,'Conan · Bức thư trong căn phòng bí mật','QUEUED',{queue_kind:'scan',queue_position:1,progress:0,active_queue_path:null,review_summary:null,structure_audit:null,palette:'violet',duration:'24:06'}),
@@ -27,7 +27,58 @@
     {key:'demo-youku',name:'Youku · logo góc trái',memory_class:'platform_logo',platform:'youku',frames:4,color:'amber'},
     {key:'demo-license',name:'Thẻ giấy phép · 国家广播电视总局',memory_class:'studio_logo',frames:3,color:'blue'}
   ];
+  /* Review dialog (R0): synthetic queue items in the shape of review_workflow.py. Every kind the
+   * dialog must show: scenes with several moments, logos with and without a region, text, a platform
+   * logo, an opening check, Visual AI advice, NEEDS_MORE_CONTEXT, advisory candidates, a card without image. */
+  const KINDS = [
+    {category:'adult',review_kind:'adult',priority:'high',suggested:'CUT',moments:3,label:'Cảnh nhạy cảm'},
+    {category:'visual_logo',review_kind:'logo_overlay',priority:'high',suggested:'BLUR',region:[60,40,260,96],label:'Logo góc trái'},
+    {category:'visual_logo',review_kind:'logo_candidate',candidate_type:null,priority:'normal',suggested:'KEEP',label:'Logo toàn khung'},
+    {category:'text',review_kind:'in_film_text',priority:'normal',suggested:'KEEP',region:[420,880,1080,120],label:'Chữ trong phim'},
+    {category:'gore',review_kind:'gore',priority:'high',suggested:'BLUR',label:'Cảnh máu'},
+    {category:'violence',review_kind:'violence',priority:'normal',suggested:'KEEP',moments:2,label:'Cảnh đánh nhau'},
+    {category:'text',review_kind:'logo_overlay',priority:'normal',suggested:'BLUR',region:[1500,60,360,110],label:'Chữ quảng cáo góc phải'},
+    {category:'visual_logo',review_kind:'platform_logo',candidate_type:'platform_logo',platform_logo:{name:'Nền tảng mẫu'},priority:'high',suggested:'BLUR',region:[1620,940,250,90],label:'Logo nền tảng mẫu'},
+    {category:'visual_logo',review_kind:'opening_promotion',candidate_type:'opening_boundary',priority:'context',suggested:null,label:'Đoạn mở đầu'},
+    {category:'adult',review_kind:'adult',priority:'normal',suggested:'KEEP',ai:{suggested_decision:'BLUR',confidence:0.93,classification:'logo thương hiệu'},label:'Cảnh cần xem lại'}
+  ];
+  const PALETTES = ['sage','amber','blue','rose','violet'];
+  const seconds = text => String(text || '').split(':').reduce((n, part) => n * 60 + (Number(part) || 0), 0);
+  function reviewItem(job, i, n, duration, advisory) {
+    const k = advisory ? KINDS[[1, 3, 7][i % 3]] : KINDS[i % KINDS.length];
+    const start = Math.round((i + 0.5) * duration / (n + 1) * 10) / 10, end = Math.round((start + 4 + (i % 5) * 2) * 10) / 10;
+    const moments = k.moments || 1, intervals = Array.from({length: moments}, (_, m) => ({start_seconds: start + m * (end - start) / moments, end_seconds: start + (m + 0.6) * (end - start) / moments}));
+    return {id: (advisory ? 'advisory-' : k.category + '-') + job.id + '-' + String(i).padStart(4, '0'), category: k.category, review_kind: k.review_kind,
+      candidate_type: k.candidate_type === undefined ? null : k.candidate_type, priority: advisory ? 'context' : k.priority, start_seconds: start, end_seconds: end,
+      labels: [k.label], reasons: [], preview_images: (i % 13 === 12 && !advisory) ? [] : ['demo/poster-' + PALETTES[i % PALETTES.length] + '.svg'],
+      suggested_decision: k.suggested, suggested_region_source_pixels: k.region ? {x: k.region[0], y: k.region[1], width: k.region[2], height: k.region[3]} : null,
+      source_frame_size: [1920, 1080], temporal_policy: moments > 1 ? 'discrete_detected_intervals' : null, detected_intervals: intervals,
+      ...(k.platform_logo ? {platform_logo: k.platform_logo} : {}), ...(k.ai ? {ai_visual_audit: k.ai} : {}), ...(advisory ? {advisory: true} : {}),
+      decision: null, decision_region_source_pixels: null};
+  }
+  function reviewQueue(job, options) {
+    options = options || {};
+    const r = job.review_summary || {main_items: 0, decisions: {}}, d = r.decisions || {}, n = options.count == null ? r.main_items || 0 : options.count;
+    const duration = Math.max(60, seconds(job.duration)), items = Array.from({length: n}, (_, i) => reviewItem(job, i, n, duration, false));
+    const decisions = options.count == null
+      ? [].concat(Array(d.BLUR || 0).fill('BLUR'), Array(d.KEEP || 0).fill('KEEP'), Array(d.CUT || 0).fill('CUT'), Array(d.NEEDS_MORE_CONTEXT || 0).fill('NEEDS_MORE_CONTEXT'))
+      : items.map((x, i) => i % 4 === 0 ? null : i % 11 === 5 ? 'NEEDS_MORE_CONTEXT' : x.suggested_decision || 'KEEP');
+    let stride = 7; const gcd = (a, b) => b ? gcd(b, a % b) : a; while (n > 1 && gcd(stride, n) !== 1) stride++;
+    decisions.forEach((value, k) => {
+      const x = items[options.count == null ? (k * stride) % n : k]; if (!x || !value) return;
+      x.decision = value; x.decision_region_source_pixels = value === 'BLUR' ? (x.suggested_region_source_pixels || 'FULL_FRAME') : null;
+    });
+    const advisory = Array.from({length: options.advisory == null ? 3 : options.advisory}, (_, i) => reviewItem(job, i, 3, duration, true));
+    const pending = items.filter(x => !x.decision).length, counts = {total: n, pending, decisions: {KEEP: 0, BLUR: 0, CUT: 0, NEEDS_MORE_CONTEXT: 0}};
+    items.forEach(x => { if (x.decision) counts.decisions[x.decision]++; });
+    const all = ['advertising', 'adult', 'gore', 'violence'], selected = (job.detector_groups || []).slice();
+    return {status: counts.decisions.NEEDS_MORE_CONTEXT ? 'NEEDS_MORE_CONTEXT' : pending ? 'REVIEW_REQUIRED' : 'READY_FOR_EDIT_PLAN', counts, items, advisory_items: advisory,
+      created_at: '2026-10-03T10:00:00Z', updated_at: '2026-10-03T11:00:00Z', source: {path: job.source_path, sha256: job.source_sha256, duration_seconds: duration},
+      reports: ['DEMO/revision-' + job.active_revision + '/report.json'], detection_scope: {selected, skipped: all.filter(x => !selected.includes(x))},
+      visual_ai_audit: {assessment_count: items.filter(x => x.ai_visual_audit).length}, export_size_policy: r.export_size_policy || {mode: 'default', maximum_output_gb: 3.5}};
+  }
   root.BFMock = {
+    reviewQueue,
     create() {
       const jobs=structuredClone(fixtures).map(j=>{
         if(j.review_summary){

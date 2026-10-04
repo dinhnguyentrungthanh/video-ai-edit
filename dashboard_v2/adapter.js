@@ -40,6 +40,8 @@
       const init = {method, cache: 'no-store', credentials: 'same-origin', redirect: 'error', headers: options.headers || {}};
       if (options.body !== undefined) init.body = options.body;
       const response = await fetchImpl(path, init);
+      // raw: only the status matters (video probe); the body is never read or parsed.
+      if (options.raw) { try { if (response.body && response.body.cancel) await response.body.cancel(); } catch (_) { /* nothing to release */ } return {status: response.status, body: null}; }
       let body = null;
       const text = await response.text();
       if (text) { try { body = JSON.parse(text); } catch (_) { body = {error: text.slice(0, 300)}; } }
@@ -62,9 +64,9 @@
     let statusSeq = 0, statusApplied = 0;
     const inflight = new Map();
 
-    async function send(method, path, body, headers) {
+    async function send(method, path, body, headers, raw) {
       try {
-        return await transport(method, path, {headers: headers || {}, body});
+        return await transport(method, path, raw ? {headers: headers || {}, body, raw: true} : {headers: headers || {}, body});
       } catch (error) {
         throw new AdapterError(0, MESSAGES[0], {operation: path});
       }
@@ -113,6 +115,39 @@
       return promise;
     }
 
+    /* Review dialog (R0, read-only): GETs and URL builders of one job. URLs are strings only (no fetch):
+     * frames and video load as same-origin <img>/<video> under the V2 CSP (no blob:). */
+    function review(jobId) {
+      const job = {id: Number(jobId)};
+      if (!/^\d{1,9}$/.test(String(jobId)) || !Number.isInteger(job.id) || job.id <= 0) throw new AdapterError(400, 'Thiếu job id hợp lệ.');
+      const path = (operation, query) => C.request(operation, job, null, query).path;
+      let mediaKey = null, sessionRequest = null;
+      function session() {
+        if (!sessionRequest) {
+          sessionRequest = get(path('reviewSession')).then(body => {
+            if (body && typeof body.token === 'string') token = body.token; // same Control Center token, kept in this closure
+            mediaKey = body && typeof body.media_key === 'string' ? body.media_key : null;
+            return {media_key: mediaKey};
+          }).finally(() => { sessionRequest = null; });
+        }
+        return sessionRequest;
+      }
+      return {
+        jobId: job.id,
+        queue: () => get(path('queue')),
+        session,
+        mediaKey: () => mediaKey,
+        resources: () => get(path('resources')),
+        exportState: () => get(path('reviewExport')),
+        evidence: item => get(path('evidence', {item: String(item)})),
+        /* Range bytes=0-0, status only (404/409/410/415 give the reason a video does not play). */
+        async probeVideo(key) { return (await send('GET', path('video', {k: key}), undefined, {Range: 'bytes=0-0'}, true)).status; },
+        frameUrl: (item, t, key) => path('frame', {item: String(item), t: String(t), k: key}),
+        videoUrl: key => path('video', {k: key}),
+        mediaUrl: p => C.endpoints.media[1].replace('{path}', encodeURIComponent(String(p))),
+      };
+    }
+
     function positiveIds(ids) {
       const list = (ids || []).map(Number);
       if (!list.length || list.length > 50 || list.some(id => !Number.isInteger(id) || id <= 0)) {
@@ -142,6 +177,7 @@
       /* Phone mode: on the PC the status (code included); on the phone only {remote: true}. */
       loadPhone: () => get(C.endpoints.phoneStatus[1]),
       health: () => get(C.endpoints.health[1]),
+      review,
       /* Read-only preview right before a cleanup / archive. */
       async preview(kind, ids) {
         const list = positiveIds(ids);
@@ -222,7 +258,7 @@
     options = options || {};
     let snap = {mode: 'live', jobs: [], logos: [], active: null, queue: {length: 0, paused: false}, resources: {cpu_percent: 0, memory: {percent: 0}, disk: {}, gpu: null}, ai: {ready: false, config: {}, message: 'Đang tải…'}, offline: false, loading: true, requests: []};
     const listeners = new Set();
-    let ai = null, memory = null, timer = null, phone = null;
+    let ai = null, memory = null, timer = null, phone = null, paused = false;
     const emit = () => listeners.forEach(fn => fn(snap));
 
     async function refresh() {
@@ -268,12 +304,17 @@
       start(intervalMs) {
         refresh(); loadAI(); loadPhone();
         if (!timer && intervalMs) timer = setInterval(() => {
+          if (paused) return; // the review dialog is open (Q7): it polls its own queue
           refresh();
           if (ai && ai.login_running) loadAI();
           if (phone && phone.enabled && !phone.remote) loadPhone(); // failed attempts / lock on the PC panel
         }, intervalMs);
       },
       stop() { clearInterval(timer); timer = null; },
+      /* Review dialog open: /api/status polling pauses; on close it refreshes at once and resumes. */
+      pause() { paused = true; },
+      resume() { if (!paused) return; paused = false; refresh(); },
+      review: jobId => adapter.review(jobId),
       async dispatch(operation, job, body) {
         const result = await adapter.dispatch(operation, job, body);
         if (['aiConfig', 'aiCheck', 'aiLogin'].includes(operation)) { ai = result.body; snap = {...snap, ai}; }

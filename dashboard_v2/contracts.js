@@ -132,11 +132,15 @@
     if (mode!=='custom' || !Number.isFinite(n) || n<0.05 || n>1000) throw new Error('Giới hạn tùy chỉnh phải từ 0,05 đến 1.000 GB.');
     return {size_mode:'custom',max_output_gb:n};
   }
-  function request(id,job,body) {
+  /* query: optional {name: value} appended as an encoded query string (review GETs: item, t, k). */
+  function request(id,job,body,query) {
     const ep = endpoints[id];
     if (!ep) throw new Error('Thao tác không có trong hợp đồng.');
     if (ep[1].includes('{id}') && (!Number.isInteger(job?.id) || job.id<=0)) throw new Error('Thiếu job id hợp lệ.');
-    return {operation:id,method:ep[0],path:ep[1].replace('{id}',job?.id),body:body||{}};
+    let path = ep[1].replace('{id}',job?.id);
+    const pairs = Object.entries(query||{}).filter(([,v]) => v!==undefined && v!==null).map(([k,v]) => encodeURIComponent(k)+'='+encodeURIComponent(String(v)));
+    if (pairs.length) path += '?'+pairs.join('&');
+    return {operation:id,method:ep[0],path,body:body||{}};
   }
   return {pcOnlyOps,PC_ONLY_REASON,SOURCE_MISSING_MESSAGE,sourceLine,formatStamp,formatBytes,detectors,tabs,labels,scanning,pausable,rerunnable,endpoints,cleaned,archived,hidden,locked,inFlight,eligible,reviewStats,tab,phase,overviewLabels,overviewMatch,operations,primary,validateScan,exportSelection,request};
 });

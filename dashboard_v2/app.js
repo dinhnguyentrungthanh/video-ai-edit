@@ -54,7 +54,9 @@ function drawerActions(j){
   const actions=ops(j),primary=C.primary(j);
   const featured=primary==='detail'?['stopAfter']:primary==='finalize'?['finalize','review']:[primary];
   const main=featured.map(id=>actions.find(a=>a.id===id)).filter(Boolean),other=actions.filter(a=>!featured.includes(a.id));
-  return '<h3>Thao tác chính</h3>'+(main.length?'<div class="drawer-primary-actions">'+main.map(a=>btn(j,a,'')).join('')+'</div>':'<p class="muted">Xem trạng thái và kết quả kiểm tra bên dưới.</p>')+(other.length?'<details class="more-actions"><summary>Thao tác khác</summary><div class="action-grid">'+other.map(a=>btn(j,a)).join('')+'</div></details>':'');
+  const review=actions.find(a=>a.id==='review'&&a.enabled);
+  const tryReview=review?'<button class="small secondary review-v2-try" data-action="review-v2" data-id="'+j.id+'">Duyệt (bản mới, thử)</button>':'';
+  return '<h3>Thao tác chính</h3>'+tryReview+(main.length?'<div class="drawer-primary-actions">'+main.map(a=>btn(j,a,'')).join('')+'</div>':'<p class="muted">Xem trạng thái và kết quả kiểm tra bên dưới.</p>')+(other.length?'<details class="more-actions"><summary>Thao tác khác</summary><div class="action-grid">'+other.map(a=>btn(j,a)).join('')+'</div></details>':'');
 }
 function drawerFocusable(el){
   for(let parent=el.parentElement;parent&&!parent.classList.contains('drawer');parent=parent.parentElement){
@@ -444,6 +446,7 @@ document.addEventListener('click',async event=>{
   const el=event.target.closest('[data-action]');if(!el||el.disabled)return;
   const action=el.dataset.action;
   if(action==='detail')openDrawer(el.dataset.id);
+  else if(action==='review-v2'){const j=getJob(el.dataset.id);if(j){reviewPushed=true;location.hash='review/'+j.id+'/'+view;}}
   else if(action==='download-start')startDownload();
   else if(action==='download-item'){D.action(downloadQueue,el.dataset.id,el.dataset.op);refreshDownload();ensureDownloadTimer();}
   else if(action==='download-filter'){downloadFilter=el.dataset.filter;refreshDownload();}
@@ -522,7 +525,26 @@ document.addEventListener('keydown',event=>{
     else if(!event.shiftKey&&document.activeElement===last){event.preventDefault();first?.focus();}
   }
 });
-function route(){aiDirty=false;const hash=location.hash.slice(1);view=['overview','downloads','videos','queue','logos','settings'].includes(hash)?hash:'overview';closeDrawer();render();window.scrollTo(0,0);}
+/* #review/<id>/<view> opens the review dialog over <view> (R0, read-only); a malformed review hash goes to #overview. */
+let reviewPushed=false;
+function route(){
+  aiDirty=false;const hash=location.hash.slice(1),target=window.BFReview.parseHash(hash);
+  if(!target&&hash.startsWith('review')){history.replaceState(null,'','#overview');}
+  const next=target?target.view:(['overview','downloads','videos','queue','logos','settings'].includes(hash)?hash:'overview');
+  const wasOpen=review.isOpen();
+  closeDrawer();
+  if(!target&&wasOpen){reviewPushed=false;review.close();}
+  // Opening or closing the dialog over the same view keeps the page as it was (scroll, open sections).
+  if(!((target||wasOpen)&&next===view&&$('#main').innerHTML)){view=next;render();window.scrollTo(0,0);}
+  if(target)review.open(target.id,target.view);
+}
+/* Closing (×, Đóng, Esc) returns to <view>: back in history when the dialog was opened from V2, else replace the hash. */
+function requestReviewClose(back){
+  if(reviewPushed){reviewPushed=false;history.back();return;}
+  history.replaceState(null,'','#'+back);route();
+}
+const review=window.BFReview.create({dialog:$('#review-dialog'),store,getJob,requestClose:requestReviewClose,
+  oldUrl:(id,back)=>LIVE?'/review/'+encodeURIComponent(id)+'?from=v2&view='+encodeURIComponent(back):''});
 window.addEventListener('hashchange',route);
 /* A new snapshot (polling or after an action) re-renders without losing the user's place. */
 function liveChrome(){
@@ -531,7 +553,7 @@ function liveChrome(){
   if(bar)bar.style.width=(Number(d.percent)||0)+'%';
 }
 function onSnapshot(){
-  state=store.snapshot();liveChrome();
+  state=store.snapshot();liveChrome();review.updateJob();
   if(view==='downloads'||view==='settings'&&(aiDirty||$('#main').contains(document.activeElement))){nav();return;}
   const focus=document.activeElement,id=focus&&focus.id,range=id==='search'?[focus.selectionStart,focus.selectionEnd]:null,y=window.scrollY;
   const inMain=focus&&$('#main').contains(focus)?[focus.dataset.action,focus.dataset.id,focus.dataset.op,focus.dataset.filter]:null;
