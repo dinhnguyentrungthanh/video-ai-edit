@@ -13,16 +13,15 @@
     options = options || {};
     const max = options.max || 2, stats = options.stats || {};
     let active = 0, order = 0, observer = null;
-    const waiting = [], entries = new Map();
+    const waiting = [], entries = new Map(), running = new Map(); // running: <img> → the load it is doing now
     stats.maxImages = stats.maxImages || 0; stats.activeImages = 0; stats.imagesLoaded = stats.imagesLoaded || 0; stats.imagesFailed = stats.imagesFailed || 0; stats.imageRetries = stats.imageRetries || 0;
 
-    function fail(entry) { stats.imagesFailed++; entry.box.classList.add('failed'); entry.box.classList.remove('loading'); }
+    function fail(entry) { entry.state = 'failed'; stats.imagesFailed++; entry.box.classList.add('failed'); entry.box.classList.remove('loading'); }
     function settle(entry, ok) {
-      active--; stats.activeImages = active;
       if (entry.cancelled) { pump(); return; }
-      if (ok) { stats.imagesLoaded++; entry.box.classList.add('loaded'); entry.box.classList.remove('loading', 'failed'); }
+      if (ok) { entry.state = 'loaded'; stats.imagesLoaded++; entry.box.classList.add('loaded'); entry.box.classList.remove('loading', 'failed'); }
       else if (entry.tries < (entry.refresh ? 2 : 1) && entry.box.isConnected) {
-        entry.tries++; stats.imageRetries++;
+        entry.tries++; stats.imageRetries++; entry.state = 'waiting';
         // A frame (403: the media key changed when the Control Center restarted): a new URL with a new key.
         Promise.resolve(entry.refresh ? entry.refresh(entry.url) : entry.url).then(url => {
           if (entry.cancelled) return;
@@ -32,17 +31,33 @@
       } else fail(entry);
       pump();
     }
+    /* Every started load gives its slot back exactly once: on load, on error, or when the same <img> starts another
+     * load (the browser drops the old request without an event), whether its entry was cancelled or not (R1-B1). */
+    function start(entry) {
+      const img = entry.img, prev = running.get(img);
+      if (prev) { prev.entry.cancelled = true; prev.finish(null); }
+      active++; stats.activeImages = active; stats.maxImages = Math.max(stats.maxImages, active);
+      const attempt = {entry, done: false};
+      const onLoad = () => attempt.finish(true), onError = () => attempt.finish(false);
+      attempt.finish = ok => {
+        if (attempt.done) return;
+        attempt.done = true;
+        img.removeEventListener('load', onLoad); img.removeEventListener('error', onError);
+        if (running.get(img) === attempt) running.delete(img);
+        active--; stats.activeImages = active;
+        if (ok !== null) settle(entry, ok);
+      };
+      running.set(img, attempt);
+      img.addEventListener('load', onLoad); img.addEventListener('error', onError);
+      entry.state = 'loading'; entry.box.classList.add('loading');
+      img.src = entry.url;
+    }
     function pump() {
       while (active < max && waiting.length) {
         waiting.sort((a, b) => b.priority - a.priority || a.order - b.order);
         const entry = waiting.shift();
         if (entry.cancelled || !entry.box.isConnected) continue;
-        active++; stats.activeImages = active; stats.maxImages = Math.max(stats.maxImages, active);
-        const img = entry.img;
-        img.onload = () => { img.onload = img.onerror = null; settle(entry, true); };
-        img.onerror = () => { img.onload = img.onerror = null; settle(entry, false); };
-        entry.box.classList.add('loading');
-        img.src = entry.url;
+        start(entry);
       }
     }
     function enqueue(entry) {
@@ -61,14 +76,20 @@
         }, {root: scroller, rootMargin: '600px 0px'}) : null;
       },
       /* box: an image box (card image, strip frame) with an <img>; url loads when the box comes near the view.
-       * refresh(failedUrl): a new URL after an error (frames: new media key), or null. Watching a box again replaces it. */
+       * refresh(failedUrl): a new URL after an error (frames: new media key), or null. Watching a box again with
+       * another URL replaces it; the same URL still waiting, loading or shown is kept (no second load). */
       watch(box, url, priority, refresh) {
-        const old = entries.get(box);
-        if (old) old.cancelled = true;
-        const img = box.querySelector('img');
+        const old = entries.get(box), img = box.querySelector('img');
+        priority = priority || 0;
+        if (old && !old.cancelled && old.img === img && url && old.url === url && old.state !== 'failed') {
+          if (refresh) old.refresh = refresh;
+          if (priority > old.priority) { old.priority = priority; if (!old.queued) enqueue(old); else pump(); }
+          return;
+        }
+        if (old) { old.cancelled = true; if (observer) observer.unobserve(box); }
         if (!img || !url) { entries.delete(box); box.classList.add('failed'); return; }
         box.classList.remove('failed');
-        const entry = {box, img, url, refresh: refresh || null, priority: priority || 0, order: order++, tries: 0, queued: false, cancelled: false};
+        const entry = {box, img, url, refresh: refresh || null, priority, order: order++, tries: 0, queued: false, cancelled: false, state: 'waiting'};
         entries.set(box, entry);
         if (observer && !priority) observer.observe(box); else enqueue(entry);
       },
@@ -79,7 +100,8 @@
         entry.priority = 10;
         if (!entry.queued) enqueue(entry); else pump();
       },
-      /* Boxes no longer in the page: waiting images are dropped (an image already loading finishes detached). */
+      /* Boxes no longer in the page: waiting images are dropped (an image already loading finishes detached and
+       * gives its slot back then). */
       forget() {
         for (const [box, entry] of entries) {
           if (box.isConnected) continue;

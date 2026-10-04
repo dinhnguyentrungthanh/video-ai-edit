@@ -16,7 +16,12 @@ const C = require('./contracts.js');
 const R = require('./review-core.js');
 let passed = 0;
 const results = [];
-function check(name, fn) { fn(); passed++; results.push(name); process.stdout.write('OK ' + name + '\n'); }
+const asyncChecks = [];
+function check(name, fn) {
+  const done = () => { passed++; results.push(name); process.stdout.write('OK ' + name + '\n'); };
+  const result = fn();
+  if (result && typeof result.then === 'function') asyncChecks.push(result.then(done)); else done();
+}
 
 /* The classic page, exactly as the Control Center serves it (token "test-token", as the D2 fixture). */
 function classicHtml() {
@@ -341,4 +346,66 @@ check('R1 zoomed evidence: yellow AI boxes, red approved boxes and the legend ma
   assert.ok(!/document\.|fetch\(|innerHTML|setTimeout/.test(fs.readFileSync(path.join(__dirname, 'review-detail.js'), 'utf8')), 'review-detail.js is pure');
 });
 
-process.stdout.write(JSON.stringify({passed, failed: 0}) + '\n');
+/* R1-B1: the image loader on fake boxes (no DOM): each started load gives its slot back exactly once. */
+function loaderHarness() {
+  const ctx = {window: {BFReviewCore: R}};
+  vm.runInNewContext(fs.readFileSync(path.join(__dirname, 'review-media.js'), 'utf8'), ctx);
+  const requests = [];
+  const fakeImg = () => {
+    const listeners = {load: new Set(), error: new Set()}, img = {requests: 0};
+    img.addEventListener = (type, fn) => listeners[type].add(fn);
+    img.removeEventListener = (type, fn) => listeners[type].delete(fn);
+    img.listeners = () => listeners.load.size + listeners.error.size;
+    img.fire = ok => { const handler = ok ? img.onload : img.onerror; for (const fn of [...listeners[ok ? 'load' : 'error']]) fn(); if (handler) handler(); };
+    Object.defineProperty(img, 'src', {set(url) { img.current = url; img.requests++; requests.push({img, url}); }, get() { return img.current; }});
+    return img;
+  };
+  const fakeBox = () => {
+    const img = fakeImg(), classes = new Set();
+    return {img, isConnected: true, classList: {add: (...c) => c.forEach(x => classes.add(x)), remove: (...c) => c.forEach(x => classes.delete(x)), has: c => classes.has(c)}, querySelector: () => img};
+  };
+  const stats = {};
+  return {loader: ctx.window.BFReviewMedia.createImageLoader({max: 2, stats}), fakeBox, requests, stats};
+}
+check('R1-B1 image loader: a box watched again while loading gives its slot back; still at most 2 images at once', () => {
+  // The reported case: L.watch(a,u,10); L.watch(a,u,10) → after the load, active() is 0 and the image loads once.
+  let h = loaderHarness(), a = h.fakeBox();
+  h.loader.watch(a, '/f/1', 10); h.loader.watch(a, '/f/1', 10);
+  assert.equal(h.loader.active(), 1); assert.equal(a.img.requests, 1, 'same URL: no second load');
+  a.img.fire(true);
+  assert.equal(h.loader.active(), 0); assert.ok(a.classList.has('loaded')); assert.equal(a.img.listeners(), 0);
+  // Another URL while loading: the first load is dropped by the browser without an event; its slot comes back once.
+  h = loaderHarness(); a = h.fakeBox();
+  h.loader.watch(a, '/f/1', 10); h.loader.watch(a, '/f/2', 10);
+  assert.equal(h.loader.active(), 1); assert.equal(a.img.current, '/f/2');
+  a.img.fire(true); a.img.fire(true);
+  assert.equal(h.loader.active(), 0); assert.equal(h.stats.imagesLoaded, 1);
+  // A cancelled entry (box gone, loader reset) still gives its slot back when its image settles.
+  h = loaderHarness(); a = h.fakeBox(); const b = h.fakeBox();
+  h.loader.watch(a, '/f/1', 10); h.loader.watch(b, '/f/2', 10);
+  a.isConnected = false; h.loader.forget(); h.loader.reset();
+  assert.equal(h.loader.active(), 2);
+  a.img.fire(true); b.img.fire(false);
+  assert.equal(h.loader.active(), 0); assert.equal(h.stats.imagesLoaded, 0, 'cancelled loads are not counted');
+  // Many boxes, some watched twice or three times, errors with a key refresh: never more than 2, back to 0.
+  h = loaderHarness();
+  const boxes = Array.from({length: 9}, () => h.fakeBox());
+  let refreshes = 0;
+  boxes.forEach((box, i) => { h.loader.watch(box, '/f/' + i, 10, url => { refreshes++; return url + '?k=new'; }); if (i % 2) h.loader.watch(box, '/f/' + i, 10); if (i % 3 === 0) h.loader.watch(box, '/f/' + i + 'b', 10); });
+  let max = 0, rounds = 0;
+  const pending = () => boxes.filter(box => box.img.listeners());
+  return (async () => {
+    while (pending().length && rounds++ < 100) {
+      max = Math.max(max, h.loader.active());
+      assert.ok(h.loader.active() <= 2 && pending().length <= 2, 'at most 2 loads at once');
+      const [box] = pending();
+      box.img.fire(!(box.img.current === '/f/4' || box.img.current === '/f/7')); // these two fail once, then load with a new key
+      await Promise.resolve(); await Promise.resolve();
+    }
+    assert.equal(h.loader.active(), 0); assert.equal(max, 2); assert.equal(refreshes, 2);
+    assert.ok(boxes.every(box => box.classList.has('loaded')), 'every box loaded');
+    assert.equal(h.stats.maxImages, 2);
+  })();
+});
+
+Promise.all(asyncChecks).then(() => process.stdout.write(JSON.stringify({passed, failed: 0}) + '\n'), error => { process.stderr.write((error && error.stack || String(error)) + '\n'); process.exit(1); });
