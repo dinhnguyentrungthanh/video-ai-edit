@@ -396,6 +396,26 @@ class PhoneModeTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             phone_access.lan_address(probe_target="127.0.0.1")  # routes over loopback: not a home Wi-Fi
 
+    # Question 10 ------------------------------------------------------------
+    def test_q10_the_phone_gets_the_review_page_with_its_layout_fixes_and_the_pc_does_not(self):
+        status = self.enable()
+        _, cookie, _ = self.login(status["code"])
+        code, _, phone_page = self.get("/review/1", headers={"Cookie": cookie})
+        self.assertEqual(code, 200)
+        _, _, pc_page = request(self.pc_port, "/review/1")
+        self.assertEqual(hashlib.sha256(pc_page).hexdigest(), CLASSIC["review_job_1_token_test_sha256"])
+        self.assertNotIn(b"phone-review", pc_page)
+        text = phone_page.decode("utf-8")
+        for marker in ('id="phone-review"', 'id="phone-review-js"', "chips-more", "Xem thêm bộ lọc",
+                       ".decide button:not(.sel) small{display:none}", "position:fixed", "font-size:12px"):
+            self.assertIn(marker, text, marker)
+        self.assertLess(text.index('id="phone-review"'), text.index("</head>"))
+        self.assertLess(text.index('id="phone-review-js"'), text.rindex("</body>"))
+        # Apart from the two additions, the phone page is the PC page (same token, same API prefix).
+        from biliflow.control_center import REVIEW_PHONE_SCRIPT, REVIEW_PHONE_STYLE
+        self.assertEqual(text.replace(REVIEW_PHONE_STYLE, "").replace(REVIEW_PHONE_SCRIPT, ""), pc_page.decode("utf-8"))
+        self.assertEqual(self.get("/review/1")[0], 401, "still needs the access cookie")
+
     # P5 --------------------------------------------------------------------
     def test_p5_the_127_0_0_1_listener_is_unchanged(self):
         self.enable()

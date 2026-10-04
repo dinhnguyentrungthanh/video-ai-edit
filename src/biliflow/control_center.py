@@ -130,6 +130,56 @@ PHONE_LOGIN_CSP = (
     "frame-ancestors 'none'"
 )
 _PHONE_ACCESS_LOCK = threading.Lock()
+# The classic review page as served by the phone listener (user decision, plan §8 question 10):
+# added after its own styles, so 127.0.0.1:8765 serves the page byte for byte as before.
+# (a) an arrow at the right edge of the filter chips, (b) no "phím N" hints on touch screens,
+# (c) the four decision buttons stay at the bottom of the screen, (d) no text under 12 px.
+REVIEW_PHONE_STYLE = (
+    "<style id=\"phone-review\">"
+    "@media (hover:none) and (pointer:coarse){.decide button:not(.sel) small{display:none}}"
+    "@media (max-width:820px){"
+    ".chips-wrap{position:relative}"
+    ".chips-wrap .chips{padding-right:44px}"
+    ".chips-more{position:absolute;right:0;top:10px;bottom:2px;width:42px;border:0;border-radius:0 999px 999px 0;"
+    "background:linear-gradient(to right,transparent,var(--bg,#0d1117) 45%);color:var(--text,#e6edf3);"
+    "font-size:24px;font-weight:700;line-height:1;padding:0 4px 0 14px;text-align:right}"
+    ".chips-more[hidden]{display:none}"
+    # Fixed, not sticky: the buttons sit in a column below the video inside an overflow:hidden card.
+    ".decide{position:fixed;left:0;right:0;bottom:0;margin:0;z-index:30;gap:8px;background:var(--card,#161b22);"
+    "padding:8px 12px calc(8px + env(safe-area-inset-bottom,0px));box-shadow:0 -6px 18px rgba(0,0,0,.55)}"
+    ".decide button{padding:10px 6px;font-size:15px}"
+    ".thumb i,.thumb span,.thumb.peak::after{font-size:12px;line-height:15px}"
+    ".mchip b,.mchip span,details.export>summary .chev{font-size:12px}"
+    "}</style>"
+)
+REVIEW_PHONE_SCRIPT = (
+    "<script id=\"phone-review-js\">(function(){"
+    "function setup(){var chips=document.getElementById('chips');if(!chips||chips.parentNode.classList.contains('chips-wrap'))return;"
+    "var wrap=document.createElement('div');wrap.className='chips-wrap';chips.parentNode.insertBefore(wrap,chips);wrap.appendChild(chips);"
+    "var more=document.createElement('button');more.type='button';more.className='chips-more';more.textContent='\\u203a';"
+    "more.setAttribute('aria-label','Xem thêm bộ lọc');wrap.appendChild(more);"
+    "function sync(){more.hidden=chips.scrollLeft+chips.clientWidth>=chips.scrollWidth-4}"
+    "more.addEventListener('click',function(){chips.scrollBy({left:Math.max(80,chips.clientWidth*0.7),behavior:'smooth'})});"
+    "chips.addEventListener('scroll',sync,{passive:true});window.addEventListener('resize',sync);"
+    "if(window.ResizeObserver)new ResizeObserver(sync).observe(chips);sync()}"
+    # The page re-renders .decide; keep room at the end of the page for the fixed buttons.
+    "var queued=false;function pad(){queued=false;var d=document.querySelector('.decide');"
+    "var fixed=d&&getComputedStyle(d).position==='fixed';document.body.style.paddingBottom=fixed?(d.offsetHeight+12)+'px':''}"
+    "function later(){if(!queued){queued=true;requestAnimationFrame(pad)}}"
+    "function start(){setup();pad();new MutationObserver(later).observe(document.body,{childList:true,subtree:true});"
+    "window.addEventListener('resize',later)}"
+    "if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',start);else start();"
+    "})();</script>"
+)
+
+
+def _review_page_for_phone(html: str) -> str:
+    """The classic review page plus REVIEW_PHONE_STYLE/SCRIPT, for the phone listener only."""
+    if "</head>" not in html or "</body>" not in html:
+        return html
+    head, rest = html.split("</head>", 1)
+    body, tail = rest.rsplit("</body>", 1)
+    return head + REVIEW_PHONE_STYLE + "</head>" + body + REVIEW_PHONE_SCRIPT + "</body>" + tail
 
 
 def _phone_access(center: Any) -> phone_access.PhoneAccess:
@@ -2102,6 +2152,13 @@ def _phone_handler_class(center: ControlCenter, phone: phone_access.PhoneAccess)
                 self.send_header("Content-Length", "0")
                 self.send_header("Cache-Control", "no-store")
                 self.end_headers()
+                return
+            if match := re.fullmatch(r"/review/(\d+)", parsed.path):
+                # Same page as the PC (same token, same API prefix), plus the phone layout fixes.
+                job_id = int(match.group(1))
+                prefix = f"/api/jobs/{job_id}/review"
+                html = _interactive_html(center.token).replace("'/api/", f"'{prefix}/")
+                self.send_bytes(200, _review_page_for_phone(html).encode(), "text/html; charset=utf-8")
                 return
             if parsed.path == "/api/phone-mode":
                 # No code, link or counters here: the phone only learns that it is the phone.

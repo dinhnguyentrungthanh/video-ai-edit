@@ -385,6 +385,7 @@ Hướng dẫn cho người dùng: `docs/DASHBOARD_V2_PHONE.md`. Code: `src/bili
 | POST `/phone-login` (form `code=`) | điện thoại | Đúng → trang nối (meta refresh tới V2) + `Set-Cookie: biliflow_phone=<HMAC>; HttpOnly; SameSite=Strict; Path=/`; sai → 401 (còn N lần); lần sai thứ 10 → 403 khóa nhập mã. Khi đang khóa: chỉ xét khóa mở đặc biệt `UNLOCK_KEY`. Đúng → 401 “Đã gỡ khóa” (đặt lại số lần sai, **không** cấp cookie, vẫn cần mã 8 ký tự); sai → 403 (còn N lần); 5 lần sai hoặc đã gỡ 3 lần → khóa mở bị khóa tới lần bật sau |
 | Mọi đường khác không cookie | điện thoại | 401 JSON |
 | `/` có cookie | điện thoại | 303 → `/dashboard-v2/` |
+| `/review/{id}` có cookie | điện thoại | Trang duyệt cũ y như PC + `REVIEW_PHONE_STYLE` (trước `</head>`) + `REVIEW_PHONE_SCRIPT` (trước `</body>`): mũi tên chip, ẩn “phím N” trên cảm ứng, nút quyết định `position:fixed` ở đáy (≤ 820 px), chữ ≥ 12 px. Trên `127.0.0.1:8765` không chèn gì |
 | POST chỉ-PC | điện thoại | 403 `{error: "Chỉ làm trên PC: …", code: "pc_only"}`: source-cleanup, source-archive, source-archive/restore, source-recycle-check, shutdown, ai/config, ai/login, logo-memory/class, logo-memory/delete, phone-mode |
 
 - Listener chỉ bind địa chỉ IPv4 riêng (10/8, 172.16/12, 192.168/16) tìm bằng `lan_address()` như Golden Label; cổng mặc định 8767 (1024–65535, khác 8765). Không bao giờ `0.0.0.0`.

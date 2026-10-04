@@ -46,7 +46,13 @@ BiliFlow không tự sửa Firewall. Nếu lỡ bấm Cancel thì điện thoạ
 - xem tiến độ, hàng đợi, danh sách video;
 - tạm dừng hoặc tiếp tục hàng đợi;
 - thiết lập và bắt đầu quét, dừng, tiếp tục, thử lại, hủy, chạy lại;
-- mở trang duyệt cảnh, duyệt cảnh, xuất video.
+- mở trang duyệt cảnh, duyệt cảnh, xuất video. Trang duyệt khi mở trên điện thoại có thêm vài chỉnh nhỏ:
+  - mũi tên **›** ở mép phải hàng bộ lọc (bấm để xem thêm);
+  - không hiện chữ “phím 1–4”;
+  - 4 nút **Giữ nguyên / Làm mờ / Cắt cảnh / Cần xem thêm** luôn nằm ở đáy màn hình;
+  - chữ nhỏ được làm to hơn.
+
+  Trang duyệt trên PC không đổi.
 
 **Chỉ làm trên PC.** Trên điện thoại các nút này bị khóa, và nếu vẫn gửi lệnh thì server trả 403 kèm lý do:
 - dọn, lưu trữ, khôi phục video gốc và kiểm tra lại Thùng rác;
