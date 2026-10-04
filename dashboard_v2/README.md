@@ -7,6 +7,8 @@ Có hai trang dùng chung giao diện (`app.js`):
 
 Trang **Tải video** ở cả hai bản đều là mô phỏng: không downloader, không gọi mạng.
 
+**Mở trên điện thoại / laptop trong Wi-Fi nhà** (đợt 2): chạy `Start-BiliFlow-Phone.cmd` ở gốc repo; xem `docs/DASHBOARD_V2_PHONE.md`. Khung "Mở trên điện thoại" nằm ở Cài đặt của bản live trên PC.
+
 ## Mở demo
 
 Chạy `Start-Demo.cmd` trong thư mục này rồi mở **http://127.0.0.1:8794/**.

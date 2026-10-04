@@ -371,3 +371,23 @@ Tình trạng: **khớp** (endpoint, body và khóa đã khớp code), **một p
 - Trang có header CSP riêng `DASHBOARD_V2_CSP` (`connect-src 'self'`, `frame-ancestors 'self'`), cộng header chung `frame-ancestors 'self'` + `X-Frame-Options: SAMEORIGIN` của mọi response.
 - `/`, `/review/{id}`, mọi `/api/...`, token, mã lỗi giữ nguyên (test so byte với f6996bb).
 - Rollback: không mở `/dashboard-v2/` là đủ; route không ghi dữ liệu. Gỡ hẳn: bỏ nhánh `elif` và các hằng `DASHBOARD_V2_*` trong `control_center.py` (không ảnh hưởng cache quét).
+
+### 8.5. Chế độ điện thoại (đợt 2, mục 12.3 của kế hoạch)
+
+Hướng dẫn cho người dùng: `docs/DASHBOARD_V2_PHONE.md`. Code: `src/biliflow/phone_access.py` (chỉ `control_center.py` import, ngoài fingerprint cache) và `_phone_handler_class` trong `control_center.py`.
+
+| Đường dẫn | Listener | Vai trò |
+| --- | --- | --- |
+| GET `/api/phone-mode` | `127.0.0.1:8765` | `{remote:false, enabled, address, port, url, code, link, locked, failed_attempts, max_failed_attempts, default_port}` |
+| POST `/api/phone-mode` `{enabled: bool, port?}` | `127.0.0.1:8765` + token | Bật (mã mới; đang bật thì giữ mã) / tắt (đóng listener, mã và cookie hết hiệu lực). Không khởi động lại Control Center |
+| GET `/api/phone-mode` | điện thoại (đã có cookie) | `{remote:true, enabled:true, pc_only:[…]}`, không có mã |
+| GET `/`, `/dashboard-v2/`, `/phone-login` không cookie | điện thoại | Trang nhập mã (401); `?code=` đúng → trang nối (meta refresh) + `Set-Cookie: biliflow_phone=<HMAC>; HttpOnly; SameSite=Strict; Path=/` |
+| POST `/phone-login` (form `code=`) | điện thoại | Như trên; sai → 401 (còn N lần); lần sai thứ 10 → 403 khóa tới lần bật sau |
+| Mọi đường khác không cookie | điện thoại | 401 JSON |
+| `/` có cookie | điện thoại | 303 → `/dashboard-v2/` |
+| POST chỉ-PC | điện thoại | 403 `{error: "Chỉ làm trên PC: …", code: "pc_only"}`: source-cleanup, source-archive, source-archive/restore, source-recycle-check, shutdown, ai/config, ai/login, logo-memory/class, logo-memory/delete, phone-mode |
+
+- Listener chỉ bind địa chỉ IPv4 riêng (10/8, 172.16/12, 192.168/16) tìm bằng `lan_address()` như Golden Label; cổng mặc định 8767 (1024–65535, khác 8765). Không bao giờ `0.0.0.0`.
+- Host phải đúng `<ip>:<cổng>`; POST cần cookie, token phiên, và Origin (nếu có) đúng `http://<ip>:<cổng>`.
+- Trang nhập mã: CSP `default-src 'none'; form-action 'self'; frame-ancestors 'none'`, `Referrer-Policy: same-origin` (`no-referrer` làm form gửi `Origin: null`).
+- Adapter: `loadPhone()`; `state.remote` khóa các thao tác `C.pcOnlyOps` (cleanup/archive/restore/recheck) và các nút tắt / AI / bộ nhớ logo trong giao diện. 403 có `code: "pc_only"` không làm mới token và không gửi lại.

@@ -224,6 +224,21 @@ git worktree remove ../bf-base
 
 **Người dùng đã trả lời câu 1–6 ngày 2026-10-04:** xem mục 12.1. Câu hỏi mới của đợt 2 đánh số tiếp từ 7.
 
+Câu hỏi đợt 2 (cloud, 2026-10-04):
+
+7. **Nhớ logo khi duyệt qua điện thoại.** Lệnh duyệt cảnh (`review/decision`) có tùy chọn `remember_studio_logo` / `remember_platform_logo`, ghi **thêm** vào bộ nhớ logo. Hiện nó vẫn chạy qua điện thoại, vì là một phần của duyệt cảnh, không phải sửa/xóa bộ nhớ. Giữ, hay muốn chặn riêng tùy chọn nhớ logo khi duyệt qua điện thoại?
+8. **Chọn địa chỉ Wi-Fi.** Giống Golden Label, listener nghe địa chỉ của card mạng đi ra mạng nhà (route mặc định). Nếu PC bật VPN hoặc có card ảo (Hyper-V/WSL) mang địa chỉ 10.x/172.x, địa chỉ chọn được có thể là của VPN, tức là mở cho mạng VPN đó. Giữ cách tự chọn (cửa sổ in rõ địa chỉ), hay muốn cho chọn/khóa địa chỉ cụ thể?
+9. **Khóa nhập mã.** Bất kỳ ai trong Wi-Fi nhà cũng có thể nhập sai 10 lần để khóa nhập mã; khi đó bạn phải tắt rồi bật lại trên PC. Điện thoại đã vào trước đó vẫn dùng tiếp. Chấp nhận?
+10. **Trang duyệt cũ ở 375 px (P9).** Trang dùng được, không tràn ngang. Đề xuất cho đợt sau (cần sửa `/review/{id}` và cập nhật fixture D2 trong cùng commit):
+    - (a) thêm dấu hiệu cuộn cho hàng chip bộ lọc;
+    - (b) ẩn nhãn “phím 1–4” trên màn hình cảm ứng;
+    - (c) cho 4 nút quyết định dính đáy màn hình khi cuộn qua video;
+    - (d) chữ nhỏ nhất 10 px nên tăng lên ≥ 12 px.
+
+    Làm mục nào?
+11. **`/` trên điện thoại** chuyển thẳng sang `/dashboard-v2/`; dashboard cũ chỉ mở trên PC. Nút “Quay lại Dashboard” của trang duyệt cũ trên điện thoại vì vậy cũng về V2. Giữ?
+12. **Mã trong link.** Theo mẫu Golden Label, link in ra có `?code=…`, nên mã nằm trong lịch sử trình duyệt của điện thoại cho tới lần bật sau. Giữ, hay chỉ in link không mã và luôn nhập mã tay?
+
 1. **E9 đã thay đổi:** nhánh nay có thêm file V2 mới (`adapter.js`, `demo-store.js`, `live.html`, `verify-adapter.cjs`, `browser-check.cjs`) và đã sửa `app.js`, `index.html`, `verify.cjs`, `serve.py`. Bản `dashboard_v2/` chưa track trong `E:\DungChung\BiliFlow` **không còn giống** bản trên nhánh. Trước khi checkout/merge, hãy dời bản đó ra ngoài repo (không xóa, nếu bạn muốn giữ). Bạn đồng ý không?
 2. **Nơi đọc asset:** route đọc `dashboard_v2/` cạnh mã nguồn (`src/biliflow/../../dashboard_v2`, đúng khi `PYTHONPATH=src` như `scripts/env.ps1`), không đọc từ project root/dữ liệu. Thiếu thư mục thì trả 404, không lỗi. Giữ như vậy?
 3. **`render_request` ở bản live** được suy ra từ `current_stage === "render"` + state PAUSED/FAILED/INTERRUPTED_RECOVERABLE, chỉ để khóa nút (backend vẫn quyết định; 409/400 được hiển thị). Guide cũ dặn “không invent render request”. Chấp nhận cách suy ra này, hay muốn bỏ (chỉ dựa vào 409)?
@@ -232,6 +247,28 @@ git worktree remove ../bf-base
 6. **403 vì Host sai** (không phải token) cũng làm adapter lấy token mới và gửi lại đúng một lần trước khi báo lỗi. Hai lần 403 là vô hại vì backend từ chối trước khi chạy gì. Giữ, hay muốn phân biệt theo nội dung lỗi?
 
 ## 9. Nhật ký cloud (mục mới nhất ở trên cùng)
+
+**Tóm tắt phiên cloud đợt 2, 2026-10-04 (12.2 và 12.3 xong trên cloud; chưa test trên máy thật):**
+
+- **Đã khớp (đã test trên cloud):**
+  - G1/G2: dòng trạng thái video gốc trùng chữ với dashboard cũ (16 trường hợp);
+  - G3: `render_request` do backend gửi;
+  - chế độ điện thoại P1–P5: cookie mã, khóa sau 10 lần sai, Host/Origin/token, 10 thao tác chỉ-PC → 403, bật/tắt chỉ từ `127.0.0.1`, mã mới mỗi lần bật, chỉ bind IPv4 riêng;
+  - `127.0.0.1:8765` không đổi (D2 trùng byte); fingerprint 10 stage không đổi;
+  - V2 có khung "Mở trên điện thoại" và dùng được ở 375 px qua listener điện thoại;
+  - đăng nhập trong Chromium thật chạy ở cả hai cách.
+- **Còn thiếu / chưa kiểm:**
+  - P6: file khởi động (cloud không có PowerShell);
+  - P7/P8: điện thoại và laptop thật trong Wi-Fi nhà;
+  - Windows Firewall và địa chỉ Wi-Fi thực tế;
+  - câu 7–12 ở mục 8.
+- **Vẫn là mô phỏng:** trang Tải video; bản demo `index.html`.
+
+| Ngày | Commit | Việc đã làm | Test đã chạy | Còn lại |
+| --- | --- | --- | --- | --- |
+| 2026-10-04 | ef9ad52, a80ab59, (commit docs này) | Đợt 2: G1–G3 (12.2); chế độ điện thoại (12.3): `src/biliflow/phone_access.py` (chỉ `control_center.py` import), listener điện thoại + `/api/phone-mode`, khung V2, `Start-BiliFlow-Phone.cmd` + `Start-BiliFlow.ps1 -Phone`, hướng dẫn `docs/DASHBOARD_V2_PHONE.md`; điền 12.4, câu 7–12 | verify 28/28; verify-adapter 17/17; browser-check 17/17; test_dashboard_v2_* 33 OK (contract 10, frontend 3, route 9, status 2, phone 9); các test Control Center như đợt 1; A4 `none`; Chromium trên handler thật (đăng nhập điện thoại, trang duyệt 375 px) | P6–P8 và cột Máy thật của 12.4; câu 7–12 |
+
+Nhật ký đợt 1:
 
 **Tóm tắt phiên cloud 2026-10-03 (Pha 0–3 xong; Pha 4 chưa làm, V2 chưa được coi là đã tích hợp):**
 
@@ -252,7 +289,7 @@ git worktree remove ../bf-base
 
 | Ngày | Commit | Việc đã làm | Test đã chạy | Còn lại |
 | --- | --- | --- | --- | --- |
-| 2026-10-03 | (commit docs này, sau 4c76a34) | Đính chính tài liệu cho khớp code: mục 5 của kế hoạch (409 `code` ở cấp ngoài, không phải `error.code`); guide mục 4 và mục 2 (danh sách job lấy từ `/api/status`, không từ `/api/jobs`) | Chỉ sửa docs, không chạy test | Như dòng dưới |
+| 2026-10-03 | c616bef | Đính chính tài liệu cho khớp code: mục 5 của kế hoạch (409 `code` ở cấp ngoài, không phải `error.code`); guide mục 4 và mục 2 (danh sách job lấy từ `/api/status`, không từ `/api/jobs`) | Chỉ sửa docs, không chạy test | Như dòng dưới |
 | 2026-10-03 | 4c76a34 | Điền hash commit vào nhật ký | — | Như dòng dưới |
 | 2026-10-03 | 86af3ad | Route `/dashboard-v2/` trong `control_center.py` (+53 dòng: whitelist 12 asset, CSP riêng, 301 khi thiếu `/`), `tests/test_dashboard_v2_route.py`, fixture hash trang cũ; tóm tắt phiên, câu hỏi mục 8 | test_dashboard_v2_route 9 OK; D5: các test Control Center như Pha 0; D6 không đổi; Chromium trên handler thật OK | Pha 4 (máy thật): toàn bộ cột Máy thật, nhóm E |
 | 2026-10-03 | 4cb9c40 | Tách DemoStore, viết ControlCenterAdapter + live store, `live.html`, gate `verify-adapter.cjs`, `browser-check.cjs` (API giả), `tests/test_dashboard_v2_frontend.py`; sửa 2 lỗi do browser-check tìm ra (focus drawer, `gpu` null) | verify.cjs 28/28; verify-adapter 15/15; browser-check 14/14; test_dashboard_v2_frontend + contract 9 OK | Pha 3 (route `/dashboard-v2/`). Lần push đầu của pha 0–1 bị 403 (quyền GitHub); push lại cùng pha 2 thành công |
@@ -377,15 +414,26 @@ Thứ tự làm: 12.2 trước, 12.3 sau. Bảng kết quả ở 12.4.
 
 | ID | Hạng mục | Cloud | Máy thật | Bằng chứng |
 | --- | --- | --- | --- | --- |
-| G1 | Thiếu video gốc hiển thị đúng ở chi tiết, danh sách và trạng thái chính | [ ] | [ ] | |
-| G2 | "Lần dọn / lưu trữ trước không thành công" hiển thị như dashboard cũ | [ ] | [ ] | |
-| G3 | `/api/status` có `render_request` từ backend; V2 không còn tự suy ra | [ ] | [ ] | |
-| P1 | Listener điện thoại: thiếu cookie thì không vào được route nào; sai mã quá 10 lần thì khóa; đúng mã thì nhận cookie | [ ] | [ ] | |
-| P2 | Host sai → 403; POST thiếu token → 403; thao tác chỉ-PC → 403 qua listener điện thoại nhưng vẫn chạy qua `127.0.0.1` | [ ] | [ ] | |
-| P3 | Endpoint bật/tắt chỉ nhận từ `127.0.0.1`; tắt thì listener đóng và mã hết hiệu lực; mỗi lần bật có mã mới | [ ] | [ ] | |
-| P4 | Chỉ nghe địa chỉ IPv4 riêng; từ chối `0.0.0.0` và địa chỉ công cộng | [ ] | [ ] | |
-| P5 | `127.0.0.1:8765` không đổi: D2 trùng byte, test Control Center cũ đạt, A4/D6 không đổi | [ ] | [ ] | |
-| P6 | File khởi động chạy đúng khi Control Center chưa chạy, đã chạy, hoặc đang chạy bản cũ; in link và mã | [ ] | [ ] | |
+| G1 | Thiếu video gốc hiển thị đúng ở chi tiết, danh sách và trạng thái chính | [x] | [ ] | `ef9ad52`. `sourceLineInfo`/`archiveLineInfo` của dashboard cũ chép nguyên văn vào `contracts.js` (`C.sourceLine`). `tests.test_dashboard_v2_contract`: 16 trường hợp so với hàm cũ trích từ `_dashboard_html()` → trùng chữ và tone; `SOURCE_MISSING_MESSAGE` trùng `export_guards`. browser-check: job `source_present:false` → dòng danh sách “Không còn video gốc trong input”, Chi tiết có câu đó và “Video gốc không còn trong input; không thể xuất.”, không còn “Có trong input”, nút Xuất khóa |
+| G2 | "Lần dọn / lưu trữ trước không thành công" hiển thị như dashboard cũ | [x] | [ ] | `ef9ad52`. Cùng test so với hàm cũ (cleanup FAILED, archive FAILED, có/không còn nguồn). browser-check: danh sách và Chi tiết hiện “Lần dọn trước không thành công: Thùng rác không phản hồi” |
+| G3 | `/api/status` có `render_request` từ backend; V2 không còn tự suy ra | [x] | [ ] | `ef9ad52`. `status()` thêm `render_request = self.store.render_request(job_id) is not None` (chỉ thêm trường). `tests.test_dashboard_v2_status` 2 OK (PENDING/FAILED_RETRYABLE → true; không có/COMPLETED → false; trường cũ còn đủ). verify-adapter: giữ nguyên giá trị backend, job PAUSED+`current_stage=render` không có trường → false |
+| P1 | Listener điện thoại: thiếu cookie thì không vào được route nào; sai mã quá 10 lần thì khóa; đúng mã thì nhận cookie | [x] | [ ] | `a80ab59`, `tests.test_dashboard_v2_phone` (9 OK, listener chạy trên 127.0.0.1, root tạm): 14 route → 401, không lộ token/mã; `?code=` hoặc form → cookie `HttpOnly; SameSite=Strict; Path=/`, giá trị là HMAC (không chứa mã); lần sai thứ 10 khóa, kể cả mã đúng cũng bị từ chối cho tới lần bật sau; cookie của lần bật trước hết hiệu lực. Chromium thật: link mở từ trang khác và form nhập mã đều vào được V2 (trang nối bằng meta refresh để cookie Strict được gửi). Lỗi tìm được và đã sửa trước commit: `Referrer-Policy: no-referrer` làm form gửi `Origin: null` → đổi sang `same-origin` |
+| P2 | Host sai → 403; POST thiếu token → 403; thao tác chỉ-PC → 403 qua listener điện thoại nhưng vẫn chạy qua `127.0.0.1` | [x] | [ ] | Cùng file test: 5 Host sai → 403; POST thiếu token → 403, setting không đổi; Origin lạ → 403; có cookie + token + Origin đúng → tạm dừng hàng đợi chạy. 10 thao tác chỉ-PC → 403 `code: pc_only`, lý do “Chỉ làm trên PC…”; Control Center không tắt, chế độ điện thoại không tự tắt. 7 thao tác (trừ shutdown, đăng nhập AI, phone-mode) gửi qua `127.0.0.1` → không bị chặn pc_only. V2: nút chỉ-PC bị khóa kèm lý do (browser-check, contract test); adapter không làm mới token khi 403 `pc_only` |
+| P3 | Endpoint bật/tắt chỉ nhận từ `127.0.0.1`; tắt thì listener đóng và mã hết hiệu lực; mỗi lần bật có mã mới | [x] | [ ] | Cùng file test: POST `/api/phone-mode` thiếu token → 403, `enabled` không phải bool → 400; qua listener điện thoại → 403 pc_only; GET trên điện thoại chỉ trả `{remote:true}` (không mã); tắt → cổng đóng (kết nối bị từ chối), mã cũ 401; bật lại → mã mới; bật khi đang bật giữ mã; `stop()` đóng listener. browser-check: khung PC Bật → link + mã, Tắt → mất mã, Bật lại → mã khác |
+| P4 | Chỉ nghe địa chỉ IPv4 riêng; từ chối `0.0.0.0` và địa chỉ công cộng | [x] | [ ] | Cùng file test: chấp nhận 10/8, 172.16/12, 192.168/16; từ chối 15 địa chỉ (`0.0.0.0`, `127.0.0.1`, công cộng, 172.32.x, 100.64.x, 169.254.x, IPv6, `localhost`, viết sai) **trước khi bind**; cổng phải 1024–65535, khác 8765; qua HTTP, `lan_address` ra loopback → 400. Thực tế trên Windows cần máy thật xác nhận địa chỉ Wi-Fi được chọn (câu 8) |
+| P5 | `127.0.0.1:8765` không đổi: D2 trùng byte, test Control Center cũ đạt, A4/D6 không đổi | [x] | [ ] | `tests.test_dashboard_v2_route` 9 OK, P5 trong file phone (`/`, `/review/1` trùng SHA-256 f6996bb khi chế độ điện thoại đang bật). test_control_center 52/53, test_skip_export 26/30 (lỗi PowerShell như cũ); source_cleanup_http 20, source_archive_http 8, export_identity 28, export_dialog 5, logo_memory_admin 14, review_workflow 111, golden_label_app 20 OK. A4/D6: 10 stage `none`. Chỉ thêm route `/api/phone-mode` vào listener PC |
+| P6 | File khởi động chạy đúng khi Control Center chưa chạy, đã chạy, hoặc đang chạy bản cũ; in link và mã | [-] | [ ] | Cloud không có PowerShell. Đã viết `Start-BiliFlow-Phone.cmd` → `scripts/Start-BiliFlow.ps1 -Phone` (giữ ASCII, CRLF). Ba nhánh: đang khởi động / đang chạy / mở mới đều gọi `Enable-PhoneMode`; bản cũ trả 404 → báo, không khởi động lại. `Start-BiliFlow.cmd` không đổi hành vi. Máy thật phải chạy cả ba trường hợp |
 | P7 | Điện thoại thật trong Wi-Fi nhà: mở link, nhập mã, dùng V2, tạm dừng/tiếp tục hàng đợi; thao tác chỉ-PC bị từ chối | — | [ ] | |
 | P8 | Laptop trong Wi-Fi nhà: như P7 | — | [ ] | |
-| P9 | Trang duyệt cũ ở 375 px: ghi nhận cách hiển thị và đề xuất, không sửa | [ ] | [ ] | |
+| P9 | Trang duyệt cũ ở 375 px: ghi nhận cách hiển thị và đề xuất, không sửa | [x] | [ ] | Chromium 375 px trên handler thật, root tạm, 1 cảnh 18+: trang không tràn ngang (scrollWidth 375); 4 nút quyết định 150×67 px, dễ bấm; hàng chip bộ lọc cuộn ngang (3 chip và ô “Thêm” nằm ngoài màn hình, không có dấu hiệu cuộn); chữ nhỏ nhất 10 px; nhãn “phím 1–4” vô nghĩa trên điện thoại; nút quyết định nằm dưới video, phải cuộn. Không sửa. Đề xuất: câu 10 mục 8 |
+
+### 12.5. Tự review bảo mật chế độ điện thoại (cloud, trước khi push)
+
+| Mặt | Kiểm tra | Kết luận |
+| --- | --- | --- |
+| Xác thực | Mã 8 ký tự từ 31 ký tự (≈ 8,5·10¹¹ tổ hợp), `secrets`; so sánh hằng thời gian; đếm lần sai trong khóa luồng (không vượt được bằng request song song); khóa sau 10 lần sai. Cookie là HMAC-SHA256 của mã với khóa ngẫu nhiên 32 byte tạo lại mỗi lần bật, nên tắt/bật làm mọi cookie cũ vô hiệu | Đạt. Rủi ro còn lại: người trong Wi-Fi có thể cố tình khóa nhập mã (câu 9) |
+| Rò mã / token | Mã chỉ trả ở GET `/api/phone-mode` của `127.0.0.1` (đọc được chỉ từ PC; Host check chặn rebinding). Điện thoại chỉ nhận `{remote:true}`. Token phiên chỉ trả sau khi có cookie. Cookie không chứa mã. Server không ghi log request. Trang nối sau `?code=` dùng `Referrer-Policy: same-origin` nên link có mã không bị gửi sang trang khác. Mã vẫn nằm trong lịch sử trình duyệt điện thoại (câu 12) và đi qua Wi-Fi dạng HTTP | Đạt trong phạm vi Wi-Fi nhà; HTTP được cảnh báo ở hướng dẫn, ở khung V2 và trang nhập mã |
+| DNS rebinding / CSRF | Host phải trùng đúng `ip:cổng`; POST cần cookie SameSite=Strict, token phiên ở header và Origin đúng; trang nhập mã `frame-ancestors 'none'`; mọi response vẫn có `X-Frame-Options: SAMEORIGIN` | Đạt |
+| Thao tác chỉ-PC | Chặn ở listener điện thoại **trước** mọi xử lý (403 `pc_only`), không dựa vào giao diện; bật/tắt chế độ chỉ ở listener `127.0.0.1` (kiểm cả `client_address` và cờ listener). Test gửi đủ 10 đường dẫn qua điện thoại → 403, qua PC → không bị chặn | Đạt. Riêng nhớ logo khi duyệt vẫn chạy qua điện thoại (câu 7) |
+| Bind | Chỉ IPv4 riêng, kiểm **trước** khi bind; không `0.0.0.0`; `allow_reuse_address = False`; cổng 1024–65535, khác 8765 | Đạt. Địa chỉ tự chọn có thể là của VPN (câu 8) |
+| Vòng đời | `stop()` và nhánh Ctrl+C của `serve()` đóng listener; thread daemon; timeout 20 s như listener PC | Đạt |
