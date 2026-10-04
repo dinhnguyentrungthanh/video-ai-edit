@@ -239,6 +239,13 @@ Câu hỏi đợt 2 (cloud, 2026-10-04). **Người dùng đã trả lời câu 
 11. **`/` trên điện thoại** chuyển thẳng sang `/dashboard-v2/`; dashboard cũ chỉ mở trên PC. Nút “Quay lại Dashboard” của trang duyệt cũ trên điện thoại vì vậy cũng về V2. Giữ?
 12. **Mã trong link.** Theo mẫu Golden Label, link in ra có `?code=…`, nên mã nằm trong lịch sử trình duyệt của điện thoại cho tới lần bật sau. Giữ, hay chỉ in link không mã và luôn nhập mã tay?
 
+Câu hỏi đợt 3 (cloud, 2026-10-04):
+
+13. **Fixture D2 không phải đổi.** Dòng báo "Đang mở cho điện thoại" ở `/` chỉ thêm khi chế độ điện thoại **đang bật**. Khi tắt (mặc định), `/` vẫn trùng byte với fixture f6996bb, nên fixture không cập nhật; test mới kiểm cả hai trạng thái. Mục 13 có dặn cập nhật fixture; giữ cách này?
+14. **Nhật ký trên khung PC chỉ của lần chạy hiện tại.** Khung "Mở trên điện thoại" hiện 10 event gần nhất từ bộ nhớ của Control Center đang chạy. Event vẫn được lưu lâu dài trong nhật ký sự kiện (`PHONE_*`), nhưng sau khi khởi động lại thì khung trống cho tới event đầu tiên. Có cần đọc lại từ nhật ký khi khởi động không?
+15. **Tự tắt 8 giờ không gia hạn.** Đang dùng điện thoại vẫn bị tắt đúng 8 giờ sau khi bật; muốn dùng tiếp thì bật lại (có mã mới). Giữ, hay muốn có nút "Gia hạn thêm 8 giờ" trên PC?
+16. **Đổi địa chỉ khi bật/tắt VPN.** Việc kiểm địa chỉ mỗi phút dùng cùng cách dò như lúc bật. Bật hoặc tắt VPN có thể đổi địa chỉ dò được, và chế độ điện thoại sẽ tự tắt (lý do "đổi địa chỉ"). Chấp nhận?
+
 1. **E9 đã thay đổi:** nhánh nay có thêm file V2 mới (`adapter.js`, `demo-store.js`, `live.html`, `verify-adapter.cjs`, `browser-check.cjs`) và đã sửa `app.js`, `index.html`, `verify.cjs`, `serve.py`. Bản `dashboard_v2/` chưa track trong `E:\DungChung\BiliFlow` **không còn giống** bản trên nhánh. Trước khi checkout/merge, hãy dời bản đó ra ngoài repo (không xóa, nếu bạn muốn giữ). Bạn đồng ý không?
 2. **Nơi đọc asset:** route đọc `dashboard_v2/` cạnh mã nguồn (`src/biliflow/../../dashboard_v2`, đúng khi `PYTHONPATH=src` như `scripts/env.ps1`), không đọc từ project root/dữ liệu. Thiếu thư mục thì trả 404, không lỗi. Giữ như vậy?
 3. **`render_request` ở bản live** được suy ra từ `current_stage === "render"` + state PAUSED/FAILED/INTERRUPTED_RECOVERABLE, chỉ để khóa nút (backend vẫn quyết định; 409/400 được hiển thị). Guide cũ dặn “không invent render request”. Chấp nhận cách suy ra này, hay muốn bỏ (chỉ dựa vào 409)?
@@ -247,6 +254,24 @@ Câu hỏi đợt 2 (cloud, 2026-10-04). **Người dùng đã trả lời câu 
 6. **403 vì Host sai** (không phải token) cũng làm adapter lấy token mới và gửi lại đúng một lần trước khi báo lỗi. Hai lần 403 là vô hại vì backend từ chối trước khi chạy gì. Giữ, hay muốn phân biệt theo nội dung lỗi?
 
 ## 9. Nhật ký cloud (mục mới nhất ở trên cùng)
+
+**Tóm tắt phiên cloud đợt 3, 2026-10-04 (H1–H6 xong trên cloud; chưa test trên máy thật):**
+
+- **Đã khớp (đã test trên cloud):**
+  - đường dẫn hỏng → 400 không traceback; giới hạn 32 kết nối; 5 s khi chưa có cookie; log lỗi một dòng;
+  - danh sách POST cho phép có test phân loại đủ mọi route; Visual AI Audit chỉ trên PC;
+  - tự tắt sau 8 giờ / đổi địa chỉ, có lý do tắt; dòng báo ở `/` khi đang bật;
+  - event `PHONE_*` có IP, không mã/cookie; khung PC hiện 10 event;
+  - `try_code` trả cookie trong một lần giữ khóa; hướng dẫn rule Firewall riêng;
+  - `127.0.0.1:8765` không đổi ngoài dòng báo; fingerprint 10 stage không đổi.
+- **Còn thiếu / chưa kiểm:** H5 và dòng báo của launcher (không có PowerShell); toàn bộ cột Máy thật ở 12.4 và 13.3; P6–P9 và E2–E8 trên điện thoại, laptop, dữ liệu thật; câu 13–16.
+- **Vẫn là mô phỏng:** trang Tải video; bản demo `index.html`.
+
+| Ngày | Commit | Việc đã làm | Test đã chạy | Còn lại |
+| --- | --- | --- | --- | --- |
+| 2026-10-04 | a7514df, (commit docs này) | Đợt 3: H1–H6 (mục 13.1) trong `phone_access.py`, `control_center.py`, `Start-BiliFlow.ps1`, V2 (khung PC, khóa Visual audit), hướng dẫn; test mới `tests/test_dashboard_v2_phone_hardening.py`; điền 13.3, câu 13–16 | test_dashboard_v2_* 57 OK (contract 10, frontend 3, route 9, status 2, phone 15, hardening 18); verify 28/28; verify-adapter 17/17; browser-check 17/17; các test Control Center như đợt trước (6 lỗi PowerShell); Chromium thật: đăng nhập điện thoại, trang duyệt 375 px; A4 `none` | Máy thật kiểm đợt 3; người dùng test toàn bộ rồi mới merge |
+
+Nhật ký đợt 2:
 
 **Tóm tắt phiên cloud đợt 2, 2026-10-04 (12.2 và 12.3 xong trên cloud; chưa test trên máy thật):**
 
@@ -559,12 +584,12 @@ Mọi ràng buộc của 12.3 vẫn giữ nguyên:
 
 | ID | Hạng mục | Cloud | Máy thật | Bằng chứng |
 | --- | --- | --- | --- | --- |
-| H1 | Đường dẫn hỏng → 400, không traceback; log lỗi có giới hạn; tối đa khoảng 32 kết nối; kết nối chưa có cookie bị đóng sau khoảng 5 s | [ ] | [ ] | |
-| H2 | Listener điện thoại chỉ nhận POST trong danh sách cho phép; test phân loại đủ mọi route; Visual AI Audit → 403 qua điện thoại, vẫn chạy trên PC | [ ] | [ ] | |
-| H3 | Tự tắt sau 8 giờ và khi địa chỉ đổi; có lý do tắt; dòng báo ở `/` (fixture D2 cập nhật, `/review/{id}` trên PC vẫn trùng byte) và ở `Start-BiliFlow.cmd` | [ ] | [ ] | |
-| H4 | Event bật/tắt/sai mã/khóa/gỡ khóa có IP, không chứa mã hay cookie; khung PC hiện các event gần nhất | [ ] | [ ] | |
-| H5 | Launcher báo đúng trạng thái sau lỗi không phải HTTP | [ ] | [ ] | |
-| H6 | `try_code` trả cookie trong một lần giữ khóa; hướng dẫn Firewall có rule riêng cho cổng 8767 | [ ] | [ ] | |
+| H1 | Đường dẫn hỏng → 400, không traceback; log lỗi có giới hạn; tối đa khoảng 32 kết nối; kết nối chưa có cookie bị đóng sau khoảng 5 s | [x] | [ ] | `a7514df`, `tests.test_dashboard_v2_phone_hardening` (18 OK, listener 127.0.0.1 + `lan` giả): `GET/POST http://[x/` → 400 “Đường dẫn không hợp lệ” ở cả listener điện thoại và PC, stderr không có `Traceback`; `handle_error` 6 lỗi liên tiếp → 2 dòng (`ValueError from <ip>`, “(4 more skipped)”), không lộ dữ liệu request; giới hạn kết nối (thử với 2): kết nối thứ 3 bị đóng ngay < 1 s; kết nối im lặng bị đóng sau khoảng `GATE_TIMEOUT_SECONDS` (test đặt 1 s) rồi slot được trả lại; có cookie thì body đến sau 1,6 s vẫn được nhận (timeout 20 s). Hằng số 32 và 5 s kiểm trong test |
+| H2 | Listener điện thoại chỉ nhận POST trong danh sách cho phép; test phân loại đủ mọi route; Visual AI Audit → 403 qua điện thoại, vẫn chạy trên PC | [x] | [ ] | Cùng file: đọc mọi route `do_POST` từ code (+ 2 route bộ nhớ logo), bung `(a\|b)` và `(\d+)` → mọi đường dẫn đều được phân loại rõ (`post_policy(...)[2]`); route lạ → 403 `PC_ONLY_DEFAULT`, trả lời < 3 s dù thiếu body (không chờ body). `ai-audit` `visual:true` qua điện thoại → 403 “Chỉ làm trên PC: Visual AI Audit gửi ảnh ra ngoài máy”, `start_ai_audit` không chạy; `visual:false` → 200 và chạy; trên PC `visual:true` vẫn chạy. browser-check: lựa chọn Visual bị khóa trên điện thoại, JSON vẫn chọn được. Hướng dẫn ghi rõ duyệt cảnh có thể thêm hoặc bỏ logo đã nhớ |
+| H3 | Tự tắt sau 8 giờ và khi địa chỉ đổi; có lý do tắt; dòng báo ở `/` (fixture D2 cập nhật, `/review/{id}` trên PC vẫn trùng byte) và ở `Start-BiliFlow.cmd` | [x] | [ ] | Cùng file: tự tắt sau thời hạn (test 0,6 s) → lý do `expired` (“hết 8 giờ”), cổng đóng, dòng báo ở `/` biến mất; `lan` giả đổi → `address_changed` (payload có địa chỉ mới); lỗi dò → `address_changed`; tắt qua API → `user`; `stop()` → `stopped`; watchdog cũ không đóng listener mới. Dòng báo `/` chỉ có khi đang bật, không chứa mã; `/` khi tắt và `/review/1` luôn trùng byte fixture f6996bb (câu 13). Launcher `Show-PhoneNotice` có trong script; chưa chạy được (không có PowerShell) |
+| H4 | Event bật/tắt/sai mã/khóa/gỡ khóa có IP, không chứa mã hay cookie; khung PC hiện các event gần nhất | [x] | [ ] | Cùng file: luồng đủ 8 loại event `PHONE_*` lưu vào store; mọi event của thiết bị có `ip`; dump toàn bộ event không chứa mã, giá trị cookie, chữ đã gõ hay khóa mở; event khóa ở mức WARN; `/api/phone-mode` trên PC trả ≤ 10 event, mới nhất trước, không có mã; listener điện thoại không trả `events`. browser-check: khung PC hiện “Nhật ký gần đây” |
+| H5 | Launcher báo đúng trạng thái sau lỗi không phải HTTP | [-] | [ ] | Cloud không có PowerShell. `Enable-PhoneMode`: lỗi không có HTTP status → `Get-PhoneStatus` → “IS on” (in link và mã) / “NOT on” / “unknown”. Máy thật cần thử, ví dụ chặn tạm hoặc làm chậm request |
+| H6 | `try_code` trả cookie trong một lần giữ khóa; hướng dẫn Firewall có rule riêng cho cổng 8767 | [x] | [ ] | `try_code(text, ip=…)` trả `(outcome, cookie)` trong một lần giữ khóa; `set_cookie_header` đã bỏ (test kiểm). Hướng dẫn có `New-NetFirewallRule … -LocalPort 8767 -Profile Private -RemoteAddress LocalSubnet` và `Remove-NetFirewallRule`, cách dự phòng cho Python, cảnh báo rule Block khi đã bấm Cancel, và ghi chú một mã cho mọi thiết bị |
 
 **Sau đợt 3:**
 1. Máy thật kéo về kiểm như đợt 2.
