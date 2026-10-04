@@ -593,6 +593,47 @@ check('R2 deliberate differences are explicit: S5 (V2 confirm dialog, classic wo
   process.stdout.write('   S5 confirm in a V2 dialog (same words) · S6 export in flight only · S8 SKIPPED read-only · R2-K BLUR of a region item = its region\n');
 });
 
+/* R3 (R2-B2): S9 on the real card markup (review-cards.js in a sandbox, no DOM needed to build a card). */
+function cardsModule() {
+  const box = {window: {BFReviewCore: R, BFReviewDetail: D}};
+  vm.runInNewContext(fs.readFileSync(path.join(__dirname, 'review-cards.js'), 'utf8'), box);
+  return box.window.BFReviewCards;
+}
+function s9Queue() {
+  // "Kiểm tra đoạn kết" (no region of its own) beside the BLUR platform logo card whose red box it borrows, and a
+  // safety card that borrows the same box.
+  const q = Mock.reviewQueue(job101, {count: 30});
+  const logo = q.items.find(x => x.id === 'visual_logo-101-0007'), end = q.items.find(x => x.id === 'visual_logo-101-0008'), gore = q.items.find(x => x.id === 'gore-101-0014');
+  logo.decision = 'BLUR'; logo.decision_region_source_pixels = logo.suggested_region_source_pixels;
+  Object.assign(end, {candidate_type: 'ending_boundary', decision: null, start_seconds: logo.start_seconds - 0.5, end_seconds: logo.end_seconds + 0.5});
+  Object.assign(gore, {start_seconds: logo.start_seconds + 0.2, end_seconds: logo.end_seconds - 0.2});
+  return {q, logo, end, gore};
+}
+check('R3 S9 (R2-B2): a card borrowing another logo card\'s red box has no region buttons, a line about the owner card, "Đi tới thẻ logo" and a dashed box', () => {
+  const Cards = cardsModule(), {q, logo, end, gore} = s9Queue(), map = R.itemMap(q);
+  const ctx = {queue: q, map, focusId: null, zoomId: null, readonly: false, techOpen: new Set(), media: () => ({ev: null, hasKey: false, playable: false, reason: '', frameUrl: () => '', mediaUrl: p => '/media/' + p})};
+  for (const x of [end, gore]) {
+    assert.equal(R.regionOwner(q, x).id, logo.id, x.id + ' borrows the logo box (classic regionOwner)');
+    const html = Cards.card(ctx, x);
+    assert.ok(!/data-review="region"/.test(html), x.id + ': no region button, not even in "Chi tiết kỹ thuật"');
+    const go = /<button[^>]*data-review="goto" data-owner="([^"]+)"[^>]*>Đi tới thẻ logo<\/button>/.exec(html);
+    assert.ok(go && go[1] === logo.id, x.id + ': "Đi tới thẻ logo" points to the owner card');
+    const text = D.borrowedRegion(x, logo).text;
+    assert.equal(text, `Khung đỏ là vùng logo của thẻ “Logo nền tảng Nền tảng mẫu” (${D.clock(logo.start_seconds)}–${D.clock(logo.end_seconds)}) — đang: Làm mờ logo`);
+    assert.ok(html.includes(D.esc(text)), x.id + ': the owner line');
+    assert.match(html, /<span class="rv-region blurred borrowed[^"]*"[^>]*><em>áp dụng \d\d:\d\d\.\d–\d\d:\d\d\.\d<\/em><\/span>/, x.id + ': dashed box with the time it applies');
+  }
+  const own = Cards.card(ctx, logo);
+  assert.equal((own.match(/data-review="region"/g) || []).length, 2, 'the owner card keeps its 2 region buttons');
+  assert.ok(!/data-review="goto"/.test(own) && !/rv-region[^"]*borrowed/.test(own), 'the owner card: solid box, no link');
+  // The classic page shows the buttons on the borrowing card too: listed as deliberate difference S9 (payload unchanged).
+  cl.load(q);
+  assert.match(cl.fn.regionControlsHtml(end, cl.fn.regionOwner(end), logo.decision_region_source_pixels), /Xử lý riêng vùng logo khoanh đỏ.*data-act="region" data-owner="visual_logo-101-0007"/);
+  const header = fs.readFileSync(path.join(__dirname, 'review-core.js'), 'utf8').slice(0, 2400);
+  assert.ok(header.includes('S9'), 'review-core.js lists S9');
+  process.stdout.write('   S9: borrowing cards link to the owner card; the classic page shows region buttons on both\n');
+});
+
 /* R1-B1: the image loader on fake boxes (no DOM): each started load gives its slot back exactly once. */
 function loaderHarness() {
   const ctx = {window: {BFReviewCore: R}};

@@ -152,6 +152,13 @@
       note: borrowed ? `Vùng logo áp dụng ${clock(owner.start_seconds)}–${clock(owner.end_seconds)}. Quyết định toàn cảnh bên dưới chỉ áp dụng ${clock(x.start_seconds)}–${clock(x.end_seconds)}; nếu chọn Cắt cả cảnh, đoạn bị cắt không cần làm mờ.`
         : 'Chỉ lựa chọn theo phần nằm trong khung đỏ, không theo logo hoặc chữ ở vị trí khác trong ảnh.'};
   }
+  /* S9 (R2-B2): a card that only borrows the red box of another logo card gets this line and "Đi tới thẻ logo"
+   * instead of the region buttons (both cards' buttons would change the same owner card). */
+  function borrowedRegion(x, owner) {
+    if (!owner || owner.id === x.id) return null;
+    const applies = `${clock(owner.start_seconds)}–${clock(owner.end_seconds)}`;
+    return {owner: owner.id, applies, text: `Khung đỏ là vùng logo của thẻ “${R.catName(owner)}” (${applies}) — đang: ${owner.decision ? R.decisionLabel(owner) : 'Chưa duyệt'}`};
+  }
   function studioCompareLine(x) {
     const c = x.studio_logo_compared;
     if (!c || x.decision || x.studio_logo_match) return '';
@@ -210,5 +217,5 @@
 
   return {esc, clock, viText, readingLabel, memoryMatch, memoryBrandName, boxesFromMemory, trackCoversFullVideo, regionOverlap, regionName, decisionScope, scopeBlock,
     overlapCoverage, regionDetailHtml, labelsReasonsHtml, visualAiHtml, evidenceHtml, aiModelLine, techBody, evidenceView, cropRect,
-    regionControls, studioCompareLine, studioTextsNote, studioFramesNote, studioMaskNote, studioNote, platformNote};
+    regionControls, borrowedRegion, studioCompareLine, studioTextsNote, studioFramesNote, studioMaskNote, studioNote, platformNote};
 });

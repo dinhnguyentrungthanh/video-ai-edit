@@ -146,12 +146,13 @@
       stats.patches += Cards.patchCards(rootEl.querySelector('.rv-cards'), ctx()) ? 1 : 0;
       tools();
     }
-    /* force: a write result or a resync always applies (the local, optimistic queue may differ from s.version). */
+    /* force: a write result or a resync always applies. R2-B1: s.unsynced marks a local (optimistic) change the
+     * server has not confirmed: the next queue that loads then applies even with the same server version. */
     function apply(queue, force) {
       const identity = R.queueIdentity(queue), version = R.queueVersion(queue);
-      if (!force && s.queue && identity === s.identity && version === s.version) return;
+      if (!force && !s.unsynced && s.queue && identity === s.identity && version === s.version) return;
       const rebuild = !s.queue || identity !== s.identity;
-      s.queue = queue; s.map = R.itemMap(queue); s.version = version;
+      s.queue = queue; s.map = R.itemMap(queue); s.version = version; s.unsynced = false;
       if (rebuild) {
         if (!s.identity) s.filter = R.initialFilter(queue);
         else { player.release(); player.reset(); s.evidence.clear(); s.evidenceLoading.clear(); } // a new scan revision
@@ -393,6 +394,12 @@
       const el = cardEl(id);
       if (el) el.scrollIntoView({block: 'nearest'});
     }
+    /* S9 "Đi tới thẻ logo": select and scroll to the owner card, in "Tất cả" when the filter hides it. */
+    function gotoCard(id) {
+      if (!s || !s.map.has(id)) return;
+      if (!s.list.some(x => x.id === id)) setFilter('all');
+      focusCard(id, true);
+    }
     function afterLocalChange(id, advance) {
       if (s.filter === 'pending' && s.list.some(x => x.id === id)) s.sticky.add(id);
       patch();
@@ -456,6 +463,7 @@
       s.undo.push(R.undoEntry(item, !item.decision && R.isAdvisoryItem(s.queue, item)));
       if (s.undo.length > 100) s.undo.shift();
       R.applyDecision(s.queue, item, decision, plan.region, plan.note, plan.studio, plan.platform);
+      s.unsynced = true;
       afterLocalChange(id, autoNext && id === s.focusId);
       enqueue('decision', plan.body);
     }
@@ -466,6 +474,7 @@
       s.undo.push(R.undoEntry(item, false));
       if (s.undo.length > 100) s.undo.shift();
       R.applyClear(s.queue, item);
+      s.unsynced = true;
       afterLocalChange(id, false);
       enqueue('clear', {id});
     }
@@ -479,6 +488,7 @@
       const plan = R.undoPlan(entry), prev = entry.prev;
       if (plan.kind === 'decision') R.applyDecision(s.queue, item, prev.decision, prev.region, prev.note, prev.studio, prev.platform);
       else R.applyClear(s.queue, item);
+      s.unsynced = true;
       enqueue(plan.kind, plan.body);
       if (s.filter === 'pending' && inList) s.sticky.add(item.id);
       patch();
@@ -517,7 +527,7 @@
       const job = deps.getJob(id);
       s = {id, view, job: job || {id, name: ''}, api: null, queue: null, map: new Map(), identity: '', version: '', list: [], rendered: 0, mediaKey: null,
         filter: 'pending', sticky: new Set(), focusId: null, zoomId: null, exp: null, lock: R.lockState(job, null), timer: null, loading: false,
-        evidence: new Map(), evidenceLoading: new Map(), techOpen: new Set(), undo: [], confirming: false, offline: false, wrote: false, saveTimer: null};
+        evidence: new Map(), evidenceLoading: new Map(), techOpen: new Set(), undo: [], confirming: false, offline: false, wrote: false, saveTimer: null, unsynced: false};
       stats.opens++;
       player.reset();
       if (!dialog.open) dialog.showModal();
@@ -557,6 +567,7 @@
       if (action === 'close') deps.requestClose(s.view);
       else if (action === 'filter' && s.queue && el.dataset.filter !== s.filter) setFilter(el.dataset.filter);
       else if (action === 'undo') undo();
+      else if (action === 'goto') gotoCard(el.dataset.owner);
       else if (!x) return;
       else if (action === 'decide') { select(x.id); decide(x.id, el.dataset.decision, el.dataset.decision === 'BLUR' && R.needsFullFrame(x)); }
       else if (action === 'clear') { select(x.id); clear(x.id); }

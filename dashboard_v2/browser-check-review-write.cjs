@@ -378,7 +378,7 @@ async function until(fn, label, timeout = 8000) {
       await page.keyboard.press('Escape'); await page.waitForFunction(() => !document.getElementById('review-dialog').open);
     });
 
-    await check('Undo, advisory, "Tự chuyển cảnh" (saved as biliflow.review.autoNext), region / memory buttons, BLUR without a region (P7)', async () => {
+    await check('Undo, advisory, "Tự chuyển cảnh" (saved as biliflow.review.autoNext), memory buttons, S9 in "Chi tiết kỹ thuật"', async () => {
       fresh();
       await page.goto(base + '/dashboard-v2/#overview');
       await page.evaluate(() => localStorage.removeItem('biliflow.review.autoNext'));
@@ -422,7 +422,8 @@ async function until(fn, label, timeout = 8000) {
       await until(async () => (await state(page)).toast.startsWith('Không hoàn tác được lựa chọn cho ứng viên phụ'), 'advisory undo message');
       await sleep(300);
       assert.equal(posts.length, start + 4);
-      // P7: BLUR on a card without a located region (its region comes from another card) → the classic error, no POST.
+      // S9 in "Chi tiết kỹ thuật" of a safety card: the borrowed box has no region buttons (the R2 path to the classic
+      // "chưa có vùng" error went with them; that error stays checked against the classic page in verify-review).
       fresh();
       const q = queueFor(101), owner = q.items.find(x => x.id === 'visual_logo-101-0011'), other = q.items.find(x => x.id === 'adult-101-0010');
       owner.decision = 'BLUR'; owner.decision_region_source_pixels = owner.suggested_region_source_pixels; owner.suggested_region_source_pixels = null;
@@ -430,13 +431,72 @@ async function until(fn, label, timeout = 8000) {
       await openJob(page, 101, 'all');
       const tech = card(page, 'adult-101-0010').locator('.rv-tech');
       await tech.locator('summary').click();
-      assert.equal(await tech.locator('.rv-region-block strong').textContent(), 'Xử lý riêng vùng logo khoanh đỏ');
+      assert.equal(await tech.locator('[data-review="region"]').count(), 0, 'no region buttons in the technical details');
+      assert.match(await tech.locator('.rv-region-block.borrowed small').textContent(), /^Khung đỏ là vùng logo của thẻ “Logo toàn khung \(chưa khoanh vùng\)” \(\d\d:\d\d\.\d–\d\d:\d\d\.\d\) — đang: Làm mờ logo$/);
       start = posts.length;
-      await tech.locator('[data-review="region"][data-decision="BLUR"]').click();
-      await until(async () => (await state(page)).toast === 'Mục này chưa có vùng được định vị; hãy chọn Làm mờ cả cảnh.', 'BLUR error');
+      await tech.locator('[data-review="goto"]').click();
+      await until(async () => (await state(page)).focus === owner.id, 'owner selected');
       await sleep(300);
-      assert.equal(posts.length, start, 'no POST');
+      assert.equal(posts.length, start, 'navigation only, no POST');
       await page.keyboard.press('Escape'); await page.waitForFunction(() => !document.getElementById('review-dialog').open);
+    });
+
+    await check('R2-B1: a write lost while offline, its reload lost too: once the server answers, the next poll puts the card and the counts back', async () => {
+      fresh();
+      await openJob(page, 101, 'pending');
+      const before = await page.locator('#review-dialog .rv-progress-text').textContent();
+      assert.equal(before, '5 / 30 cảnh cần quyết định cuối');
+      // The server stops answering: the write (and its 300/900 ms retries) and the reload of the queue fail.
+      await page.route('**/api/jobs/101/review/**', route => route.abort());
+      await page.keyboard.press('3'); // CUT on visual_logo-101-0002, applied at once
+      assert.equal(await page.locator('#review-dialog .rv-progress-text').textContent(), '4 / 30 cảnh cần quyết định cuối', 'optimistic');
+      // The write gives up after its retries (its message is then replaced by the failed reload's), offline shows.
+      await page.waitForFunction(() => !document.querySelector('#review-dialog .rv-offline').hidden, null, {timeout: 8000});
+      await until(async () => (await state(page)).save !== 'Đang lưu…', 'write settled', 8000);
+      assert.equal(await card(page, 'visual_logo-101-0002').locator('.rv-status').textContent(), 'Cắt', 'still the unsaved choice while offline');
+      // The server answers again with the same queue version: the next poll must still apply it.
+      await page.unroute('**/api/jobs/101/review/**');
+      await page.waitForFunction(() => document.querySelector('#review-dialog .rv-offline').hidden, null, {timeout: 8000});
+      await until(async () => (await card(page, 'visual_logo-101-0002').locator('.rv-status').textContent()) === 'Chưa duyệt', 'card back to the saved state', 8000);
+      assert.equal(await page.locator('#review-dialog .rv-progress-text').textContent(), before, 'counts back to the server queue');
+      assert.equal(queueFor(101).items.find(x => x.id === 'visual_logo-101-0002').decision, null, 'nothing was written');
+      await page.keyboard.press('Escape'); await page.waitForFunction(() => !document.getElementById('review-dialog').open);
+    });
+
+    await check('R2-B2 (S9): "Kiểm tra đoạn kết" beside the platform logo card it borrows the red box from: no region buttons there, a dashed box, "Đi tới thẻ logo"', async () => {
+      fresh();
+      const q = queueFor(101), logo = q.items.find(x => x.id === 'visual_logo-101-0007'), end = q.items.find(x => x.id === 'visual_logo-101-0008');
+      logo.decision = 'BLUR'; logo.decision_region_source_pixels = logo.suggested_region_source_pixels;
+      Object.assign(end, {candidate_type: 'ending_boundary', decision: null, start_seconds: logo.start_seconds + 0.5, end_seconds: logo.end_seconds + 1});
+      for (const [width, theme] of [[1440, 'light'], [390, 'dark']]) {
+        const p = width === 1440 ? page : await newPage(390, 844, 'dark');
+        await openJob(p, 101, 'all');
+        const cards = await p.locator('#review-dialog article.rv-card').evaluateAll(list => list.map(el => el.dataset.item));
+        assert.equal(cards.indexOf(end.id), cards.indexOf(logo.id) + 1, 'side by side');
+        const e = card(p, end.id), l = card(p, logo.id);
+        assert.equal(await e.locator('[data-review="region"]').count(), 0, 'no region buttons on the borrowing card');
+        assert.equal(await l.locator('[data-review="region"]').count(), 2, 'the owner card keeps them');
+        assert.match(await e.locator('.rv-region-block.borrowed small').textContent(), /^Khung đỏ là vùng logo của thẻ “Logo nền tảng Nền tảng mẫu” \(\d\d:\d\d\.\d–\d\d:\d\d\.\d\) — đang: Làm mờ logo$/);
+        const box = await e.locator('.rv-region').evaluate(r => ({style: getComputedStyle(r).borderTopStyle, label: r.querySelector('em') && r.querySelector('em').textContent}));
+        assert.equal(box.style, 'dashed'); assert.match(box.label, /^áp dụng \d\d:\d\d\.\d–\d\d:\d\d\.\d$/);
+        assert.equal(await l.locator('.rv-region').evaluate(r => getComputedStyle(r).borderTopStyle), 'solid');
+        // The owner card's buttons change only the owner card; the borrowing card follows with its line only.
+        const start = posts.length;
+        await l.locator('[data-review="region"][data-decision="KEEP"]').click();
+        await until(() => posts.length === start + 1, 'owner KEEP');
+        assert.deepEqual(posts[start].body, {id: logo.id, decision: 'KEEP', full_frame: false, note: 'Đã xác nhận vùng khoanh đỏ là tiêu đề hoặc nội dung hợp lệ của phim'});
+        await until(async () => (await e.locator('.rv-region').count()) === 0 && (await e.locator('.rv-region-block').count()) === 0, 'no longer borrowed: box and line go');
+        await l.locator('[data-review="region"][data-decision="BLUR"]').click();
+        await until(() => posts.length === start + 2, 'owner BLUR');
+        await until(async () => (await e.locator('.rv-region.borrowed').count()) === 1, 'borrowed again');
+        // "Đi tới thẻ logo" from "Chưa duyệt", where the decided logo card is hidden: switches to "Tất cả" and selects it.
+        await p.locator('#review-dialog .rv-chips [data-filter="pending"]').click();
+        await card(p, end.id).locator('[data-review="goto"]').click();
+        await until(async () => (await state(p)).filter === 'all' && (await state(p)).focus === logo.id, 'owner card selected in Tất cả');
+        assert.ok(await card(p, logo.id).evaluate(el => { const r = el.getBoundingClientRect(), b = el.closest('.rv-body').getBoundingClientRect(); return r.bottom > b.top && r.top < b.bottom; }), 'scrolled into view');
+        if (p !== page) await p.close();
+        else { await p.keyboard.press('Escape'); await p.waitForFunction(() => !document.getElementById('review-dialog').open); }
+      }
     });
 
     await check('Demo page: decisions change the synthetic queue in memory and show in "Lịch sử thao tác mẫu"; no request', async () => {

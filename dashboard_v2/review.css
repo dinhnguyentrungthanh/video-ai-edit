@@ -121,6 +121,11 @@
 .rv-region-block .scene-actions button, .rv-memory > button { justify-self: start; text-align: left; }
 .tech-body .rv-region-block { margin: 4px 0; }
 .rv-region.blurred { background: #ff304f12; -webkit-backdrop-filter: blur(9px); backdrop-filter: blur(9px); }
+/* S9: a red box borrowed from another logo card: dashed, with the time it applies. */
+.rv-region.borrowed { border-style: dashed; }
+.rv-region em { position: absolute; left: -3px; top: calc(100% + 2px); padding: 1px 5px; border-radius: 4px; font: 600 11px system-ui, sans-serif; font-style: normal; color: #fff; background: #c4243d; white-space: nowrap; }
+.rv-region.up em { top: auto; bottom: calc(100% + 2px); }
+.rv-region-block.borrowed { grid-template-columns: minmax(0, 1fr) auto; align-items: center; }
 .rv-card.d-blur-full .rv-art img { filter: blur(14px); }
 .rv-card.d-cut .rv-art img { filter: brightness(.3) grayscale(.4); }
 .rv-cut-label { position: absolute; left: 10px; bottom: 10px; display: none; padding: 3px 8px; border-radius: 6px; font: 600 12px system-ui, sans-serif; color: #fff; background: #aa263e; }
@@ -159,6 +164,7 @@
   .rv-thumb span, .rv-thumb b, .rv-thumb i { font-size: 12px; }
   .rv-card.zoom .rv-art { max-height: none; }
   .rv-actions button, .rv-tools .rv-undo { min-height: 44px; }
+  .rv-region-block.borrowed { grid-template-columns: minmax(0, 1fr); }
   .rv-keys { display: none; }
   .rv-toast { left: 12px; right: 12px; bottom: 76px; max-width: none; }
 }

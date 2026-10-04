@@ -8,7 +8,9 @@
  *   S7 the queue identity reads source.sha256 (the classic page reads source.input_sha256, always empty);
  *   S8 a SKIPPED video opens read-only;
  *   R2-K the BLUR button (and key 2) of an item with a red region blurs that region (P7, 6.3); the classic
- *      main button and key 2 always blur the whole frame (the classic page blurs a region with its region buttons).
+ *      main button and key 2 always blur the whole frame (the classic page blurs a region with its region buttons);
+ *   S9 a card that only borrows another logo card's red box has no region buttons: a line about the owner card
+ *      and "Đi tới thẻ logo" (the classic page shows the same buttons on both cards; the bodies are unchanged).
  * R2 decisions follow the classic decide(), undo() and writeFailureMessage(): same confirms (S5 shows them in
  * a V2 dialog), same errors and, field for field, the same POST bodies.
  */

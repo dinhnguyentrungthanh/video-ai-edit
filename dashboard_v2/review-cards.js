@@ -83,9 +83,22 @@
     return !!owner && owner.decision === 'BLUR' && owner.decision_region_source_pixels !== 'FULL_FRAME';
   }
   const fullBlur = x => x.decision === 'BLUR' && x.decision_region_source_pixels === 'FULL_FRAME';
+  /* The red box over the image: solid on the card that owns the region; dashed with the time it applies on a
+   * card that borrows another logo card's region (S9). */
+  function regionHtml(ctx, x) {
+    const box = R.regionBox(ctx.queue, x);
+    if (!box) return '';
+    const borrowed = box.owner !== x.id && D.borrowedRegion(x, ctx.map.get(box.owner));
+    return '<span class="rv-region' + (regionBlurred(ctx, x) ? ' blurred' : '') + (borrowed ? ' borrowed' + (box.top + box.height > 0.84 ? ' up' : '') : '') + '" style="left:' + pct(box.left) + ';top:' + pct(box.top) + ';width:' + pct(box.width) + ';height:' + pct(box.height) + '">' +
+      (borrowed ? '<em>' + esc('áp dụng ' + borrowed.applies) + '</em>' : '') + '</span>';
+  }
   function regionBlock(ctx, x) {
     const owner = R.regionOwner(ctx.queue, x), r = owner && (owner.suggested_region_source_pixels || owner.decision_region_source_pixels), c = D.regionControls(x, owner, r);
     if (!c) return '';
+    if (c.owner !== x.id) { // S9: no region buttons on a borrowing card; the owner card decides its region
+      const b = D.borrowedRegion(x, owner);
+      return '<div class="rv-region-block borrowed"><small>' + esc(b.text) + '</small><button class="small secondary" type="button" data-review="goto" data-owner="' + esc(b.owner) + '">Đi tới thẻ logo</button></div>';
+    }
     const b = (d, label) => '<button class="small secondary' + (c.decision === d ? ' selected' : '') + '" type="button" data-review="region" data-owner="' + esc(c.owner) + '" data-decision="' + d + '" aria-pressed="' + (c.decision === d) + '"' + (ctx.readonly ? ' disabled' : '') + '>' + esc(label) + '</button>';
     return '<div class="rv-region-block"><strong>' + esc(c.title) + '</strong><small>' + esc(c.note) + '</small><div class="scene-actions">' + b('KEEP', R.TEXT.regionKeep) + b('BLUR', R.TEXT.regionBlur) + '</div></div>';
   }
@@ -114,11 +127,11 @@
   function techHtml(ctx, x, ev) { return D.techBody(ctx.queue, x, ev || null, R.isSafety(x) ? regionBlock(ctx, x) : ''); }
 
   function card(ctx, x) {
-    const box = R.regionBox(ctx.queue, x), m = ctx.media(x), src = mainImage(m, x), tip = suggestion(x), zoomed = ctx.zoomId === x.id;
+    const m = ctx.media(x), src = mainImage(m, x), tip = suggestion(x), zoomed = ctx.zoomId === x.id;
     return '<article class="scene rv-card' + (x.id === ctx.focusId ? ' on' : '') + (x.decision ? ' decided' : '') + (zoomed ? ' zoom' : '') + (x.decision === 'CUT' ? ' d-cut' : '') + (fullBlur(x) ? ' d-blur-full' : '') + '" data-item="' + esc(x.id) + '">' +
       '<div class="rv-art" data-review="select" style="aspect-ratio:' + esc(R.frameAspect(x)) + '">' +
         (src ? '<img alt="" decoding="async" data-src="' + esc(src) + '">' : '') +
-        (box ? '<span class="rv-region' + (regionBlurred(ctx, x) ? ' blurred' : '') + '" style="left:' + pct(box.left) + ';top:' + pct(box.top) + ';width:' + pct(box.width) + ';height:' + pct(box.height) + '"></span>' : '') +
+        regionHtml(ctx, x) +
         aiBoxes(ctx, x) + '<span class="rv-cut-label">Đã chọn cắt</span>' +
         '<span class="rv-art-note">' + (src ? 'Không tải được ảnh' : 'Không có ảnh xem trước cho mục này.') + '</span>' +
       '</div>' +
@@ -202,8 +215,9 @@
     el.classList.toggle('on', x.id === ctx.focusId);
     el.classList.toggle('d-cut', x.decision === 'CUT');
     el.classList.toggle('d-blur-full', fullBlur(x));
-    const region = el.querySelector('.rv-region');
-    if (region) region.classList.toggle('blurred', regionBlurred(ctx, x));
+    // The region can appear, move to another owner card or go (only the box is replaced, never the image box).
+    const region = el.querySelector('.rv-region'), box = regionHtml(ctx, x);
+    if ((region ? region.outerHTML : '') !== box) { if (region) region.remove(); if (box) el.querySelector('.rv-art').insertAdjacentHTML('beforeend', box); }
     if (setHtml(el.querySelector('.rv-actions'), actions(ctx, x))) patched++;
     setHtml(el.querySelector('.tech-body'), techHtml(ctx, x, ctx.media(x).ev));
     return patched;
