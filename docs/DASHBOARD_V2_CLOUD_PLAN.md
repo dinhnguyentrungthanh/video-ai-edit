@@ -812,4 +812,23 @@ $Mine | Where-Object { $_.Action -eq "Block" -or ($_.Action -eq "Allow" -and "$(
 | M2 | Hướng dẫn Firewall: chọn bản vá theo số; rule có kiểm tra và chạy lại được; câu về junction; thứ tự Private → rule → thử → dọn; dọn rule bằng lệnh đúng phạm vi | [ ] | [ ] | |
 | M3 | Listener điện thoại trả 400 khi body POST bị cắt | [ ] | [ ] | |
 
+### 15.4. Thêm vào đợt 5 (người dùng yêu cầu, 2026-10-04): nút "Quay lại Dashboard" của trang duyệt về lại V2
+
+- Hiện tại: trang duyệt cũ có `<button class="back" type="button" onclick="location.href='/'">← Quay lại Dashboard</button>` (`review_workflow.py`); đây là chỗ duy nhất của trang điều hướng về `/`. Mở trang duyệt từ V2 trên PC rồi bấm nút này thì về dashboard cũ `/`. Qua listener điện thoại, `/` đã chuyển sang V2 (câu 11).
+- **M4. Sửa:**
+  - V2 mở trang duyệt bằng `/review/{id}?from=v2&view=<view>`, với `<view>` là màn V2 đang mở (`overview`, `downloads`, `videos`, `queue`, `logos`, `settings`).
+  - Route `/review/{id}` (listener PC và listener điện thoại): chỉ khi có `from=v2` mới thay đúng chuỗi `onclick="location.href='/'"` của nút back bằng `onclick="location.href='/dashboard-v2/#<view>'"`. `view` phải nằm trong danh sách trên; sai hoặc thiếu thì dùng `overview`. Không đưa chuỗi nào khác từ URL vào trang.
+  - Không có `from=v2` thì `/review/{id}` trả về **trùng byte** như cũ (D2). Không sửa `review_workflow.py`.
+- Test:
+  - `/review/1` vẫn trùng fixture D2;
+  - `/review/1?from=v2&view=videos` có `location.href='/dashboard-v2/#videos'` và nút back không còn `location.href='/'`;
+  - `view` lạ (vd. `"><script>`) → `#overview`, không phản chiếu gì;
+  - V2 (verify hoặc browser-check): nút Duyệt mở `/review/{id}?from=v2&view=<view>`;
+  - qua listener điện thoại, trang duyệt mở từ V2 cũng về V2, và vẫn có chỉnh giao diện điện thoại.
+- Trang duyệt kiểu V2 **không** làm ở đợt này: người dùng chọn làm sau merge, với plan riêng.
+
+| ID | Hạng mục | Cloud | Máy thật | Bằng chứng |
+| --- | --- | --- | --- | --- |
+| M4 | Nút Quay lại Dashboard của trang duyệt mở từ V2 về lại V2; `/review/{id}` không tham số vẫn trùng byte | [ ] | [ ] | |
+
 **Sau đợt 5:** máy thật kéo về kiểm nhanh (test liên quan, full suite, fingerprint; không chạy review dài); người dùng chuyển thư mục chính sang bản mới và test đầy đủ PC + điện thoại + laptop; chỉ merge vào `main` khi người dùng yêu cầu.
