@@ -334,6 +334,86 @@ test('Live store: pause() stops /api/status polling while the review dialog is o
   }
 });
 
+/* R2: review writes of one job: a serial chain (never once()), retries 300/900 ms on a network error or >= 500. */
+function writeAdapter(script) {
+  const f = fake(script), sleeps = [];
+  const a = A.create({contracts: C, transport: f.transport, sleep: ms => { sleeps.push(ms); return Promise.resolve(); }});
+  return {f, a, sleeps, posts: () => f.posts().filter(c => c.path.includes('/review/'))};
+}
+const QUEUE = n => ({status: 'REVIEW_REQUIRED', items: [], counts: {total: n, pending: n}});
+test('Review writes (R2): two quick decisions on two cards are two POSTs, in order, one after the other', async () => {
+  let release;
+  const gate = new Promise(r => { release = r; });
+  const answers = [() => gate.then(() => ({status: 200, body: QUEUE(1)})), {status: 200, body: QUEUE(2)}];
+  const {f, a, posts} = writeAdapter({'POST /api/jobs/12/review/decision': answers});
+  const r = a.review(12);
+  const b1 = {id: 'gore-12-0001', decision: 'CUT', full_frame: false, note: null};
+  const b2 = {id: 'logo-12-0002', decision: 'BLUR', full_frame: false, note: null, remember_platform_logo: true};
+  const p1 = r.write('decision', b1), p2 = r.write('decision', b2);
+  assert.equal(r.pendingWrites(), 2);
+  await new Promise(resolve => setTimeout(resolve, 5));
+  assert.equal(posts().length, 1, 'the second POST waits for the first');
+  release();
+  const [x1, x2] = await Promise.all([p1, p2]);
+  assert.deepEqual(posts().map(c => c.body), [b1, b2], 'bodies sent exactly as given, in order');
+  assert.equal(x1.last, false); assert.equal(x2.last, true, 'only the last pending write applies its queue');
+  assert.deepEqual(x2.body, QUEUE(2));
+  assert.equal(r.pendingWrites(), 0);
+  assert.equal(f.calls.filter(c => c.path === '/api/status').length, 0, 'no /api/status after a decision');
+  assert.ok(posts().every(c => c.headers['X-BiliFlow-Token'] === TOKEN && c.headers['Content-Type'] === 'application/json'));
+});
+test('Review writes (R2): a network error or >= 500 is sent again after 300 ms then 900 ms; then it fails with the attempts', async () => {
+  let w = writeAdapter({'POST /api/jobs/12/review/decision': [{status: 500, body: {error: 'bận'}}, new Error('reset'), {status: 200, body: QUEUE(0)}]});
+  const ok = await w.a.review(12).write('decision', {id: 'a', decision: 'KEEP', full_frame: false, note: null});
+  assert.equal(w.posts().length, 3); assert.deepEqual(w.sleeps, [300, 900]); assert.equal(ok.last, true);
+  w = writeAdapter({'POST /api/jobs/12/review/clear': [{status: 503, body: {error: 'Hàng đợi đang bị khóa'}}]});
+  await assert.rejects(() => w.a.review(12).write('clear', {id: 'a'}), e => e.status === 503 && e.attempts === 3 && e.message === 'Hàng đợi đang bị khóa');
+  assert.equal(w.posts().length, 3); assert.deepEqual(w.sleeps, [300, 900], 'two retries only');
+});
+test('Review writes (R2): with the real timers the resends come about 300 ms and 900 ms apart', async () => {
+  const times = [];
+  const f = fake({'POST /api/jobs/12/review/decision': () => { times.push(Date.now()); return times.length < 3 ? {status: 502, body: {}} : {status: 200, body: QUEUE(0)}; }});
+  await A.create({contracts: C, transport: f.transport}).review(12).write('decision', {id: 'a', decision: 'KEEP', full_frame: false, note: null});
+  const gaps = [times[1] - times[0], times[2] - times[1]];
+  assert.ok(gaps[0] >= 280 && gaps[0] < 600 && gaps[1] >= 870 && gaps[1] < 1400, JSON.stringify(gaps));
+});
+test('Review writes (R2): 400 is not sent again and keeps the server text; the next write still goes', async () => {
+  const text = 'Chỉ có thể ghi nhớ logo hãng phim khi chọn Giữ nguyên';
+  const {a, posts, sleeps} = writeAdapter({'POST /api/jobs/12/review/decision': [{status: 400, body: {error: text}}, {status: 200, body: QUEUE(0)}]});
+  const r = a.review(12);
+  const p1 = r.write('decision', {id: 'a', decision: 'CUT', full_frame: false, note: null, remember_studio_logo: true});
+  const p2 = r.write('decision', {id: 'b', decision: 'KEEP', full_frame: false, note: null});
+  await assert.rejects(() => p1, e => e.status === 400 && e.message === text && e.attempts === 1);
+  assert.equal((await p2).last, true);
+  assert.equal(posts().length, 2); assert.deepEqual(sleeps, [], '400 never waits or retries');
+});
+test('Review writes (R2): 403 gets a new session and sends once more; a second 403 is not retried', async () => {
+  let w = writeAdapter({'POST /api/jobs/12/review/decision': [{status: 403, body: {error: 'token'}}, {status: 200, body: QUEUE(0)}]});
+  await w.a.review(12).write('decision', {id: 'a', decision: 'KEEP', full_frame: false, note: null});
+  assert.equal(w.posts().length, 2); assert.equal(w.f.sessions().length, 2, 'token, then one refresh'); assert.deepEqual(w.sleeps, []);
+  w = writeAdapter({'POST /api/jobs/12/review/decision': [{status: 403, body: {error: 'Phiên không hợp lệ'}}]});
+  await assert.rejects(() => w.a.review(12).write('decision', {id: 'a', decision: 'KEEP', full_frame: false, note: null}), e => e.status === 403);
+  assert.equal(w.posts().length, 2, 'one resend after the refresh, no retry loop'); assert.deepEqual(w.sleeps, []);
+});
+test('Review writes (R2): the chain belongs to the job, not to one dialog: a new review(id) sees the pending writes and waits for them', async () => {
+  let release;
+  const gate = new Promise(r => { release = r; });
+  const {a, posts} = writeAdapter({'POST /api/jobs/12/review/decision': () => gate.then(() => ({status: 500, body: {error: 'WinError 32'}}))});
+  const first = a.review(12), failed = first.write('decision', {id: 'a', decision: 'KEEP', full_frame: false, note: null}).catch(e => e);
+  const again = a.review(12), other = a.review(13);
+  assert.equal(again.pendingWrites(), 1, 'a reopened dialog sees the write'); assert.equal(other.pendingWrites(), 0);
+  let idle = false;
+  const waiting = again.idle().then(() => { idle = true; });
+  await new Promise(resolve => setTimeout(resolve, 5));
+  assert.equal(idle, false);
+  release();
+  const error = await failed; await waiting;
+  assert.equal(error.attempts, 3, 'it still finishes (with its retries) after the dialog closed');
+  assert.equal(idle, true); assert.equal(again.pendingWrites(), 0); assert.equal(posts().length, 3);
+  await assert.rejects(() => again.write('bulkKeep', {filter: 'all'}), e => e.status === 400);
+  assert.equal(posts().length, 3, 'only decision and clear');
+});
+
 (async () => {
   for (const [name, fn] of tests) {
     try { await fn(); } catch (error) { error.message = name + ': ' + error.message; throw error; }

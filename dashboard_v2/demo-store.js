@@ -36,9 +36,51 @@
     }
     function changed() { previewVersion++; normalizeQueue(); emit(); }
 
-    /* Review dialog (R0): the adapter's review(jobId) interface on a synthetic in-memory queue.
-     * Images are the bundled poster SVGs; there is no video, frame or evidence in the demo. */
-    const reviews = new Map();
+    /* Review dialog: the adapter's review(jobId) interface on a synthetic in-memory queue.
+     * Images are the bundled poster SVGs; there is no video, frame or evidence in the demo.
+     * R2 writes (decision / clear) change that queue in memory, one at a time per job, never over the network. */
+    const reviews = new Map(), writers = new Map();
+    const writer = id => { if (!writers.has(id)) writers.set(id, {chain: Promise.resolve(), pending: 0}); return writers.get(id); };
+    function countQueue(q) {
+      const counts = {total: q.items.length, pending: 0, decisions: {KEEP: 0, BLUR: 0, CUT: 0, NEEDS_MORE_CONTEXT: 0}};
+      for (const x of q.items) { if (counts.decisions[x.decision] != null) counts.decisions[x.decision]++; else counts.pending++; }
+      q.counts = counts; q.updated_at = new Date().toISOString();
+      q.status = counts.decisions.NEEDS_MORE_CONTEXT ? 'NEEDS_MORE_CONTEXT' : counts.pending ? 'REVIEW_REQUIRED' : 'READY_FOR_EDIT_PLAN';
+    }
+    /* The record_review_decision / clear_review_decision rules that matter to the dialog (same refusals as 400). */
+    function reviewWrite(j, operation, body) {
+      online();
+      const q = reviews.get(j.id);
+      if (!q) throw demoError(404, 'Video chưa có danh sách duyệt (đang quét hoặc quét lại).');
+      if (C.inFlight(j) || C.locked(j) || j.state === 'SKIPPED') throw demoError(409, 'Video đang chờ xuất, đang xuất, bị khóa hoặc đã bỏ qua; không sửa quyết định.');
+      let item = q.items.find(x => x.id === body.id);
+      if (!item && operation === 'decision') {
+        const i = q.advisory_items.findIndex(x => x.id === body.id);
+        if (i >= 0) { item = q.advisory_items.splice(i, 1)[0]; delete item.advisory; q.items.push(item); }
+      }
+      if (!item) throw demoError(400, 'Unknown or duplicate review item: ' + body.id);
+      delete item.studio_logo_memory; delete item.platform_logo_memory;
+      if (operation === 'clear') Object.assign(item, {decision: null, decision_note: null, decision_region_source_pixels: null, decided_at: null});
+      else {
+        const d = body.decision, studio = body.remember_studio_logo === true, platform = body.remember_platform_logo === true;
+        if (studio && d !== 'KEEP') throw demoError(400, 'Chỉ có thể ghi nhớ logo hãng phim khi chọn Giữ nguyên');
+        if (platform && d !== 'BLUR') throw demoError(400, 'Chỉ có thể ghi nhớ logo nền tảng khi chọn Làm mờ');
+        let region = null;
+        if (d === 'BLUR') region = body.full_frame ? 'FULL_FRAME' : item.suggested_region_source_pixels || (platform ? {x: 1600, y: 60, width: 240, height: 90} : null);
+        if (d === 'BLUR' && !region) throw demoError(400, 'BLUR requires a region or explicit full-frame approval');
+        Object.assign(item, {decision: d, decision_region_source_pixels: region, decided_at: new Date().toISOString(),
+          decision_note: body.note ?? (studio ? 'Người duyệt xác nhận đây là logo hãng phim — giữ nguyên và ghi nhớ' : platform ? 'Người duyệt xác nhận đây là logo nền tảng video — làm mờ vùng logo và ghi nhớ' : null)});
+        if (studio) item.studio_logo_memory = {remembered: true, frames: 12, frames_source: 'source_video'};
+        if (platform) item.platform_logo_memory = {remembered: true, logo_frames: 4, platform: {key: 'demo', name: 'Nền tảng mẫu'}};
+      }
+      countQueue(q);
+      state.requests.push(C.request(operation, j, body));
+      // The dashboard row follows the queue once the dialog closes (resume()).
+      const c = q.counts;
+      j.review_summary = {...(j.review_summary || {}), status: q.status, main_items: c.total, pending: c.pending, decisions: {...c.decisions}};
+      if (['WAITING_REVIEW', 'READY_TO_EXPORT'].includes(j.state)) j.state = q.status === 'READY_FOR_EDIT_PLAN' ? 'READY_TO_EXPORT' : 'WAITING_REVIEW';
+      return structuredClone(q);
+    }
     function review(jobId) {
       const j = getJob(jobId);
       if (!j) throw demoError(404, 'Không tìm thấy video.');
@@ -61,6 +103,17 @@
         frameUrl: () => '',
         videoUrl: () => '',
         mediaUrl: asset,
+        write(operation, body) {
+          if (operation !== 'decision' && operation !== 'clear') return Promise.reject(demoError(400, 'Thao tác ghi không hợp lệ.'));
+          const w = writer(j.id);
+          w.pending++;
+          const run = async () => { try { return {body: reviewWrite(j, operation, body), last: w.pending === 1}; } finally { w.pending--; } };
+          const done = w.chain.then(run, run);
+          w.chain = done.then(() => {}, () => {});
+          return done;
+        },
+        pendingWrites: () => writer(j.id).pending,
+        idle: () => writer(j.id).chain,
       };
     }
 
@@ -121,7 +174,7 @@
       start() {},
       stop() {},
       pause() {},
-      resume() {},
+      resume() { emit(); }, // the review dialog closed: rows show the decisions made in it
       review,
       async dispatch(operation, job, body) {
         online();
@@ -186,7 +239,7 @@
         else if (j.state === 'RENDERING') { j.state = 'SCANNING_LOGO'; delete j.render_progress; state.active = {job_id: 102, stage: 'visual_logo', pid: 12345}; }
         previewVersion++; emit();
       },
-      reset() { state = Mock.create(); reviews.clear(); conflictUsed = false; previewVersion++; emit(); },
+      reset() { state = Mock.create(); reviews.clear(); writers.clear(); conflictUsed = false; previewVersion++; emit(); },
     };
   }
 

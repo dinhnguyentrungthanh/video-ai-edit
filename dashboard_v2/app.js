@@ -525,7 +525,7 @@ document.addEventListener('keydown',event=>{
     else if(!event.shiftKey&&document.activeElement===last){event.preventDefault();first?.focus();}
   }
 });
-/* #review/<id>/<view> opens the review dialog over <view> (R0, read-only); a malformed review hash goes to #overview. */
+/* #review/<id>/<view> opens the review dialog over <view>; a malformed review hash goes to #overview. */
 let reviewPushed=false;
 function route(){
   aiDirty=false;const hash=location.hash.slice(1),target=window.BFReview.parseHash(hash);
@@ -543,7 +543,7 @@ function requestReviewClose(back){
   if(reviewPushed){reviewPushed=false;history.back();return;}
   history.replaceState(null,'','#'+back);route();
 }
-const review=window.BFReview.create({dialog:$('#review-dialog'),store,getJob,requestClose:requestReviewClose,
+const review=window.BFReview.create({dialog:$('#review-dialog'),store,getJob,requestClose:requestReviewClose,toast,
   oldUrl:(id,back)=>LIVE?'/review/'+encodeURIComponent(id)+'?from=v2&view='+encodeURIComponent(back):''});
 window.addEventListener('hashchange',route);
 /* A new snapshot (polling or after an action) re-renders without losing the user's place. */

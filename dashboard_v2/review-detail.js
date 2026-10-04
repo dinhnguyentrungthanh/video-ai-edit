@@ -97,13 +97,14 @@
     if (memoryMatch(m)) { const name = memoryBrandName(m); return `<div class="labels">Bộ nhớ thương hiệu: khớp hình logo bạn đã duyệt trước đó${name ? ` (${esc(name)})` : ''}, AI không được hỏi về logo; trạng thái ${esc(m.vlm_confirmation || '—')}${scene}; điểm ${score} là điểm xếp hạng (độ giống với bộ nhớ hoặc điểm hình học), không phải độ tin cậy AI</div>`; }
     return `<div class="labels">AI (Qwen): trả lời ${m.vlm_answer ? `“${esc(m.vlm_answer)}”` : '— (thẻ cũ, chưa lưu câu trả lời gốc)'}; trạng thái ${esc(m.vlm_confirmation || '—')}${m.promoted_from_rejected_boundary ? ' (đổi từ câu trả lời KHÔNG để giữ 5 giây đầu)' : ''}${scene}; điểm ${score} là điểm hình học, không phải độ tin cậy AI</div>`;
   }
-  /* The classic techDetails body without the region buttons (decisions come in R2). */
-  function techBody(queue, x, ev) {
+  /* The classic techDetails body; controls: the region buttons of a safety card (classic techDetails(x, ev, true)). */
+  function techBody(queue, x, ev, controls) {
     const owner = R.regionOwner(queue, x), r = owner && (owner.suggested_region_source_pixels || owner.decision_region_source_pixels);
     const score = x.max_score == null ? '—' : Number(x.max_score).toFixed(3);
     const parts = [`<div class="meta">${esc(x.review_kind || x.category)} · ưu tiên ${esc(x.priority || '—')} · điểm ${score} · ${clock(x.start_seconds)}–${clock(x.end_seconds)} · ${esc(x.id)}</div>`, scopeBlock(queue, x)];
     if (R.isSafety(x)) parts.push(overlapCoverage(queue, x));
     if (!R.isSafety(x) || (owner && r && r !== 'FULL_FRAME')) parts.push(regionDetailHtml(x, owner, r));
+    if (controls) parts.push(controls);
     parts.push(labelsReasonsHtml(x), visualAiHtml(x), evidenceHtml(ev));
     if (x.model_evidence) parts.push(aiModelLine(x), `<div class="labels">AI cục bộ: ${esc(JSON.stringify(x.model_evidence))}</div>`);
     return parts.join('');
@@ -141,6 +142,73 @@
     return {x, y, w, h, width, height, red: {x: (rx - x) / w * width, y: (ry - y) / h * height, w: rw / w * width, h: rh / h * height}};
   }
 
+  /* R2: notes of the region buttons and of "Đây là logo hãng phim — giữ & nhớ" / "Đây là logo nền tảng — làm mờ & nhớ",
+   * word for word from the classic regionControlsHtml, studioHtml and platformHtml (verify-review.cjs compares). */
+  const mmssTenth = s => { const v = Math.max(0, Number(s) || 0), m = Math.floor(v / 60); return `${m}:${(v - m * 60).toFixed(1).padStart(4, '0')}`; };
+  function regionControls(x, owner, r) {
+    if (!owner || !r || r === 'FULL_FRAME') return null;
+    const borrowed = owner.id !== x.id;
+    return {owner: owner.id, decision: owner.decision || null, title: borrowed ? 'Xử lý riêng vùng logo khoanh đỏ' : 'Phân loại vùng khoanh đỏ',
+      note: borrowed ? `Vùng logo áp dụng ${clock(owner.start_seconds)}–${clock(owner.end_seconds)}. Quyết định toàn cảnh bên dưới chỉ áp dụng ${clock(x.start_seconds)}–${clock(x.end_seconds)}; nếu chọn Cắt cả cảnh, đoạn bị cắt không cần làm mờ.`
+        : 'Chỉ lựa chọn theo phần nằm trong khung đỏ, không theo logo hoặc chữ ở vị trí khác trong ảnh.'};
+  }
+  function studioCompareLine(x) {
+    const c = x.studio_logo_compared;
+    if (!c || x.decision || x.studio_logo_match) return '';
+    const pct = Math.floor(100 * Number(c.best_similarity || 0)), need = Math.round(100 * Number(c.minimum_similarity ?? .95)), cells = c.best_cell_difference, limit = Number(c.maximum_cell_difference ?? 20);
+    const grid = pct >= need && cells != null && Number(cells) > limit ? ` nhưng lệch màu ${Number(cells)} (cần ≤ ${limit})` : '';
+    return `<small class="studio-note">Đã so với ${Number(c.records) || 0} logo hãng phim bạn đã nhớ: giống nhất ${pct}% (cần ≥ ${need}%)${grid} — chưa khớp${Number(c.masked_regions) > 0 ? ' (đã bỏ qua vùng watermark đã làm mờ)' : ''}</small>`;
+  }
+  function studioTextsNote(x) {
+    const texts = x.studio_logo_memory?.remembered ? [] : (x.suggestion_withheld?.window_texts || []);
+    return texts.length ? ` (sẽ nhớ cả chữ: ${esc(texts.slice(0, 6).join(', '))}${texts.length > 6 ? ', …' : ''} — nếu trong đó có tên web/thương hiệu lạ, đừng bấm nút này mà hãy Cắt)` : '';
+  }
+  function studioFramesNote(x) {
+    const m = R.studioRemembered(x);
+    if (m) {
+      if (m.frames == null) return '';
+      if (m.frames_missing) return ' Không còn ảnh khung hình đã nhớ (state/studio-logo-frames) nên không cập nhật được vùng watermark — logo này tạm thời không khớp thẻ nào cho tới khi bạn nhớ lại nó.';
+      if (m.frames_source === 'source_video') return ` Đã nhớ ${Number(m.frames)} khung trong đoạn ${R.span(x)}.`;
+      if (m.frames_source) return ` Chỉ nhớ ${Number(m.frames)} ảnh xem trước (không đọc được video gốc), không phải cả đoạn ${R.span(x)} — tập khác có thể không khớp.`;
+      return ` Chỉ nhớ ${Number(m.frames)} ảnh xem trước của thẻ này, không phải cả đoạn ${R.span(x)}.`;
+    }
+    const shots = (x.preview_images || []).slice(0, 8), times = shots.map(R.thumbTime).filter(t => t != null).map(mmssTenth);
+    return ` Sẽ nhớ mọi khung hình trong đoạn ${R.span(x)} (giải mã lại từ video gốc đúng như lúc quét, tối đa 250 khung); nếu không đọc được video gốc thì chỉ nhớ ${shots.length} ảnh xem trước${times.length ? ` (lúc ${times.join(', ')})` : ''}.`;
+  }
+  function studioMaskNote(queue, x) {
+    const m = R.studioRemembered(x);
+    if (m && m.frames == null) return '';
+    if (m && m.frames_source) {
+      const parts = [];
+      if (m.mask_refused) parts.push('Vùng watermark đã làm mờ quá lớn (trên 20% khung hình) nên không bỏ qua — logo được nhớ nguyên ảnh.');
+      else if ((m.ignored_regions || []).length) parts.push(`Đang bỏ qua ${m.ignored_regions.length} vùng watermark đã làm mờ.`);
+      if (m.mask_updated_at) parts.push('Đã cập nhật logo hãng phim đã nhớ theo vùng watermark bạn vừa chọn.');
+      return parts.length ? `<small class="studio-note">${parts.join(' ')}</small>` : '';
+    }
+    const overlays = (queue?.items || []).filter(o => o.id !== x.id && o.candidate_type === 'persistent_overlay' && Number(o.start_seconds) < Number(x.end_seconds) && Number(o.end_seconds) > Number(x.start_seconds));
+    const blurred = overlays.filter(o => o.decision === 'BLUR' && o.decision_region_source_pixels !== 'FULL_FRAME' && (o.category === 'text' || o.category === 'visual_logo'));
+    const pending = overlays.length > blurred.length || (x.evidence_regions || []).some(b => b && b.covered_by && !blurred.some(o => o.id === b.covered_by));
+    if (m) return pending || blurred.length ? '<small class="studio-note">Ảnh đã nhớ đang có watermark/lớp phủ — tập không có lớp phủ này sẽ không khớp.</small>' : '';
+    const notes = [];
+    if (blurred.length) notes.push(`<small class="studio-note">Sẽ bỏ qua ${blurred.length} vùng watermark bạn đã chọn làm mờ (${blurred.map(o => esc(readingLabel(o, 'watermark'))).join(', ')}) khi so khớp — tập không có watermark hoặc có watermark ở đúng chỗ đó vẫn khớp; chữ, website, banner hay lớp phủ ở chỗ khác vẫn giữ thẻ ở danh sách chính.</small>`);
+    if (pending) notes.push('<small class="studio-note">Ảnh đang có watermark/lớp phủ chưa được chọn Làm mờ. Nếu bạn chọn Làm mờ thẻ watermark đó (trước hay sau khi bấm nút này), BiliFlow sẽ tự bỏ qua vùng đó trong logo đã nhớ; nếu không, tập không có lớp phủ này sẽ không khớp.</small>');
+    return notes.join('');
+  }
+  /* The <small> under the studio button (classic studioHtml). */
+  function studioNote(x) {
+    return `Giữ nguyên đoạn này và nhớ hình logo cùng chữ trên đó${studioTextsNote(x)}. Lần quét sau, thẻ có ảnh trùng khớp từ 95% với một khung bất kỳ của logo này sẽ nằm ở Ứng viên phụ — trừ khi có chữ lạ, website hay lớp phủ (banner) nằm ngoài vùng watermark đã làm mờ; khi đó thẻ vẫn ở danh sách chính.${studioFramesNote(x)}`;
+  }
+  function platformNote(x, m) {
+    if (m) {
+      if (m.logo_frames == null) return '';
+      const name = m.platform && m.platform.key !== 'unknown' && m.platform.name ? ` ${esc(m.platform.name)}` : '';
+      return `Đã nhớ logo nền tảng${name}: ${Number(m.logo_frames)} khung có logo trên nền tối. Lần quét sau, đầu hoặc cuối tập khác có hình trùng khớp sẽ thành thẻ Làm mờ vùng logo — vẫn chờ bạn duyệt.`;
+    }
+    const where = x.suggested_region_source_pixels ? 'vùng khoanh đỏ' : 'vùng logo BiliFlow tìm thấy trên nền tối trong đoạn này (không làm mờ cả khung; khoảng thời gian thu lại đúng lúc logo hiện)';
+    return `Làm mờ ${where} và nhớ hình logo. Lần quét sau, logo nền tảng trùng khớp ở đầu hoặc cuối tập khác sẽ thành thẻ Làm mờ — vẫn chờ bạn duyệt. Dùng cho logo nền tảng phát hành (iQIYI, WeTV…), không dùng cho logo hãng phim hay giấy phép.`;
+  }
+
   return {esc, clock, viText, readingLabel, memoryMatch, memoryBrandName, boxesFromMemory, trackCoversFullVideo, regionOverlap, regionName, decisionScope, scopeBlock,
-    overlapCoverage, regionDetailHtml, labelsReasonsHtml, visualAiHtml, evidenceHtml, aiModelLine, techBody, evidenceView, cropRect};
+    overlapCoverage, regionDetailHtml, labelsReasonsHtml, visualAiHtml, evidenceHtml, aiModelLine, techBody, evidenceView, cropRect,
+    regionControls, studioCompareLine, studioTextsNote, studioFramesNote, studioMaskNote, studioNote, platformNote};
 });

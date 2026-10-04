@@ -346,6 +346,253 @@ check('R1 zoomed evidence: yellow AI boxes, red approved boxes and the legend ma
   assert.ok(!/document\.|fetch\(|innerHTML|setTimeout/.test(fs.readFileSync(path.join(__dirname, 'review-detail.js'), 'utf8')), 'review-detail.js is pure');
 });
 
+/* R2: decisions against the classic decide(), clearDecision(), undo(), keyDecision() and writeFailureMessage()
+ * (a third sandbox; confirm/alert/enqueueWrite are recorders). */
+const DECIDE_CONSTS = ['esc', 'clock', 'mmss', 'mmssTenth', 'span', 'SAFETY', 'KIND_NAMES', 'SCENE_WORDS', 'EXPORT_LOCK_MESSAGE', 'SOURCE_CLEANED_LOCK_MESSAGE', 'SOURCE_ARCHIVED_LOCK_MESSAGE', 'WRITE_RETRY_MS'];
+const DECIDE_FUNCS = ['isSafety', 'momentsOf', 'isScene', 'momentTotal', 'studioEligible', 'catName', 'sceneLogo', 'isLogoItem', 'actionName', 'platformEligible', 'countsFrom',
+  'statusFrom', 'isAdvisoryItem', 'pushUndo', 'syncLocalCounts', 'applyLocalDecision', 'applyLocalClear', 'writeFailureMessage', 'sceneBlurMessage', 'decisionsLocked',
+  'refuseWhileExporting', 'decide', 'clearDecision', 'undo', 'advisoryUndoMessage', 'decisionLabel', 'keyDecision', 'thumbTime', 'readingLabel', 'regionOwner',
+  'studioCompareLine', 'studioTextsNote', 'studioFramesNote', 'studioMaskNote', 'studioRemembered', 'platformRemembered', 'platformNote', 'regionControlsHtml', 'studioHtml', 'platformHtml'];
+const decideSource = DECIDE_CONSTS.map(n => line(new RegExp('^const ' + n + '='))).concat(DECIDE_FUNCS.map(n => line(new RegExp('^(async )?function ' + n + '\\(')))).join('\n');
+const decideBox = {};
+vm.createContext(decideBox);
+vm.runInContext(`let queue=null,itemMap=new Map(),busy=false,exportJob={status:'IDLE'},focusId=null,previousFocusId=null,autoNext=true,filter='all',listIds=[];
+const sticky=new Set(),undoStack=[];let answers=[],asked=[],alerts=[],writes=[];
+function confirm(m){asked.push(m);return answers.length?answers.shift():true;}
+function alert(m){alerts.push(m);}
+function enqueueWrite(kind,body){writes.push({kind,body:JSON.parse(JSON.stringify(body))});return Promise.resolve();}
+function afterLocalChange(){} function updateNavState(){} function renderFocus(){} function renderSide(){} function updateListStatuses(){} function updateHeader(){}
+function studioHtmlNote(x){return studioHtml(x);}
+${decideSource}
+globalThis.classic={
+  load(q){queue=q;itemMap=new Map();for(const x of q.items||[])itemMap.set(x.id,x);for(const x of q.advisory_items||[])if(!itemMap.has(x.id))itemMap.set(x.id,x);undoStack.length=0;listIds=[];focusId=null;},
+  run(fn,script){answers=(script||[]).slice();asked=[];alerts=[];writes=[];fn();return {asked:asked.slice(),alerts:alerts.slice(),writes:writes.slice()};},
+  decide:(id,d,full,note,studio,platform)=>decide(id,d,full,note,studio,platform), clear:id=>clearDecision(id), undo:()=>undo(), key(id,n){focusId=id;keyDecision(n);},
+  undoStack:()=>JSON.parse(JSON.stringify(undoStack)), item:id=>itemMap.get(id), drop:id=>itemMap.delete(id), lock(value){exportJob=value;},
+  fn:{writeFailureMessage,decisionLabel,advisoryUndoMessage,sceneBlurMessage,studioCompareLine,studioTextsNote,studioFramesNote,studioMaskNote,studioRemembered,platformRemembered,platformNote,regionControlsHtml,regionOwner,studioHtml,platformHtml},
+  consts:{WRITE_RETRY_MS}
+};`, decideBox);
+const cl = decideBox.classic, esc = D.esc;
+/* The V2 dialog's decide()/clear()/undo() on the same steps as review.js (S5 confirms answered by `script`). */
+function v2Session(q) {
+  const map = R.itemMap(q), undo = [];
+  const run = (fn, script) => { const answers = (script || []).slice(), out = {asked: [], alerts: [], writes: []}; fn(answers, out); return out; };
+  const ask = (answers, out, message) => { out.asked.push(message); return answers.length ? answers.shift() : true; };
+  return {
+    map, undoStack: () => JSON.parse(JSON.stringify(undo)),
+    decide: (id, d, full, note, studio, platform) => (answers, out) => {
+      const item = map.get(id);
+      if (!item) { out.alerts.push(R.TEXT.missingItem); return; }
+      for (const message of R.decisionConfirms(item, d, full)) if (!ask(answers, out, message)) return;
+      const plan = R.decisionBody(item, d, {fullFrame: full, note, studio, platform});
+      if (plan.error) { out.alerts.push(plan.error); return; }
+      undo.push(R.undoEntry(item, !item.decision && R.isAdvisoryItem(q, item))); if (undo.length > 100) undo.shift();
+      R.applyDecision(q, item, d, plan.region, plan.note, plan.studio, plan.platform);
+      out.writes.push({kind: 'decision', body: JSON.parse(JSON.stringify(plan.body))});
+    },
+    clear: id => (answers, out) => { const item = map.get(id); if (!item || !item.decision) return; undo.push(R.undoEntry(item, false)); if (undo.length > 100) undo.shift(); R.applyClear(q, item); out.writes.push({kind: 'clear', body: {id}}); },
+    undo: () => (answers, out) => {
+      const entry = undo.pop(); if (!entry) return;
+      const item = map.get(entry.id);
+      if (!item) { out.alerts.push(R.TEXT.undoMissing); return; }
+      if (entry.advisory) { out.alerts.push(R.advisoryUndoMessage(item)); return; }
+      const plan = R.undoPlan(entry), prev = entry.prev;
+      if (plan.kind === 'decision') R.applyDecision(q, item, prev.decision, prev.region, prev.note, prev.studio, prev.platform); else R.applyClear(q, item);
+      out.writes.push({kind: plan.kind, body: plan.body});
+    },
+    run,
+  };
+}
+const itemState = x => x && ({decision: x.decision ?? null, region: x.decision_region_source_pixels ?? null, note: x.decision_note ?? null, studio: x.studio_logo_memory || null, platform: x.platform_logo_memory || null});
+function decideQueues() {
+  const a = Mock.reviewQueue(job101, {count: 30}), b = structuredClone(QUEUES.edge);
+  // Visual AI on items with and without a region, a scene with AI, a platform logo without a region, remembered memories.
+  a.items[3].ai_visual_audit = {suggested_decision: 'KEEP', confidence: 0.95, classification: 'tiêu đề phim'};
+  a.items[0].ai_visual_audit = {suggested_decision: 'CUT', confidence: 0.91};
+  a.items[2].ai_visual_audit = {suggested_decision: 'BLUR', confidence: 0.97, classification: 'logo <b>thương hiệu</b>'};
+  a.items[12].ai_visual_audit = {suggested_decision: 'BLUR', confidence: 0.89};
+  a.items[17].suggested_region_source_pixels = null; // platform logo without a region
+  a.items[22].decision = 'KEEP'; a.items[22].studio_logo_memory = {remembered: true, frames: 40, frames_source: 'source_video'};
+  a.items[27].decision = 'BLUR'; a.items[27].decision_region_source_pixels = null; a.items[27].platform_logo_memory = {remembered: true, logo_frames: 6, platform: {key: 'demo', name: 'Nền tảng <mẫu>'}};
+  return [a, b];
+}
+check('R2 decisions: confirms, errors, POST bodies, local state and undo entries equal the classic decide() / clearDecision()', () => {
+  let cases = 0, bodies = 0;
+  const SCRIPTS = [[], [false], [true, false]];
+  for (const base of decideQueues()) {
+    for (const x of base.items.concat(base.advisory_items)) {
+      const variants = [[false, null, false, false], [true, null, false, false], [false, 'ghi chú <i>', false, false], [false, null, true, false], [false, null, false, true]];
+      for (const decision of ['KEEP', 'BLUR', 'CUT', 'NEEDS_MORE_CONTEXT']) for (const [full, note, studio, platform] of variants) for (const script of SCRIPTS) {
+        const q1 = structuredClone(base), q2 = structuredClone(base);
+        cl.load(q1); const v2 = v2Session(q2);
+        const a = cl.run(() => cl.decide(x.id, decision, full, note, studio, platform), script);
+        const b = v2.run(v2.decide(x.id, decision, full, note, studio, platform), script);
+        const label = `${x.id} ${decision} full=${full} note=${note} studio=${studio} platform=${platform} script=${JSON.stringify(script)}`;
+        same(b, a, label);
+        same(itemState(v2.map.get(x.id)), itemState(cl.item(x.id)), label + ' item');
+        same([q2.counts, q2.status], [q1.counts, q1.status], label + ' counts');
+        same(v2.undoStack(), cl.undoStack(), label + ' undo');
+        cases++; bodies += a.writes.length;
+        // Then clear it again: same {id} body and undo entry.
+        const c1 = cl.run(() => cl.clear(x.id)), c2 = v2.run(v2.clear(x.id));
+        same(c2, c1, label + ' clear'); same(itemState(v2.map.get(x.id)), itemState(cl.item(x.id)), label + ' cleared');
+      }
+    }
+  }
+  const missing = (() => { const q = structuredClone(QUEUES.edge), v2 = v2Session(structuredClone(QUEUES.edge)); cl.load(q); return [cl.run(() => cl.decide('missing-id', 'KEEP')), v2.run(v2.decide('missing-id', 'KEEP'))]; })();
+  same(missing[1], missing[0], 'unknown id');
+  assert.ok(cases > 2500 && bodies > 2000, `cases ${cases}, bodies ${bodies}`);
+  process.stdout.write(`   ${cases} decision cases, ${bodies} POST bodies identical\n`);
+});
+check('R2 undo: up to 100 steps, advisory items cannot go back, the same bodies as the classic undo()', () => {
+  for (const base of decideQueues()) {
+    const q1 = structuredClone(base), q2 = structuredClone(base);
+    cl.load(q1); const v2 = v2Session(q2);
+    const all = base.items.concat(base.advisory_items), D4 = ['KEEP', 'BLUR', 'CUT', 'NEEDS_MORE_CONTEXT'];
+    let seed = 7;
+    const rnd = n => (seed = (seed * 1103515245 + 12345) % 2147483648) % n;
+    for (let i = 0; i < 130; i++) {
+      const x = all[rnd(all.length)], d = D4[rnd(4)], full = rnd(2) === 1, studio = rnd(5) === 0, platform = rnd(5) === 0;
+      if (rnd(6) === 0) { same(v2.run(v2.clear(x.id)), cl.run(() => cl.clear(x.id)), 'clear ' + i); continue; }
+      same(v2.run(v2.decide(x.id, d, full, null, studio, platform)), cl.run(() => cl.decide(x.id, d, full, null, studio, platform)), 'step ' + i);
+    }
+    assert.equal(cl.undoStack().length, 100); same(v2.undoStack(), cl.undoStack(), 'stack capped at 100');
+    let advisory = 0;
+    for (let i = 0; i < 105; i++) {
+      const a = cl.run(() => cl.undo()), b = v2.run(v2.undo());
+      same(b, a, 'undo ' + i);
+      if (a.alerts.length) advisory++;
+    }
+    for (const x of all) same(itemState(v2.map.get(x.id)), itemState(cl.item(x.id)), 'after undo ' + x.id);
+    same([q2.counts, q2.status], [q1.counts, q1.status]);
+    assert.ok(advisory >= 1, 'advisory undo message seen');
+  }
+  // An item no longer in the queue: the classic message, nothing sent.
+  const q = structuredClone(QUEUES.edge), v2 = v2Session(structuredClone(QUEUES.edge)), id = q.items[0].id;
+  cl.load(q); cl.run(() => cl.decide(id, 'KEEP')); v2.run(v2.decide(id, 'KEEP'));
+  cl.drop(id); v2.map.delete(id);
+  same(v2.run(v2.undo()), cl.run(() => cl.undo()), 'undo of a missing item');
+  assert.equal(R.TEXT.undoMissing, 'Mục cần hoàn tác không còn trong hàng đợi hiện tại.');
+  assert.ok(script.includes(R.TEXT.undoMissing) && script.includes(R.TEXT.missingItem) && script.includes(R.TEXT.needsRegion) && script.includes(R.TEXT.fullFrame));
+});
+check('R2 keys 1–4 and the card buttons: the classic keyDecision except R2-K (BLUR on an item with a red region blurs the region)', () => {
+  let regionItems = 0;
+  for (const base of decideQueues()) for (const x of base.items) for (const n of [1, 2, 3, 4]) {
+    const q1 = structuredClone(base), q2 = structuredClone(base); cl.load(q1); const v2 = v2Session(q2);
+    const a = cl.run(() => cl.key(x.id, n)), k = R.keyDecision(n, x), b = v2.run(v2.decide(x.id, k.decision, k.fullFrame, null, false, false));
+    if (n === 2 && !R.needsFullFrame(x)) {
+      regionItems++;
+      // R2-K: the classic key 2 asks to blur the whole frame; the V2 key 2 is the card's "Làm mờ" button: the red region, no whole-frame confirm.
+      assert.ok(a.asked.includes(R.TEXT.fullFrame) || a.asked.some(m => /Làm mờ toàn bộ khung hình/.test(m)), x.id);
+      assert.equal(b.writes[0].body.full_frame, false); assert.equal(R.blurLabel(x), 'Làm mờ');
+      same(b, cl.run(() => { cl.load(structuredClone(base)); cl.decide(x.id, 'BLUR', false); }), x.id + ' = classic decide(id, BLUR, false)');
+    } else same(b, a, x.id + ' key ' + n);
+  }
+  assert.ok(regionItems > 5, 'region items: ' + regionItems);
+  const x = QUEUES.edge.items.find(i => R.needsFullFrame(i));
+  assert.equal(R.blurLabel(x), 'Làm mờ cả cảnh'); assert.ok(script.includes('Làm mờ cả cảnh'));
+  // The chosen main button: the classic marks "Làm mờ cả cảnh" for BLUR on FULL_FRAME; V2 marks its BLUR button the same way, or BLUR on a region for a region item.
+  assert.equal(R.chosenButton({decision: 'BLUR', decision_region_source_pixels: 'FULL_FRAME'}), 'BLUR');
+  assert.equal(R.chosenButton({decision: 'BLUR', decision_region_source_pixels: null, platform_logo_memory: {remembered: true}}), null);
+  assert.equal(R.chosenButton({decision: 'BLUR', suggested_region_source_pixels: {x: 1}, decision_region_source_pixels: {x: 1}}), 'BLUR');
+  assert.equal(R.chosenButton({decision: 'CUT'}), 'CUT'); assert.equal(R.chosenButton({decision: null}), null);
+});
+check('R2 region buttons, studio / platform memory texts and labels equal the classic regionControlsHtml, studioHtml and platformHtml', () => {
+  const q = structuredClone(decideQueues()[0]);
+  const studio = q.items.find(x => R.studioEligible(x)), overlay = q.items.find(x => x.category === 'visual_logo' && x.suggested_region_source_pixels);
+  overlay.candidate_type = 'persistent_overlay'; overlay.start_seconds = studio.start_seconds - 1; overlay.end_seconds = studio.end_seconds + 1;
+  const variants = [
+    x => x,
+    x => ({...x, studio_logo_compared: {records: 3, best_similarity: 0.962, minimum_similarity: 0.95, best_cell_difference: 31, maximum_cell_difference: 20, masked_regions: 1}}),
+    x => ({...x, studio_logo_compared: {records: 2, best_similarity: 0.81}, suggestion_withheld: {window_texts: ['A', 'B<c>', 'C', 'D', 'E', 'F', 'G']}, preview_images: ['p-12.5s.jpg', 'p-61.25s.jpg']}),
+    x => ({...x, decision: 'KEEP', studio_logo_memory: {remembered: true, frames: 40, frames_source: 'source_video', ignored_regions: [{}], mask_updated_at: 'now'}}),
+    x => ({...x, decision: 'KEEP', studio_logo_memory: {remembered: true, frames: 6, frames_source: 'previews', mask_refused: true}}),
+    x => ({...x, decision: 'KEEP', studio_logo_memory: {remembered: true, frames: 6, frames_missing: true}}),
+    x => ({...x, decision: 'KEEP', studio_logo_memory: {remembered: true, frames: 6}}),
+    x => ({...x, decision: 'KEEP', studio_logo_memory: {remembered: true}}),
+    x => ({...x, decision: 'BLUR', platform_logo_memory: {remembered: true, logo_frames: 5, platform: {key: 'demo', name: 'Nền <tảng>'}}}),
+    x => ({...x, decision: 'BLUR', platform_logo_memory: {remembered: true}}),
+    x => ({...x, evidence_regions: [{covered_by: 'other-id'}]}),
+  ];
+  let n = 0;
+  for (const blurOverlay of [false, true]) {
+    overlay.decision = blurOverlay ? 'BLUR' : null; overlay.decision_region_source_pixels = blurOverlay ? overlay.suggested_region_source_pixels : null;
+    for (const make of variants) for (const base of [studio].concat(q.items.filter(x => R.platformEligible(x)))) {
+      const x = make(structuredClone(base)), qq = {...q, items: q.items.map(i => i.id === x.id ? x : i)};
+      cl.load(qq);
+      assert.equal(D.studioCompareLine(x), cl.fn.studioCompareLine(x)); assert.equal(D.studioTextsNote(x), cl.fn.studioTextsNote(x));
+      assert.equal(D.studioFramesNote(x), cl.fn.studioFramesNote(x)); assert.equal(D.studioMaskNote(qq, x), cl.fn.studioMaskNote(x));
+      same(R.studioRemembered(x), cl.fn.studioRemembered(x)); same(R.platformRemembered(x), cl.fn.platformRemembered(x));
+      assert.equal(D.platformNote(x, R.platformRemembered(x)), cl.fn.platformNote(x, cl.fn.platformRemembered(x)));
+      if (R.studioEligible(x)) {
+        const remembered = !!R.studioRemembered(x);
+        assert.equal(`<div class="studio-wrap">${D.studioCompareLine(x)}<button type="button" class="studio${remembered ? ' sel' : ''}" data-act="studio" aria-pressed="${remembered}">${remembered ? R.TEXT.studioDone : esc(R.TEXT.studio)}</button><small>${D.studioNote(x)}</small>${D.studioMaskNote(qq, x)}</div>`, cl.fn.studioHtml(x));
+      }
+      if (R.platformEligible(x)) {
+        const m = R.platformRemembered(x);
+        assert.equal(`<div class="studio-wrap"><button type="button" class="studio platform${m ? ' sel' : ''}" data-act="platform" aria-pressed="${!!m}">${m ? R.TEXT.platformDone : esc(R.TEXT.platform)}</button><small>${D.platformNote(x, m)}</small></div>`, cl.fn.platformHtml(x));
+      }
+      n++;
+    }
+  }
+  // Region buttons: owner, title, note and the chosen button of every sample item.
+  let regions = 0;
+  for (const base of decideQueues()) {
+    cl.load(base);
+    for (const x of base.items.concat(base.advisory_items)) {
+      const owner = R.regionOwner(base, x), r = owner && (owner.suggested_region_source_pixels || owner.decision_region_source_pixels), c = D.regionControls(x, owner, r);
+      const html = c ? `<div class="decision-block"><strong>${c.title}</strong><small>${c.note}</small><div class="region-decide"><button type="button" class="rk${c.decision === 'KEEP' ? ' sel' : ''}" data-act="region" data-owner="${esc(c.owner)}" data-decision="KEEP">${R.TEXT.regionKeep}</button><button type="button" class="rb${c.decision === 'BLUR' ? ' sel' : ''}" data-act="region" data-owner="${esc(c.owner)}" data-decision="BLUR">${R.TEXT.regionBlur}</button></div></div>` : '';
+      const ownerOld = cl.fn.regionOwner(x), rOld = ownerOld && (ownerOld.suggested_region_source_pixels || ownerOld.decision_region_source_pixels);
+      assert.equal(html, cl.fn.regionControlsHtml(x, ownerOld, rOld), x.id);
+      if (c) regions++;
+    }
+  }
+  assert.equal(R.regionNote('KEEP'), 'Đã xác nhận vùng khoanh đỏ là tiêu đề hoặc nội dung hợp lệ của phim'); assert.equal(R.regionNote('BLUR'), 'Đã xác nhận vùng khoanh đỏ là logo thương hiệu');
+  assert.ok(script.includes(`b.dataset.decision==='KEEP'?'${R.regionNote('KEEP')}':'${R.regionNote('BLUR')}'`), 'region notes are the classic ones');
+  assert.ok(n > 30 && regions > 5, `memory cases ${n}, region cards ${regions}`);
+});
+check('R2 write failures, retries and texts: writeFailureMessage, WRITE_RETRY_MS, decisionLabel, advisoryUndoMessage, sceneBlurMessage', () => {
+  same(R.WRITE_RETRY_MS, cl.consts.WRITE_RETRY_MS);
+  assert.ok(script.includes('const transient=!error.status||error.status>=500;'), 'classic retry rule');
+  for (const [status, transient] of [[0, true], [500, true], [503, true], [400, false], [403, false], [409, false]]) assert.equal(R.transientWrite({status}), transient, String(status));
+  const q = decideQueues()[0]; cl.load(q);
+  const map = R.itemMap(q), errors = [{status: 0, message: 'Mất kết nối', attempts: 3}, {status: 400, message: 'Mục này chưa có vùng <x>', attempts: 1}, {status: 500, message: 'WinError 32: E:\\x', attempts: 3}, {status: 503, message: 'bận', attempts: 2}];
+  let n = 0;
+  for (const x of q.items.slice(0, 12).concat(q.advisory_items)) {
+    const bodies = [['clear', {id: x.id}], ['decision', {id: x.id, decision: 'BLUR', full_frame: true, note: null}], ['decision', {id: x.id, decision: 'KEEP', full_frame: false, note: null}],
+      ['decision', {id: x.id, decision: 'BLUR', full_frame: false, note: null, remember_platform_logo: true}], ['decision', {id: 'gone-id', decision: 'CUT', full_frame: false, note: null}]];
+    for (const [kind, body] of bodies) for (const error of errors) { assert.equal(R.writeFailureMessage(kind, body, error, map.get(body.id)), cl.fn.writeFailureMessage(kind, body, error)); n++; }
+    for (const variant of [{}, {decision: 'BLUR', decision_region_source_pixels: 'FULL_FRAME'}, {decision: 'BLUR', decision_region_source_pixels: {x: 1}}, {decision: 'NEEDS_MORE_CONTEXT'}, {decision: 'CUT'},
+      {decision: 'KEEP', studio_logo_memory: {remembered: true, frames: 3, ignored_regions: [1]}}, {decision: 'BLUR', platform_logo_memory: {remembered: true, platform: {key: 'unknown', name: 'X'}}}]) {
+      const y = {...x, ...variant};
+      assert.equal(R.decisionLabel(y), cl.fn.decisionLabel(y)); assert.equal(R.advisoryUndoMessage(y), cl.fn.advisoryUndoMessage(y));
+    }
+    if (R.isScene(x)) assert.equal(R.sceneBlurMessage(x), cl.fn.sceneBlurMessage(x));
+  }
+  assert.ok(n >= 300, 'messages ' + n);
+});
+
+check('R2 deliberate differences are explicit: S5 (V2 confirm dialog, classic words), S6, S8, R2-K; undo titles are the classic ones', () => {
+  // S5: the classic page asks with window.confirm()/alert(); the dialog asks the same strings (compared above) in its own <dialog>.
+  assert.ok(/(^|[^\w.])confirm\(/.test(script) && /(^|[^\w.])alert\(/.test(script), 'the classic page uses confirm()/alert()');
+  for (const file of ['review.js', 'review-cards.js', 'review-core.js', 'review-detail.js', 'review-media.js']) {
+    assert.ok(!/(^|[^\w.])(confirm|alert|prompt)\(/.test(fs.readFileSync(path.join(__dirname, file), 'utf8')), file + ': no native dialog');
+  }
+  const header = fs.readFileSync(path.join(__dirname, 'review-core.js'), 'utf8').slice(0, 1600);
+  for (const tag of ['S1', 'S2', 'S6', 'S7', 'S8', 'R2-K', 'S5']) assert.ok(header.includes(tag), 'review-core.js lists ' + tag);
+  // Undo button titles (classic updateNavState).
+  assert.ok(script.includes('`Lựa chọn cho ứng viên phụ ${catName(item)} ${span(item)} không hoàn tác được (phím Z để xem lý do)`'));
+  assert.ok(script.includes('`Hoàn tác lựa chọn cho ${catName(item)} ${span(item)} (phím Z)`') && script.includes("'Chưa có lựa chọn nào trong phiên này để hoàn tác'"));
+  const x = QUEUES.edge.items[0];
+  assert.equal(R.undoTitle({advisory: false}, x), `Hoàn tác lựa chọn cho ${R.catName(x)} ${R.span(x)} (phím Z)`);
+  assert.equal(R.undoTitle({advisory: true}, x), `Lựa chọn cho ứng viên phụ ${R.catName(x)} ${R.span(x)} không hoàn tác được (phím Z để xem lý do)`);
+  assert.equal(R.undoTitle(undefined, undefined), 'Chưa có lựa chọn nào trong phiên này để hoàn tác');
+  // The autoNext key and its default (on unless "0"), shared with the classic page.
+  assert.ok(script.includes("autoNext=localStorage.getItem('biliflow.review.autoNext')!=='0'"));
+  assert.ok(fs.readFileSync(path.join(__dirname, 'review.js'), 'utf8').includes("localStorage.getItem(AUTO_KEY) !== '0'") && fs.readFileSync(path.join(__dirname, 'review.js'), 'utf8').includes("AUTO_KEY = 'biliflow.review.autoNext'"));
+  process.stdout.write('   S5 confirm in a V2 dialog (same words) · S6 export in flight only · S8 SKIPPED read-only · R2-K BLUR of a region item = its region\n');
+});
+
 /* R1-B1: the image loader on fake boxes (no DOM): each started load gives its slot back exactly once. */
 function loaderHarness() {
   const ctx = {window: {BFReviewCore: R}};

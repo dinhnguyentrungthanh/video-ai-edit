@@ -1,17 +1,15 @@
-/* Review dialog browser check (R0): Chromium (Playwright) on live.html with a fake Control Center API
- * on 127.0.0.1 (synthetic queues from mock-data.js; no real backend, database, video or network).
+/* Review dialog browser check (R0/R1): Chromium (Playwright) on live.html with a fake Control Center API
+ * on 127.0.0.1 (review-fake-server.cjs: synthetic queues from mock-data.js; no real backend, database or network).
  * At 1440, 1024 and 390 px, light and dark: the dialog, its address, Back/Esc/Đóng, 2 / 1 columns and
  * full screen, the old-page link, at most 2 images at once, polling that only patches, the paused
- * dashboard polling, 500 synthetic items, and no POST, no blob:, no console or CSP error.
+ * dashboard polling, 500 synthetic items, and no POST in these viewing flows (R2 writes have their own
+ * check, browser-check-review-write.cjs), no blob:, no console or CSP error.
  * Run: node dashboard_v2/browser-check-review.cjs
  */
 'use strict';
-const fs = require('fs');
-const http = require('http');
 const path = require('path');
-const vm = require('vm');
 const assert = require('assert/strict');
-const {execSync, execFileSync} = require('child_process');
+const {execSync} = require('child_process');
 
 function loadPlaywright() {
   try { return require('playwright'); } catch (_) { /* fall through */ }
@@ -20,96 +18,8 @@ function loadPlaywright() {
 const pw = loadPlaywright();
 if (!pw) { process.stdout.write('SKIP browser-check-review: Playwright is not installed\n'); process.exit(0); }
 
-const ROOT = __dirname;
-const TOKEN = 'browser-token';
-const TYPES = {'.css': 'text/css', '.js': 'text/javascript', '.svg': 'image/svg+xml', '.html': 'text/html'};
-const ASSETS = new Set(['styles.css', 'theme.css', 'review.css', 'contracts.js', 'adapter.js', 'download-demo.js', 'mock-data.js', 'demo-store.js',
-  'review-core.js', 'review-detail.js', 'review-media.js', 'review-cards.js', 'review.js', 'app.js', ...fs.readdirSync(path.join(ROOT, 'assets')).map(f => 'assets/' + f)]);
-const ctx = {window: {BFContracts: require('./contracts.js')}, structuredClone};
-vm.runInNewContext(fs.readFileSync(path.join(ROOT, 'mock-data.js'), 'utf8'), ctx);
-const Mock = ctx.window.BFMock;
-const jobs = Mock.create().jobs.map(({name, duration, palette, render_request, output_path, ...j}) => ({...j, duration_seconds: 446}));
-const queues = new Map(); // job id → queue override (else generated from the job)
-const queueFor = id => {
-  const j = jobs.find(x => x.id === id);
-  if (!j || !j.active_queue_path) return null;
-  if (!queues.has(id)) queues.set(id, Mock.reviewQueue({...j, duration: '01:00'}));
-  return queues.get(id);
-};
-const counters = {status: 0, queue: 0, media: 0, mediaActive: 0, mediaMax: 0, frames: 0, frame403: 0, video: 0, video403: 0, evidence: 0, session: 0};
-/* R1: a synthetic 70 s VP8 clip (ffmpeg test pattern, 1 key frame per second) in the repo's temp/ folder. */
-const CLIP = path.join(ROOT, '..', 'temp', 'review-check', 'clip.webm');
-let VIDEO = fs.existsSync(CLIP);
-if (!VIDEO) {
-  try {
-    fs.mkdirSync(path.dirname(CLIP), {recursive: true});
-    execFileSync('ffmpeg', ['-y', '-loglevel', 'error', '-f', 'lavfi', '-i', 'testsrc=duration=70:size=320x180:rate=10', '-c:v', 'libvpx', '-b:v', '150k', '-g', '10', CLIP], {timeout: 120000});
-    VIDEO = fs.existsSync(CLIP);
-  } catch (_) { VIDEO = false; }
-}
-const server_state = {key: 'mk1', videoStatus: null, evidenceDelay: 300, evidence: new Map()}; // item id → evidence override
-const posts = [], requests = [];
-
-function send(res, code, body, type) {
-  const data = typeof body === 'string' || Buffer.isBuffer(body) ? body : JSON.stringify(body);
-  res.writeHead(code, {'Content-Type': type || 'application/json; charset=utf-8', 'Cache-Control': 'no-store'});
-  res.end(data);
-}
-const server = http.createServer((req, res) => {
-  const url = new URL(req.url, 'http://127.0.0.1'), p = url.pathname;
-  requests.push(req.method + ' ' + req.url);
-  if (req.method !== 'GET') { posts.push(p); req.resume(); return send(res, 405, {error: 'R0 is read-only'}); }
-  if (p === '/dashboard-v2/') return send(res, 200, fs.readFileSync(path.join(ROOT, 'live.html')), 'text/html');
-  if (p === '/demo/') return send(res, 200, fs.readFileSync(path.join(ROOT, 'index.html')), 'text/html');
-  const asset = p.match(/^\/(?:dashboard-v2|demo)\/(.+)$/);
-  if (asset && ASSETS.has(asset[1])) return send(res, 200, fs.readFileSync(path.join(ROOT, asset[1])), TYPES[path.extname(asset[1])]);
-  if (p === '/api/session') return send(res, 200, {token: TOKEN});
-  if (p === '/api/status') { counters.status++; return send(res, 200, {version: 't', jobs, queue: {length: 0, paused: false}, active: null, resources: {disk: {}}}); }
-  if (p === '/api/phone-mode') return send(res, 200, {remote: false, enabled: false});
-  if (p === '/api/ai') return send(res, 200, {ready: false, config: {enabled: false}, message: 'tắt'});
-  const review = p.match(/^\/api\/jobs\/(\d+)\/review\/(queue|export|session|resources)$/);
-  if (review) {
-    const id = Number(review[1]), j = jobs.find(x => x.id === id);
-    if (review[2] === 'queue') { counters.queue++; const q = queueFor(id); return q ? send(res, 200, q) : send(res, 404, {error: 'Video chưa có danh sách duyệt'}); }
-    if (review[2] === 'export') return send(res, 200, {status: j.state, source_cleaned: !!j.source_cleaned, source_archived: !!j.source_archived});
-    if (review[2] === 'session') { counters.session++; return send(res, 200, {token: TOKEN, media_key: server_state.key}); }
-    return send(res, 200, {source_bytes: 1, report_bytes: 1, disk_free_bytes: 1});
-  }
-  const evidence = p.match(/^\/api\/jobs\/(\d+)\/review\/(evidence|frame|video)$/);
-  if (evidence) {
-    const q = queueFor(Number(evidence[1])), item = url.searchParams.get('item'), x = q && q.items.concat(q.advisory_items).find(i => i.id === item);
-    if (evidence[2] === 'evidence') {
-      counters.evidence++;
-      return setTimeout(() => x ? send(res, 200, server_state.evidence.get(item) || Mock.reviewEvidence(x)) : send(res, 404, {error: 'Không có mục này'}), server_state.evidenceDelay);
-    }
-    const key = url.searchParams.get('k');
-    if (evidence[2] === 'frame') {
-      counters.frames++;
-      if (key !== server_state.key) { counters.frame403++; return send(res, 403, {error: 'Khóa media không hợp lệ'}); }
-      counters.mediaActive++; counters.mediaMax = Math.max(counters.mediaMax, counters.mediaActive);
-      return setTimeout(() => { counters.mediaActive--; send(res, 200, fs.readFileSync(path.join(ROOT, 'assets', 'poster-blue.svg')), 'image/svg+xml'); }, 220);
-    }
-    counters.video++;
-    if (key !== server_state.key) { counters.video403++; return send(res, 403, {error: 'Khóa media không hợp lệ'}); }
-    if (server_state.videoStatus) return send(res, server_state.videoStatus, {error: 'video'});
-    if (!VIDEO) return send(res, 404, {error: 'no clip'});
-    const size = fs.statSync(CLIP).size, range = /bytes=(\d*)-(\d*)/.exec(req.headers.range || '');
-    // As review_evidence.stream_file: Accept-Ranges, Content-Range and Cache-Control: no-store.
-    if (!range) { res.writeHead(200, {'Content-Type': 'video/webm', 'Content-Length': size, 'Accept-Ranges': 'bytes', 'Cache-Control': 'no-store'}); return fs.createReadStream(CLIP).pipe(res); }
-    const a = range[1] === '' ? 0 : Number(range[1]), b = range[2] === '' ? size - 1 : Math.min(size - 1, Number(range[2]));
-    if (a >= size) { res.writeHead(416, {'Content-Range': 'bytes */' + size, 'Cache-Control': 'no-store'}); return res.end(); }
-    res.writeHead(206, {'Content-Type': 'video/webm', 'Content-Length': b - a + 1, 'Content-Range': `bytes ${a}-${b}/${size}`, 'Accept-Ranges': 'bytes', 'Cache-Control': 'no-store'});
-    return fs.createReadStream(CLIP, {start: a, end: b}).pipe(res);
-  }
-  const media = p.match(/^\/media\/(.+)$/);
-  if (media) {
-    const file = decodeURIComponent(media[1]).match(/^demo\/(poster-[a-z]+\.svg)$/);
-    counters.media++; counters.mediaActive++; counters.mediaMax = Math.max(counters.mediaMax, counters.mediaActive);
-    return setTimeout(() => { counters.mediaActive--; file ? send(res, 200, fs.readFileSync(path.join(ROOT, 'assets', file[1])), 'image/svg+xml') : send(res, 404, {error: 'x'}); }, 220);
-  }
-  if (/^\/review\/\d+$/.test(p)) return send(res, 200, '<!doctype html><title>review</title><h1>Trang duyệt cũ</h1>', 'text/html');
-  return send(res, 404, {error: 'Không tìm thấy'});
-});
+// The fake Control Center (shared with browser-check-review-write.cjs): synthetic queues, frames, a test clip.
+const {server, Mock, jobs, queues, queueFor, counters, server_state, posts, requests, VIDEO} = require('./review-fake-server.cjs').create();
 
 let passed = 0;
 async function check(name, fn) { await fn(); passed++; process.stdout.write('OK ' + name + '\n'); }

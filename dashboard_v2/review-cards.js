@@ -1,7 +1,8 @@
-/* Review dialog markup (R0/R1, read-only): header, filter chips, scene cards with their media (▶, timeline,
- * strip of ≤8 frames, moment chips, AI boxes, zoom, "Chi tiết kỹ thuật") and the in-place patch used by
- * polling. Every queue string goes through esc(); ids only reach data-* attributes escaped.
- * Card design follows the prototype dialog (article.scene, .scene-content); decisions come in R2.
+/* Review dialog markup: header, filter chips, scene cards with their media (▶, timeline, strip of ≤8 frames,
+ * moment chips, AI boxes, zoom, "Chi tiết kỹ thuật"), R2 decision buttons (Giữ / Làm mờ / Cắt / Cần xem thêm /
+ * Xóa quyết định, region buttons, studio / platform memory, the blur or cut illustration on the image) and the
+ * in-place patch used after a decision and by polling. Every queue string goes through esc(); ids only reach
+ * data-* attributes escaped. Card design follows the prototype dialog (article.scene, .scene-content, .selected).
  */
 (function (root) {
   'use strict';
@@ -71,17 +72,54 @@
     return (view.legend ? '<p class="rv-legend">' + esc(view.legend) + '</p>' : '') +
       (view.mode === 'region' ? '<figure class="rv-crop-box"><canvas class="rv-crop" width="360" height="120" aria-label="Ảnh cắt quanh vùng khoanh đỏ"></canvas><figcaption>Vùng khoanh đỏ, phóng to</figcaption></figure>' : '');
   }
-  function tech(ctx, x, ev) { return '<details class="rv-tech"' + (ctx.techOpen && ctx.techOpen.has(x.id) ? ' open' : '') + '><summary>Chi tiết kỹ thuật</summary><div class="tech-body">' + D.techBody(ctx.queue, x, ev || null) + '</div></details>'; }
+  function tech(ctx, x, ev) { return '<details class="rv-tech"' + (ctx.techOpen && ctx.techOpen.has(x.id) ? ' open' : '') + '><summary>Chi tiết kỹ thuật</summary><div class="tech-body">' + techHtml(ctx, x, ev) + '</div></details>'; }
 
   function pill(x) { const [label, cls] = R.statusOf(x); return '<span class="rv-status ' + cls + '">' + esc(label) + '</span>'; }
 
+  /* R2. Illustration only (not the export): BLUR on a region blurs the red box, BLUR on the whole frame blurs the
+   * image, CUT darkens it with "Đã chọn cắt". */
+  function regionBlurred(ctx, x) {
+    const owner = R.regionOwner(ctx.queue, x);
+    return !!owner && owner.decision === 'BLUR' && owner.decision_region_source_pixels !== 'FULL_FRAME';
+  }
+  const fullBlur = x => x.decision === 'BLUR' && x.decision_region_source_pixels === 'FULL_FRAME';
+  function regionBlock(ctx, x) {
+    const owner = R.regionOwner(ctx.queue, x), r = owner && (owner.suggested_region_source_pixels || owner.decision_region_source_pixels), c = D.regionControls(x, owner, r);
+    if (!c) return '';
+    const b = (d, label) => '<button class="small secondary' + (c.decision === d ? ' selected' : '') + '" type="button" data-review="region" data-owner="' + esc(c.owner) + '" data-decision="' + d + '" aria-pressed="' + (c.decision === d) + '"' + (ctx.readonly ? ' disabled' : '') + '>' + esc(label) + '</button>';
+    return '<div class="rv-region-block"><strong>' + esc(c.title) + '</strong><small>' + esc(c.note) + '</small><div class="scene-actions">' + b('KEEP', R.TEXT.regionKeep) + b('BLUR', R.TEXT.regionBlur) + '</div></div>';
+  }
+  function memoryBlock(ctx, x) {
+    const off = ctx.readonly ? ' disabled' : '';
+    let html = '';
+    if (R.studioEligible(x)) {
+      const done = !!R.studioRemembered(x);
+      html += '<div class="rv-memory">' + D.studioCompareLine(x) + '<button class="small secondary' + (done ? ' selected' : '') + '" type="button" data-review="studio" aria-pressed="' + done + '"' + off + '>' + esc(done ? R.TEXT.studioDone : R.TEXT.studio) + '</button><small>' + D.studioNote(x) + '</small>' + D.studioMaskNote(ctx.queue, x) + '</div>';
+    }
+    if (R.platformEligible(x)) {
+      const m = R.platformRemembered(x), note = D.platformNote(x, m);
+      html += '<div class="rv-memory"><button class="small secondary' + (m ? ' selected' : '') + '" type="button" data-review="platform" aria-pressed="' + !!m + '"' + off + '>' + esc(m ? R.TEXT.platformDone : R.TEXT.platform) + '</button>' + (note ? '<small>' + note + '</small>' : '') + '</div>';
+    }
+    return html;
+  }
+  /* The buttons of one card; ctx.readonly (lock or offline) disables every one of them. */
+  function actions(ctx, x) {
+    const chosen = R.chosenButton(x), off = ctx.readonly ? ' disabled' : '', ad = !R.isSafety(x), region = ad ? regionBlock(ctx, x) : '';
+    const b = (d, label, key) => '<button class="rv-decide' + (chosen === d ? ' selected' : '') + '" type="button" data-review="decide" data-decision="' + d + '" aria-pressed="' + (chosen === d) + '" title="' + esc(label + ' (phím ' + key + ')') + '"' + off + '>' + esc(label) + '</button>';
+    return region + (region ? '<p class="rv-decide-head">' + esc('Quyết định cho toàn cảnh ' + R.catName(x) + ' · ' + R.span(x)) + '</p>' : '') +
+      '<div class="scene-actions" role="group" aria-label="Quyết định">' + b('KEEP', 'Giữ', 1) + b('BLUR', R.blurLabel(x), 2) + b('CUT', 'Cắt', 3) + b('NEEDS_MORE_CONTEXT', 'Cần xem thêm', 4) +
+      '<button class="rv-clear" type="button" data-review="clear"' + (ctx.readonly || !x.decision ? ' disabled' : '') + '>Xóa quyết định</button></div>' +
+      (x.decision ? '<p class="rv-chosen">Đã chọn: <b>' + esc(R.decisionLabel(x)) + '</b></p>' : '') + memoryBlock(ctx, x);
+  }
+  function techHtml(ctx, x, ev) { return D.techBody(ctx.queue, x, ev || null, R.isSafety(x) ? regionBlock(ctx, x) : ''); }
+
   function card(ctx, x) {
     const box = R.regionBox(ctx.queue, x), m = ctx.media(x), src = mainImage(m, x), tip = suggestion(x), zoomed = ctx.zoomId === x.id;
-    return '<article class="scene rv-card' + (x.id === ctx.focusId ? ' on' : '') + (x.decision ? ' decided' : '') + (zoomed ? ' zoom' : '') + '" data-item="' + esc(x.id) + '">' +
+    return '<article class="scene rv-card' + (x.id === ctx.focusId ? ' on' : '') + (x.decision ? ' decided' : '') + (zoomed ? ' zoom' : '') + (x.decision === 'CUT' ? ' d-cut' : '') + (fullBlur(x) ? ' d-blur-full' : '') + '" data-item="' + esc(x.id) + '">' +
       '<div class="rv-art" data-review="select" style="aspect-ratio:' + esc(R.frameAspect(x)) + '">' +
         (src ? '<img alt="" decoding="async" data-src="' + esc(src) + '">' : '') +
-        (box ? '<span class="rv-region" style="left:' + pct(box.left) + ';top:' + pct(box.top) + ';width:' + pct(box.width) + ';height:' + pct(box.height) + '"></span>' : '') +
-        aiBoxes(ctx, x) +
+        (box ? '<span class="rv-region' + (regionBlurred(ctx, x) ? ' blurred' : '') + '" style="left:' + pct(box.left) + ';top:' + pct(box.top) + ';width:' + pct(box.width) + ';height:' + pct(box.height) + '"></span>' : '') +
+        aiBoxes(ctx, x) + '<span class="rv-cut-label">Đã chọn cắt</span>' +
         '<span class="rv-art-note">' + (src ? 'Không tải được ảnh' : 'Không có ảnh xem trước cho mục này.') + '</span>' +
       '</div>' +
       '<div class="rv-bar">' + bar(m, x) + '</div>' +
@@ -90,7 +128,7 @@
       '<p class="rv-note" role="status" hidden></p><div class="rv-zoom-slot">' + (zoomed ? zoomExtra(ctx, x) : '') + '</div>' +
       '<div class="scene-content"><div class="rv-card-top"><h3><button class="rv-name" type="button" data-review="select" aria-label="' + esc('Chọn ' + R.sceneName(x) + ' ' + R.span(x)) + '">' + esc(R.sceneName(x)) + '</button></h3>' + pill(x) + '</div>' +
         '<small class="rv-meta">' + esc(R.span(x) + ' · ' + groupOf(x) + ' · ' + regionLine(ctx.queue, x)) + '</small>' +
-        (tip ? '<p class="rv-hint">' + esc(tip) + '</p>' : '') + tech(ctx, x, m.ev) +
+        (tip ? '<p class="rv-hint">' + esc(tip) + '</p>' : '') + '<div class="rv-actions">' + actions(ctx, x) + '</div>' + tech(ctx, x, m.ev) +
       '</div></article>';
   }
   /* Evidence arrived (or the video became unavailable): media parts of one card, without touching its
@@ -102,7 +140,8 @@
     timeline.innerHTML = R.timelineHtml(x, m.ev || null);
     if (head) timeline.appendChild(head);
     el.querySelector('.rv-strip').innerHTML = strip(m, x);
-    el.querySelector('.tech-body').innerHTML = D.techBody(ctx.queue, x, m.ev || null);
+    const body = techHtml(ctx, x, m.ev);
+    el.querySelector('.tech-body').innerHTML = body; el.querySelector('.tech-body').__html = body;
     el.querySelector('.rv-zoom-slot').innerHTML = el.classList.contains('zoom') ? zoomExtra(ctx, x) : '';
     return mainImage(m, x);
   }
@@ -132,9 +171,10 @@
       '<div class="rv-progress-box">' + progressHtml(ctx) + '</div>' +
       chips(ctx) +
       (scope ? '<div class="notice rv-scope" role="note">' + esc(scope) + '</div>' : '') +
-      '<div class="rv-tools"><button class="small secondary" type="button" disabled>Giữ tất cả</button><button class="small secondary" type="button" disabled>Dùng đề xuất</button>' +
-        '<button class="small secondary" type="button" disabled>↶ Hoàn tác</button><span class="rv-tools-note">Bản thử: chỉ xem. Duyệt bằng nút “Duyệt” hoặc trang duyệt cũ.</span></div>' +
-      (ctx.lock.readonly ? '<div class="notice rv-lock" role="status">Chỉ xem · ' + esc(ctx.lock.reason) + '</div>' : '');
+      '<div class="rv-tools"><button class="small secondary" type="button" disabled title="Có ở bản sau; bây giờ dùng trang duyệt cũ.">Giữ tất cả</button><button class="small secondary" type="button" disabled title="Có ở bản sau; bây giờ dùng trang duyệt cũ.">Dùng đề xuất</button>' +
+        '<button class="small secondary rv-undo" type="button" data-review="undo" disabled title="Chưa có lựa chọn nào trong phiên này để hoàn tác">↶ Hoàn tác</button><span class="rv-save" role="status" aria-live="polite"></span></div>' +
+      (ctx.lock.readonly ? '<div class="notice rv-lock" role="status">Chỉ xem · ' + esc(ctx.lock.reason) + '</div>' : '') +
+      '<div class="notice rv-offline" role="alert"' + (ctx.offline ? '' : ' hidden') + '>' + esc(R.TEXT.offline) + '</div>';
   }
 
   function empty(ctx) {
@@ -142,19 +182,40 @@
       (ctx.filter === 'pending' ? 'Chọn “Tất cả” để xem lại các cảnh đã duyệt.' : 'Thử bộ lọc khác.') + '</div>';
   }
 
-  /* Polling: same list → only statuses, classes and header text change; the card nodes stay. */
+  /* After a decision and on polling (same list): statuses, classes, the illustration, the buttons and the
+   * technical text change in place; the card nodes and the image box (maybe the playing <video>) stay. */
+  function setHtml(el, html) {
+    if (!el || el.__html === html) return false;
+    const active = document.activeElement, key = active && el.contains(active) ? [active.dataset.review, active.dataset.decision || '', active.dataset.owner || ''] : null;
+    el.innerHTML = html; el.__html = html;
+    if (key) {
+      const again = [...el.querySelectorAll('[data-review]')].find(b => b.dataset.review === key[0] && (b.dataset.decision || '') === key[1] && (b.dataset.owner || '') === key[2]);
+      if (again && !again.disabled) again.focus({preventScroll: true});
+    }
+    return true;
+  }
+  function patchCard(el, ctx, x) {
+    let patched = 0;
+    const html = pill(x), status = el.querySelector('.rv-status');
+    if (status && status.outerHTML !== html) { status.outerHTML = html; patched++; }
+    el.classList.toggle('decided', !!x.decision);
+    el.classList.toggle('on', x.id === ctx.focusId);
+    el.classList.toggle('d-cut', x.decision === 'CUT');
+    el.classList.toggle('d-blur-full', fullBlur(x));
+    const region = el.querySelector('.rv-region');
+    if (region) region.classList.toggle('blurred', regionBlurred(ctx, x));
+    if (setHtml(el.querySelector('.rv-actions'), actions(ctx, x))) patched++;
+    setHtml(el.querySelector('.tech-body'), techHtml(ctx, x, ctx.media(x).ev));
+    return patched;
+  }
   function patchCards(container, ctx) {
     let patched = 0;
     for (const el of container.querySelectorAll('article.rv-card')) {
       const x = ctx.map.get(el.dataset.item);
-      if (!x) continue;
-      const html = pill(x), status = el.querySelector('.rv-status');
-      if (status && status.outerHTML !== html) { status.outerHTML = html; patched++; }
-      el.classList.toggle('decided', !!x.decision);
-      el.classList.toggle('on', x.id === ctx.focusId);
+      if (x) patched += patchCard(el, ctx, x) ? 1 : 0;
     }
     return patched;
   }
 
-  root.BFReviewCards = {BATCH, esc, card, refreshMedia, zoomExtra, mainImage, header, progressHtml, chips, empty, patchCards};
+  root.BFReviewCards = {BATCH, esc, card, refreshMedia, zoomExtra, mainImage, header, progressHtml, chips, empty, patchCard, patchCards, actions};
 })(window);

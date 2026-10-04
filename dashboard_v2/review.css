@@ -1,5 +1,5 @@
 @charset "UTF-8";
-/* Review dialog (R0/R1). Colours come from theme.css tokens; cards keep the prototype's .scene look.
+/* Review dialog (R0–R2). Colours come from theme.css tokens; cards keep the prototype's .scene look.
  * PC ≥1100 px: wide dialog, 2 columns. 821–1099 px: almost full screen, 1 column. ≤820 px: full screen. */
 #review-dialog { width: min(1280px, 96vw); max-width: none; height: calc(100dvh - 32px); max-height: none; padding: 0; overflow: hidden; border-radius: var(--radius); }
 #review-dialog[open] { display: flex; flex-direction: column; }
@@ -110,6 +110,32 @@
 [data-theme="dark"] .st-blur { color: #b4d3ff; background: #2b3e5e; border-color: #526f98; }
 [data-theme="dark"] .st-cut { color: #ffafbb; background: #452d3b; border-color: #8b5068; }
 [data-theme="dark"] .st-more { color: #f5ce85; background: #453a2c; border-color: #786347; }
+/* R2: decisions. The chosen button uses the prototype's .scene-actions button.selected (theme.css). */
+.rv-actions { display: grid; gap: 8px; margin-top: 10px; }
+.rv-actions .scene-actions { margin-top: 0; }
+.rv-actions button:disabled { cursor: not-allowed; }
+.rv-chosen, .rv-decide-head { margin: 0; font-size: 12px; color: var(--muted); }
+.rv-decide-head { font-weight: 600; color: var(--text); }
+.rv-region-block, .rv-memory { display: grid; gap: 6px; padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--bg); font-size: 12px; }
+.rv-region-block small, .rv-memory small { color: var(--muted); line-height: 1.45; }
+.rv-region-block .scene-actions button, .rv-memory > button { justify-self: start; text-align: left; }
+.tech-body .rv-region-block { margin: 4px 0; }
+.rv-region.blurred { background: #ff304f12; -webkit-backdrop-filter: blur(9px); backdrop-filter: blur(9px); }
+.rv-card.d-blur-full .rv-art img { filter: blur(14px); }
+.rv-card.d-cut .rv-art img { filter: brightness(.3) grayscale(.4); }
+.rv-cut-label { position: absolute; left: 10px; bottom: 10px; display: none; padding: 3px 8px; border-radius: 6px; font: 600 12px system-ui, sans-serif; color: #fff; background: #aa263e; }
+.rv-card.d-cut .rv-cut-label { display: block; }
+.rv-art.revealed .rv-cut-label { display: none; }
+.rv-save { font-size: 12px; color: var(--muted); min-width: 64px; }
+.rv-keys { margin-right: auto; font-size: 12px; color: var(--muted); }
+.rv-toast { position: absolute; right: 18px; bottom: 74px; z-index: 5; max-width: min(520px, calc(100% - 36px)); padding: 12px 16px; border-radius: 10px; font-size: 13px; line-height: 1.45; cursor: pointer;
+  color: #194faf; background: #edf4ff; border: 1px solid #aac6f1; box-shadow: 0 8px 25px #233c6622; }
+.rv-toast.error { color: #aa263e; background: #fff0f2; border-color: #efc4cd; }
+.rv-confirm { width: min(520px, calc(100vw - 28px)); }
+.rv-confirm .modal-body p { margin: 0; color: var(--text); white-space: pre-line; }
+[data-theme="dark"] .rv-toast { background: #293f60; color: #d0e4ff; border-color: #7296c6; }
+[data-theme="dark"] .rv-toast.error { background: #452d3b; color: #ffafbb; border-color: #8b5068; }
+@media (hover: none) { .rv-keys { display: none; } }
 @media (max-width: 1099px) {
   #review-dialog { width: calc(100vw - 24px); height: calc(100dvh - 24px); }
   .rv-cards { grid-template-columns: minmax(0, 760px); justify-content: center; }
@@ -132,4 +158,7 @@
   .rv-bar button, .rv-mchip { min-height: 44px; }
   .rv-thumb span, .rv-thumb b, .rv-thumb i { font-size: 12px; }
   .rv-card.zoom .rv-art { max-height: none; }
+  .rv-actions button, .rv-tools .rv-undo { min-height: 44px; }
+  .rv-keys { display: none; }
+  .rv-toast { left: 12px; right: 12px; bottom: 76px; max-width: none; }
 }

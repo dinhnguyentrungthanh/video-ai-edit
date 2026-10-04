@@ -4,7 +4,9 @@
  * Rules (docs/DASHBOARD_V2_UPDATE_GUIDE.md, section 8.3):
  *  - POST sends Content-Type: application/json and X-BiliFlow-Token.
  *  - A POST answered 403 refreshes the token (GET /api/session) and is sent again exactly once.
- *  - No other write is ever repeated (408, network error, 409, 400, 5xx surface to the user).
+ *  - No other write is ever repeated (408, network error, 409, 400, 5xx surface to the user), except the
+ *    review decisions of one job (plan 6.7): a serial chain like the classic writeChain, where a network
+ *    error or a status >= 500 is sent again after 300 ms, then 900 ms (the same body: it sets one decision).
  *  - GET is retried only when the user asks; a GET 403 never refreshes the token.
  *  - Polling responses carry a sequence number; an older response never replaces a newer one.
  *  - The token lives only in this closure: never in a URL, localStorage or a log line.
@@ -62,7 +64,9 @@
     const transport = options.transport || fetchTransport(options.fetch || (typeof fetch === 'function' ? fetch.bind(globalThis) : null));
     let token = null, tokenRequest = null;
     let statusSeq = 0, statusApplied = 0;
-    const inflight = new Map();
+    const inflight = new Map(), writers = new Map();
+    const sleep = options.sleep || (ms => new Promise(resolve => setTimeout(resolve, ms)));
+    const WRITE_RETRY_MS = [300, 900];
 
     async function send(method, path, body, headers, raw) {
       try {
@@ -115,7 +119,21 @@
       return promise;
     }
 
-    /* Review dialog (R0, read-only): GETs and URL builders of one job. URLs are strings only (no fetch):
+    /* Review writes (R2): one chain per job that outlives the dialog (closing it never cancels a write).
+     * Never once(): two quick decisions on two cards are two POSTs, in order. 403 → session, one resend
+     * (post()); 400/409 are never resent; no /api/status after a decision. */
+    function writer(id) { if (!writers.has(id)) writers.set(id, {chain: Promise.resolve(), pending: 0}); return writers.get(id); }
+    async function postWrite(path, body, operation) {
+      for (let attempt = 1; ; attempt++) {
+        try { return await post(path, body, operation); } catch (error) {
+          error.attempts = attempt;
+          if ((error.status && error.status < 500) || attempt > WRITE_RETRY_MS.length) throw error;
+          await sleep(WRITE_RETRY_MS[attempt - 1]);
+        }
+      }
+    }
+
+    /* Review dialog: GETs, URL builders and the decision writes of one job. URLs are strings only (no fetch):
      * frames and video load as same-origin <img>/<video> under the V2 CSP (no blob:). */
     function review(jobId) {
       const job = {id: Number(jobId)};
@@ -145,6 +163,23 @@
         frameUrl: (item, t, key) => path('frame', {item: String(item), t: String(t), k: key}),
         videoUrl: key => path('video', {k: key}),
         mediaUrl: p => C.endpoints.media[1].replace('{path}', encodeURIComponent(String(p))),
+        /* operation 'decision' {id, decision, full_frame, note, remember_*?} or 'clear' {id}, body as given.
+         * Resolves {body: server queue, last: no other write of this job waits}; rejects after the retries. */
+        write(operation, body) {
+          if (operation !== 'decision' && operation !== 'clear') return Promise.reject(new AdapterError(400, 'Thao tác ghi không hợp lệ.'));
+          const descriptor = C.request(operation, job, body), w = writer(job.id);
+          w.pending++;
+          const run = async () => {
+            try { const result = await postWrite(descriptor.path, descriptor.body, operation); return {body: result.body, last: w.pending === 1}; }
+            finally { w.pending--; }
+          };
+          const done = w.chain.then(run, run);
+          w.chain = done.then(() => {}, () => {});
+          return done;
+        },
+        pendingWrites: () => writer(job.id).pending,
+        /* Resolves once every write already queued for this job has settled (reopening waits for it). */
+        idle: () => writer(job.id).chain,
       };
     }
 

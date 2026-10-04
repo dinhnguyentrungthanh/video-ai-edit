@@ -6,7 +6,11 @@
  *   S6 "export active" is contracts.inFlight (render_request, RENDERING/VERIFYING, QUEUED export),
  *      not every QUEUED job;
  *   S7 the queue identity reads source.sha256 (the classic page reads source.input_sha256, always empty);
- *   S8 a SKIPPED video opens read-only.
+ *   S8 a SKIPPED video opens read-only;
+ *   R2-K the BLUR button (and key 2) of an item with a red region blurs that region (P7, 6.3); the classic
+ *      main button and key 2 always blur the whole frame (the classic page blurs a region with its region buttons).
+ * R2 decisions follow the classic decide(), undo() and writeFailureMessage(): same confirms (S5 shows them in
+ * a V2 dialog), same errors and, field for field, the same POST bodies.
  */
 (function (root, factory) {
   const contracts = typeof module === 'object' && module.exports ? require('./contracts.js') : root.BFContracts;
@@ -34,8 +38,19 @@
     skippedLock:'Video đã được đánh dấu bỏ qua (không xuất). Bấm “Mở lại để xuất” ở Dashboard để sửa.',
     bulkUnsupported:'Bộ lọc này không hỗ trợ thao tác hàng loạt.',
     advisory:'Ứng viên kiểm tra thêm — chưa thuộc quyết định chính',
-    rescanning:'Video đang được quét lại. Đóng hộp và mở lại khi quét xong.'
+    rescanning:'Video đang được quét lại. Đóng hộp và mở lại khi quét xong.',
+    missingItem:'Không tìm thấy mục này trong hàng đợi hiện tại.',
+    needsRegion:'Mục này chưa có vùng được định vị; hãy chọn Làm mờ cả cảnh.',
+    fullFrame:'Bạn có xác nhận làm mờ toàn bộ khung hình trong đoạn này?',
+    undoMissing:'Mục cần hoàn tác không còn trong hàng đợi hiện tại.',
+    studio:'Đây là logo hãng phim — giữ & nhớ',studioDone:'✓ Đã nhớ là logo hãng phim (giữ nguyên)',
+    platform:'Đây là logo nền tảng — làm mờ & nhớ',platformDone:'✓ Đã nhớ là logo nền tảng (làm mờ)',
+    regionKeep:'Đây là tiêu đề/nội dung phim — giữ lại',regionBlur:'Đây là logo thương hiệu — làm mờ',
+    offline:'Mất kết nối với Control Center. Các nút quyết định tạm khóa đến khi kết nối lại; lựa chọn đã lưu vẫn được giữ.'
   };
+  /* Notes of the region buttons ("Đây là tiêu đề/nội dung phim — giữ lại" / "Đây là logo thương hiệu — làm mờ"). */
+  const REGION_NOTES = {KEEP:'Đã xác nhận vùng khoanh đỏ là tiêu đề hoặc nội dung hợp lệ của phim',BLUR:'Đã xác nhận vùng khoanh đỏ là logo thương hiệu'};
+  const WRITE_RETRY_MS = [300, 900];
 
   function isSafety(x) { return !!x && Object.prototype.hasOwnProperty.call(SAFETY, x.category); }
   function momentsOf(x) {
@@ -282,9 +297,95 @@
     return {404:'source_missing',409:'source_changed',410:'source_cleaned',415:'unsupported_container'}[status] || (status >= 200 && status < 300 && (mediaErrorCode === 3 || mediaErrorCode === 4) ? 'decode_error' : null);
   }
 
+
+  /* R2: decisions, as the classic decide() / clearDecision() / undo() in pure steps. The dialog asks every
+   * message of decisionConfirms() in order (any "Hủy" stops), then decisionBody() gives the POST body or the
+   * classic error, applyDecision() changes the item locally and the write is queued. */
+  function momentTotal(ms) { return ms.reduce((sum, m) => sum + (m.end - m.start), 0); }
+  function sceneBlurMessage(x) { const ms = momentsOf(x); return `Làm mờ toàn bộ khung hình trong ${ms.length} khoảnh khắc (tổng ${mmss(momentTotal(ms))})? Khoảng trống giữa các khoảnh khắc giữ nguyên.`; }
+  function aiConfirm(item, decision) {
+    const ai = item.ai_visual_audit, aiDecision = ai?.suggested_decision, confidence = Number(ai?.confidence || 0);
+    if (!(aiDecision && confidence >= .9 && decision !== aiDecision && FINAL.includes(aiDecision) && FINAL.includes(decision))) return '';
+    return `Visual AI tin cậy ${Math.round(confidence * 100)}% đề xuất “${actionName(item, aiDecision)}” vì vùng đỏ được nhận là ${ai.classification || 'nội dung phim'}. Bạn vẫn muốn chọn “${actionName(item, decision)}” cho đúng vùng đỏ này?`;
+  }
+  function decisionConfirms(item, decision, fullFrame) {
+    const out = [], ai = aiConfirm(item, decision);
+    if (ai) out.push(ai);
+    if (decision === 'BLUR' && fullFrame) out.push(isScene(item) ? sceneBlurMessage(item) : TEXT.fullFrame);
+    return out;
+  }
+  /* options: {fullFrame (the whole-frame confirm was accepted), note, studio, platform}. */
+  function decisionBody(item, decision, options) {
+    const o = options || {}, id = item.id, note = o.note == null ? null : o.note, full_frame = decision === 'BLUR' && !!o.fullFrame;
+    const platform = !!o.platform && decision === 'BLUR' && !full_frame && platformEligible(item);
+    if (decision === 'BLUR' && !full_frame && !platform && !item.suggested_region_source_pixels) return {error: TEXT.needsRegion};
+    const studio = !!o.studio && decision === 'KEEP' && studioEligible(item);
+    const body = platform ? {id, decision, full_frame, note, remember_platform_logo: true} : studio ? {id, decision, full_frame, note, remember_studio_logo: true} : {id, decision, full_frame, note};
+    return {body, region: decision === 'BLUR' ? (full_frame ? 'FULL_FRAME' : item.suggested_region_source_pixels) : null, note, studio, platform};
+  }
+  function regionNote(decision) { return REGION_NOTES[decision] || null; }
+  /* Keys 1–4 on the selected card: the card's own buttons (R2-K: key 2 is the card's BLUR button). */
+  function keyDecision(n, x) { const d = {1: 'KEEP', 2: 'BLUR', 3: 'CUT', 4: 'NEEDS_MORE_CONTEXT'}[n]; return d ? {decision: d, fullFrame: d === 'BLUR' && needsFullFrame(x)} : null; }
+  function blurLabel(x) { return needsFullFrame(x) ? 'Làm mờ cả cảnh' : 'Làm mờ'; }
+  /* The main button shown as chosen (.selected): BLUR only when it matches the card's BLUR button. */
+  function chosenButton(x) { if (x.decision !== 'BLUR') return DECISIONS.includes(x.decision) ? x.decision : null; return needsFullFrame(x) === (x.decision_region_source_pixels === 'FULL_FRAME') ? 'BLUR' : null; }
+  function studioRemembered(x) { return x.decision === 'KEEP' && x.studio_logo_memory?.remembered ? x.studio_logo_memory : null; }
+  function platformRemembered(x) { return x.decision === 'BLUR' && x.platform_logo_memory?.remembered ? x.platform_logo_memory : null; }
+  function isAdvisoryItem(queue, x) { return !!x && (!!x.advisory || (queue?.advisory_items || []).includes(x)); }
+  function syncCounts(queue) { queue.counts = countsFrom(queue.items); queue.status = statusFrom(queue.items); }
+  function applyDecision(queue, item, decision, region, note, studio, platform) {
+    item.decision = decision; item.decision_region_source_pixels = region; item.decision_note = note; item.decided_at = new Date().toISOString();
+    if (studio) item.studio_logo_memory = {remembered: true}; else delete item.studio_logo_memory;
+    if (platform) item.platform_logo_memory = {remembered: true}; else delete item.platform_logo_memory;
+    syncCounts(queue);
+  }
+  function applyClear(queue, item) {
+    item.decision = null; item.decision_region_source_pixels = null; item.decision_note = null; item.decided_at = null;
+    delete item.studio_logo_memory; delete item.platform_logo_memory;
+    syncCounts(queue);
+  }
+  /* Undo (≤100 steps, P10): the state before a change; an advisory item decided for the first time cannot go back. */
+  function undoEntry(item, advisory) {
+    return {id: item.id, advisory: !!advisory, prev: {decision: item.decision || null, region: item.decision_region_source_pixels ?? null, note: item.decision_note ?? null,
+      studio: !!item.studio_logo_memory?.remembered, platform: !!item.platform_logo_memory?.remembered}};
+  }
+  function undoPlan(entry) {
+    const prev = entry.prev;
+    if (!prev.decision) return {kind: 'clear', body: {id: entry.id}};
+    const body = {id: entry.id, decision: prev.decision, full_frame: prev.region === 'FULL_FRAME', note: prev.note};
+    if (prev.studio) body.remember_studio_logo = true;
+    if (prev.platform) body.remember_platform_logo = true;
+    return {kind: 'decision', body};
+  }
+  /* Title of "↶ Hoàn tác" (classic updateNavState). */
+  function undoTitle(entry, x) {
+    if (!x) return 'Chưa có lựa chọn nào trong phiên này để hoàn tác';
+    return entry.advisory ? `Lựa chọn cho ứng viên phụ ${catName(x)} ${span(x)} không hoàn tác được (phím Z để xem lý do)` : `Hoàn tác lựa chọn cho ${catName(x)} ${span(x)} (phím Z)`;
+  }
+  function decisionLabel(x) {
+    if (x.decision === 'BLUR' && x.platform_logo_memory?.remembered) { const m = x.platform_logo_memory, name = m.platform && m.platform.key !== 'unknown' && m.platform.name ? ` ${m.platform.name}` : ''; return `Làm mờ logo · đã nhớ là logo nền tảng${name}`; }
+    if (x.decision === 'KEEP' && x.studio_logo_memory?.remembered) { const m = x.studio_logo_memory; return m.frames != null ? `Giữ nguyên · đã nhớ là logo hãng phim (${Number(m.frames)} khung${m.ignored_regions?.length ? ', bỏ qua watermark đã làm mờ' : ''})` : 'Giữ nguyên · đã nhớ là logo hãng phim'; }
+    if (x.decision === 'BLUR' && x.decision_region_source_pixels === 'FULL_FRAME') return isScene(x) ? `Làm mờ toàn cảnh trong ${momentsOf(x).length} khoảnh khắc` : 'Làm mờ toàn cảnh';
+    if (x.decision === 'BLUR') return isLogoItem(x) ? 'Làm mờ logo' : 'Làm mờ vùng chữ/logo';
+    if (x.decision === 'NEEDS_MORE_CONTEXT') return 'Cần xem thêm';
+    return actionName(x, x.decision);
+  }
+  function advisoryUndoMessage(x) { return `Không hoàn tác được lựa chọn cho ứng viên phụ ${catName(x)} ${span(x)}: khi bạn chọn, mục này đã được chuyển vào danh sách chính. Bỏ chọn lúc này sẽ biến nó thành mục bắt buộc chưa duyệt và chặn xuất video, nên lựa chọn “${decisionLabel(x)}” được giữ nguyên. Nếu muốn đổi, hãy chọn lại Giữ nguyên, Làm mờ, Cắt hoặc Cần xem thêm cho mục này.`; }
+  /* The last write failed (after its retries): the classic message; x = the item of body.id, if still known. */
+  function writeFailureMessage(kind, body, error, x) {
+    const where = x ? `${catName(x)} ${span(x)}` : String(body?.id || '');
+    const what = kind === 'clear' ? 'bỏ chọn' : `“${body?.remember_platform_logo ? 'Đây là logo nền tảng — làm mờ & nhớ' : body?.decision === 'BLUR' && body?.full_frame ? 'Làm mờ cả cảnh' : x ? actionName(x, body?.decision) : String(body?.decision || '')}”`;
+    const raw = String(error?.message || ''), detail = error?.status >= 500 && /WinError|Errno|denied|[\\/]/i.test(raw) ? 'máy chủ chưa ghi được file hàng đợi (file đang bị đọc hoặc khóa)' : raw;
+    return `Chưa lưu được lựa chọn ${what} cho mục ${where}${error?.attempts > 1 ? ` (đã thử ${error.attempts} lần)` : ''}. Mục này sẽ trở về trạng thái đã lưu trên máy và được mở lại để bạn chọn lại. Chi tiết: ${detail}`;
+  }
+  /* A write error worth a retry (network error or status ≥ 500); 400/403/409 are not (403 is handled by the adapter). */
+  function transientWrite(error) { return !error || !error.status || error.status >= 500; }
+
   return {SAFETY,KIND_NAMES,STATUS,FILTERS,MORE_FILTERS,FILTER_IDS,TEXT,isSafety,momentsOf,isScene,studioEligible,platformEligible,sceneLogo,hasPlayer,
     isLogoItem,isAdItem,needsFullFrame,catName,actionName,sceneName,statusOf,mmss,span,visible,byTime,listItems,itemMap,countsFrom,statusFrom,progress,progressText,
     nextNote,initialFilter,pickFocus,nextUndecided,step,queueIdentity,queueVersion,bulkFilters,bulkCount,lockState,canExport,regionOwner,regionBox,
     frameAspect,scopeWarning,filterLabel,thumbTime,momentIndex,nextMomentAfter,pickStrip,pickSceneStrip,pickFor,stripFrames,peakFirst,tlPos,thin,timelineHtml,
-    seekTarget,VIDEO_REASONS,videoReason,probeReason};
+    seekTarget,VIDEO_REASONS,videoReason,probeReason,REGION_NOTES,WRITE_RETRY_MS,momentTotal,sceneBlurMessage,aiConfirm,decisionConfirms,decisionBody,regionNote,
+    keyDecision,blurLabel,chosenButton,studioRemembered,platformRemembered,isAdvisoryItem,syncCounts,applyDecision,applyClear,undoEntry,undoPlan,undoTitle,decisionLabel,
+    advisoryUndoMessage,writeFailureMessage,transientWrite};
 });

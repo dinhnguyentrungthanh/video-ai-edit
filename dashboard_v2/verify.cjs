@@ -174,4 +174,26 @@ check('Demo store keeps the in-memory contract (409 once, no network)',()=>{
   const before=S.snapshot().requests.length;S.scenario('conflict');
   return S.dispatch('scheduler',null,{paused:true}).then(()=>assert.fail('409 expected'),e=>{assert.equal(e.status,409);assert.equal(S.snapshot().requests.length,before);});
 });
+check('Demo store review writes (R2): decision / clear change the synthetic queue in memory, one at a time, recorded, never sent',async()=>{
+  const ctx={window:{BFContracts:C},structuredClone};
+  vm.runInNewContext(fs.readFileSync(path.join(__dirname,'mock-data.js'),'utf8'),ctx);
+  const S=require('./demo-store.js').create(C,ctx.window.BFMock),r=S.review(101),q0=await r.queue(),before=S.snapshot().requests.length;
+  const target=q0.items.find(x=>!x.decision&&x.suggested_region_source_pixels),plain=q0.items.find(x=>!x.decision&&!x.suggested_region_source_pixels);
+  const p1=r.write('decision',{id:target.id,decision:'BLUR',full_frame:false,note:null}),p2=r.write('decision',{id:plain.id,decision:'CUT',full_frame:false,note:null});
+  assert.equal(r.pendingWrites(),2);
+  const [a,b]=await Promise.all([p1,p2]);
+  assert.equal(a.last,false);assert.equal(b.last,true);
+  const x=b.body.items.find(i=>i.id===target.id);
+  assert.equal(x.decision,'BLUR');assert.equal(JSON.stringify(x.decision_region_source_pixels),JSON.stringify(target.suggested_region_source_pixels));
+  assert.equal(b.body.counts.pending,q0.counts.pending-2);
+  assert.deepEqual([...S.snapshot().requests.slice(before)].map(d=>d.method+' '+d.path),['POST /api/jobs/101/review/decision','POST /api/jobs/101/review/decision']);
+  await assert.rejects(()=>r.write('decision',{id:plain.id,decision:'BLUR',full_frame:false,note:null}),e=>e.status===400,'BLUR needs a region or full_frame');
+  const cleared=await r.write('clear',{id:plain.id});
+  assert.equal(cleared.body.items.find(i=>i.id===plain.id).decision,null);
+  await assert.rejects(()=>r.write('bulkKeep',{filter:'all'}),e=>e.status===400);
+  S.scenario('offline');
+  await assert.rejects(()=>r.write('clear',{id:target.id}),e=>e.status===0);
+  assert.equal(r.pendingWrites(),0);
+  assert.ok(!/fetch\(|XMLHttpRequest/.test(fs.readFileSync(path.join(__dirname,'demo-store.js'),'utf8')));
+});
 Promise.all(pending).then(()=>process.stdout.write(JSON.stringify({passed:checks,failed:0})+'\n'),error=>{console.error(error);process.exitCode=1;});
