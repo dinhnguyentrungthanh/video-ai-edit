@@ -12,7 +12,7 @@ This is the short, authoritative starting point for a new Codex account or chat.
   - `main` and the running Control Center do not have V2.
 - Active branch: `main`. On 2026-10-03 the user asked to merge `improve/scan-performance-metrics` (everything since `7f5a9fb`: the scan-performance work, detector/review fixes and dashboard batches 1-4) into `main` and run it there. `main` was fast-forwarded to the branch tip (the commit that carries this note) and the working tree, which the Control Center runs from, was switched to `main` with no file change. The branch is kept.
 - Pushed at the user's request on 2026-10-03: `origin/main` (GitHub `dinhnguyentrungthanh/video-ai-edit`) moved `9155cd7..23aa1e4`. Local `main` has moved on since (the merge below); push again only when the user asks.
-- Merged at the user's request on 2026-10-03 at about 21:40, with no job running: branch `fix/export-identity-http` (worktree `temp/wt-export-fix`) was fast-forwarded into `main`. It brings export identity from the render, reuse of only a proven export, HTTP request limits and the short-export rate cap (see Current work). Not pushed: `origin/main` is still 23aa1e4. The running Control Center keeps the code it started with until it is restarted (ask the user first).
+- Merged at the user's request on 2026-10-03 at about 21:40, with no job running: branch `fix/export-identity-http` (worktree `temp/wt-export-fix`) was fast-forwarded into `main`. It brings export identity from the render, reuse of only a proven export, HTTP request limits and the short-export rate cap (see Current work). `origin/main` was pushed later and is at f6996bb (checked 2026-10-04). The running Control Center keeps the code it started with until it is restarted (ask the user first).
 - Latest code milestones: `fix/export-identity-http` (2a37496 export identity, proven-export reuse and HTTP limits; 732b02b short-export rate cap), 1197 tests OK. Before it: dashboard batch 3 `d90c8f3` and batch 4 `6a8a59c` (docs `bb29219`); 1130 tests OK. Earlier on the branch: `2c72280` reduces CPU RGB-distance overhead with bit-exact output; 278/278 tests. Six source excerpts show 20.50% lower CPU routing time, not whole-video scan time. Actual cold-routing/VLM-input checks also pass. Prior `6231f58` fixes lossy visual-logo cache; `bf5bc35` adds opt-in OCR controls with serial default. Prefetch stays OFF. See `docs/SCAN_PERFORMANCE.md`.
 - Runtime source version: `src/biliflow/__init__.py` reports `0.7.24`
 - Packaging metadata in `pyproject.toml` still reports `0.7.19`; use the runtime source version for dashboard diagnosis and align the package metadata during a later release housekeeping change.
@@ -70,6 +70,17 @@ Always confirm this section with `git status` and `git log` because it becomes s
     - send `render_request` from the backend;
     - add a phone/laptop mode for the home Wi-Fi, modelled on Golden Label's `--phone`.
   - All of it is in `docs/DASHBOARD_V2_CLOUD_PLAN.md` sections 11 and 12. Not merged; Control Center not restarted.
+- 2026-10-04, later: batch 2 pulled (up to 949f935).
+  - Local check:
+    - full suite: 1236 tests OK after fixing two test bugs that only show on Windows;
+    - V2 gates pass;
+    - cache fingerprints unchanged.
+  - A security review found phone mode safe on the home Wi-Fi and listed S1–S6 to harden.
+  - The user decided:
+    - Visual AI Audit is PC-only;
+    - batch 3 on the cloud fixes S1–S6;
+    - then the user tests everything, and only after that is the branch merged into `main`.
+  - Not merged. Plan: `docs/DASHBOARD_V2_CLOUD_PLAN.md` sections 11–13.
 
 ## Current work — 2026-10-03 export identity, proven-export reuse, HTTP request limits, short-export rate cap (branch `fix/export-identity-http`, merged into `main`; Control Center restart pending)
 

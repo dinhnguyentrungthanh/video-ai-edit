@@ -26,6 +26,10 @@
   - `render_request` sent by the backend;
   - a phone/laptop mode on the home Wi-Fi.
 - Not merged; Control Center not restarted.
+- 2026-10-04, later: batch 2 pulled (949f935).
+  - Local check: 1236 tests OK after two Windows-only test fixes.
+  - Security review: phone mode is safe on the home Wi-Fi; S1–S6 should be hardened.
+- Next: batch 3 on the cloud (`docs/DASHBOARD_V2_CLOUD_PLAN.md` §13). The user tests everything before any merge into `main`.
 
 ## Export identity, proven-export reuse, HTTP request limits, short-export rate cap (2026-10-03) — branch `fix/export-identity-http`, merged into `main`; needs a Control Center restart
 
