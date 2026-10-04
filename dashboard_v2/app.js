@@ -206,17 +206,30 @@ function render(){
 }
 function refreshList(){const body=$('#list-body');if(!body)return;const saved=foldState(body);body.innerHTML=listBody();restoreFolds(body,saved);lastMainHtml=null;}
 function changeFilter(f,fromSummary){filter=f;page=1;if(fromSummary)query='';if(!['overview','videos'].includes(view)){view='videos';location.hash='videos';}render();$('#video-list')?.scrollIntoView({block:'start',behavior:'instant'});}
+/* U2: the scrolling element is aside.drawer (.drawer{overflow:auto}), not .drawer-body. A snapshot whose drawer
+   markup is unchanged leaves the drawer untouched (nodes, scroll, open sections, focus, selection, poster); a changed
+   one is rebuilt and gets its scroll, open sections and focus back. */
+let lastDrawerHtml=null;
 function refreshDrawer(){
-  const root=$('#drawer-root'),body=root.querySelector('.drawer-body');if(!currentJob||!body)return;
-  const open=[...root.querySelectorAll('details')].map(d=>d.open),scroll=body.scrollTop,focus=document.activeElement;
+  const root=$('#drawer-root'),aside=root.querySelector('.drawer');if(!currentJob||!aside)return;
+  const j=getJob(currentJob);if(!j){closeDrawer();return;}
+  const html=drawerHtml(j);if(html===lastDrawerHtml)return;
+  const body=root.querySelector('.drawer-body'),open=[...root.querySelectorAll('details')].map(d=>d.open),scroll=aside.scrollTop,bodyScroll=body?body.scrollTop:0,focus=document.activeElement;
   const key=focus&&root.contains(focus)?[focus.dataset.action,focus.dataset.op,focus.tagName,[...root.querySelectorAll(focus.tagName)].indexOf(focus)]:null;
   openDrawer(currentJob,true);
   root.querySelectorAll('details').forEach((d,i)=>{if(i<open.length)d.open=open[i];});
-  const next=root.querySelector('.drawer-body');if(next)next.scrollTop=scroll;
+  const next=root.querySelector('.drawer'),nextBody=root.querySelector('.drawer-body');
+  if(nextBody)nextBody.scrollTop=bodyScroll;
+  if(next)next.scrollTop=scroll;
   if(key){const same=[...root.querySelectorAll(key[2])],target=key[0]?same.find(el=>el.dataset.action===key[0]&&el.dataset.op===key[1]&&!el.disabled):same[key[3]];if(target)target.focus({preventScroll:true});}
 }
 function openDrawer(id,refresh){
   const j=getJob(id);if(!j){if(refresh)closeDrawer();return;}currentJob=j.id;if(!refresh)drawerFocus=document.activeElement;
+  const html=drawerHtml(j);
+  $('#drawer-root').innerHTML=html;lastDrawerHtml=html;
+  document.body.style.overflow='hidden';if(!refresh)$('.drawer [data-action="close-drawer"]').focus();
+}
+function drawerHtml(j){
   const review=j.review_summary,structure=j.structure_audit,ai=j.ai_audit,sourceInfo=C.sourceLine(j);
   const exporting=C.tab(j)==='export',progress=exporting?renderPercent(j):percent(j.progress);
   const running=['scanning','export'].includes(C.tab(j))&&j.state!=='QUEUED';
@@ -227,7 +240,7 @@ function openDrawer(id,refresh){
     ['Kiểm tra bằng AI',ai?.state||'Chưa chạy',ai?.summary||'Kiểm tra tùy chọn'],
     j.state==='READY_TO_EXPORT'&&j.source_present===false?['Xuất video','Thiếu video gốc',C.SOURCE_MISSING_MESSAGE]:['Xuất video',exporting?(j.render_progress?.state==='VERIFYING'?'Đang kiểm tra':C.labels[j.state]):j.state==='COMPLETED'?'Đã hoàn tất':'Chưa xuất',j.queue_kind==='export'&&j.queue_position?'Lượt #'+j.queue_position:review?reviewRemaining(j)+' cảnh chưa quyết định cuối':'Cần quét xong']
   ];
-  $('#drawer-root').innerHTML=
+  return(
     '<button class="drawer-backdrop" data-action="close-drawer" aria-label="Đóng chi tiết video" tabindex="-1"></button>'+
     '<aside class="drawer" role="dialog" aria-modal="true" aria-labelledby="drawer-title">'+
       '<div class="drawer-head"><div><small>VIDEO #'+j.id+' · PHIÊN '+j.active_revision+'</small><h2 id="drawer-title">'+esc(j.name)+'</h2></div><button class="icon-button" data-action="close-drawer" aria-label="Đóng chi tiết">×</button></div>'+
@@ -258,10 +271,9 @@ function openDrawer(id,refresh){
           '<div class="key-value"><span>Hàng đợi</span><span>'+esc(j.queue_position?'Lượt #'+j.queue_position+' · '+(j.queue_kind==='export'?'Xuất video':'Quét cảnh'):'Không chờ worker')+'</span></div>'+
         '</details>'+
       '</div>'+
-    '</aside>';
-  document.body.style.overflow='hidden';if(!refresh)$('.drawer [data-action="close-drawer"]').focus();
+    '</aside>');
 }
-function closeDrawer(){ $('#drawer-root').innerHTML='';currentJob=null;document.body.style.overflow='';if(drawerFocus?.isConnected)drawerFocus.focus();}
+function closeDrawer(){ $('#drawer-root').innerHTML='';lastDrawerHtml=null;currentJob=null;document.body.style.overflow='';if(drawerFocus?.isConnected)drawerFocus.focus();}
 function showModal(title,body,commit,label){
   scanFormJob=null;exportFormJob=null;
   modalFocus=document.activeElement;modalCommit=commit;modalBusy=false;
