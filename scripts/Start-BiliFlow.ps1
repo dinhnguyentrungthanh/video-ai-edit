@@ -76,7 +76,9 @@ function Enable-PhoneMode([string]$Url) {
     Write-Host '  BILIFLOW TREN DIEN THOAI / LAPTOP (cung Wi-Fi nha)'
     Write-Host "  Mo tren dien thoai:  $($Result.url)"
     Write-Host "  Nhap ma truy cap:    $($Result.code)"
-    Write-Host '  Lan dau Windows hoi cho Python qua tuong lua: chon Private networks (khong chon Public).'
+    Write-Host '  Tuong lua: KHONG bam Cancel (Cancel tao rule Block cho Python, chan ca cong 8767).'
+    Write-Host '  Nen tao rule rieng cho Python + cong 8767 (xem docs\DASHBOARD_V2_PHONE.md muc 2);'
+    Write-Host '  hoac khi Windows hoi: chon Private networks, khong chon Public, roi bam Allow.'
     Write-Host '  Chi dung trong Wi-Fi nha: ket noi HTTP, khong ma hoa.'
     Write-Host '  Tu tat sau 8 gio, hoac khi dia chi Wi-Fi cua PC doi.'
     Write-Host '  Tat: nut "Tat che do dien thoai" trong Dashboard V2 > Cai dat tren PC, hoac Stop-BiliFlow.cmd (tat ca hai).'

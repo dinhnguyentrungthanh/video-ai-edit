@@ -403,3 +403,10 @@ Hướng dẫn cho người dùng: `docs/DASHBOARD_V2_PHONE.md`. Code: `src/bili
 - **Câu 14:** khi tạo `PhoneAccess`, `restore_history(store.events(None, limit=500))` đọc lại tối đa 20 event `PHONE_*` gần nhất (đánh dấu `restored: true`) và lý do tắt gần nhất: từ event `PHONE_MODE_DISABLED` mới nhất; nếu event mới nhất là `PHONE_MODE_ENABLED` thì lý do là `stopped`.
 - **Câu 15:** POST `/api/phone-mode` `{extend: true}` (PC, token): giờ tắt = bây giờ + 8 giờ, giữ mã, event `PHONE_MODE_EXTENDED`; đang tắt → 400. Qua listener điện thoại → 403 `pc_only`.
 - **H6:** `PhoneAccess.try_code(text, ip=…)` trả `(outcome, set_cookie_header | None)` trong một lần giữ khóa; `set_cookie_header()` đã bỏ.
+
+### 8.7. Đợt 4 (mục 14 của kế hoạch)
+
+- **L1:** `_PhoneServer` giới hạn `MAX_CONNECTIONS_PER_IP` = 6 kết nối mỗi IP (trong tổng 32); vượt thì đóng ngay kết nối mới của IP đó. `PhoneHandler.setup()` đặt một `threading.Timer(GATE_TIMEOUT_SECONDS)` tính từ lúc nhận kết nối, gọi `request.shutdown(SHUT_RDWR)`; hủy trong `opened()` (có cookie) và `finish()`. Kết nối bị từ chối vì giới hạn ghi event `PHONE_CONNECTIONS_LIMITED` (`ip`, `limit`: `per_ip`/`total`), tối đa 1 event mỗi `LIMITED_EVENT_INTERVAL_SECONDS` = 60 s.
+- **L2:** `PHONE_LOGIN` chỉ ghi một lần cho mỗi IP trong một lần bật.
+- **L3:** `_PhoneServer` giữ các socket đã nhận; `disable()` đóng listener rồi `close_connections()` (shutdown mọi socket đang mở, kể cả video đang phát). Listener `127.0.0.1:8765` không bị đụng.
+- **L4:** hướng dẫn Firewall: không bấm Cancel; rule `-Program <python.exe trong runtime\python\cpython-3.11.*> -Protocol TCP -LocalPort 8767 -Profile Private -RemoteAddress LocalSubnet`; dọn rule Block/Public cũ. Dòng in của launcher (ASCII) có "KHONG bam Cancel".

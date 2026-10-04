@@ -47,7 +47,9 @@ COOKIE_NAME = "biliflow_phone"
 AUTO_OFF_SECONDS = 8 * 3600        # H3: turned off 8 hours after it was turned on
 ADDRESS_CHECK_SECONDS = 60          # H3: turned off when the PC's Wi-Fi address changes
 MAX_CONNECTIONS = 32                # H1: further connections are closed at once
-GATE_TIMEOUT_SECONDS = 5.0          # H1: a connection without the cookie is held at most this long
+MAX_CONNECTIONS_PER_IP = 6          # L1: one device cannot take every connection
+LIMITED_EVENT_INTERVAL_SECONDS = 60.0  # L1: at most one PHONE_CONNECTIONS_LIMITED event per interval
+GATE_TIMEOUT_SECONDS = 5.0          # H1/L1: a connection without the cookie is closed this long after it was accepted
 ERROR_LOG_INTERVAL_SECONDS = 10.0   # H1: at most one error line per interval, with a skipped count
 RECENT_EVENTS = 20                  # H4: kept in memory for the PC panel (also written to the store)
 DISABLE_REASONS = {
@@ -171,29 +173,78 @@ class _PhoneServer(ThreadingHTTPServer):
     allow_reuse_address = False
     daemon_threads = True
 
-    def __init__(self, address: tuple[str, int], handler: type, *, max_connections: int = MAX_CONNECTIONS):
+    def __init__(self, address: tuple[str, int], handler: type, *, max_connections: int = MAX_CONNECTIONS,
+                 max_per_ip: int = MAX_CONNECTIONS_PER_IP,
+                 on_limited: Callable[[str, str], None] | None = None):
         self._slots = threading.BoundedSemaphore(max_connections)
+        self._max_per_ip = max_per_ip
+        self._per_ip: dict[str, int] = {}
+        self._open: set[Any] = set()  # L3: accepted sockets, closed when the mode is turned off
+        self._conn_lock = threading.Lock()
+        self._closed = False
+        self.on_limited = on_limited
         self._error_lock = threading.Lock()
         self._error_last = 0.0
         self._error_skipped = 0
         super().__init__(address, handler)
 
+    @staticmethod
+    def _ip(client_address: Any) -> str:
+        return str(client_address[0]) if client_address else "?"
+
     def process_request(self, request: Any, client_address: Any) -> None:
-        # H1: a bounded number of handler threads; a connection over the limit is closed at once.
-        if not self._slots.acquire(blocking=False):
+        # H1/L1: at most `max_connections` handler threads, and at most `max_per_ip` per device;
+        # a connection over either limit is closed at once.
+        ip = self._ip(client_address)
+        with self._conn_lock:
+            refused = self._closed or self._per_ip.get(ip, 0) >= self._max_per_ip
+            if not refused and not self._slots.acquire(blocking=False):
+                refused = "total"
+            if not refused:
+                self._per_ip[ip] = self._per_ip.get(ip, 0) + 1
+                self._open.add(request)
+        if refused:
             self.shutdown_request(request)
+            if self.on_limited is not None and not self._closed:
+                self.on_limited(ip, "total" if refused == "total" else "per_ip")
             return
         try:
             super().process_request(request, client_address)
         except BaseException:
-            self._slots.release()
+            self._release(request, ip)
             raise
+
+    def _release(self, request: Any, ip: str) -> None:
+        with self._conn_lock:
+            self._open.discard(request)
+            left = self._per_ip.get(ip, 1) - 1
+            if left > 0:
+                self._per_ip[ip] = left
+            else:
+                self._per_ip.pop(ip, None)
+        self._slots.release()
 
     def process_request_thread(self, request: Any, client_address: Any) -> None:
         try:
             super().process_request_thread(request, client_address)
         finally:
-            self._slots.release()
+            self._release(request, self._ip(client_address))
+
+    def close_connections(self) -> int:
+        """L3: shut down every accepted connection (a video being streamed included)."""
+        with self._conn_lock:
+            self._closed = True
+            sockets = list(self._open)
+        for sock in sockets:
+            try:
+                sock.shutdown(socket.SHUT_RDWR)
+            except OSError:
+                pass
+        return len(sockets)
+
+    def connections_of(self, ip: str) -> int:
+        with self._conn_lock:
+            return self._per_ip.get(ip, 0)
 
     def handle_error(self, request: Any, client_address: Any) -> None:
         # H1: one short line, at most once per interval, never a traceback with request data.
@@ -229,8 +280,21 @@ class PhoneAccess:
         self.last_disabled_at: float | None = None
         self.events: deque[dict[str, Any]] = deque(maxlen=RECENT_EVENTS)
         self._deadline: float | None = None   # monotonic deadline read by the watchdog (extendable)
+        self._login_ips: set[str] = set()      # L2: one PHONE_LOGIN event per device per enable
+        self._limited_last = 0.0               # L1: last PHONE_CONNECTIONS_LIMITED event
         self._lifetime = AUTO_OFF_SECONDS
         self._reset_counters()
+
+    def _limited(self, ip: str, kind: str) -> None:
+        """L1: a refused connection; at most one event per LIMITED_EVENT_INTERVAL_SECONDS."""
+        now = time.monotonic()
+        with self._lock:
+            if self._limited_last and now - self._limited_last < LIMITED_EVENT_INTERVAL_SECONDS:
+                return
+            self._limited_last = now
+        what = "quá số kết nối cho một thiết bị" if kind == "per_ip" else "hết chỗ kết nối"
+        self._event("PHONE_CONNECTIONS_LIMITED", f"Từ chối kết nối của thiết bị {ip} ({what})",
+                    ip=ip, limit=kind)
 
     def _reset_counters(self) -> None:
         self.failed_attempts = 0
@@ -238,6 +302,7 @@ class PhoneAccess:
         self.unlock_failures = 0
         self.unlock_locked = False
         self.unlocks = 0
+        self._login_ips = set()
 
     # ------------------------------------------------------------------ events (H4)
     def _event(self, event_type: str, message: str, **payload: Any) -> None:
@@ -263,7 +328,8 @@ class PhoneAccess:
                check_port: Callable[[Any], None] | None = None,
                lifetime_seconds: float = AUTO_OFF_SECONDS,
                check_seconds: float = ADDRESS_CHECK_SECONDS,
-               max_connections: int = MAX_CONNECTIONS) -> dict[str, Any]:
+               max_connections: int = MAX_CONNECTIONS,
+               max_per_ip: int = MAX_CONNECTIONS_PER_IP) -> dict[str, Any]:
         """Open the listener with a new code; already on: unchanged (same code)."""
         with self._lock:
             if self._server is not None:
@@ -275,7 +341,8 @@ class PhoneAccess:
             self.address, self._code, self._secret = host, code, secret
             self._reset_counters()
             try:
-                server = _PhoneServer((host, port), handler_factory(self), max_connections=max_connections)
+                server = _PhoneServer((host, port), handler_factory(self), max_connections=max_connections,
+                                      max_per_ip=max_per_ip, on_limited=self._limited)
             except OSError as error:
                 self.address = self._code = self._secret = None
                 raise ValueError(PORT_BUSY_MESSAGE.format(address=host, port=port, error=error)) from error
@@ -343,6 +410,7 @@ class PhoneAccess:
             self._reset_counters()
         server.shutdown()
         server.server_close()
+        server.close_connections()  # L3: open requests and video streams end with the mode
         extra = {"current_address": current_address} if reason == "address_changed" else {}
         self._event("PHONE_MODE_DISABLED",
                     f"Tắt chế độ điện thoại ({DISABLE_REASONS.get(reason, reason)})",
@@ -500,7 +568,12 @@ class PhoneAccess:
         # Events after the lock (they reach the store); never the text that was typed.
         who = {"ip": ip or "?"}
         if outcome == "ok":
-            self._event("PHONE_LOGIN", f"Thiết bị {who['ip']} nhập đúng mã", **who)
+            # L2: one event per device per enable, so a holder of the code cannot flood the event log.
+            with self._lock:
+                first = who["ip"] not in self._login_ips
+                self._login_ips.add(who["ip"])
+            if first:
+                self._event("PHONE_LOGIN", f"Thiết bị {who['ip']} nhập đúng mã", **who)
         elif outcome == "wrong":
             self._event("PHONE_CODE_WRONG", f"Thiết bị {who['ip']} nhập sai mã", **who, **counts)
         elif outcome == "locked_now":

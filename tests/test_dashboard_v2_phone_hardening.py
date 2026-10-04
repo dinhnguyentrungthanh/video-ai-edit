@@ -512,5 +512,156 @@ class H6SmallFixes(HardeningBase):
             self.assertIn(needle, guide)
 
 
+class Batch4LowFindings(HardeningBase):
+    """Plan §14: L1 per-device limit and a real gate deadline, L2 login events, L3 cut on off."""
+
+    def fake_client(self, ip):
+        """One accepted connection as if it came from `ip` (socketpair; no Wi-Fi address involved)."""
+        server_end, client_end = socket.socketpair()
+        client_end.settimeout(5)
+        self.phone._server.process_request(server_end, (ip, 40000))
+        return client_end
+
+    def test_l1_one_device_cannot_take_every_connection(self):
+        with mock.patch.object(phone_access, "GATE_TIMEOUT_SECONDS", 3.0):
+            self.enable(max_per_ip=2)
+            held = [self.fake_client("10.0.0.5") for _ in range(2)]
+            time.sleep(0.2)
+            self.assertEqual(self.phone._server.connections_of("10.0.0.5"), 2)
+            third = self.fake_client("10.0.0.5")
+            started = time.monotonic()
+            self.assertEqual(third.recv(10), b"", "the same device's third connection is closed at once")
+            self.assertLess(time.monotonic() - started, 1.0)
+            other = self.fake_client("10.0.0.6")
+            other.sendall(f"GET / HTTP/1.1\r\nHost: {self.host}\r\n\r\n".encode())
+            reply = other.recv(65536)
+            self.assertTrue(reply.startswith(b"HTTP/1.0 401"), "another device is still served")
+            for sock in (third, other, *held):
+                sock.close()
+
+    def test_l1_refusals_write_one_rate_limited_event(self):
+        with mock.patch.object(phone_access, "GATE_TIMEOUT_SECONDS", 3.0):
+            self.enable(max_per_ip=1)
+            first = self.fake_client("10.0.0.7")
+            time.sleep(0.1)
+            refused = [self.fake_client("10.0.0.7") for _ in range(5)]
+            events = [e for e in self.store.events(None) if e["event_type"] == "PHONE_CONNECTIONS_LIMITED"]
+            self.assertEqual(len(events), 1, "at most one event per interval")
+            self.assertEqual((events[0]["payload"]["ip"], events[0]["payload"]["limit"]), ("10.0.0.7", "per_ip"))
+            pc = json.loads(http(self.pc_port, "GET", "/api/phone-mode", host=f"127.0.0.1:{self.pc_port}")[2])
+            self.assertEqual(pc["events"][0]["type"], "PHONE_CONNECTIONS_LIMITED", "the PC panel sees it")
+            self.phone._limited_last -= phone_access.LIMITED_EVENT_INTERVAL_SECONDS + 1  # the interval passed
+            refused.append(self.fake_client("10.0.0.7"))
+            events = [e for e in self.store.events(None) if e["event_type"] == "PHONE_CONNECTIONS_LIMITED"]
+            self.assertEqual(len(events), 2)
+            for sock in (first, *refused):
+                sock.close()
+        self.assertEqual(phone_access.MAX_CONNECTIONS_PER_IP, 6)
+        self.assertEqual(phone_access.LIMITED_EVENT_INTERVAL_SECONDS, 60.0)
+
+    def test_l1_a_trickling_connection_is_cut_at_the_deadline(self):
+        with mock.patch.object(phone_access, "GATE_TIMEOUT_SECONDS", 1.0):
+            self.enable()
+            sock = socket.create_connection(("127.0.0.1", self.port), timeout=5)
+            started = time.monotonic()
+            closed_at = None
+            request = f"GET / HTTP/1.1\r\nHost: {self.host}\r\nX-Slow: ".encode() + b"a" * 40
+            for byte in request:
+                try:
+                    sock.sendall(bytes([byte]))
+                except OSError:
+                    closed_at = time.monotonic()
+                    break
+                time.sleep(0.3)  # one byte every 0.3 s: each read is well under the per-read timeout
+                if time.monotonic() - started > 4:
+                    break
+            if closed_at is None:
+                try:
+                    data = sock.recv(10)
+                except OSError:
+                    data = b""
+                self.assertEqual(data, b"")
+                closed_at = time.monotonic()
+            sock.close()
+            self.assertLess(closed_at - started, 2.5, "cut about GATE_TIMEOUT_SECONDS after the accept")
+            time.sleep(0.2)
+            self.assertEqual(self.phone._server.connections_of("127.0.0.1"), 0, "the slot is given back")
+
+    def test_l2_one_login_event_per_device_per_enable(self):
+        self.enable()
+        for _ in range(4):
+            self.cookie()  # 127.0.0.1
+        self.assertEqual(self.phone.try_code(self.code, ip="10.0.0.9")[0], "ok")
+        self.assertEqual(self.phone.try_code(self.code, ip="10.0.0.9")[0], "ok")
+        logins = [e["payload"]["ip"] for e in self.store.events(None) if e["event_type"] == "PHONE_LOGIN"]
+        self.assertEqual(sorted(logins), ["10.0.0.9", "127.0.0.1"])
+        self.phone.disable()
+        self.enable()
+        self.cookie()
+        logins = [e for e in self.store.events(None) if e["event_type"] == "PHONE_LOGIN"]
+        self.assertEqual(len(logins), 3, "a new enable records the device again")
+
+    def test_l3_turning_off_cuts_a_video_being_streamed_but_not_the_pc(self):
+        big = self.root / "big.mp4"
+        with big.open("wb") as handle:
+            handle.truncate(256 * 1024 * 1024)  # sparse: far more than the socket buffers hold
+        self.center.media_key_valid = lambda job_id, key: True
+        self.center.review_video = lambda job_id: (big, "video/mp4")
+        self.enable()
+        cookie = self.cookie()
+
+        def start(port, host, extra=""):
+            sock = socket.create_connection(("127.0.0.1", port), timeout=5)
+            sock.sendall(f"GET /api/jobs/1/review/video?k=x HTTP/1.1\r\nHost: {host}\r\n{extra}\r\n".encode())
+            head = sock.recv(65536)
+            self.assertIn(b"200", head.split(b"\r\n", 1)[0])
+            return sock
+
+        phone_stream = start(self.port, self.host, f"Cookie: {cookie}\r\n")
+        pc_stream = start(self.pc_port, f"127.0.0.1:{self.pc_port}")
+        time.sleep(0.5)  # both servers are now blocked writing
+        self.assertEqual(self.phone._server.connections_of("127.0.0.1"), 1)
+        server = self.phone._server
+        started = time.monotonic()
+        self.phone.disable()
+        phone_stream.settimeout(5)
+        ended = False
+        while time.monotonic() - started < 5:
+            try:
+                chunk = phone_stream.recv(1 << 20)
+            except OSError:
+                ended = True
+                break
+            if not chunk:
+                ended = True
+                break
+        self.assertTrue(ended)
+        self.assertLess(time.monotonic() - started, 2.0, "the phone stream ends with the mode")
+        time.sleep(0.2)
+        self.assertEqual(server.connections_of("127.0.0.1"), 0)
+        # The PC stream keeps flowing.
+        pc_stream.settimeout(5)
+        received = sum(len(pc_stream.recv(1 << 20)) for _ in range(5))
+        self.assertGreater(received, 0)
+        phone_stream.close()
+        pc_stream.close()
+
+    def test_l4_the_guide_and_the_launcher_never_suggest_cancel(self):
+        guide = (ROOT / "docs" / "DASHBOARD_V2_PHONE.md").read_text(encoding="utf-8")
+        firewall = guide[guide.index("## 2. Windows Firewall"):guide.index("## 3.")]
+        self.assertIn("Không bấm Cancel", firewall)
+        self.assertNotIn("có thể bấm **Cancel**", guide)
+        for needle in ("-Program $Python", "-LocalPort 8767", "-Profile Private", "-RemoteAddress LocalSubnet",
+                       "cpython-3.11.*-windows-x86_64-none", "Public"):
+            self.assertIn(needle, firewall)
+        self.assertNotRegex(firewall, r"cpython-3\.11\.\d+-windows", "no hard-coded patch number")
+        self.assertNotIn("kết nối chưa có cookie bị đóng sau 5 s;", guide)
+        self.assertIn("5 s sau lúc kết nối", guide)
+        self.assertIn("mỗi thiết bị (mỗi IP) tối đa 6", guide)
+        launcher = (ROOT / "scripts" / "Start-BiliFlow.ps1").read_bytes()
+        self.assertTrue(all(byte < 128 for byte in launcher), "Windows PowerShell 5.1 reads the script as ANSI")
+        self.assertIn(b"KHONG bam Cancel", launcher)
+
+
 if __name__ == "__main__":
     unittest.main()

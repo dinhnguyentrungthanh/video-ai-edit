@@ -8,6 +8,7 @@ import mimetypes
 import os
 import re
 import secrets
+import socket
 import threading
 import urllib.parse
 from datetime import datetime, timezone
@@ -2129,8 +2130,31 @@ def _phone_handler_class(center: ControlCenter, phone: phone_access.PhoneAccess)
         timeout = phone_access.GATE_TIMEOUT_SECONDS
         _cached_body: dict[str, Any] | None = None
 
+        _gate: threading.Timer | None = None
+
+        def setup(self) -> None:
+            super().setup()
+            # L1: a real deadline counted from the accept, not per read: a client that trickles one
+            # byte every few seconds is still cut off GATE_TIMEOUT_SECONDS after connecting.
+            request = self.request
+
+            def cut() -> None:
+                with contextlib.suppress(OSError):
+                    request.shutdown(socket.SHUT_RDWR)
+
+            self._gate = threading.Timer(phone_access.GATE_TIMEOUT_SECONDS, cut)
+            self._gate.daemon = True
+            self._gate.start()
+
+        def finish(self) -> None:
+            if self._gate is not None:
+                self._gate.cancel()
+            super().finish()
+
         def opened(self) -> None:
-            """The cookie is valid: the usual request timeout from now on (video streams lift it)."""
+            """The cookie is valid: no deadline, the usual request timeout (video streams lift it)."""
+            if self._gate is not None:
+                self._gate.cancel()
             self.timeout = REQUEST_TIMEOUT_SECONDS
             with contextlib.suppress(OSError):
                 self.connection.settimeout(REQUEST_TIMEOUT_SECONDS)

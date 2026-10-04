@@ -21,25 +21,41 @@ Chế độ này cho điện thoại hoặc laptop **cùng Wi-Fi nhà** mở Das
 
 BiliFlow **không** tự sửa Firewall; bạn tự chọn một trong hai cách.
 
-**Cách nên dùng: một rule riêng cho cổng 8767.** Chỉ mở cổng của chế độ điện thoại, chỉ cho mạng Private, chỉ cho máy trong cùng mạng.
+> **Không bấm Cancel** khi Windows hỏi cho Python qua tường lửa. Bấm Cancel làm Windows tạo rule **Block** cho Python, mà rule Block thắng mọi rule Allow, kể cả rule riêng cho cổng 8767 dưới đây. Điện thoại sẽ không vào được.
+
+**Cách nên dùng: một rule riêng cho chính Python của BiliFlow và cổng 8767.** Rule chỉ mở cổng của chế độ điện thoại, cho đúng file Python của BiliFlow, chỉ ở mạng Private, chỉ cho máy cùng mạng. Có rule này từ trước thì Windows thường không hỏi nữa. (Máy thật sẽ thử lại trước khi chốt cách này.)
 
 1. Mở **PowerShell bằng quyền Administrator**: bấm Start, gõ `PowerShell`, chuột phải → *Run as administrator*.
-2. Dán lệnh này rồi Enter:
+2. Tìm file Python thật đang nghe cổng.
+   - `.venv\Scripts\python.exe` chỉ là launcher. Tiến trình nghe cổng là `python.exe` trong `runtime\python\cpython-3.11.<bản vá>-windows-x86_64-none\`.
+   - Thư mục `cpython-3.11-windows-x86_64-none` (không có số bản vá) là junction trỏ tới thư mục trên; lệnh dưới bỏ qua nó.
 
 ```powershell
-New-NetFirewallRule -DisplayName "BiliFlow phone mode (TCP 8767)" -Direction Inbound -Action Allow -Protocol TCP -LocalPort 8767 -Profile Private -RemoteAddress LocalSubnet
+$Python = Get-ChildItem "E:\DungChung\BiliFlow\runtime\python" -Directory -Filter "cpython-3.11.*-windows-x86_64-none" |
+    Sort-Object Name -Descending | Select-Object -First 1 | ForEach-Object { Join-Path $_.FullName "python.exe" }
+$Python; Test-Path $Python
 ```
 
-3. Mạng Wi-Fi nhà phải đặt là **Private**: *Settings → Network & internet → Wi-Fi → (tên Wi-Fi) → Network profile type → Private network*.
-4. Khi Windows hỏi có cho Python nhận kết nối không, có thể bấm **Cancel**, vì rule trên đã đủ.
-   - Lưu ý: nếu trước đó đã bấm Cancel, Windows có thể đã tạo rule **Block** cho Python, và rule Block thắng rule Allow. Kiểm tra trong *Windows Defender Firewall → Advanced settings → Inbound Rules* (các rule tên `python` có biểu tượng chặn) rồi tắt rule đó.
-5. Gỡ rule khi không dùng nữa:
+   Dòng cuối phải in `True`. Nếu đang mở chế độ điện thoại, có thể kiểm thêm: `(Get-Process -Id (Get-NetTCPConnection -LocalPort 8767 -State Listen).OwningProcess).Path` phải trùng `$Python`.
+3. Tạo rule (cùng cửa sổ PowerShell):
 
 ```powershell
-Remove-NetFirewallRule -DisplayName "BiliFlow phone mode (TCP 8767)"
+New-NetFirewallRule -DisplayName "BiliFlow phone mode (Python, TCP 8767)" -Direction Inbound -Action Allow -Program $Python -Protocol TCP -LocalPort 8767 -Profile Private -RemoteAddress LocalSubnet
 ```
 
-**Cách dự phòng:** khi Windows hỏi cho Python qua tường lửa, tick **Private networks**, **không** tick Public. Cách này cho Python nhận kết nối ở mọi cổng trong mạng Private nên rộng hơn cách trên. Nếu lỡ bấm Cancel: *Windows Security → Firewall & network protection → Allow an app through firewall* → cho Python ở mục Private.
+4. Mạng Wi-Fi nhà phải đặt là **Private**: *Settings → Network & internet → Wi-Fi → (tên Wi-Fi) → Network profile type → Private network*.
+5. Nếu Windows vẫn hỏi có cho Python nhận kết nối không: tick **Private networks**, **không** tick Public, rồi bấm Allow. **Không bấm Cancel.**
+6. Dọn các rule cũ trong *Windows Defender Firewall → Advanced settings → Inbound Rules*:
+   - rule tên `python` có biểu tượng chặn (Block), thường do lần trước đã bấm Cancel: tắt hoặc xóa;
+   - rule cho phép Python ở mạng **Public**: nên tắt. Rule này làm Python nhận kết nối cả khi PC ở Wi-Fi công cộng;
+   - rule chỉ theo cổng tạo theo hướng dẫn cũ (`BiliFlow phone mode (TCP 8767)`), nếu có: `Remove-NetFirewallRule -DisplayName "BiliFlow phone mode (TCP 8767)"`.
+7. Gỡ rule khi không dùng nữa:
+
+```powershell
+Remove-NetFirewallRule -DisplayName "BiliFlow phone mode (Python, TCP 8767)"
+```
+
+**Cách dự phòng:** khi Windows hỏi cho Python qua tường lửa, tick **Private networks**, **không** tick Public, rồi bấm Allow. Cách này cho Python nhận kết nối ở mọi cổng trong mạng Private nên rộng hơn cách trên. Nếu lỡ bấm Cancel: tắt rule Block của Python như bước 6, rồi vào *Windows Security → Firewall & network protection → Allow an app through firewall* → cho Python ở mục Private.
 
 ## 3. Mở trên điện thoại hoặc laptop
 
@@ -108,7 +124,13 @@ Sau khi khởi động lại Control Center, khung đọc lại các việc gầ
   - giá trị cookie là HMAC của mã với một khóa ngẫu nhiên, không phải bản thân mã.
 - Host phải đúng `ip:8767`, nhằm chống DNS rebinding.
 - Lệnh ghi (POST) cần thêm token phiên và Origin đúng của listener. Listener điện thoại chỉ nhận các POST trong **danh sách cho phép** (`PHONE_ALLOWED_POSTS`); mọi POST khác, kể cả route thêm sau này, đều bị trả 403 `pc_only` trước khi đọc body.
-- Chống quấy: tối đa 32 kết nối cùng lúc; kết nối chưa có cookie bị đóng sau 5 s; đường dẫn hỏng trả 400; log lỗi chỉ một dòng, tối đa 1 dòng mỗi 10 s.
+- Chống quấy:
+  - tối đa 32 kết nối cùng lúc, và mỗi thiết bị (mỗi IP) tối đa 6; vượt thì kết nối mới bị đóng ngay, thiết bị khác vẫn vào được;
+  - bị từ chối vì giới hạn thì khung trên PC có dòng "Từ chối kết nối của thiết bị …" (tối đa 1 dòng mỗi 60 s);
+  - kết nối chưa có cookie bị đóng **5 s sau lúc kết nối**, kể cả khi thiết bị gửi nhỏ giọt từng byte; đã có cookie thì không bị hạn này;
+  - tắt chế độ điện thoại thì mọi kết nối đang mở, kể cả video đang phát trên điện thoại, bị cắt ngay; video đang phát trên PC không ảnh hưởng;
+  - đường dẫn hỏng trả 400; log lỗi chỉ một dòng, tối đa 1 dòng mỗi 10 s.
+- Nhật ký "thiết bị nhập đúng mã" chỉ ghi một lần cho mỗi thiết bị trong một lần bật.
 - Bật/tắt chỉ nhận từ `127.0.0.1` kèm token phiên; bật/tắt không khởi động lại Control Center.
 - Mã: 8 ký tự ngẫu nhiên, không gồm các ký tự dễ nhầm như `0/o`, `1/l/i`.
 - Khóa mở đặc biệt (`UNLOCK_KEY` trong `src/biliflow/phone_access.py`) nằm trong mã nguồn, nên nó chỉ gỡ khóa, không bao giờ tự cấp cookie. Giới hạn: 5 lần sai, 3 lần gỡ mỗi lần bật.
