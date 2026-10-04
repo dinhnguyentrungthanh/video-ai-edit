@@ -176,8 +176,8 @@
     j.active_revision = j.active_revision ?? '—';
     // Only what the backend says about the export; the name is never derived here.
     j.output_path = (j.cleanup && j.cleanup.output_name) || (j.archive && j.archive.output_name) || null;
-    // A paused / failed / interrupted export keeps its request (backend current_stage === 'render').
-    j.render_request = j.current_stage === 'render' && ['PAUSED', 'FAILED', 'INTERRUPTED_RECOVERABLE'].includes(j.state);
+    // Computed by the backend (/api/status, store.render_request); never derived here.
+    j.render_request = raw.render_request === true;
     return j;
   }
   function normalizeLogos(memory) {

@@ -93,8 +93,9 @@ function scope(j){return '<div class="scope-chips">'+Object.entries(C.detectors)
 function row(j){
   const main=ops(j).find(a=>a.id===C.primary(j)),remaining=reviewRemaining(j),p=j.state==='RENDERING'?renderPercent(j):percent(j.progress),eligible=C.eligible(j,'cleanup')||C.eligible(j,'archive');
   const isExport=C.tab(j)==='export',progText=j.state==='VERIFYING'||j.render_progress?.state==='VERIFYING'?'Kiểm tra':isExport&&j.state==='QUEUED'?'Chờ xuất':p+'%';
-  const note=C.archived(j)?'Đã lưu trữ video gốc':C.cleaned(j)?'Video gốc trong Thùng rác':j.state==='WAITING_REVIEW'?remaining+' cảnh cần duyệt':j.queue_position?'Lượt #'+j.queue_position:'Revision '+j.active_revision;
-  return '<article class="job-row" data-job="'+j.id+'"><div class="video-cell">'+(filter==='completed'&&eligible?'<input class="select-job" type="checkbox" aria-label="Chọn video '+j.id+'" data-select="'+j.id+'" '+(selected.has(j.id)?'checked':'')+(state.source_cleanup_running||state.offline?' disabled':'')+'>':'')+'<img class="poster" src="assets/poster-'+j.palette+'.svg" alt="" loading="lazy"><div class="video-text"><button class="video-title" data-action="detail" data-id="'+j.id+'" title="'+esc(j.name)+'">'+esc(j.name)+'</button><div class="video-meta"><span>#'+j.id+'</span><span>·</span><span>'+j.duration+'</span><span>·</span><span>'+bytes(j.source_size_bytes)+'</span></div></div></div><div class="status-cell">'+badge(j)+'<span class="cell-sub">'+esc(note)+'</span></div><div class="scope-cell">'+scope(j)+'</div><div class="progress-cell"><div class="row-progress"><span>'+progText+'</span><div class="meter"><i style="width:'+p+'%"></i></div></div></div><div class="row-actions">'+(main?btn(j,{...main,label:main.id==='start'?'Thiết lập':main.id==='restore'?'Khôi phục':main.label},''): '<button class="secondary small" data-action="detail" data-id="'+j.id+'">Chi tiết</button>')+'<button class="icon-button" data-action="detail" data-id="'+j.id+'" aria-label="Thao tác video '+j.id+'" title="Thao tác video">⋯</button></div></article>';
+  const src=C.sourceLine(j);
+  const note=src&&src[1]==='error'?src[0]:C.archived(j)?'Đã lưu trữ video gốc':C.cleaned(j)?'Video gốc trong Thùng rác':j.state==='WAITING_REVIEW'?remaining+' cảnh cần duyệt':j.queue_position?'Lượt #'+j.queue_position:'Revision '+j.active_revision;
+  return '<article class="job-row" data-job="'+j.id+'"><div class="video-cell">'+(filter==='completed'&&eligible?'<input class="select-job" type="checkbox" aria-label="Chọn video '+j.id+'" data-select="'+j.id+'" '+(selected.has(j.id)?'checked':'')+(state.source_cleanup_running||state.offline?' disabled':'')+'>':'')+'<img class="poster" src="assets/poster-'+j.palette+'.svg" alt="" loading="lazy"><div class="video-text"><button class="video-title" data-action="detail" data-id="'+j.id+'" title="'+esc(j.name)+'">'+esc(j.name)+'</button><div class="video-meta"><span>#'+j.id+'</span><span>·</span><span>'+j.duration+'</span><span>·</span><span>'+bytes(j.source_size_bytes)+'</span></div></div></div><div class="status-cell">'+badge(j)+'<span class="cell-sub'+(src&&src[1]==='error'?' tone-error':'')+'">'+esc(note)+'</span></div><div class="scope-cell">'+scope(j)+'</div><div class="progress-cell"><div class="row-progress"><span>'+progText+'</span><div class="meter"><i style="width:'+p+'%"></i></div></div></div><div class="row-actions">'+(main?btn(j,{...main,label:main.id==='start'?'Thiết lập':main.id==='restore'?'Khôi phục':main.label},''): '<button class="secondary small" data-action="detail" data-id="'+j.id+'">Chi tiết</button>')+'<button class="icon-button" data-action="detail" data-id="'+j.id+'" aria-label="Thao tác video '+j.id+'" title="Thao tác video">⋯</button></div></article>';
 }
 function allFiltered(){
   const needle=query.normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase();
@@ -186,15 +187,15 @@ function refreshDrawer(){
 }
 function openDrawer(id,refresh){
   const j=getJob(id);if(!j){if(refresh)closeDrawer();return;}currentJob=j.id;if(!refresh)drawerFocus=document.activeElement;
-  const review=j.review_summary,structure=j.structure_audit,ai=j.ai_audit;
+  const review=j.review_summary,structure=j.structure_audit,ai=j.ai_audit,sourceInfo=C.sourceLine(j);
   const exporting=C.tab(j)==='export',progress=exporting?renderPercent(j):percent(j.progress);
   const running=['scanning','export'].includes(C.tab(j))&&j.state!=='QUEUED';
   const progressText=exporting?stageLabel(j.render_progress?.state||j.state):stageLabel(j.current_stage||j.state);
-  const progressNote=j.state==='QUEUED'?'Video đang chờ đến lượt xử lý.':j.state==='WAITING_REVIEW'?reviewRemaining(j)+' cảnh cần quyết định của bạn trước khi xuất.':j.state==='READY_TO_EXPORT'?'Các cảnh đã được duyệt. Bạn có thể xuất video.':running?'Bạn có thể tiếp tục sử dụng dashboard trong lúc video được xử lý.':C.phase(j);
+  const progressNote=j.state==='QUEUED'?'Video đang chờ đến lượt xử lý.':j.state==='WAITING_REVIEW'?reviewRemaining(j)+' cảnh cần quyết định của bạn trước khi xuất.':j.state==='READY_TO_EXPORT'?(j.source_present===false?C.SOURCE_MISSING_MESSAGE:'Các cảnh đã được duyệt. Bạn có thể xuất video.'):running?'Bạn có thể tiếp tục sử dụng dashboard trong lúc video được xử lý.':C.phase(j);
   const checkTiles=[
     ['Kiểm tra cấu trúc',structure?.result||'Chưa kiểm tra',structure?.outdated_rule?'Kết quả theo quy tắc cũ':structure?.summary||'Có sau khi tạo danh sách cảnh duyệt'],
     ['Kiểm tra bằng AI',ai?.state||'Chưa chạy',ai?.summary||'Kiểm tra tùy chọn'],
-    ['Xuất video',exporting?(j.render_progress?.state==='VERIFYING'?'Đang kiểm tra':C.labels[j.state]):j.state==='COMPLETED'?'Đã hoàn tất':'Chưa xuất',j.queue_kind==='export'&&j.queue_position?'Lượt #'+j.queue_position:review?reviewRemaining(j)+' cảnh chưa quyết định cuối':'Cần quét xong']
+    j.state==='READY_TO_EXPORT'&&j.source_present===false?['Xuất video','Thiếu video gốc',C.SOURCE_MISSING_MESSAGE]:['Xuất video',exporting?(j.render_progress?.state==='VERIFYING'?'Đang kiểm tra':C.labels[j.state]):j.state==='COMPLETED'?'Đã hoàn tất':'Chưa xuất',j.queue_kind==='export'&&j.queue_position?'Lượt #'+j.queue_position:review?reviewRemaining(j)+' cảnh chưa quyết định cuối':'Cần quét xong']
   ];
   $('#drawer-root').innerHTML=
     '<button class="drawer-backdrop" data-action="close-drawer" aria-label="Đóng chi tiết video" tabindex="-1"></button>'+
@@ -209,6 +210,7 @@ function openDrawer(id,refresh){
           '<div class="hero-status"><span>'+esc(running?progressText:C.phase(j))+'</span>'+(running?'<strong>'+progress+'%</strong>':'')+'</div>'+
           (running?'<div class="meter" role="progressbar" aria-label="Tiến độ video" aria-valuemin="0" aria-valuemax="100" aria-valuenow="'+progress+'"><i style="width:'+progress+'%"></i></div>':'')+
           '<p>'+esc(progressNote)+'</p>'+
+          (sourceInfo?'<p class="source-line tone-'+sourceInfo[1]+'"'+(sourceInfo[1]==='error'?' role="status"':'')+'>'+esc(sourceInfo[0])+'</p>':'')+
         '</section>'+
         drawerActions(j)+
         '<section class="detail-section"><h3>Phạm vi kiểm tra</h3>'+scope(j)+'<p class="muted">'+(j.detector_groups.length<4?'Chỉ các nhóm đã chọn được kiểm tra. Video này chưa chọn đủ bốn nhóm.':'Đã chọn đầy đủ bốn nhóm kiểm tra.')+'</p>'+
@@ -218,7 +220,7 @@ function openDrawer(id,refresh){
         '</section>'+
         '<details class="detail-section audit-details"><summary>Kết quả kiểm tra & xuất video</summary><div class="detail-grid">'+checkTiles.map(([title,value,note])=>'<div class="detail-tile"><small>'+title+'</small><strong>'+esc(value)+'</strong><p>'+esc(note)+'</p></div>').join('')+'</div></details>'+
         '<details class="detail-section technical"><summary>Video gốc & thông tin kỹ thuật</summary>'+
-          '<p class="muted">'+(C.archived(j)?'Đang lưu trữ. Khôi phục sẽ trả video gốc về input để xuất lại.':C.cleaned(j)?'Đã vào Thùng rác. Khôi phục đúng tên, đường dẫn và SHA-256 trước khi xử lý lại.':'Có trong input · report và quyết định duyệt được giữ.')+'</p>'+
+          '<p class="muted">'+(C.archived(j)?'Đang lưu trữ. Khôi phục sẽ trả video gốc về input để xuất lại.':C.cleaned(j)?'Đã vào Thùng rác. Khôi phục đúng tên, đường dẫn và SHA-256 trước khi xử lý lại.':j.source_present===false?'Không còn video gốc trong input':'Có trong input · report và quyết định duyệt được giữ.')+'</p>'+
           '<div class="key-value"><span>Job key</span><span class="mono">'+esc(j.job_key)+'</span></div>'+
           '<div class="key-value"><span>Nguồn</span><span class="mono">'+esc(j.source_path)+'</span></div>'+
           '<div class="key-value"><span>SHA-256 mẫu</span><span class="mono">'+esc(j.source_sha256)+'</span></div>'+

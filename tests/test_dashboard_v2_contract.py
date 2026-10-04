@@ -120,6 +120,65 @@ class StateGroupTests(unittest.TestCase):
                     "console.log(C.tab({state:'QUEUED',queue_kind:'other'}),C.tab({state:'QUEUED'}))")
         self.assertEqual(out.split(), ["waiting", "waiting"])
 
+    def test_source_line_matches_the_classic_dashboard(self) -> None:
+        """G1/G2: V2 shows the classic card's source line, text and tone, for the same job."""
+        html = control_center._dashboard_html()
+        names = ["formatStamp", "formatBytes", "videoName", "isArchived", "recheckNote",
+                 "archiveRecheckNote", "archiveLineInfo", "sourceLineInfo"]
+        old = []
+        for name in names:
+            match = re.search(r"function " + name + r"\([^\n]*", html)
+            self.assertIsNotNone(match, name)
+            old.append(match.group(0))
+        stamp = "2026-10-03T09:20:00Z"
+        cases = [
+            {"state": "COMPLETED", "source_present": False},
+            {"state": "READY_TO_EXPORT", "source_present": False},
+            {"state": "COMPLETED", "source_present": True},
+            {"state": "COMPLETED", "source_present": True, "source_cleanup": {"state": "FAILED", "error": "Ổ đĩa đầy"}},
+            {"state": "COMPLETED", "source_present": False, "source_cleanup": {"state": "FAILED", "error": "x"}},
+            {"state": "COMPLETED", "source_present": True, "source_archive": {"state": "FAILED", "error": "SHA-256 khác"}},
+            {"state": "COMPLETED", "source_present": False, "source_archive": {"state": "FAILED", "error": "y"}},
+            {"state": "COMPLETED", "source_present": False, "source_cleaned": True,
+             "source_cleanup": {"state": "RECYCLED", "size_bytes": 3 * 1024 ** 3, "finished_at": stamp, "verified": False,
+                                "rechecked_at": stamp}},
+            {"state": "COMPLETED", "source_present": False, "source_cleanup": {"state": "PENDING"}},
+            {"state": "SKIPPED", "source_present": True, "source_cleanup": {"state": "RESTORED", "restored_at": stamp}},
+            {"state": "COMPLETED", "source_present": False, "source_archived": True, "source_path": "E:\\in\\Tập 3.mp4",
+             "source_archive": {"state": "ARCHIVED", "kind": "EXPORTED", "size_bytes": 5e8, "archived_at": stamp,
+                                "export_verified": False, "output_name": "Tập 3-reviewed.mp4", "warning": "cảnh báo"}},
+            {"state": "COMPLETED", "source_present": False, "source_archive": {"state": "RESTORING"}},
+            {"state": "COMPLETED", "source_present": True, "source_archive": {"state": "RESTORED", "restored_at": stamp}},
+            {"state": "COMPLETED", "source_present": True, "cleanup": {"eligible": False, "reason": "Chưa xuất"}},
+            {"state": "SKIPPED", "source_present": True, "cleanup": {"eligible": True},
+             "archive": {"eligible": False, "reason": "Đang bận"}},
+            {"state": "WAITING_REVIEW", "source_present": True, "cleanup": {"eligible": False, "reason": "z"}},
+        ]
+        script = (
+            "const C=require('./dashboard_v2/contracts.js');" + "\n".join(old) + ";"
+            f"const cases={json.dumps(cases, ensure_ascii=False)};"
+            "console.log(JSON.stringify(cases.map(j=>[C.sourceLine(j),sourceLineInfo(j)])));"
+        )
+        rows = json.loads(_node(script))
+        for case, (new, classic) in zip(cases, rows):
+            self.assertEqual(new, classic, case)
+        self.assertEqual(rows[0][0], ["Không còn video gốc trong input", "error"])
+        self.assertEqual(rows[3][0], ["Lần dọn trước không thành công: Ổ đĩa đầy", "error"])
+        self.assertEqual(rows[5][0], ["Lần lưu trữ trước không thành công: SHA-256 khác", "error"])
+
+    def test_missing_source_message_is_the_backend_text(self) -> None:
+        from biliflow.export_guards import SOURCE_MISSING_MESSAGE
+        out = _node("console.log(require('./dashboard_v2/contracts.js').SOURCE_MISSING_MESSAGE)").strip()
+        self.assertEqual(out, SOURCE_MISSING_MESSAGE)
+        html = control_center._dashboard_html()
+        self.assertIn("value:'Thiếu video gốc',detail:SOURCE_MISSING_MESSAGE", html)
+        self.assertIn("'Thiếu video gốc',C.SOURCE_MISSING_MESSAGE", (ROOT / "dashboard_v2" / "app.js").read_text(encoding="utf-8"))
+
+    def test_the_presenter_no_longer_claims_a_missing_source_is_in_input(self) -> None:
+        app = (ROOT / "dashboard_v2" / "app.js").read_text(encoding="utf-8")
+        self.assertIn("j.source_present===false?'Không còn video gốc trong input'", app)
+        self.assertIn("C.sourceLine(j)", app)
+
     def test_labels_cover_every_state(self) -> None:
         out = json.loads(_node(
             "console.log(JSON.stringify(Object.keys(require('./dashboard_v2/contracts.js').labels)))"))

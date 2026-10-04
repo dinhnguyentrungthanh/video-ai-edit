@@ -154,7 +154,7 @@ Khi tích hợp, Duyệt cảnh phải điều hướng đến `/review/{id}` c�
 Các trường `name`, `duration` (chuỗi), `palette` trong fixture phục vụ trình bày demo.
 Adapter thật phải derive tên từ `source_path`, định dạng `duration_seconds` và lấy poster qua media hợp lệ.
 Fixture có `gpu.name` để minh họa; API hiện tại không cung cấp tên GPU. Không giả định trường này luôn có.
-Demo dùng boolean `render_request` để thử khóa. Adapter không được tự invent render request thật; dùng trạng thái / thông tin backend và xử lý từ chối 409.
+Demo dùng boolean `render_request` để thử khóa. Adapter không được tự invent render request thật; dùng trạng thái / thông tin backend và xử lý từ chối 409. **Đợt 2 (G3):** `/api/status` → `jobs[].render_request` do backend tính (`store.render_request(job_id) is not None`: stage `render` ở PENDING/RUNNING/FAILED_RETRYABLE/FAILED); adapter dùng nguyên giá trị đó.
 
 ### Nhóm trạng thái phải giữ
 
@@ -320,6 +320,7 @@ Tự động kiểm tra bằng `tests/test_dashboard_v2_contract.py` (route và 
 | 5 | `do_POST` thứ tự: Host sai → 403; thiếu/sai token → 403 (body bị bỏ để socket không bị reset); body quá 64 KiB, Content-Length sai, JSON không phải object hoặc lồng quá sâu → 400; body ngừng gửi quá 20 s → **408** `{"error": …}` rồi đóng kết nối (client có thể chỉ thấy kết nối đóng, không có body); đường dẫn lạ → 404; `ActionConflict` → 409; `KeyError/TypeError/ValueError` → 400; còn lại → 500. | Adapter phân biệt: 403 (làm mới token đúng một lần), 408 và lỗi mạng (“kết nối bị ngắt”, **không** tự gửi lại lệnh ghi), 409, 400, 500, 404. |
 | 6 | `GET` lỗi: `KeyError/ValueError/FileNotFoundError` → 404; preview với danh sách id sai → 400; còn lại → 500. Host sai → 403. Riêng media: `k` sai → 403 (khóa media, **không phải** token phiên); logo frame ngoài thư mục → 403. | Không làm mới token khi **GET** trả 403. GET chỉ thử lại khi người dùng bấm. |
 | 7 | `render_progress` chỉ có khi `state === "RENDERING"`: `{state: "STARTING"\|"RENDERING"\|"VERIFYING", percent 0–100, speed_text?, eta_seconds?}`. `state === "VERIFYING"` cũng là trạng thái job hợp lệ. | Cả hai cách vẫn vào nhóm “xuất”; thẻ chính “Kiểm tra bản xuất” khi một trong hai là VERIFYING. |
+| 7b | (Đợt 2, G3) `jobs[].render_request` (bool) có trong `/api/status`: `store.render_request(job_id) is not None`, cùng định nghĩa backend dùng để chặn xuất/chạy lại/sửa quyết định. Chỉ thêm trường. | Adapter dùng nguyên giá trị; không suy ra từ `current_stage`. |
 | 8 | `active` là `{job_id, stage, pid}` hoặc `null` (không phải mảng). `queue` là `{length, paused}`; thứ tự theo từng job nằm ở `jobs[].queue_position/queue_kind`. `queue_kind` chỉ `scan` hoặc `export`, và chỉ có khi job đang chờ chạy được. | Không dựng danh sách queue từ nơi khác. Kiểu lạ → nhóm “Chờ xử lý”. |
 | 9 | `resources`: `cpu_percent`, `memory{percent,used_bytes,total_bytes}`, `disk{percent,free_bytes,total_bytes}`, `gpu` = `null` hoặc `{memory_used_bytes,memory_total_bytes,utilization_percent,temperature_c}`. **Không có tên GPU.** | Hiển thị N/A khi `gpu` null; không bịa `gpu.name` (fixture demo có, live không). |
 | 10 | `GET /api/logo-memory` trả `{memory_sha256, records[], backups}`; mỗi record có `key, memory_class, decision, platform, labels, episode, frames, frame_urls, convertible, refusal_text…` (không có `name`/`color` như fixture). `frame_urls` đã mã hóa sẵn. | Adapter dựng tên hiển thị từ record; dùng `memory_sha256` của **lần tải gần nhất** làm `expected_sha256`; 409 `memory_changed` → tải lại. |
@@ -360,7 +361,7 @@ Tình trạng: **khớp** (endpoint, body và khóa đã khớp code), **một p
 - 400: hiện nguyên văn `error`.
 - GET chỉ thử lại khi người dùng bấm; 403 của GET không làm mới token.
 - Mọi request đi qua một adapter duy nhất; token chỉ ở bộ nhớ, không ghi URL, localStorage hay log.
-- Trường hiển thị adapter tự thêm (`normalizeJob`): `name` = tên file của `source_path`, `duration` từ `duration_seconds`, `palette` (ảnh minh họa), `output_path` = `cleanup.output_name`/`archive.output_name` do backend trả (không tự tính), `render_request` = `current_stage === "render"` và state PAUSED/FAILED/INTERRUPTED_RECOVERABLE (chỉ để khóa nút; backend vẫn là nguồn thẩm quyền và 409/400 được hiển thị).
+- Trường hiển thị adapter tự thêm (`normalizeJob`): `name` = tên file của `source_path`, `duration` từ `duration_seconds`, `palette` (ảnh minh họa), `output_path` = `cleanup.output_name`/`archive.output_name` do backend trả (không tự tính), `render_request` = giá trị backend gửi trong `/api/status` (đợt 2, G3; không còn suy ra từ `current_stage`; backend vẫn chặn và 409/400 được hiển thị).
 - Polling: `/api/status` mỗi 3 s (như dashboard cũ); `/api/ai` khi mở trang và khi đang đăng nhập; `/api/logo-memory` khi mở trang Bộ nhớ logo và sau mỗi thao tác logo.
 
 ### 8.4. Route xem thử `/dashboard-v2/` (Pha 3)

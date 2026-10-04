@@ -31,6 +31,9 @@ const demo = ctx.window.BFMock.create();
 const jobs = demo.jobs.map(({name, duration, palette, render_request, output_path, ...j}) => ({...j, duration_seconds: 1500}));
 const r103 = jobs.find(j => j.id === 103);
 r103.review_summary = {...r103.review_summary, main_items: 2, pending: 0, decisions: {KEEP: 1, NEEDS_MORE_CONTEXT: 1}};
+// G1/G2 fixtures: a ready job whose source left input, and a completed job whose last cleanup failed.
+jobs.push({...jobs.find(j => j.id === 107), id: 116, job_key: 'demo-video-116', source_path: 'E:\\DungChung\\BiliFlow\\input\\Mất nguồn.mp4', source_present: false});
+jobs.push({...jobs.find(j => j.id === 105), id: 117, job_key: 'demo-video-117', source_path: 'E:\\DungChung\\BiliFlow\\input\\Dọn lỗi.mp4', source_cleanup: {id: 917, state: 'FAILED', error: 'Thùng rác không phản hồi'}});
 let polls = 0;
 const posts = [];
 let refuseNextCancel = false;
@@ -253,6 +256,27 @@ async function check(name, fn) { await fn(); passed++; results.push(name); proce
       assert.equal(await demoPage.locator('.demo-pill').textContent(), 'DỮ LIỆU MẪU');
       assert.deepEqual(demoRequests, []); assert.equal(polls, apiBefore); assert.equal(posts.length, before);
       await demoPage.close();
+    });
+
+    await check('G1/G2: missing source and a failed cleanup read like the classic dashboard', async () => {
+      if (await page.locator('.drawer').count()) await page.keyboard.press('Escape');
+      await page.goto(base + '/dashboard-v2/#videos');
+      await page.waitForSelector('#search');
+      await page.locator('[data-action="filter"][data-filter="all"]').first().click();
+      await page.fill('#search', '116');
+      assert.match(await page.locator('[data-job="116"] .cell-sub').textContent(), /^Không còn video gốc trong input$/);
+      await openJob(116);
+      const drawer = await page.locator('.drawer').textContent();
+      assert.match(drawer, /Không còn video gốc trong input/);
+      assert.match(drawer, /Video gốc không còn trong input; không thể xuất\./);
+      assert.ok(!/Có trong input/.test(drawer), 'never claims the source is in input');
+      assert.equal(await page.locator('.drawer [data-op="finalize"]').isDisabled(), true);
+      await page.keyboard.press('Escape');
+      await page.fill('#search', '117');
+      assert.match(await page.locator('[data-job="117"] .cell-sub').textContent(), /^Lần dọn trước không thành công: Thùng rác không phản hồi$/);
+      await openJob(117);
+      assert.match(await page.locator('.drawer .source-line').textContent(), /Lần dọn trước không thành công: Thùng rác không phản hồi/);
+      await page.keyboard.press('Escape');
     });
 
     await check('No page error and no request outside the origin', async () => {

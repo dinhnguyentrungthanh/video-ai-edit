@@ -627,6 +627,9 @@ class ControlCenter:
             job["ai_audit"] = self.ai_audit_summary(int(job["id"]))
             job["structure_audit"] = self.structure_audit_summary(int(job["id"]))
             job["render_progress"] = self.render_progress_summary(job)
+            # Dashboard V2: an unfinished export request (waiting, running or failed
+            # and retryable) locks export, rerun and decisions; the card no longer guesses it.
+            job["render_request"] = self.store.render_request(int(job["id"])) is not None
             job["ocr_recognition_batch_size"] = self.scheduler.ocr_batch_size(int(job["id"]))
             job["fast_scan"] = self.scheduler.fast_scan(int(job["id"]))
             job["detector_groups"] = list(

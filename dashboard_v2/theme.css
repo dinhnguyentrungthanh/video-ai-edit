@@ -384,3 +384,11 @@ code { font-size: 12px; color: #304b70; background: #edf2f9; }
   .download-percent { flex-wrap: wrap; }
   .download-result h3 { font-size: 18px; }
 }
+
+/* Source line (same text as the classic dashboard card) and the phone panel. */
+.cell-sub.tone-error, .source-line.tone-error { color: var(--red); font-weight: 600; }
+.source-line { margin: 8px 0 0; font-size: 13px; overflow-wrap: anywhere; }
+.source-line.tone-waiting { color: var(--amber); }
+.phone-panel .phone-link { font-size: 15px; overflow-wrap: anywhere; user-select: all; }
+.phone-panel .phone-code { font-size: 26px; letter-spacing: 4px; font-weight: 700; user-select: all; }
+.pc-only-note { color: var(--amber); font-size: 12px; }

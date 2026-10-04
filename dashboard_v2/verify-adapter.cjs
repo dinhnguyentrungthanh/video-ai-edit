@@ -186,15 +186,17 @@ test('Previews are GET only, with encoded ids and the 1-50 limit', async () => {
 test('Snapshot normalization keeps backend values and derives only display fields', () => {
   const status = {version: '0.7.24', jobs: [
     {id: 5, state: 'RENDERING', source_path: 'E:\\DungChung\\BiliFlow\\input\\Tập 5.mp4', duration_seconds: 3725, detector_groups: ['adult'], active_revision: 2, current_stage: 'render', render_progress: {state: 'VERIFYING', percent: 100}},
-    {id: 6, state: 'PAUSED', source_path: '/x/y.mkv', current_stage: 'render'},
+    {id: 6, state: 'PAUSED', source_path: '/x/y.mkv', current_stage: 'render', render_request: true},
+    {id: 8, state: 'PAUSED', source_path: '/x/z.mkv', current_stage: 'render'},
     {id: 7, state: 'COMPLETED', source_path: 'a.mp4', cleanup: {eligible: true, output_name: 'a-reviewed.mp4'}},
   ], active: {job_id: 5, stage: 'render', pid: 1}, queue: {length: 0, paused: false},
   resources: {cpu_percent: 3, memory: {percent: 4, used_bytes: 1, total_bytes: 2}, disk: {percent: 5, free_bytes: 6, total_bytes: 7}, gpu: null}, source_cleanup_running: false};
   const s = A.normalizeSnapshot(status, null, {memory_sha256: 'b'.repeat(64), records: [{key: 'k1', labels: ['iQIYI'], memory_class: 'platform_logo', frames: 2, frame_urls: ['/api/logo-memory/frame?key=k1&i=0']}]});
-  const [a, b, c] = s.jobs;
+  const [a, b, d, c] = s.jobs;
   assert.equal(a.name, 'Tập 5'); assert.equal(a.duration, '1:02:05'); assert.equal(a.render_progress.state, 'VERIFYING');
   assert.equal(C.tab(a), 'export'); assert.equal(a.output_path, null);
   assert.equal(b.name, 'y'); assert.equal(b.render_request, true); assert.deepEqual(b.detector_groups, []);
+  assert.equal(d.render_request, false, 'render_request comes from the backend only, never from current_stage');
   assert.equal(c.output_path, 'a-reviewed.mp4');
   assert.equal(s.resources.gpu, null); assert.equal(s.logos[0].name, 'iQIYI'); assert.equal(s.memory_sha256, 'b'.repeat(64));
   assert.equal(s.ai.ready, false, 'AI is not ready until /api/ai says so');
