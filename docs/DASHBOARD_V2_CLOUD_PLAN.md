@@ -195,14 +195,14 @@ Bảng ở mục 7 có hai cột kết quả: **Cloud** và **Máy thật**.
 | ID | Hạng mục | Cloud | Máy thật | Bằng chứng |
 | --- | --- | --- | --- | --- |
 | E1 | Kéo nhánh về một worktree. Chạy full suite trên Windows (`.venv\Scripts\python.exe -m unittest discover -s tests -p "test_*.py"`) và `node dashboard_v2/verify.cjs` | — | [x] | 2026-10-04, c616bef, worktree `temp/wt-dashboard-v2`, `.venv` của thư mục chính và `PYTHONPATH=src`: 1215 test OK (25 skip, 159 s); verify.cjs 28/28; verify-adapter 15/15. Worktree cần một `input/placeholder.mp4` rỗng (đã gitignore) cho 28 test của `test_job_pipeline` và `test_job_ocr_option`, vì chúng lấy một `.mp4` trong `input/`. Log: `temp/ui-plan/dashboard-v2-check/full-suite-2.log` |
-| E2 | Khởi động lại Control Center trên code nhánh, chỉ khi người dùng đồng ý và không có job nào chạy | — | [ ] | |
+| E2 | Khởi động lại Control Center trên code nhánh, chỉ khi người dùng đồng ý và không có job nào chạy | — | [ ] | 2026-10-04: thư mục chính chuyển sang `869dcf5` (detached; `main` vẫn f6996bb) khi Control Center đang tắt và không job nào chạy. Người dùng tự mở bằng `Start-BiliFlow.cmd` khi test. Quay lại bản cũ: tắt Control Center rồi `git switch main` |
 | E3 | So `/dashboard-v2` với `/` (chỉ GET): số video từng nhóm, hàng đợi, tiến độ, revision và lỗi của toàn bộ job thật | — | [ ] | Chưa làm trên dữ liệu thật. Trên dữ liệu giả, 6 nhóm đã trùng nhưng có 2 chỗ hiển thị lệch (mục 11) |
 | E4 | Mở trang duyệt từ V2 đúng job; ảnh, khung hình và video hiện đúng | — | [ ] | |
 | E5 | Thao tác an toàn do người dùng bấm: ẩn/hiện một job đã hủy; tạm dừng/tiếp tục hàng đợi khi rảnh | — | [ ] | |
 | E6 | Xuất một video do người dùng bấm từ V2: kiểm ba lựa chọn dung lượng trong dialog, xuất thật một lần | — | [ ] | |
 | E7 | Dọn / lưu trữ / khôi phục: chỉ xem preview trong V2; thao tác thật chỉ người dùng tự bấm (theo `AGENTS.md`) | — | [ ] | |
 | E8 | Rollback: `/` vẫn là dashboard cũ; tắt V2 không đổi dữ liệu | — | [ ] | |
-| E9 | Trước khi merge vào `main`: bỏ bản `dashboard_v2/` chưa track và các ghi chú V2 chưa commit trong thư mục chính `E:\DungChung\BiliFlow`. Chúng giống hệt bản trên nhánh; nếu không bỏ, git sẽ từ chối merge | — | [ ] | |
+| E9 | Trước khi merge vào `main`: bỏ bản `dashboard_v2/` chưa track và các ghi chú V2 chưa commit trong thư mục chính `E:\DungChung\BiliFlow`. Chúng giống hệt bản trên nhánh; nếu không bỏ, git sẽ từ chối merge | — | [x] | 2026-10-04, trước khi thư mục chính chạy thử nhánh: bản `dashboard_v2/` cũ (17 file) và `docs/DASHBOARD_V2_UPDATE_GUIDE.md` được dời sang `temp\dashboard-v2-main-copy-20261004\`; 3 ghi chú (`CHANGELOG.md`, `docs/PROJECT_STATUS.md`, `docs/SESSION_HANDOFF.md`) được chép kèm diff vào đó rồi trả về như `main`. Cả 21 file trùng byte với commit e044a18 (so bằng `git hash-object`), nên không mất gì. Lúc merge không cần làm lại |
 
 Lệnh mẫu cho A4 và D6, chạy từ gốc repo:
 
@@ -343,6 +343,7 @@ Nhật ký đợt 1:
 
 | Ngày | Commit | Việc đã làm | Kết quả | Còn lại |
 | --- | --- | --- | --- | --- |
+| 2026-10-04 | 869dcf5 (đợt 3) | Kéo đợt 3 về. Một agent riêng review bảo mật lại (chỉ đọc code, chạy handler thật với socket giả, không mở cổng). Chạy thử H5 bằng server giả trên 127.0.0.1. Làm E9 (mục 7), rồi cho thư mục chính chạy thử `869dcf5` (detached) để người dùng test; `main` vẫn f6996bb | Full suite 1259 OK (25 skip) ngay lần đầu; verify 28/28; verify-adapter 17/17; `node --check` 9/9; fingerprint 10 stage `none` (`fingerprint-batch3.txt`); fixture D2 không đổi; không file cấm nào bị sửa. H5 11/11. Review bảo mật: không có lỗi nghiêm trọng, cao hay trung bình; 3 lỗi thấp (L1–L3) và 2 chỗ sai trong hướng dẫn (dưới bảng) | Người dùng test trên PC, điện thoại và laptop (E2–E8, P6–P9); đợt 4 (mục 14), người dùng đã đồng ý |
 | 2026-10-04 | 949f935 (đợt 2) | Kéo đợt 2 về. Sửa 2 lỗi chỉ có trong test và chỉ lộ ra trên Windows (dưới bảng). Một agent riêng review bảo mật chế độ điện thoại; nó chỉ đọc code và không mở cổng nào | Full suite 1236 OK (25 skip) sau khi sửa test; verify 28/28; verify-adapter 17/17; fingerprint 10 stage `none`; không file cấm nào bị sửa. Review bảo mật: không có lỗi nghiêm trọng hay cao; 2 trung bình, 4 thấp (S1–S6 dưới bảng) | P6–P9 trên máy thật; sửa S1–S6 |
 | 2026-10-04 | c616bef (bảng này commit ở 6df60d3) | Kéo nhánh về `temp/wt-dashboard-v2`; điền cột Máy thật ở mục 7. Bản xem thử chỉ đọc trên handler thật: root tạm `temp\v2-preview-*`, 11 job giả, cổng 8796, chặn mọi POST, không chạy scheduler/watcher, không đọc dữ liệu thật | Full suite 1215 OK (25 skip); verify 28/28; verify-adapter 15/15; fingerprint 10 stage không đổi; V2 trùng 6 nhóm với `/`; 0 lỗi console/CSP; 375 px không tràn. **Tìm được 2 chỗ V2 hiển thị sai hoặc thiếu so với `/`** (dưới bảng) | Sửa 2 chỗ dưới bảng. Câu hỏi mục 8 chờ người dùng trả lời. C4, C5, C6 (Tab/Escape), C7 và E2–E9 cần Control Center thật chạy code nhánh, nghĩa là phải khởi động lại; việc này chỉ làm khi người dùng đồng ý và không có job nào chạy |
 
@@ -399,6 +400,25 @@ Nên sửa ở đợt sau:
   - `try_code` và `set_cookie_header` lấy khóa hai lần; nên cho `try_code` trả luôn cookie.
   - Một cookie dùng chung cho mọi thiết bị trong một lần bật.
   - Hướng dẫn Firewall nên ưu tiên một rule riêng cho TCP 8767, mạng Private, LocalSubnet, thay vì cho python.exe qua mọi cổng.
+
+**Review bảo mật lại sau đợt 3 (máy thật, 2026-10-04).** Một agent riêng đọc diff b166bcd..869dcf5 và chạy `_phone_handler_class`/`_PhoneServer` thật với socket giả trong bộ nhớ và store tạm; không bind cổng, không sửa file. Kết luận: không có lỗi nghiêm trọng, cao hay trung bình; không có hồi quy so với lần review trước.
+
+- Đã thử, đạt:
+  - cổng cookie: 28 đường dẫn GET × 7 kiểu cookie, 21 tổ hợp POST và 7 method khác chỉ nhận 401, 403 hoặc 501; không lời gọi nào tới `center`; mã không bao giờ nằm trong body;
+  - danh sách cho phép: 36 đường dẫn POST biến dạng (`;x`, `//`, `/` ở cuối, `.json`, `%2D`, chữ hoa, absolute-form, `..`) không tới được handler chỉ-PC; route lạ nhận 403 trước khi đọc body;
+  - Visual AI Audit: 27 biến thể JSON và header (khóa trùng, `"false"`, `1`, `[1]`, NaN, BOM, UTF-16, Content-Length thiếu/sai/trùng, chunked, quá lớn, lồng sâu) không lần nào chạy với `visual_opt_in=True`;
+  - semaphore không rò và không trả thừa slot; không có vòng khóa giữa `PhoneAccess._lock`, `_PHONE_ACCESS_LOCK` và khóa store; watchdog cũ không đóng listener mới;
+  - `extend:true` chỉ tới được từ `127.0.0.1` kèm Host đúng và token; trang lạ (DNS rebinding) không giữ chế độ bật được;
+  - event `PHONE_*`, dòng báo ở `/` và lịch sử khôi phục không chứa mã, cookie, chữ đã gõ hay khóa mở; `/` khi tắt trùng byte fixture;
+  - fuzz 1.500 đường dẫn và 40.008 giá trị Cookie: không lỗi, không lọt.
+- S1–S6: S1 sửa một phần (L1); S2, S3, S6 đã sửa; S4 đã sửa, trừ L2; S5 đúng trong code và máy thật đã chạy thử bằng server giả (H5 ở 13.3).
+- Còn lại, đều mức thấp (đề xuất sửa ở đợt 4, mục 14):
+  - **L1. Giới hạn 32 kết nối là chung cho mọi thiết bị, và 5 s chưa phải hạn chót.** `PhoneHandler.timeout` tính cho từng lần đọc, nên kết nối gửi 1 byte mỗi 4 s giữ được mãi. Một thiết bị trong Wi-Fi mở 32 kết nối như vậy là chặn được mọi thiết bị khác, và khung trên PC không thấy gì vì kết nối bị từ chối không được ghi lại. Chỉ ảnh hưởng việc dùng chế độ điện thoại, nhẹ hơn rủi ro khóa nhập mã đã chấp nhận ở câu 9.
+  - **L2. Event `PHONE_LOGIN` không giới hạn.** Mỗi lần nhập đúng mã ghi một event; bảng `events` chỉ giữ 10.000 dòng, nên người có mã có thể đẩy event cũ của job ra ngoài. Mỗi event cũng là một lần commit dưới khóa store mà scheduler dùng.
+  - **L3. Video đang phát vẫn chạy tiếp sau khi tắt.** `disable()` chỉ đóng socket nghe; `stream_video` chỉ dừng khi Control Center dừng.
+- Hướng dẫn `docs/DASHBOARD_V2_PHONE.md` có 2 chỗ sai:
+  - mục 2 bước 4 bảo có thể bấm **Cancel**, trong khi ghi chú ngay dưới nói Cancel tạo rule Block cho Python, và rule Block thắng rule Allow của cổng 8767;
+  - mục 7 ghi kết nối chưa có cookie "bị đóng sau 5 s": chỉ đúng với kết nối im lặng (L1).
 
 ## 12. Đợt 2 (giao ngày 2026-10-04): việc cho phiên cloud tiếp theo
 
@@ -496,7 +516,7 @@ Thứ tự làm: 12.2 trước, 12.3 sau. Bảng kết quả ở 12.4.
 | P3 | Endpoint bật/tắt chỉ nhận từ `127.0.0.1`; tắt thì listener đóng và mã hết hiệu lực; mỗi lần bật có mã mới | [x] | [x] | Cùng file test: POST `/api/phone-mode` thiếu token → 403, `enabled` không phải bool → 400; qua listener điện thoại → 403 pc_only; GET trên điện thoại chỉ trả `{remote:true}` (không mã); tắt → cổng đóng (kết nối bị từ chối), mã cũ 401; bật lại → mã mới; bật khi đang bật giữ mã; `stop()` đóng listener. browser-check: khung PC Bật → link + mã, Tắt → mất mã, Bật lại → mã khác. **Máy thật:** cùng file test, đạt |
 | P4 | Chỉ nghe địa chỉ IPv4 riêng; từ chối `0.0.0.0` và địa chỉ công cộng | [x] | [x] | Cùng file test: chấp nhận 10/8, 172.16/12, 192.168/16; từ chối 15 địa chỉ (`0.0.0.0`, `127.0.0.1`, công cộng, 172.32.x, 100.64.x, 169.254.x, IPv6, `localhost`, viết sai) **trước khi bind**; cổng phải 1024–65535, khác 8765; qua HTTP, `lan_address` ra loopback → 400. Thực tế trên Windows cần máy thật xác nhận địa chỉ Wi-Fi được chọn (câu 8). **Máy thật:** đạt sau khi sửa test (mục 11). Máy này tự dò ra địa chỉ 192.168.1.x, là IPv4 riêng hợp lệ; bind thật trên Wi-Fi thử ở P7 |
 | P5 | `127.0.0.1:8765` không đổi: D2 trùng byte, test Control Center cũ đạt, A4/D6 không đổi | [x] | [x] | `tests.test_dashboard_v2_route` 9 OK, P5 trong file phone (`/`, `/review/1` trùng SHA-256 f6996bb khi chế độ điện thoại đang bật). test_control_center 52/53, test_skip_export 26/30 (lỗi PowerShell như cũ); source_cleanup_http 20, source_archive_http 8, export_identity 28, export_dialog 5, logo_memory_admin 14, review_workflow 111, golden_label_app 20 OK. A4/D6: 10 stage `none`. Chỉ thêm route `/api/phone-mode` vào listener PC. **Máy thật:** full suite 1236 test OK (25 skip); `test_control_center` 53/53; `test_dashboard_v2_route` 9/9; fingerprint 10 stage `none` (`temp/ui-plan/dashboard-v2-check/fingerprint-batch2.txt`) |
-| P6 | File khởi động chạy đúng khi Control Center chưa chạy, đã chạy, hoặc đang chạy bản cũ; in link và mã | [-] | [ ] | Cloud không có PowerShell. Đã viết `Start-BiliFlow-Phone.cmd` → `scripts/Start-BiliFlow.ps1 -Phone` (giữ ASCII, CRLF). Ba nhánh: đang khởi động / đang chạy / mở mới đều gọi `Enable-PhoneMode`; bản cũ trả 404 → báo, không khởi động lại. `Start-BiliFlow.cmd` không đổi hành vi. Máy thật phải chạy cả ba trường hợp |
+| P6 | File khởi động chạy đúng khi Control Center chưa chạy, đã chạy, hoặc đang chạy bản cũ; in link và mã | [-] | [ ] | Cloud không có PowerShell. Đã viết `Start-BiliFlow-Phone.cmd` → `scripts/Start-BiliFlow.ps1 -Phone` (giữ ASCII, CRLF). Ba nhánh: đang khởi động / đang chạy / mở mới đều gọi `Enable-PhoneMode`; bản cũ trả 404 → báo, không khởi động lại. `Start-BiliFlow.cmd` không đổi hành vi. Máy thật phải chạy cả ba trường hợp. **Máy thật** (2026-10-04): nhánh “bản cũ trả 404” đã chạy thử bằng server giả (H5 ở 13.3): báo rõ, không khởi động lại. Ba trường hợp thật chờ người dùng |
 | P7 | Điện thoại thật trong Wi-Fi nhà: mở link, nhập mã, dùng V2, tạm dừng/tiếp tục hàng đợi; thao tác chỉ-PC bị từ chối | — | [ ] | |
 | P8 | Laptop trong Wi-Fi nhà: như P7 | — | [ ] | |
 | P9 | Trang duyệt cũ ở 375 px: ghi nhận cách hiển thị và đề xuất, không sửa | [x] | [ ] | Chromium 375 px trên handler thật, root tạm, 1 cảnh 18+: trang không tràn ngang (scrollWidth 375); 4 nút quyết định 150×67 px, dễ bấm; hàng chip bộ lọc cuộn ngang (3 chip và ô “Thêm” nằm ngoài màn hình, không có dấu hiệu cuộn); chữ nhỏ nhất 10 px; nhãn “phím 1–4” vô nghĩa trên điện thoại; nút quyết định nằm dưới video, phải cuộn. Không sửa. Đề xuất: câu 10 mục 8 |
@@ -586,12 +606,12 @@ Mọi ràng buộc của 12.3 vẫn giữ nguyên:
 
 | ID | Hạng mục | Cloud | Máy thật | Bằng chứng |
 | --- | --- | --- | --- | --- |
-| H1 | Đường dẫn hỏng → 400, không traceback; log lỗi có giới hạn; tối đa khoảng 32 kết nối; kết nối chưa có cookie bị đóng sau khoảng 5 s | [x] | [ ] | `a7514df`, `tests.test_dashboard_v2_phone_hardening` (18 OK, listener 127.0.0.1 + `lan` giả): `GET/POST http://[x/` → 400 “Đường dẫn không hợp lệ” ở cả listener điện thoại và PC, stderr không có `Traceback`; `handle_error` 6 lỗi liên tiếp → 2 dòng (`ValueError from <ip>`, “(4 more skipped)”), không lộ dữ liệu request; giới hạn kết nối (thử với 2): kết nối thứ 3 bị đóng ngay < 1 s; kết nối im lặng bị đóng sau khoảng `GATE_TIMEOUT_SECONDS` (test đặt 1 s) rồi slot được trả lại; có cookie thì body đến sau 1,6 s vẫn được nhận (timeout 20 s). Hằng số 32 và 5 s kiểm trong test |
-| H2 | Listener điện thoại chỉ nhận POST trong danh sách cho phép; test phân loại đủ mọi route; Visual AI Audit → 403 qua điện thoại, vẫn chạy trên PC | [x] | [ ] | Cùng file: đọc mọi route `do_POST` từ code (+ 2 route bộ nhớ logo), bung `(a\|b)` và `(\d+)` → mọi đường dẫn đều được phân loại rõ (`post_policy(...)[2]`); route lạ → 403 `PC_ONLY_DEFAULT`, trả lời < 3 s dù thiếu body (không chờ body). `ai-audit` `visual:true` qua điện thoại → 403 “Chỉ làm trên PC: Visual AI Audit gửi ảnh ra ngoài máy”, `start_ai_audit` không chạy; `visual:false` → 200 và chạy; trên PC `visual:true` vẫn chạy. browser-check: lựa chọn Visual bị khóa trên điện thoại, JSON vẫn chọn được. Hướng dẫn ghi rõ duyệt cảnh có thể thêm hoặc bỏ logo đã nhớ |
-| H3 | Tự tắt sau 8 giờ và khi địa chỉ đổi; có lý do tắt; dòng báo ở `/` (fixture D2 cập nhật, `/review/{id}` trên PC vẫn trùng byte) và ở `Start-BiliFlow.cmd` | [x] | [ ] | Cùng file: tự tắt sau thời hạn (test 0,6 s) → lý do `expired` (“hết 8 giờ”), cổng đóng, dòng báo ở `/` biến mất; `lan` giả đổi → `address_changed` (payload có địa chỉ mới); lỗi dò → `address_changed`; tắt qua API → `user`; `stop()` → `stopped`; watchdog cũ không đóng listener mới. Dòng báo `/` chỉ có khi đang bật, không chứa mã; `/` khi tắt và `/review/1` luôn trùng byte fixture f6996bb (câu 13). Launcher `Show-PhoneNotice` có trong script; chưa chạy được (không có PowerShell) |
-| H4 | Event bật/tắt/sai mã/khóa/gỡ khóa có IP, không chứa mã hay cookie; khung PC hiện các event gần nhất | [x] | [ ] | Cùng file: luồng đủ 8 loại event `PHONE_*` lưu vào store; mọi event của thiết bị có `ip`; dump toàn bộ event không chứa mã, giá trị cookie, chữ đã gõ hay khóa mở; event khóa ở mức WARN; `/api/phone-mode` trên PC trả ≤ 10 event, mới nhất trước, không có mã; listener điện thoại không trả `events`. browser-check: khung PC hiện “Nhật ký gần đây” |
-| H5 | Launcher báo đúng trạng thái sau lỗi không phải HTTP | [-] | [ ] | Cloud không có PowerShell. `Enable-PhoneMode`: lỗi không có HTTP status → `Get-PhoneStatus` → “IS on” (in link và mã) / “NOT on” / “unknown”. Máy thật cần thử, ví dụ chặn tạm hoặc làm chậm request |
-| H6 | `try_code` trả cookie trong một lần giữ khóa; hướng dẫn Firewall có rule riêng cho cổng 8767 | [x] | [ ] | `try_code(text, ip=…)` trả `(outcome, cookie)` trong một lần giữ khóa; `set_cookie_header` đã bỏ (test kiểm). Hướng dẫn có `New-NetFirewallRule … -LocalPort 8767 -Profile Private -RemoteAddress LocalSubnet` và `Remove-NetFirewallRule`, cách dự phòng cho Python, cảnh báo rule Block khi đã bấm Cancel, và ghi chú một mã cho mọi thiết bị |
+| H1 | Đường dẫn hỏng → 400, không traceback; log lỗi có giới hạn; tối đa khoảng 32 kết nối; kết nối chưa có cookie bị đóng sau khoảng 5 s | [x] | [x] | `a7514df`, `tests.test_dashboard_v2_phone_hardening` (18 OK, listener 127.0.0.1 + `lan` giả): `GET/POST http://[x/` → 400 “Đường dẫn không hợp lệ” ở cả listener điện thoại và PC, stderr không có `Traceback`; `handle_error` 6 lỗi liên tiếp → 2 dòng (`ValueError from <ip>`, “(4 more skipped)”), không lộ dữ liệu request; giới hạn kết nối (thử với 2): kết nối thứ 3 bị đóng ngay < 1 s; kết nối im lặng bị đóng sau khoảng `GATE_TIMEOUT_SECONDS` (test đặt 1 s) rồi slot được trả lại; có cookie thì body đến sau 1,6 s vẫn được nhận (timeout 20 s). Hằng số 32 và 5 s kiểm trong test. **Máy thật** (Windows, 2026-10-04): `test_dashboard_v2_phone_hardening` 23/23; full suite 1259 OK (25 skip) ngay lần đầu. Review lại (mục 11): 32 là giới hạn chung cho mọi thiết bị, và 5 s tính lại sau mỗi lần đọc nên chưa phải hạn chót → L1 (mục 14) |
+| H2 | Listener điện thoại chỉ nhận POST trong danh sách cho phép; test phân loại đủ mọi route; Visual AI Audit → 403 qua điện thoại, vẫn chạy trên PC | [x] | [x] | Cùng file: đọc mọi route `do_POST` từ code (+ 2 route bộ nhớ logo), bung `(a\|b)` và `(\d+)` → mọi đường dẫn đều được phân loại rõ (`post_policy(...)[2]`); route lạ → 403 `PC_ONLY_DEFAULT`, trả lời < 3 s dù thiếu body (không chờ body). `ai-audit` `visual:true` qua điện thoại → 403 “Chỉ làm trên PC: Visual AI Audit gửi ảnh ra ngoài máy”, `start_ai_audit` không chạy; `visual:false` → 200 và chạy; trên PC `visual:true` vẫn chạy. browser-check: lựa chọn Visual bị khóa trên điện thoại, JSON vẫn chọn được. Hướng dẫn ghi rõ duyệt cảnh có thể thêm hoặc bỏ logo đã nhớ. **Máy thật:** cùng file test, đạt |
+| H3 | Tự tắt sau 8 giờ và khi địa chỉ đổi; có lý do tắt; dòng báo ở `/` (fixture D2 cập nhật, `/review/{id}` trên PC vẫn trùng byte) và ở `Start-BiliFlow.cmd` | [x] | [x] | Cùng file: tự tắt sau thời hạn (test 0,6 s) → lý do `expired` (“hết 8 giờ”), cổng đóng, dòng báo ở `/` biến mất; `lan` giả đổi → `address_changed` (payload có địa chỉ mới); lỗi dò → `address_changed`; tắt qua API → `user`; `stop()` → `stopped`; watchdog cũ không đóng listener mới. Dòng báo `/` chỉ có khi đang bật, không chứa mã; `/` khi tắt và `/review/1` luôn trùng byte fixture f6996bb (câu 13). Launcher `Show-PhoneNotice` có trong script; chưa chạy được (không có PowerShell). **Máy thật:** cùng file test, đạt. Dòng báo ở `/` và tự tắt khi đổi địa chỉ sẽ thử thật ở P7 |
+| H4 | Event bật/tắt/sai mã/khóa/gỡ khóa có IP, không chứa mã hay cookie; khung PC hiện các event gần nhất | [x] | [x] | Cùng file: luồng đủ 8 loại event `PHONE_*` lưu vào store; mọi event của thiết bị có `ip`; dump toàn bộ event không chứa mã, giá trị cookie, chữ đã gõ hay khóa mở; event khóa ở mức WARN; `/api/phone-mode` trên PC trả ≤ 10 event, mới nhất trước, không có mã; listener điện thoại không trả `events`. browser-check: khung PC hiện “Nhật ký gần đây”. **Máy thật:** cùng file test, đạt |
+| H5 | Launcher báo đúng trạng thái sau lỗi không phải HTTP | [-] | [x] | Cloud không có PowerShell. `Enable-PhoneMode`: lỗi không có HTTP status → `Get-PhoneStatus` → “IS on” (in link và mã) / “NOT on” / “unknown”. Máy thật cần thử, ví dụ chặn tạm hoặc làm chậm request. **Máy thật** (Windows PowerShell 5.1, 2026-10-04): nạp riêng 3 hàm `Get-PhoneStatus`, `Show-PhoneNotice`, `Enable-PhoneMode` từ script (phần chạy chính không chạy), file trạng thái giả, server giả trên 127.0.0.1: 11/11 đạt. Server đóng kết nối không trả lời → GET trạng thái → “IS on” (in link và mã), “NOT on” hoặc “unknown”, cả ba đúng; hết giờ thật sau 15 s → “IS on”; bản cũ trả 404 → báo bản cũ, không khởi động lại (P6); 400 → “could not start” kèm lý do; `Show-PhoneNotice` in dòng NOTE khi đang bật, im lặng khi tắt hoặc 404 (H3); POST gửi `{"enabled":true,"port":8767}` kèm token. Script: `temp/ui-plan/dashboard-v2-check/h5-launcher/` |
+| H6 | `try_code` trả cookie trong một lần giữ khóa; hướng dẫn Firewall có rule riêng cho cổng 8767 | [x] | [x] | `try_code(text, ip=…)` trả `(outcome, cookie)` trong một lần giữ khóa; `set_cookie_header` đã bỏ (test kiểm). Hướng dẫn có `New-NetFirewallRule … -LocalPort 8767 -Profile Private -RemoteAddress LocalSubnet` và `Remove-NetFirewallRule`, cách dự phòng cho Python, cảnh báo rule Block khi đã bấm Cancel, và ghi chú một mã cho mọi thiết bị. **Máy thật:** cùng file test, đạt. Lệnh tạo rule Firewall do người dùng tự chạy khi test thật |
 
 ### 13.4. Quyết định của người dùng cho câu 13–16 (2026-10-04)
 
@@ -603,6 +623,55 @@ Mọi ràng buộc của 12.3 vẫn giữ nguyên:
 | 16 | Chấp nhận tự tắt khi bật/tắt VPN làm đổi địa chỉ | Không đổi |
 
 **Sau đợt 3:**
-1. Máy thật kéo về kiểm như đợt 2.
+1. Máy thật kéo về kiểm như đợt 2 (xong 2026-10-04, mục 11; E9 cũng đã làm).
 2. Người dùng test toàn bộ trên điện thoại, laptop và dữ liệu thật: P6–P9 ở 12.4 và E2–E8 ở mục 7.
 3. Chỉ merge vào `main` (kèm E9) khi người dùng đã test xong và yêu cầu merge.
+
+## 14. Đợt 4 (giao ngày 2026-10-04): sửa 3 lỗi thấp và hướng dẫn
+
+Người dùng đồng ý làm đợt 4 trước khi test trên điện thoại và laptop (2026-10-04). Trong lúc cloud làm, người dùng test phần PC trên `869dcf5`.
+
+Đọc trước: phần "Review bảo mật lại sau đợt 3" ở cuối mục 11.
+
+Đợt này nhỏ: chỉ sửa listener điện thoại, hướng dẫn và một dòng in của launcher. Mọi ràng buộc của 12.3 và 13 vẫn giữ nguyên:
+- không sửa file nằm trong fingerprint cache, không thêm thư viện;
+- `127.0.0.1:8765` giữ nguyên hành vi;
+- không tự sửa Windows Firewall;
+- chế độ điện thoại mặc định tắt;
+- không test nào bind vào địa chỉ Wi-Fi thật (luôn gán `lan` giả).
+
+### 14.1. Việc cần làm
+
+- **L1. Giới hạn kết nối theo từng thiết bị, và hạn chót thật trước khi có cookie.**
+  - Mỗi IP chỉ giữ tối đa khoảng 6 trong 32 kết nối. Vượt thì đóng ngay kết nối mới của IP đó; IP khác vẫn vào được.
+  - Kết nối chưa có cookie bị đóng sau 5 s **tính từ lúc nhận kết nối**, kể cả khi client gửi nhỏ giọt từng byte. Ví dụ: một `threading.Timer` gọi `request.shutdown(socket.SHUT_RDWR)`, hủy trong `opened()` và `finish()`.
+  - Từ chối vì giới hạn thì ghi một event có giới hạn tần suất (vd. `PHONE_CONNECTIONS_LIMITED` kèm IP, tối đa 1 event mỗi 60 s), để khung trên PC thấy có thiết bị đang chiếm kết nối.
+- **L2. Giới hạn event `PHONE_LOGIN`.** Chỉ ghi một event cho mỗi cặp (IP, lần bật), hoặc giới hạn tần suất. Mục đích: người có mã không đẩy được event cũ của job ra khỏi giới hạn 10.000 dòng của bảng `events`.
+- **L3. Tắt là cắt luôn kết nối đang mở, kể cả video đang phát.** `_PhoneServer` giữ danh sách socket đã nhận; `disable()` đóng listener rồi đóng các socket đó. Stream video trên PC (`127.0.0.1:8765`) không bị ảnh hưởng.
+- **L4. Sửa hướng dẫn và dòng in của launcher.**
+  - `docs/DASHBOARD_V2_PHONE.md` mục 2 bước 4: **không** bấm Cancel, vì Cancel làm Windows tạo rule Block cho Python và rule Block thắng rule Allow của cổng 8767.
+  - Đề xuất cách tránh hộp thoại hỏi Python (máy thật sẽ thử trước khi chốt): rule Allow gắn với chính file Python của BiliFlow **và** cổng 8767 (`-Program … -Protocol TCP -LocalPort 8767 -Profile Private -RemoteAddress LocalSubnet`), thay vì rule chỉ theo cổng.
+    - `.venv\Scripts\python.exe` chỉ là launcher. Tiến trình nghe cổng là `python.exe` trong `runtime\python\cpython-3.11.<bản vá>-windows-x86_64-none\`; thư mục `cpython-3.11-windows-x86_64-none` là junction trỏ tới đó.
+    - Ghi lệnh tìm đường dẫn thật, không ghi cứng số bản vá.
+  - Thêm một dòng: nếu trước đây đã cho Python qua tường lửa ở mạng **Public**, nên tắt rule đó trong *Inbound Rules*, vì khi đó Python nhận kết nối cả ở Wi-Fi công cộng.
+  - Mục 7: ghi đúng cách giới hạn kết nối sau L1, thay câu "kết nối chưa có cookie bị đóng sau 5 s".
+  - Dòng in của launcher về tường lửa (`scripts/Start-BiliFlow.ps1`, giữ ASCII) khớp với hướng dẫn mới và có "khong bam Cancel".
+
+### 14.2. Test
+
+- Test mới theo mẫu `tests/test_dashboard_v2_phone_hardening.py` (listener 127.0.0.1, root tạm, `lan` giả, hằng số nhỏ trong test):
+  - L1: một IP vượt giới hạn → kết nối mới của IP đó bị đóng ngay, IP khác vẫn được phục vụ (giả IP bằng cách gọi `process_request` với `client_address` khác); kết nối gửi 1 byte mỗi 0,3 s bị đóng đúng hạn chót (test đặt khoảng 1 s); kết nối đã có cookie không bị hạn chót cắt; event giới hạn ghi tối đa 1 lần trong khoảng thời gian.
+  - L2: nhiều lần nhập đúng mã từ một IP → 1 event; IP khác → thêm 1 event.
+  - L3: đang tải video qua listener điện thoại thì tắt chế độ → kết nối bị đóng trong < 2 s.
+- Chạy lại như 13.2: node gates, `tests.test_dashboard_v2_*`, test Control Center liên quan, lệnh A4 (10 stage `none`).
+
+### 14.3. Checklist đợt 4
+
+| ID | Hạng mục | Cloud | Máy thật | Bằng chứng |
+| --- | --- | --- | --- | --- |
+| L1 | Giới hạn kết nối theo IP; hạn chót thật 5 s trước khi có cookie; event khi bị giới hạn | [ ] | [ ] | |
+| L2 | Event `PHONE_LOGIN` có giới hạn | [ ] | [ ] | |
+| L3 | Tắt chế độ đóng cả kết nối đang mở, kể cả video đang phát | [ ] | [ ] | |
+| L4 | Hướng dẫn: không bấm Cancel; rule Firewall gắn Python và cổng 8767; mục 7 ghi đúng; dòng in của launcher | [ ] | [ ] | |
+
+**Sau đợt 4:** máy thật kéo về kiểm như đợt 3; người dùng test phần điện thoại và laptop (P7, P8, P9, câu 10–11) trên bản đã sửa; chỉ merge vào `main` khi người dùng yêu cầu.
