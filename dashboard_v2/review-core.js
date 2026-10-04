@@ -10,7 +10,11 @@
  *   R2-K the BLUR button (and key 2) of an item with a red region blurs that region (P7, 6.3); the classic
  *      main button and key 2 always blur the whole frame (the classic page blurs a region with its region buttons);
  *   S9 a card that only borrows another logo card's red box has no region buttons: a line about the owner card
- *      and "Đi tới thẻ logo" (the classic page shows the same buttons on both cards; the bodies are unchanged).
+ *      and "Đi tới thẻ logo" (the classic page shows the same buttons on both cards; the bodies are unchanged);
+ *   S3 the export state reloads 1.5 s after a decision too (the classic page: only while QUEUED/RENDERING);
+ *   S4 the resources line says "Ổ đĩa còn trống" (the classic page: "Ổ E còn trống", contracts.resourceItems).
+ * R3 bulk and export follow the classic bulkKeep(), bulkAccept(), runBlocking() and finalizeExport(): same filter map,
+ * same confirm words (count as the server selects, S1), the export gate and the export_dialog.py sentence.
  * R2 decisions follow the classic decide(), undo() and writeFailureMessage(): same confirms (S5 shows them in
  * a V2 dialog), same errors and, field for field, the same POST bodies.
  */
@@ -48,6 +52,7 @@
     studio:'Đây là logo hãng phim — giữ & nhớ',studioDone:'✓ Đã nhớ là logo hãng phim (giữ nguyên)',
     platform:'Đây là logo nền tảng — làm mờ & nhớ',platformDone:'✓ Đã nhớ là logo nền tảng (làm mờ)',
     regionKeep:'Đây là tiêu đề/nội dung phim — giữ lại',regionBlur:'Đây là logo thương hiệu — làm mờ',
+    bulkKeepNone:'Không có mục chưa duyệt trong bộ lọc này.',bulkAcceptNone:'Không có đề xuất chưa duyệt trong bộ lọc này.',
     offline:'Mất kết nối với Control Center. Các nút quyết định tạm khóa đến khi kết nối lại; lựa chọn đã lưu vẫn được giữ.'
   };
   /* Notes of the region buttons ("Đây là tiêu đề/nội dung phim — giữ lại" / "Đây là logo thương hiệu — làm mờ"). */
@@ -383,11 +388,32 @@
   /* A write error worth a retry (network error or status ≥ 500); 400/403/409 are not (403 is handled by the adapter). */
   function transientWrite(error) { return !error || !error.status || error.status >= 500; }
 
+  /* R3. Bulk (classic bulkKeep / bulkAccept): the filters to send, in order, and the confirm text with the S1 count.
+   * kind: 'bulkKeep' | 'bulkAccept'. */
+  function bulkPlan(queue, filter, kind) {
+    const filters = bulkFilters(filter);
+    if (!filters) return {error: TEXT.bulkUnsupported};
+    const count = bulkCount(queue, filter, kind === 'bulkAccept' ? 'accept' : 'keep');
+    if (!count) return {error: kind === 'bulkAccept' ? TEXT.bulkAcceptNone : TEXT.bulkKeepNone};
+    return {filters, count, confirm: kind === 'bulkAccept' ? `Áp dụng ${count} đề xuất đang hiển thị? Bạn vẫn có thể bỏ chọn từng mục trước khi xuất.`
+      : `Giữ nguyên ${count} mục chưa duyệt đang hiển thị? Thao tác này không blur hoặc cắt video.`};
+  }
+  /* The export state under the progress (classic renderExport exportText), for what "N / M" and S2 do not say:
+   * an export queued, running, done or failed, a skipped video, a cleaned or archived source. */
+  function exportLine(exp) {
+    const e = exp || {}, done = e.status === 'COMPLETED' ? `Hoàn tất: ${e.output || ''}. ` : '';
+    if (e.source_cleaned) { const when = C.formatStamp(e.source_cleanup?.finished_at); return `${done}Video gốc đã được dọn vào Thùng rác${when ? ` lúc ${when}` : ''}. Chép lại đúng tên “${e.source_name || ''}” vào input để xuất lại hoặc sửa quyết định.`; }
+    if (e.source_archived) { const when = C.formatStamp(e.source_archive?.archived_at); return `${done}Video gốc đang ở kho lưu trữ${when ? ` từ ${when}` : ''}. Bấm “Khôi phục bản xuất” trên Dashboard để xuất lại hoặc sửa quyết định.`; }
+    return {QUEUED: 'Đã xếp hàng xuất video.', RENDERING: 'Đang render và kiểm tra video…', COMPLETED: `Hoàn tất: ${e.output || ''}`, FAILED: `Xuất thất bại: ${e.error || 'không rõ lỗi'}`,
+      SKIPPED: 'Video đã được đánh dấu bỏ qua (không xuất). Bấm “Mở lại để xuất” ở Dashboard nếu muốn xuất video.'}[e.status] || '';
+  }
+  const exportActive = exp => !!exp && ['QUEUED', 'RENDERING'].includes(exp.status);
+
   return {SAFETY,KIND_NAMES,STATUS,FILTERS,MORE_FILTERS,FILTER_IDS,TEXT,isSafety,momentsOf,isScene,studioEligible,platformEligible,sceneLogo,hasPlayer,
     isLogoItem,isAdItem,needsFullFrame,catName,actionName,sceneName,statusOf,mmss,span,visible,byTime,listItems,itemMap,countsFrom,statusFrom,progress,progressText,
     nextNote,initialFilter,pickFocus,nextUndecided,step,queueIdentity,queueVersion,bulkFilters,bulkCount,lockState,canExport,regionOwner,regionBox,
     frameAspect,scopeWarning,filterLabel,thumbTime,momentIndex,nextMomentAfter,pickStrip,pickSceneStrip,pickFor,stripFrames,peakFirst,tlPos,thin,timelineHtml,
     seekTarget,VIDEO_REASONS,videoReason,probeReason,REGION_NOTES,WRITE_RETRY_MS,momentTotal,sceneBlurMessage,aiConfirm,decisionConfirms,decisionBody,regionNote,
     keyDecision,blurLabel,chosenButton,studioRemembered,platformRemembered,isAdvisoryItem,syncCounts,applyDecision,applyClear,undoEntry,undoPlan,undoTitle,decisionLabel,
-    advisoryUndoMessage,writeFailureMessage,transientWrite};
+    advisoryUndoMessage,writeFailureMessage,transientWrite,bulkPlan,exportLine,exportActive};
 });

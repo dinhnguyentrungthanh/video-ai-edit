@@ -38,7 +38,8 @@
 
     /* Review dialog: the adapter's review(jobId) interface on a synthetic in-memory queue.
      * Images are the bundled poster SVGs; there is no video, frame or evidence in the demo.
-     * R2 writes (decision / clear) change that queue in memory, one at a time per job, never over the network. */
+     * R2/R3 writes (decision, clear, bulk-keep, bulk-accept) change that queue in memory, one at a time per job,
+     * never over the network. */
     const reviews = new Map(), writers = new Map();
     const writer = id => { if (!writers.has(id)) writers.set(id, {chain: Promise.resolve(), pending: 0}); return writers.get(id); };
     function countQueue(q) {
@@ -53,6 +54,29 @@
       const q = reviews.get(j.id);
       if (!q) throw demoError(404, 'Video chưa có danh sách duyệt (đang quét hoặc quét lại).');
       if (C.inFlight(j) || C.locked(j) || j.state === 'SKIPPED') throw demoError(409, 'Video đang chờ xuất, đang xuất, bị khóa hoặc đã bỏ qua; không sửa quyết định.');
+      if (operation === 'bulkKeep' || operation === 'bulkAccept') bulkWrite(q, operation, body.filter);
+      else writeItem(q, operation, body);
+      countQueue(q);
+      state.requests.push(C.request(operation, j, body));
+      // The dashboard row follows the queue once the dialog closes (resume()).
+      const c = q.counts;
+      j.review_summary = {...(j.review_summary || {}), status: q.status, main_items: c.total, pending: c.pending, decisions: {...c.decisions}};
+      if (['WAITING_REVIEW', 'READY_TO_EXPORT'].includes(j.state)) j.state = q.status === 'READY_FOR_EDIT_PLAN' ? 'READY_TO_EXPORT' : 'WAITING_REVIEW';
+      return structuredClone(q);
+    }
+    /* bulk_keep_review_items / bulk_accept_suggested_decisions: undecided main items of the filter (S1). */
+    function bulkWrite(q, operation, filter) {
+      if (!['pending', 'high', 'all', 'gore', 'violence', 'adult', 'text', 'visual_logo'].includes(filter)) throw demoError(400, 'Bộ lọc hàng loạt không hợp lệ');
+      const at = new Date().toISOString();
+      for (const x of q.items) {
+        if (x.decision != null || !(filter === 'pending' || filter === 'all' || (filter === 'high' ? x.priority === 'high' : x.category === filter))) continue;
+        if (operation === 'bulkKeep') { Object.assign(x, {decision: 'KEEP', decision_note: 'Bulk keep from filtered review view', decision_region_source_pixels: null, decided_at: at}); continue; }
+        const d = x.suggested_decision, region = d === 'BLUR' ? x.suggested_region_source_pixels || null : null;
+        if (!['KEEP', 'BLUR', 'CUT', 'NEEDS_MORE_CONTEXT'].includes(d) || (d === 'BLUR' && !region)) continue;
+        Object.assign(x, {decision: d, decision_note: 'Human accepted the detector suggestion from the filtered review view', decision_region_source_pixels: region, decided_at: at});
+      }
+    }
+    function writeItem(q, operation, body) {
       let item = q.items.find(x => x.id === body.id);
       if (!item && operation === 'decision') {
         const i = q.advisory_items.findIndex(x => x.id === body.id);
@@ -73,13 +97,6 @@
         if (studio) item.studio_logo_memory = {remembered: true, frames: 12, frames_source: 'source_video'};
         if (platform) item.platform_logo_memory = {remembered: true, logo_frames: 4, platform: {key: 'demo', name: 'Nền tảng mẫu'}};
       }
-      countQueue(q);
-      state.requests.push(C.request(operation, j, body));
-      // The dashboard row follows the queue once the dialog closes (resume()).
-      const c = q.counts;
-      j.review_summary = {...(j.review_summary || {}), status: q.status, main_items: c.total, pending: c.pending, decisions: {...c.decisions}};
-      if (['WAITING_REVIEW', 'READY_TO_EXPORT'].includes(j.state)) j.state = q.status === 'READY_FOR_EDIT_PLAN' ? 'READY_TO_EXPORT' : 'WAITING_REVIEW';
-      return structuredClone(q);
     }
     function review(jobId) {
       const j = getJob(jobId);
@@ -104,7 +121,7 @@
         videoUrl: () => '',
         mediaUrl: asset,
         write(operation, body) {
-          if (operation !== 'decision' && operation !== 'clear') return Promise.reject(demoError(400, 'Thao tác ghi không hợp lệ.'));
+          if (!['decision', 'clear', 'bulkKeep', 'bulkAccept'].includes(operation)) return Promise.reject(demoError(400, 'Thao tác ghi không hợp lệ.'));
           const w = writer(j.id);
           w.pending++;
           const run = async () => { try { return {body: reviewWrite(j, operation, body), last: w.pending === 1}; } finally { w.pending--; } };

@@ -174,7 +174,7 @@ check('Demo store keeps the in-memory contract (409 once, no network)',()=>{
   const before=S.snapshot().requests.length;S.scenario('conflict');
   return S.dispatch('scheduler',null,{paused:true}).then(()=>assert.fail('409 expected'),e=>{assert.equal(e.status,409);assert.equal(S.snapshot().requests.length,before);});
 });
-check('Demo store review writes (R2): decision / clear change the synthetic queue in memory, one at a time, recorded, never sent',async()=>{
+check('Demo store review writes (R2, R3): decision / clear / bulk change the synthetic queue in memory, one at a time, recorded, never sent',async()=>{
   const ctx={window:{BFContracts:C},structuredClone};
   vm.runInNewContext(fs.readFileSync(path.join(__dirname,'mock-data.js'),'utf8'),ctx);
   const S=require('./demo-store.js').create(C,ctx.window.BFMock),r=S.review(101),q0=await r.queue(),before=S.snapshot().requests.length;
@@ -190,7 +190,15 @@ check('Demo store review writes (R2): decision / clear change the synthetic queu
   await assert.rejects(()=>r.write('decision',{id:plain.id,decision:'BLUR',full_frame:false,note:null}),e=>e.status===400,'BLUR needs a region or full_frame');
   const cleared=await r.write('clear',{id:plain.id});
   assert.equal(cleared.body.items.find(i=>i.id===plain.id).decision,null);
-  await assert.rejects(()=>r.write('bulkKeep',{filter:'all'}),e=>e.status===400);
+  await assert.rejects(()=>r.write('finalize',{size_mode:'default'}),e=>e.status===400,'finalize is not a review write');
+  // R3: bulk-keep / bulk-accept as the server selects (S1): undecided main items of the filter; accept skips BLUR without a region.
+  const q1=(await r.write('bulkKeep',{filter:'adult'})).body;
+  assert.ok(q1.items.filter(x=>x.category==='adult').every(x=>x.decision));
+  const undecided=q1.items.filter(x=>!x.decision),skipped=undecided.filter(x=>!['KEEP','BLUR','CUT','NEEDS_MORE_CONTEXT'].includes(x.suggested_decision)||(x.suggested_decision==='BLUR'&&!x.suggested_region_source_pixels));
+  const q2=(await r.write('bulkAccept',{filter:'all'})).body;
+  assert.equal(q2.items.filter(x=>!x.decision).length,skipped.length);
+  await assert.rejects(()=>r.write('bulkKeep',{filter:'visual_ai'}),e=>e.status===400);
+  assert.deepEqual([...S.snapshot().requests].slice(-2).map(d=>d.operation+' '+JSON.stringify(d.body)),['bulkKeep {"filter":"adult"}','bulkAccept {"filter":"all"}']);
   S.scenario('offline');
   await assert.rejects(()=>r.write('clear',{id:target.id}),e=>e.status===0);
   assert.equal(r.pendingWrites(),0);

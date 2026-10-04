@@ -1,7 +1,9 @@
 /* Fake Control Center for the review browser checks (R1 media, R2 writes): synthetic queues from mock-data.js,
  * a synthetic VP8 clip made by ffmpeg in temp/, no real backend, database, video or network.
  * R2: POST /api/jobs/<id>/review/decision|clear change the in-memory queue like record_review_decision /
- * clear_review_decision (token checked, same 400 texts); server_state.failNext scripts failures
+ * clear_review_decision (token checked, same 400 texts); R3: bulk-keep / bulk-accept like bulk_keep_review_items /
+ * bulk_accept_suggested_decisions, finalize queues the export (job QUEUED, queue_kind export, only when the queue is
+ * READY_FOR_EDIT_PLAN) and records its body; server_state.failNext scripts failures
  * ({status, body} or 'drop' = connection cut mid-answer), server_state.postDelay holds every answer.
  * /classic/<id> serves the real classic page (_interactive_html, as the Control Center rewrites it) so a
  * check can compare the bodies both pages send.
@@ -36,14 +38,15 @@ function create() {
   vm.runInNewContext(fs.readFileSync(path.join(ROOT, 'mock-data.js'), 'utf8'), ctx);
   const Mock = ctx.window.BFMock;
   const jobs = Mock.create().jobs.map(({name, duration, palette, render_request, output_path, ...j}) => ({...j, duration_seconds: 446}));
-  const queues = new Map(); // job id → queue override (else generated from the job)
+  const queues = new Map(); // job id → queue override (else generated from the job as it was at start)
+  const base = new Map(jobs.map(j => [j.id, structuredClone(j.review_summary)]));
   const queueFor = id => {
     const j = jobs.find(x => x.id === id);
     if (!j || !j.active_queue_path) return null;
-    if (!queues.has(id)) queues.set(id, Mock.reviewQueue({...j, duration: '01:00'}));
+    if (!queues.has(id)) queues.set(id, Mock.reviewQueue({...j, review_summary: structuredClone(base.get(id)), duration: '01:00'}));
     return queues.get(id);
   };
-  const counters = {queueAt: [], status: 0, queue: 0, media: 0, mediaActive: 0, mediaMax: 0, frames: 0, frame403: 0, video: 0, video403: 0, evidence: 0, session: 0};
+  const counters = {queueAt: [], exportAt: [], resourcesAt: [], status: 0, queue: 0, media: 0, mediaActive: 0, mediaMax: 0, frames: 0, frame403: 0, video: 0, video403: 0, evidence: 0, session: 0};
   /* R1: a synthetic 70 s VP8 clip (ffmpeg test pattern, 1 key frame per second) in the repo's temp/ folder. */
   const CLIP = path.join(ROOT, '..', 'temp', 'review-check', 'clip.webm');
   let VIDEO = fs.existsSync(CLIP);
@@ -54,7 +57,7 @@ function create() {
       VIDEO = fs.existsSync(CLIP);
     } catch (_) { VIDEO = false; }
   }
-  const server_state = {key: 'mk1', token: TOKEN, videoStatus: null, evidenceDelay: 300, evidence: new Map(), failNext: [], postDelay: 0, classic: new Map()};
+  const server_state = {key: 'mk1', token: TOKEN, videoStatus: null, evidenceDelay: 300, evidence: new Map(), failNext: [], postDelay: 0, classic: new Map(), changed: []};
   const posts = [], requests = [];
 
   function send(res, code, body, type) {
@@ -68,9 +71,23 @@ function create() {
     q.counts = counts; q.updated_at = new Date().toISOString();
     q.status = counts.decisions.NEEDS_MORE_CONTEXT ? 'NEEDS_MORE_CONTEXT' : counts.pending ? 'REVIEW_REQUIRED' : 'READY_FOR_EDIT_PLAN';
   }
-  /* record_review_decision / clear_review_decision, the parts the dialog can reach (same refusal texts). */
+  /* record_review_decision / clear_review_decision / bulk_*, the parts the dialog can reach (same refusal texts). */
   function applyWrite(q, kind, body) {
     const bad = error => ({status: 400, body: {error}});
+    if (kind === 'bulk-keep' || kind === 'bulk-accept') {
+      const f = body && body.filter, at = new Date().toISOString();
+      if (!['pending', 'high', 'all', 'gore', 'violence', 'adult', 'text', 'visual_logo'].includes(f)) return bad('Bộ lọc hàng loạt không hợp lệ');
+      let changed = 0;
+      for (const x of q.items) {
+        if (x.decision != null || !(f === 'pending' || f === 'all' || (f === 'high' ? x.priority === 'high' : x.category === f))) continue;
+        if (kind === 'bulk-keep') { Object.assign(x, {decision: 'KEEP', decision_note: 'Bulk keep from filtered review view', decision_region_source_pixels: null, decided_at: at}); changed++; continue; }
+        const d = x.suggested_decision, region = d === 'BLUR' ? x.suggested_region_source_pixels || null : null;
+        if (!DECISIONS.includes(d) || (d === 'BLUR' && !region)) continue;
+        Object.assign(x, {decision: d, decision_note: 'Human accepted the detector suggestion from the filtered review view', decision_region_source_pixels: region, decided_at: at}); changed++;
+      }
+      countQueue(q); server_state.changed.push(changed);
+      return {status: 200, body: q};
+    }
     if (!body || typeof body.id !== 'string') return bad('Thiếu id');
     let item = q.items.find(x => x.id === body.id);
     if (kind === 'clear') {
@@ -101,6 +118,12 @@ function create() {
     countQueue(q);
     return {status: 200, body: q};
   }
+  /* As ControlCenter.sync_queue_state + the /api/status review_summary: the job follows its queue. */
+  function syncJob(id, q) {
+    const j = jobs.find(x => x.id === id), c = q.counts;
+    j.review_summary = {...(j.review_summary || {}), status: q.status, main_items: c.total, pending: c.pending, decisions: {...c.decisions}, export_size_policy: q.export_size_policy};
+    if (['WAITING_REVIEW', 'READY_TO_EXPORT'].includes(j.state)) j.state = q.status === 'READY_FOR_EDIT_PLAN' ? 'READY_TO_EXPORT' : 'WAITING_REVIEW';
+  }
   function post(req, res, p) {
     let raw = '';
     req.setEncoding('utf8');
@@ -108,7 +131,7 @@ function create() {
     req.on('end', () => {
       let body = null;
       try { body = JSON.parse(raw); } catch (_) { /* recorded as null */ }
-      const m = p.match(/^\/api\/jobs\/(\d+)\/review\/(decision|clear)$/);
+      const m = p.match(/^\/api\/jobs\/(\d+)\/review\/(decision|clear|bulk-keep|bulk-accept|finalize)$/);
       posts.push({path: p, body, token: req.headers['x-biliflow-token'] || null, type: req.headers['content-type'] || '', at: Date.now()});
       if (!m) return send(res, 405, {error: 'Không hỗ trợ'});
       const fail = server_state.failNext.shift();
@@ -121,7 +144,14 @@ function create() {
         if (!/^application\/json/.test(req.headers['content-type'] || '')) return send(res, 415, {error: 'JSON'});
         const q = queueFor(Number(m[1]));
         if (!q) return send(res, 404, {error: 'Video chưa có danh sách duyệt'});
+        if (m[2] === 'finalize') {
+          const j = jobs.find(x => x.id === Number(m[1]));
+          if (q.status !== 'READY_FOR_EDIT_PLAN') return send(res, 400, {error: 'Vẫn còn mục chưa có quyết định cuối cùng.'});
+          Object.assign(j, {state: 'QUEUED', queue_kind: 'export'});
+          return send(res, 200, {status: 'QUEUED', export_size_policy: body});
+        }
         const result = applyWrite(q, m[2], body);
+        if (result.status === 200) syncJob(Number(m[1]), q);
         send(res, result.status, result.body);
       }, server_state.postDelay);
     });
@@ -144,9 +174,10 @@ function create() {
     if (review) {
       const id = Number(review[1]), j = jobs.find(x => x.id === id);
       if (review[2] === 'queue') { counters.queue++; counters.queueAt.push(Date.now()); const q = queueFor(id); return q ? send(res, 200, q) : send(res, 404, {error: 'Video chưa có danh sách duyệt'}); }
-      if (review[2] === 'export') return send(res, 200, {status: j.state, source_cleaned: !!j.source_cleaned, source_archived: !!j.source_archived});
+      if (review[2] === 'export') { counters.exportAt.push(Date.now()); return send(res, 200, {status: j.state, source_cleaned: !!j.source_cleaned, source_archived: !!j.source_archived, output: j.state === 'COMPLETED' ? 'output/demo-' + id + '-reviewed.mp4' : null}); }
+      if (review[2] === 'resources') counters.resourcesAt.push(Date.now());
       if (review[2] === 'session') { counters.session++; return send(res, 200, {token: server_state.token, media_key: server_state.key}); }
-      return send(res, 200, {source_bytes: 1, report_bytes: 1, disk_free_bytes: 1});
+      return send(res, 200, {source_bytes: 245000000, report_bytes: 18000000, disk_free_bytes: 312000000000, estimated_preview_seconds: 40, estimated_preview_megabytes_range: [180, 260]});
     }
     const evidence = p.match(/^\/api\/jobs\/(\d+)\/review\/(evidence|frame|video)$/);
     if (evidence) {
@@ -190,7 +221,7 @@ function create() {
     if (/^\/review\/\d+$/.test(p)) return send(res, 200, '<!doctype html><title>review</title><h1>Trang duyệt cũ</h1>', 'text/html');
     return send(res, 404, {error: 'Không tìm thấy'});
   });
-  return {server, Mock, jobs, queues, queueFor, counters, server_state, posts, requests, VIDEO, TOKEN, applyWrite};
+  return {server, Mock, jobs, queues, queueFor, counters, server_state, posts, requests, VIDEO, TOKEN, applyWrite, syncJob};
 }
 
 module.exports = {create, classicPage};

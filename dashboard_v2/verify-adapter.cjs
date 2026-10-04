@@ -410,8 +410,35 @@ test('Review writes (R2): the chain belongs to the job, not to one dialog: a new
   const error = await failed; await waiting;
   assert.equal(error.attempts, 3, 'it still finishes (with its retries) after the dialog closed');
   assert.equal(idle, true); assert.equal(again.pendingWrites(), 0); assert.equal(posts().length, 3);
-  await assert.rejects(() => again.write('bulkKeep', {filter: 'all'}), e => e.status === 400);
-  assert.equal(posts().length, 3, 'only decision and clear');
+  await assert.rejects(() => again.write('finalize', {size_mode: 'default'}), e => e.status === 400);
+  assert.equal(posts().length, 3, 'only decision, clear and bulk go through the chain');
+});
+
+test('R3: a bulk write queued after pending decisions waits for them; it sends {filter} only; Quảng cáo is two writes, in order', async () => {
+  let release;
+  const gate = new Promise(r => { release = r; });
+  const {f, a, posts} = writeAdapter({'POST /api/jobs/12/review/decision': () => gate.then(() => ({status: 200, body: QUEUE(1)})), 'POST /api/jobs/12/review/bulk-keep': {status: 200, body: QUEUE(0)}});
+  const r = a.review(12);
+  const d = r.write('decision', {id: 'a', decision: 'KEEP', full_frame: false, note: null});
+  const b1 = r.write('bulkKeep', {filter: 'visual_logo'}), b2 = r.write('bulkKeep', {filter: 'text'});
+  await new Promise(resolve => setTimeout(resolve, 5));
+  assert.deepEqual(posts().map(c => c.path), ['/api/jobs/12/review/decision'], 'the bulk waits for the decision');
+  release();
+  await Promise.all([d, b1, b2]);
+  assert.deepEqual(posts().map(c => [c.path, c.body]), [['/api/jobs/12/review/decision', {id: 'a', decision: 'KEEP', full_frame: false, note: null}],
+    ['/api/jobs/12/review/bulk-keep', {filter: 'visual_logo'}], ['/api/jobs/12/review/bulk-keep', {filter: 'text'}]]);
+  assert.equal(f.calls.filter(c => c.path === '/api/status').length, 0);
+});
+test('R3: finalize is sent once, never retried (500, network error, 409), and only through dispatch', async () => {
+  for (const answer of [{status: 500, body: {error: 'lỗi'}}, new Error('reset'), {status: 409, body: {error: 'đổi', code: 'state_changed'}}]) {
+    const sleeps = [], f = fake({'POST /api/jobs/7/review/finalize': answer});
+    const a = A.create({contracts: C, transport: f.transport, sleep: ms => { sleeps.push(ms); return Promise.resolve(); }});
+    await assert.rejects(() => a.dispatch('finalize', job(7, 'READY_TO_EXPORT'), {size_mode: 'custom', max_output_gb: 2.5}));
+    assert.equal(f.posts().length, 1, 'one POST'); assert.deepEqual(sleeps, [], 'no retry wait');
+    assert.deepEqual(f.posts()[0].body, {size_mode: 'custom', max_output_gb: 2.5}, 'no extra field');
+    await assert.rejects(() => a.review(7).write('finalize', {size_mode: 'default'}), e => e.status === 400);
+    assert.equal(f.posts().length, 1, 'the review write chain refuses finalize');
+  }
 });
 
 (async () => {

@@ -126,6 +126,26 @@
     if (start && (!['animation','live_action','mixed'].includes(data.content_style) || !['careful','fast'].includes(data.profile))) throw new Error('Chọn loại nội dung và chế độ quét hợp lệ.');
     return data;
   }
+  /* Export dialog text and limits, as export_dialog.py (EXPORT_DIALOG_JS); the body stays {size_mode, max_output_gb?}. */
+  const EXPORT_GATE_MESSAGE = 'Vẫn còn mục chưa có quyết định cuối cùng.';
+  const EXPORT_SIZE_OPTIONS = [['default','Tối đa 3,5 GB (mặc định)'],['custom','Giới hạn tùy chỉnh'],['unlimited','Không giới hạn dung lượng']];
+  const EXPORT_CUSTOM_GB = {attributes:'type="number" min="0.05" max="1000" step="0.1"',value:'3.5'};
+  function exportDescription(selection) {
+    if (selection.size_mode==='unlimited') return 'không giới hạn dung lượng';
+    if (selection.size_mode==='default') return 'tối đa 3,5 GB';
+    return `tối đa ${Number(selection.max_output_gb).toLocaleString('vi-VN')} GB`;
+  }
+  function exportConfirmText(selection) { return `Khóa các lựa chọn hiện tại và bắt đầu xuất video hoàn chỉnh (${exportDescription(selection)})?`; }
+  function exportPolicyChoice(policy) {
+    const value=policy||{}, mode=EXPORT_SIZE_OPTIONS.some(o => o[0]===value.mode)?value.mode:'default', gb=Number(value.maximum_output_gb);
+    return {mode,gb:mode==='custom'&&gb>0?gb:Number(EXPORT_CUSTOM_GB.value)};
+  }
+  /* The resources line of the export dialog (classic renderExport; S4: "Ổ đĩa còn trống", not "Ổ E còn trống"). */
+  function resourceItems(r) {
+    if (!r) return [];
+    const size = n => n>1073741824 ? `${(n/1073741824).toFixed(1)} GB` : `${(n/1048576).toFixed(1)} MB`, range = r.estimated_preview_megabytes_range||[0,0];
+    return [['Video nguồn',size(r.source_bytes)],['Ảnh và report',size(r.report_bytes)],['Ổ đĩa còn trống',size(r.disk_free_bytes)],['Preview dự kiến',`${r.estimated_preview_seconds} giây · khoảng ${range[0]}–${range[1]} MB`]];
+  }
   function exportSelection(mode,gb) {
     if (mode==='default' || mode==='unlimited') return {size_mode:mode};
     const n=Number(gb);
@@ -142,5 +162,5 @@
     if (pairs.length) path += '?'+pairs.join('&');
     return {operation:id,method:ep[0],path,body:body||{}};
   }
-  return {pcOnlyOps,PC_ONLY_REASON,SOURCE_MISSING_MESSAGE,sourceLine,formatStamp,formatBytes,detectors,tabs,labels,scanning,pausable,rerunnable,endpoints,cleaned,archived,hidden,locked,inFlight,eligible,reviewStats,tab,phase,overviewLabels,overviewMatch,operations,primary,validateScan,exportSelection,request};
+  return {pcOnlyOps,PC_ONLY_REASON,SOURCE_MISSING_MESSAGE,sourceLine,formatStamp,formatBytes,detectors,tabs,labels,scanning,pausable,rerunnable,endpoints,cleaned,archived,hidden,locked,inFlight,eligible,reviewStats,tab,phase,overviewLabels,overviewMatch,operations,primary,validateScan,exportSelection,EXPORT_GATE_MESSAGE,EXPORT_SIZE_OPTIONS,EXPORT_CUSTOM_GB,exportDescription,exportConfirmText,exportPolicyChoice,resourceItems,request};
 });

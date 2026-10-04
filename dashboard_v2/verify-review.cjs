@@ -578,7 +578,7 @@ check('R2 deliberate differences are explicit: S5 (V2 confirm dialog, classic wo
   for (const file of ['review.js', 'review-cards.js', 'review-core.js', 'review-detail.js', 'review-media.js']) {
     assert.ok(!/(^|[^\w.])(confirm|alert|prompt)\(/.test(fs.readFileSync(path.join(__dirname, file), 'utf8')), file + ': no native dialog');
   }
-  const header = fs.readFileSync(path.join(__dirname, 'review-core.js'), 'utf8').slice(0, 1600);
+  const header = fs.readFileSync(path.join(__dirname, 'review-core.js'), 'utf8').slice(0, 3200);
   for (const tag of ['S1', 'S2', 'S6', 'S7', 'S8', 'R2-K', 'S5']) assert.ok(header.includes(tag), 'review-core.js lists ' + tag);
   // Undo button titles (classic updateNavState).
   assert.ok(script.includes('`Lựa chọn cho ứng viên phụ ${catName(item)} ${span(item)} không hoàn tác được (phím Z để xem lý do)`'));
@@ -629,9 +629,89 @@ check('R3 S9 (R2-B2): a card borrowing another logo card\'s red box has no regio
   // The classic page shows the buttons on the borrowing card too: listed as deliberate difference S9 (payload unchanged).
   cl.load(q);
   assert.match(cl.fn.regionControlsHtml(end, cl.fn.regionOwner(end), logo.decision_region_source_pixels), /Xử lý riêng vùng logo khoanh đỏ.*data-act="region" data-owner="visual_logo-101-0007"/);
-  const header = fs.readFileSync(path.join(__dirname, 'review-core.js'), 'utf8').slice(0, 2400);
+  const header = fs.readFileSync(path.join(__dirname, 'review-core.js'), 'utf8').slice(0, 3200);
   assert.ok(header.includes('S9'), 'review-core.js lists S9');
   process.stdout.write('   S9: borrowing cards link to the owner card; the classic page shows region buttons on both\n');
+});
+
+/* R3: bulk and export against the classic bulkKeep / bulkAccept (runBlocking, postJson recorded) and EXPORT_DIALOG_JS. */
+const BULK_FUNCS = ['isSafety', 'isLogoItem', 'isAdItem', 'visible', 'bulkFilters', 'decisionsLocked', 'refuseWhileExporting', 'bulkKeep', 'bulkAccept', 'formatStamp'];
+const EXPORT_LINES = lines.slice(0, 12).filter(l => /EXPORT_GATE_MESSAGE=|^function export(SizeSelection|ConfirmText|PolicyChoice|SizeOptionsHtml)\(/.test(l));
+const bulkSource = ['EXPORT_LOCK_MESSAGE', 'SOURCE_CLEANED_LOCK_MESSAGE', 'SOURCE_ARCHIVED_LOCK_MESSAGE', 'size', 'SAFETY'].map(n => line(new RegExp('^const ' + n + '='))).concat(EXPORT_LINES, BULK_FUNCS.map(n => line(new RegExp('^(async )?function ' + n + '\\(')))).join('\n');
+const bulkBox = {};
+vm.createContext(bulkBox);
+vm.runInContext(`let queue=null,filter='pending',exportJob={status:'IDLE'};const sticky=new Set();let asked=[],alerts=[],posted=[];
+function confirm(m){asked.push(m);return true;}function alert(m){alerts.push(m);}
+async function postJson(kind,body){posted.push({kind,body:JSON.parse(JSON.stringify(body))});return queue;}
+async function runBlocking(task){await task();} async function applyQueueUpdate(){} function scheduleResources(){}
+${bulkSource}
+globalThis.classic={async run(q,f,kind){queue=q;filter=f;asked=[];alerts=[];posted=[];await (kind==='bulkAccept'?bulkAccept():bulkKeep());return {asked:asked.slice(),alerts:alerts.slice(),posted:posted.slice()};},
+  fn:{exportSizeSelection,exportConfirmText,exportPolicyChoice,exportSizeOptionsHtml,formatStamp,size},consts:{EXPORT_GATE_MESSAGE,EXPORT_SIZE_OPTIONS}};`, bulkBox);
+const bk = bulkBox.classic;
+check('R3.1 bulk: the classic filter map, words and POSTs ({filter}; Quảng cáo = visual_logo then text; Visual AI / Ứng viên phụ unsupported); S1 counts', async () => {
+  const KIND = {bulkKeep: 'bulk-keep', bulkAccept: 'bulk-accept'};
+  let same1 = 0, s1 = 0, unsupported = 0, sends = 0;
+  for (const [name, q] of Object.entries(QUEUES)) for (const f of R.FILTER_IDS) for (const kind of ['bulkKeep', 'bulkAccept']) {
+    const a = await bk.run(structuredClone(q), f, kind), plan = R.bulkPlan(q, f, kind);
+    const b = plan.error ? {asked: [], alerts: [plan.error], posted: []} : {asked: [plan.confirm], alerts: [], posted: plan.filters.map(filter => ({kind: KIND[kind], body: {filter}}))};
+    const label = `${name} ${f} ${kind}`;
+    if (plan.error === R.TEXT.bulkUnsupported) { unsupported++; same(b, a, label); continue; }
+    // The count the classic page shows (what the list displays) and the one V2 shows (what the server will change).
+    const classicCount = a.asked.length ? Number(/(\d+)/.exec(a.asked[0])[1]) : 0, v2Count = plan.error ? 0 : plan.count;
+    if (classicCount === v2Count) { same(b, a, label); same1++; }
+    else { // S1: same words and filters, the count follows the server
+      s1++;
+      assert.equal(v2Count, R.bulkCount(q, f, kind === 'bulkAccept' ? 'accept' : 'keep'), label);
+      if (a.asked.length && b.asked.length) { assert.equal(b.asked[0], a.asked[0].replace(String(classicCount), String(v2Count)), label + ' words'); same(b.posted, a.posted, label + ' filters'); }
+    }
+    sends += b.posted.length;
+  }
+  const ads = R.bulkPlan(QUEUES.mixed30, 'ads', 'bulkKeep');
+  same(ads.filters, ['visual_logo', 'text'], 'Quảng cáo: 2 commands, visual_logo then text');
+  assert.ok(same1 > 60 && unsupported >= 14 && sends > 60, `identical ${same1}, S1 ${s1}, unsupported ${unsupported}, POSTs ${sends}`);
+  process.stdout.write(`   bulk: ${same1} cases identical to the classic page, ${s1} with the S1 count, ${unsupported} unsupported\n`);
+});
+check('R3.3 export dialog: options, limits, gate and confirm sentence equal EXPORT_DIALOG_JS (export_dialog.py); the body stays {size_mode, max_output_gb?}', () => {
+  const C = require('./contracts.js');
+  same(C.EXPORT_SIZE_OPTIONS, bk.consts.EXPORT_SIZE_OPTIONS); assert.equal(C.EXPORT_GATE_MESSAGE, bk.consts.EXPORT_GATE_MESSAGE);
+  let n = 0;
+  for (const [mode, gb] of [['default', ''], ['unlimited', 'x'], ['custom', '2.5'], ['custom', 12.75], ['custom', '0.05'], ['custom', '1000'], ['custom', '0.04'], ['custom', '1000.1'], ['custom', ''], ['custom', 'abc'], ['custom', '3,5'], ['nope', '2']]) {
+    let classicSel = null, classicErr = null, v2 = null, v2Err = null;
+    try { classicSel = bk.fn.exportSizeSelection(mode, gb); } catch (e) { classicErr = e.message; }
+    try { v2 = C.exportSelection(mode, gb); } catch (e) { v2Err = e.message; }
+    if (mode === 'nope') { assert.ok(v2Err && classicSel && classicSel.size_mode === 'custom', 'an unknown mode: V2 refuses, the classic page reads it as custom'); n++; continue; }
+    assert.equal(v2Err, classicErr, `${mode} ${gb} error`);
+    if (!classicSel) { n++; continue; }
+    const {description, ...body} = classicSel;
+    same(v2, body, `${mode} ${gb}: the body without the classic "description"`);
+    assert.equal(C.exportConfirmText(v2), bk.fn.exportConfirmText(classicSel), `${mode} ${gb} sentence`);
+    n++;
+  }
+  for (const policy of [null, {}, {mode: 'custom', maximum_output_gb: 7.5}, {mode: 'custom', maximum_output_gb: 0}, {mode: 'unlimited', maximum_output_gb: 9}, {mode: 'default'}, {mode: 'bogus'}]) same(C.exportPolicyChoice(policy), bk.fn.exportPolicyChoice(policy), JSON.stringify(policy));
+  assert.ok(script.includes('min="0.05" max="1000" step="0.1"') || html.includes('min="0.05" max="1000" step="0.1"'), 'classic custom field attributes');
+  assert.equal(C.EXPORT_CUSTOM_GB.attributes, 'type="number" min="0.05" max="1000" step="0.1"');
+  assert.ok(n === 12);
+});
+check('R3.2 / R3.4: resources line (S4 "Ổ đĩa còn trống"), export state line and S2 / S3 are explicit', () => {
+  const C = require('./contracts.js');
+  const r = {source_bytes: 245000000, report_bytes: 18000000, disk_free_bytes: 312000000000, estimated_preview_seconds: 40, estimated_preview_megabytes_range: [180, 260]};
+  same(C.resourceItems(r).map(i => i[1]), [bk.fn.size(r.source_bytes), bk.fn.size(r.report_bytes), bk.fn.size(r.disk_free_bytes), '40 giây · khoảng 180–260 MB']);
+  for (const [label] of C.resourceItems(r)) assert.ok(script.includes(`<div class="resource">${label === 'Ổ đĩa còn trống' ? 'Ổ E còn trống' : label}<strong>`), 'classic resource ' + label);
+  assert.equal(C.resourceItems(r)[2][0], 'Ổ đĩa còn trống', 'S4');
+  for (const stamp of ['2026-10-03T09:20:00Z', '', null, 'bad']) assert.equal(C.formatStamp(stamp), bk.fn.formatStamp(stamp));
+  const texts = {QUEUED: 'Đã xếp hàng xuất video.', RENDERING: 'Đang render và kiểm tra video…', SKIPPED: 'Video đã được đánh dấu bỏ qua (không xuất). Bấm “Mở lại để xuất” ở Dashboard nếu muốn xuất video.'};
+  for (const [status, text] of Object.entries(texts)) { assert.equal(R.exportLine({status}), text); assert.ok(script.includes(text), status); }
+  assert.equal(R.exportLine({status: 'COMPLETED', output: 'out/a.mp4'}), 'Hoàn tất: out/a.mp4'); assert.ok(script.includes('COMPLETED:`Hoàn tất: ${exportJob.output||\'\'}`'));
+  assert.equal(R.exportLine({status: 'FAILED', error: 'x'}), 'Xuất thất bại: x'); assert.ok(script.includes('FAILED:`Xuất thất bại: ${exportJob.error||\'không rõ lỗi\'}`'));
+  assert.match(R.exportLine({status: 'COMPLETED', output: 'o.mp4', source_cleaned: true, source_name: 'v.mp4', source_cleanup: {finished_at: '2026-10-03T09:20:00Z'}}), /^Hoàn tất: o\.mp4\. Video gốc đã được dọn vào Thùng rác lúc .+\. Chép lại đúng tên “v\.mp4” vào input để xuất lại hoặc sửa quyết định\.$/);
+  assert.match(R.exportLine({status: 'SKIPPED', source_archived: true}), /^Video gốc đang ở kho lưu trữ\. Bấm “Khôi phục bản xuất” trên Dashboard để xuất lại hoặc sửa quyết định\.$/);
+  for (const status of ['IDLE', 'WAITING_REVIEW', 'READY_TO_EXPORT']) assert.equal(R.exportLine({status}), '', status + ': "N / M" and S2 already say it');
+  // S2 (only "Cần xem thêm" left) and S3 (export state reloads after a decision) are deliberate differences.
+  const q = Mock.reviewQueue(job101, {count: 4}); q.items.forEach(x => { x.decision = 'KEEP'; }); q.items[1].decision = 'NEEDS_MORE_CONTEXT';
+  assert.equal(R.nextNote(q), 'Còn 1 mục Cần xem thêm — chọn quyết định cuối trước khi xuất.');
+  const header = fs.readFileSync(path.join(__dirname, 'review-core.js'), 'utf8').slice(0, 3200);
+  for (const tag of ['S2', 'S3', 'S4']) assert.ok(header.includes(tag), 'review-core.js lists ' + tag);
+  assert.ok(fs.readFileSync(path.join(__dirname, 'review.js'), 'utf8').includes('}, 1500);'), 'S3: one reload 1.5 s after the last write');
 });
 
 /* R1-B1: the image loader on fake boxes (no DOM): each started load gives its slot back exactly once. */

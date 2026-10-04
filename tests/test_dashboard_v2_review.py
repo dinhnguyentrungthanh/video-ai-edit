@@ -1,4 +1,4 @@
-"""V2 review dialog, batches R0–R2 (docs/DASHBOARD_V2_REVIEW_PLAN.md sections 7.1–7.3).
+"""V2 review dialog, batches R0–R3 (docs/DASHBOARD_V2_REVIEW_PLAN.md sections 7.1–7.4).
 
 The new files are whitelisted and served on the PC listener and, with the access cookie, on the phone
 listener; the CSP is unchanged, the new files have no blob:, inline script or fetch; the classic pages
@@ -7,6 +7,8 @@ matches the classic page (verify-review.cjs) and, for S1, counts bulk actions li
 R2: the bodies the dialog sends (review-core.js decisionBody / undoPlan, equal to the classic page's) are
 POSTed to the real /api/jobs/<id>/review/decision|clear route on a temporary root with a synthetic queue,
 and the queue it returns matches what the dialog shows after its optimistic change.
+R3: bulk-keep / bulk-accept POSTed to the real route change exactly the number of items the dialog's confirm shows
+(S1), and the export dialog's options, limits, gate and confirm sentence are those of export_dialog.py.
 Temporary roots and synthetic queues only; the phone listener runs on a fake LAN address (127.0.0.1).
 """
 from __future__ import annotations
@@ -26,7 +28,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest import mock
 
-from biliflow import phone_access, review_workflow
+from biliflow import export_dialog, phone_access, review_workflow
 from biliflow.control_center import (
     DASHBOARD_V2_CSP,
     DASHBOARD_V2_DIR,
@@ -270,9 +272,8 @@ process.stdout.write(JSON.stringify({queue,steps}));
 """
 
 
-@unittest.skipUnless(NODE, "node is required to build the dialog's payloads")
-class ReviewR2Writes(unittest.TestCase):
-    """The real route on a temporary root: the dialog's bodies are accepted and give the state the dialog shows."""
+class _TempJobFixture(unittest.TestCase):
+    """A temporary root with a real JobStore, the real handler on port 0 and one job with a synthetic queue."""
 
     def setUp(self):
         temp = TemporaryDirectory()
@@ -320,6 +321,11 @@ class ReviewR2Writes(unittest.TestCase):
         finally:
             connection.close()
 
+
+@unittest.skipUnless(NODE, "node is required to build the dialog's payloads")
+class ReviewR2Writes(_TempJobFixture):
+    """The real route on a temporary root: the dialog's bodies are accepted and give the state the dialog shows."""
+
     def test_the_dialog_bodies_give_the_state_the_dialog_shows(self):
         sent = 0
         for index, step in enumerate(self.data["steps"]):
@@ -353,6 +359,91 @@ class ReviewR2Writes(unittest.TestCase):
         written = sorted(p.relative_to(self.root).as_posix() for p in self.root.rglob("*") if p.is_file())
         self.assertTrue(all(p.startswith(("reports/", "state/", "input/r2-demo.mp4")) for p in written), written)
         self.assertEqual(self.root.joinpath("input", "r2-demo.mp4").read_bytes(), b"synthetic" * 64, "the source is never touched")
+
+
+R3_BULK_JS = r"""
+const vm=require('vm'),fs=require('fs'),R=require('./dashboard_v2/review-core.js');
+const ctx={window:{BFContracts:require('./dashboard_v2/contracts.js')},structuredClone};
+vm.runInNewContext(fs.readFileSync('dashboard_v2/mock-data.js','utf8'),ctx);
+const M=ctx.window.BFMock,j=M.create().jobs.find(x=>x.id===101),queue=M.reviewQueue(j,{count:40,advisory:3});
+queue.items[4].category='text';queue.items[4].review_kind='logo_overlay';queue.items[4].decision=null;
+queue.items[7].suggested_region_source_pixels=null;queue.items[7].decision=null;   // a BLUR suggestion without a region: accept skips it
+const cases=[];
+for(const f of R.FILTER_IDS)for(const kind of ['bulkKeep','bulkAccept']){const plan=R.bulkPlan(queue,f,kind);cases.push({filter:f,kind,filters:plan.filters||null,count:plan.count||0,error:plan.error||null,confirm:plan.confirm||null});}
+process.stdout.write(JSON.stringify({queue,cases}));
+"""
+
+
+@unittest.skipUnless(NODE, "node is required to build the dialog's bulk plans")
+class ReviewR3Bulk(_TempJobFixture):
+    """S1 on the real route: the count in the dialog's confirm is the number of items the server changes."""
+
+    def test_bulk_writes_change_the_count_the_confirm_shows(self):
+        data = json.loads(node(R3_BULK_JS))
+        queue = data["queue"]
+        queue["source"] = json.loads(self.queue_file.read_text(encoding="utf-8"))["source"]
+        queue["reports"] = []
+        checked = 0
+        for case in data["cases"]:
+            with self.subTest(filter=case["filter"], kind=case["kind"]):
+                if case["filters"] is None:
+                    self.assertIn(case["error"], ("Bộ lọc này không hỗ trợ thao tác hàng loạt.", "Không có mục chưa duyệt trong bộ lọc này.",
+                                                  "Không có đề xuất chưa duyệt trong bộ lọc này."))
+                    continue
+                self.queue_file.write_text(json.dumps(queue), encoding="utf-8")
+                route = "bulk-keep" if case["kind"] == "bulkKeep" else "bulk-accept"
+                changed = 0
+                for value in case["filters"]:
+                    status, payload = self.post(route, {"filter": value})
+                    self.assertEqual(status, 200, payload)
+                    changed += payload["audit_log"][-1]["changed_count"]
+                self.assertEqual(changed, case["count"], case["confirm"])
+                self.assertIn(f" {case['count']} ", case["confirm"])
+                checked += 1
+        self.assertGreaterEqual(checked, 12)
+        # Visual AI and "Ứng viên phụ" are refused by the dialog; the server refuses them too.
+        for value in ("visual_ai", "candidates", "ads"):
+            status, payload = self.post("bulk-keep", {"filter": value})
+            self.assertEqual(status, 400, value)
+            self.assertEqual(payload["error"], "Bộ lọc hàng loạt không hợp lệ")
+        self.assertEqual(self.root.joinpath("input", "r2-demo.mp4").read_bytes(), b"synthetic" * 64, "the source is never touched")
+
+
+@unittest.skipUnless(NODE, "node is required to read contracts.js")
+class ReviewR3ExportDialog(unittest.TestCase):
+    """R3.3: the V2 export dialog (contracts.js + app.js exportModal) against export_dialog.py."""
+
+    def test_options_limits_gate_and_sentence_match_export_dialog_py(self):
+        script = (
+            "const C=require('./dashboard_v2/contracts.js'),vm=require('vm'),box={};"
+            "vm.createContext(box);vm.runInContext(process.argv[1]+';globalThis.out={exportSizeSelection,exportConfirmText,exportPolicyChoice,EXPORT_GATE_MESSAGE,EXPORT_SIZE_OPTIONS};',box);"
+            "const P=box.out,rows=[];"
+            "for(const [m,g] of [['default',''],['unlimited',''],['custom','2.5'],['custom','0.05'],['custom','1000'],['custom','0.04'],['custom','1000.1'],['custom',''],['custom','12.75']]){"
+            "let a=null,b=null,ea=null,eb=null;try{a=P.exportSizeSelection(m,g);}catch(e){ea=e.message;}try{b=C.exportSelection(m,g);}catch(e){eb=e.message;}"
+            "rows.push({m,g,ea,eb,body:b,ta:a&&P.exportConfirmText(a),tb:b&&C.exportConfirmText(b),keys:b&&Object.keys(b)});}"
+            "const pol=[null,{mode:'custom',maximum_output_gb:7.5},{mode:'unlimited',maximum_output_gb:9},{mode:'x'}].map(p=>[P.exportPolicyChoice(p),C.exportPolicyChoice(p)]);"
+            "process.stdout.write(JSON.stringify({rows,pol,options:C.EXPORT_SIZE_OPTIONS,gate:C.EXPORT_GATE_MESSAGE,attrs:C.EXPORT_CUSTOM_GB.attributes,value:C.EXPORT_CUSTOM_GB.value}))"
+        )
+        completed = subprocess.run([NODE, "-e", script, export_dialog.EXPORT_DIALOG_JS], cwd=ROOT, capture_output=True, text=True, encoding="utf-8", timeout=60)
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        data = json.loads(completed.stdout)
+        self.assertEqual([tuple(x) for x in data["options"]], list(export_dialog.EXPORT_SIZE_OPTIONS))
+        self.assertEqual(data["gate"], export_dialog.EXPORT_GATE_MESSAGE)
+        self.assertEqual(data["attrs"], export_dialog.EXPORT_CUSTOM_GB_ATTRIBUTES)
+        self.assertEqual(data["value"], export_dialog.EXPORT_CUSTOM_GB_DEFAULT)
+        for row in data["rows"]:
+            with self.subTest(mode=row["m"], gb=row["g"]):
+                self.assertEqual(row["eb"], row["ea"], "same limits and refusal text")
+                if row["body"]:
+                    self.assertEqual(row["tb"], row["ta"], "same confirm sentence")
+                    self.assertLessEqual(set(row["keys"]), {"size_mode", "max_output_gb"}, "the body stays {size_mode, max_output_gb?}")
+        for classic, v2 in data["pol"]:
+            self.assertEqual(v2, classic)
+        app = (DASHBOARD_V2_DIR / "app.js").read_text(encoding="utf-8")
+        self.assertIn("C.EXPORT_SIZE_OPTIONS.map(", app)
+        self.assertIn("C.EXPORT_CUSTOM_GB.attributes", app)
+        self.assertIn("C.exportConfirmText(C.exportSelection(", app)
+        self.assertIn("mutate('finalize',j,selection)", app, "finalize only from the dialog's confirm button")
 
 
 if __name__ == "__main__":

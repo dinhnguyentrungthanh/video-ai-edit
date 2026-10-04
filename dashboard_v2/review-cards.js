@@ -168,12 +168,19 @@
   }
 
   /* The header part that changes with the queue version (patched in place by polling). */
+  /* R3: "Xuất video" opens the V2 export dialog over this one; off until READY_FOR_EDIT_PLAN, when locked, offline or busy. */
+  function exportTitle(ctx) {
+    if (ctx.lock.readonly) return ctx.lock.reason;
+    if (ctx.offline) return R.TEXT.offline;
+    if (ctx.busy || ctx.exporting) return 'Đang chạy một thao tác; chờ xong rồi xuất.';
+    return ctx.queue && ctx.queue.status === 'READY_FOR_EDIT_PLAN' ? 'Mở hộp “Xuất video đã duyệt”' : R.nextNote(ctx.queue);
+  }
   function progressHtml(ctx) {
-    const p = R.progress(ctx.queue), width = p.total ? Math.round(p.done / p.total * 100) : 100;
+    const p = R.progress(ctx.queue), width = p.total ? Math.round(p.done / p.total * 100) : 100, line = R.exportLine(ctx.exp);
     return '<div class="rv-progress"><span class="rv-progress-text">' + esc(R.progressText(ctx.queue)) + '</span>' +
       '<div class="meter" role="progressbar" aria-label="Cảnh đã có quyết định cuối" aria-valuemin="0" aria-valuemax="100" aria-valuenow="' + width + '"><i style="width:' + width + '%"></i></div>' +
-      '<button class="small" type="button" disabled title="Xuất video trong hộp này có ở bản sau. Bây giờ dùng nút “Xuất video” ở Dashboard.">Xuất video</button></div>' +
-      '<p class="rv-next muted">' + esc(R.nextNote(ctx.queue)) + '</p>';
+      '<button class="small primary rv-export" type="button" data-review="export"' + (ctx.canExport ? '' : ' disabled') + ' title="' + esc(exportTitle(ctx)) + '">Xuất video</button></div>' +
+      '<p class="rv-next muted">' + esc(R.nextNote(ctx.queue)) + '</p>' + (line ? '<p class="rv-export-line">' + esc(line) + '</p>' : '');
   }
 
   function header(ctx) {
@@ -184,7 +191,8 @@
       '<div class="rv-progress-box">' + progressHtml(ctx) + '</div>' +
       chips(ctx) +
       (scope ? '<div class="notice rv-scope" role="note">' + esc(scope) + '</div>' : '') +
-      '<div class="rv-tools"><button class="small secondary" type="button" disabled title="Có ở bản sau; bây giờ dùng trang duyệt cũ.">Giữ tất cả</button><button class="small secondary" type="button" disabled title="Có ở bản sau; bây giờ dùng trang duyệt cũ.">Dùng đề xuất</button>' +
+      '<div class="rv-tools"><button class="small secondary rv-bulk" type="button" data-review="bulk" data-kind="bulkKeep"' + (ctx.readonly ? ' disabled' : '') + ' title="Giữ nguyên các mục chưa duyệt của bộ lọc đang chọn">Giữ tất cả</button>' +
+        '<button class="small secondary rv-bulk" type="button" data-review="bulk" data-kind="bulkAccept"' + (ctx.readonly ? ' disabled' : '') + ' title="Áp dụng đề xuất cho các mục chưa duyệt của bộ lọc đang chọn">Dùng đề xuất</button>' +
         '<button class="small secondary rv-undo" type="button" data-review="undo" disabled title="Chưa có lựa chọn nào trong phiên này để hoàn tác">↶ Hoàn tác</button><span class="rv-save" role="status" aria-live="polite"></span></div>' +
       (ctx.lock.readonly ? '<div class="notice rv-lock" role="status">Chỉ xem · ' + esc(ctx.lock.reason) + '</div>' : '') +
       '<div class="notice rv-offline" role="alert"' + (ctx.offline ? '' : ' hidden') + '>' + esc(R.TEXT.offline) + '</div>';

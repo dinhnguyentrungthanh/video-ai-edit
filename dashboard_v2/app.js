@@ -354,17 +354,30 @@ function scanForm(j,rerun){
   scanFormJob=j.id;
 }
 let exportFormJob=null;
-function exportModal(j){
-  showModal('Xuất video đã duyệt','<p><strong>#'+j.id+' · '+esc(j.name)+'</strong></p><p>'+ (C.reviewStats(j).total)+' cảnh đã có quyết định cuối cùng. Xuất khóa các lựa chọn hiện tại.</p><label class="field"><span>Giới hạn dung lượng bản xuất</span><select id="export-mode"><option value="default">Tối đa 3,5 GB (mặc định)</option><option value="custom">Giới hạn tùy chỉnh</option><option value="unlimited">Không giới hạn dung lượng</option></select></label><label class="field" id="custom-size" hidden><span>Dung lượng tối đa (GB)</span><input id="export-gb" type="number" min="0.05" max="1000" step="0.1" value="3.5"></label><p>Video được xếp vào hàng đợi xuất. Trạng thái hoàn tất chỉ xuất hiện sau khi xuất và kiểm tra xong.</p>',async()=>{
+/* "Xuất video đã duyệt": the size choices, limits and confirm sentence of export_dialog.py; finalize is sent once,
+   only from "Xác nhận xuất video", never retried. options (review dialog, R3): {resources, onQueued(result)}. */
+function exportModal(j,options){
+  options=options||{};
+  const resources=C.resourceItems(options.resources);
+  showModal('Xuất video đã duyệt','<p><strong>#'+j.id+' · '+esc(j.name)+'</strong></p><p>'+ (C.reviewStats(j).total)+' cảnh đã có quyết định cuối cùng. Xuất khóa các lựa chọn hiện tại.</p>'+(resources.length?'<div class="export-resources">'+resources.map(([label,value])=>'<span>'+esc(label)+' <strong>'+esc(value)+'</strong></span>').join('')+'</div>':'')+'<label class="field"><span>Giới hạn dung lượng bản xuất</span><select id="export-mode">'+C.EXPORT_SIZE_OPTIONS.map(([value,label])=>'<option value="'+value+'">'+esc(label)+'</option>').join('')+'</select></label><label class="field" id="custom-size" hidden><span>Dung lượng tối đa (GB)</span><input id="export-gb" '+C.EXPORT_CUSTOM_GB.attributes+' value="'+C.EXPORT_CUSTOM_GB.value+'"></label><p id="export-confirm-text" class="export-confirm"></p><p>Video được xếp vào hàng đợi xuất. Trạng thái hoàn tất chỉ xuất hiện sau khi xuất và kiểm tra xong.</p>',async()=>{
     const selection=C.exportSelection($('#export-mode').value,$('#export-gb').value);
     const result=await mutate('finalize',j,selection);exportDrafts.delete(draftKey(j));
     const status=result&&result.body&&result.body.status;
-    toast(LIVE?(status==='COMPLETED'?'Bản xuất của lần duyệt này đã có (manifest khớp); không xuất lại.':'Đã xếp lệnh xuất #'+j.id+'. Hoàn tất chỉ hiện sau khi xuất và kiểm tra xong.'):'Đã xếp video mẫu #'+j.id+' vào hàng đợi xuất.');return true;
+    toast(LIVE?(status==='COMPLETED'?'Bản xuất của lần duyệt này đã có (manifest khớp); không xuất lại.':'Đã xếp lệnh xuất #'+j.id+'. Hoàn tất chỉ hiện sau khi xuất và kiểm tra xong.'):'Đã xếp video mẫu #'+j.id+' vào hàng đợi xuất.');
+    if(options.onQueued)options.onQueued(result);
+    return true;
   },'Xác nhận xuất video');
   exportFormJob=j;
-  const policy=j.review_summary?.export_size_policy||{},saved=exportDrafts.get(draftKey(j));
-  const mode=saved?saved.mode:['default','custom','unlimited'].includes(policy.mode)?policy.mode:'default';
-  $('#export-mode').value=mode;$('#export-gb').value=saved?saved.gb:policy.maximum_output_gb||3.5;$('#custom-size').hidden=mode!=='custom';
+  const choice=C.exportPolicyChoice(j.review_summary?.export_size_policy),saved=exportDrafts.get(draftKey(j));
+  const mode=saved?saved.mode:choice.mode;
+  $('#export-mode').value=mode;$('#export-gb').value=saved?saved.gb:choice.gb;$('#custom-size').hidden=mode!=='custom';
+  exportConfirmLine();
+}
+/* The confirm sentence of export_dialog.py for the current choice (or the limit error of a bad custom value). */
+function exportConfirmLine(){
+  const el=$('#export-confirm-text');if(!el)return;
+  try{el.textContent=C.exportConfirmText(C.exportSelection($('#export-mode').value,$('#export-gb').value));el.classList.remove('error');}
+  catch(e){el.textContent=e.message;el.classList.add('error');}
 }
 function previewMarkup(kind,p,message){
   const eligible=p.eligible||[],ineligible=p.ineligible||[],rb=p.recycle_bin;
@@ -504,7 +517,7 @@ document.addEventListener('change',event=>{
     const j=getJob(scanFormJob);if(!j)return;const old=scanDrafts.get(draftKey(j))||{};
     scanDrafts.set(draftKey(j),{...old,detectors:[...document.querySelectorAll('input[name="detector"]:checked')].map(x=>x.value),ocr_recognition_batch_size:Number($('#scan-ocr').value),fast_scan:$('#scan-fast').checked,content_style:$('#scan-style')?.value||j.content_style,profile:$('#scan-profile')?.value||j.profile});
   }
-  if(exportFormJob&&['export-mode','export-gb'].includes(el.id))exportDrafts.set(draftKey(exportFormJob),{mode:$('#export-mode').value,gb:$('#export-gb').value});
+  if(exportFormJob&&['export-mode','export-gb'].includes(el.id)){exportDrafts.set(draftKey(exportFormJob),{mode:$('#export-mode').value,gb:$('#export-gb').value});exportConfirmLine();}
   if(['ai-enabled','ai-model','ai-effort'].includes(el.id))aiDirty=true;
   if(el.id==='sort'){sort=el.value;page=1;refreshList();}
   else if(el.id==='download-domain'){downloadDraft.domain=el.value;downloadDraft.error='';render();}
@@ -513,7 +526,7 @@ document.addEventListener('change',event=>{
   else if(el.id==='export-mode')$('#custom-size').hidden=el.value!=='custom';
   else if(el.matches('[data-select]')){const id=Number(el.dataset.select);if(el.checked&&selected.size>=50){el.checked=false;toast('Mỗi lần chọn tối đa 50 video.',true);return;}el.checked?selected.add(id):selected.delete(id);refreshList();}
 });
-document.addEventListener('input',event=>{if(event.target.id==='search'){query=event.target.value;page=1;refreshList();}else if(event.target.id==='download-url'){downloadDraft.url=event.target.value;downloadDraft.error='';$('#download-error').hidden=true;event.target.removeAttribute('aria-invalid');}});
+document.addEventListener('input',event=>{if(event.target.id==='export-gb')exportConfirmLine();else if(event.target.id==='search'){query=event.target.value;page=1;refreshList();}else if(event.target.id==='download-url'){downloadDraft.url=event.target.value;downloadDraft.error='';$('#download-error').hidden=true;event.target.removeAttribute('aria-invalid');}});
 $('#modal').addEventListener('cancel',event=>{if(modalBusy)event.preventDefault();});
 document.addEventListener('keydown',event=>{
   if($('#modal').open)return;
@@ -543,7 +556,10 @@ function requestReviewClose(back){
   if(reviewPushed){reviewPushed=false;history.back();return;}
   history.replaceState(null,'','#'+back);route();
 }
-const review=window.BFReview.create({dialog:$('#review-dialog'),store,getJob,requestClose:requestReviewClose,toast,
+/* R3: "Xuất video" in the review dialog opens the same export dialog over it, with the job's latest status (the
+   dashboard poll is paused while the dialog is open) and the resources line; closing it on success is up to the dialog. */
+async function reviewExport(id,options){await store.refresh();state=store.snapshot();const j=getJob(id);if(!j)throw new Error('Không tìm thấy video.');exportModal(j,options);}
+const review=window.BFReview.create({dialog:$('#review-dialog'),store,getJob,requestClose:requestReviewClose,toast,exportDialog:reviewExport,
   oldUrl:(id,back)=>LIVE?'/review/'+encodeURIComponent(id)+'?from=v2&view='+encodeURIComponent(back):''});
 window.addEventListener('hashchange',route);
 /* A new snapshot (polling or after an action) re-renders without losing the user's place. */

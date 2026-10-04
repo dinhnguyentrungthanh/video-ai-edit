@@ -10,11 +10,14 @@
  * chain (adapter, 6.7); the queue the server returns applies only for the last pending write, polling waits
  * while writes are pending, a failed write reloads the queue and reopens its card (P14). Closing the dialog
  * never cancels a write; its error then shows in the dashboard toast. Nothing here decides on its own.
- * Bulk actions and export stay in R3.
+ * R3: "Giữ tất cả" / "Dùng đề xuất" for the filtered cards (confirm with the S1 count, after the pending writes,
+ * dialog locked while it runs, no undo); "Xuất video" waits for the writes, checks the gate, then opens the V2
+ * export dialog over this one (finalize only from its "Xác nhận xuất video", never retried) and closes this
+ * dialog once the export is queued. The export state and the resources reload 1.5 s after a write (S3, 6.8).
  */
 (function (root) {
   'use strict';
-  const R = root.BFReviewCore, Cards = root.BFReviewCards, Media = root.BFReviewMedia, D = root.BFReviewDetail;
+  const R = root.BFReviewCore, Cards = root.BFReviewCards, Media = root.BFReviewMedia, D = root.BFReviewDetail, C = root.BFContracts;
   const HASH = /^review\/(\d{1,9})(?:\/(overview|downloads|videos|queue|logos|settings))?$/;
   const POLL_MS = 3000, PREFETCH_MS = 600;
 
@@ -33,7 +36,7 @@
   }
   function spaceActivates(target) { return !!(target && target !== document.body && target.closest && target.closest('button,summary,a[href],input,select,textarea,label,[role="button"],[contenteditable="true"]')); }
 
-  /* deps: {dialog, store, getJob(id), oldUrl(id, view), requestClose(view), toast(text, error)} */
+  /* deps: {dialog, store, getJob(id), oldUrl(id, view), requestClose(view), toast(text, error), exportDialog(id, {resources, onQueued})} */
   function create(deps) {
     const dialog = deps.dialog, rootEl = dialog.querySelector('#review-root');
     const stats = root.BFReviewStats = {opens: 0, fullRenders: 0, cardRenders: 0, patches: 0, polls: 0, cardsRendered: 0, maxImages: 0, evidenceFetches: 0, sessionRefreshes: 0};
@@ -55,7 +58,8 @@
     }
     function ctx() {
       return {job: s.job, queue: s.queue, map: s.map, filter: s.filter, list: s.list, focusId: s.focusId, zoomId: s.zoomId, lock: s.lock, techOpen: s.techOpen,
-        offline: s.offline, readonly: s.lock.readonly || s.offline, oldUrl: deps.oldUrl(s.id, s.view), media};
+        offline: s.offline, busy: s.busy, exporting: s.exporting, exp: s.exp, readonly: s.lock.readonly || s.offline || s.busy,
+        canExport: R.canExport(s.queue, s.lock) && !s.offline && !s.busy && !s.exporting, oldUrl: deps.oldUrl(s.id, s.view), media};
     }
     function shell(headHtml, bodyHtml) {
       rootEl.innerHTML = '<div class="rv-head">' + headHtml + '</div><div class="rv-body">' + bodyHtml + '</div>' +
@@ -191,9 +195,32 @@
       }
     }
     function poll() {
-      if (!s || document.visibilityState === 'hidden' || s.loading || s.confirming || pending()) return;
+      if (!s || document.visibilityState === 'hidden' || s.loading || s.confirming || s.busy || pending()) return;
       stats.polls++; s.loading = true;
       load(false).finally(() => { if (s) s.loading = false; });
+      if (R.exportActive(s.exp)) loadExport(); // the export state follows a queued or running export
+    }
+    /* S3 / 6.8: the export state and the resources reload 1.5 s after the last write (several writes: once). */
+    function scheduleRefresh() {
+      if (!s) return;
+      clearTimeout(s.refreshTimer);
+      const current = s;
+      s.refreshTimer = setTimeout(() => {
+        if (current !== s) return;
+        loadExport();
+        s.api.resources().then(r => { if (current === s && r) s.resources = r; }, () => {});
+      }, 1500);
+    }
+    function loadExport() {
+      const current = s;
+      stats.exportFetches = (stats.exportFetches || 0) + 1;
+      return s.api.exportState().then(exp => { if (current === s && exp) setExport(exp); }, () => {});
+    }
+    function setExport(exp) {
+      const before = s.lock.reason;
+      s.exp = exp; s.lock = R.lockState(s.job, exp);
+      if (!s.queue || !rootEl.querySelector('.rv-cards')) return;
+      if (before !== s.lock.reason) { player.release(); renderAll(); } else patch();
     }
 
     /* Media key (GET review/session): one request at a time for the whole dialog; true when it changed. */
@@ -356,6 +383,7 @@
       const el = rootEl.querySelector('.rv-save');
       if (!s || !el) return;
       clearTimeout(s.saveTimer);
+      if (s.busy) { el.textContent = 'Đang áp dụng…'; return; }
       if (pending()) { el.textContent = 'Đang lưu…'; return; }
       const w = writeState(s.id);
       el.textContent = s.wrote && !w.failed ? 'Đã lưu' : '';
@@ -366,9 +394,13 @@
       const button = rootEl.querySelector('.rv-undo');
       if (button) {
         const last = s.undo[s.undo.length - 1], x = last && s.map.get(last.id);
-        button.disabled = !s.undo.length || s.lock.readonly || s.offline;
+        button.disabled = !s.undo.length || s.lock.readonly || s.offline || s.busy;
         button.title = R.undoTitle(last, x);
       }
+      const c = ctx();
+      for (const b of rootEl.querySelectorAll('.rv-bulk')) b.disabled = c.readonly;
+      const exp = rootEl.querySelector('.rv-export');
+      if (exp) exp.disabled = !c.canExport;
       saveState();
     }
     function setOffline(value) {
@@ -379,7 +411,7 @@
       if (s.queue && rootEl.querySelector('.rv-cards')) patch();
     }
     function refuse() {
-      if (!s || !s.queue) return true;
+      if (!s || !s.queue || s.busy) return true; // a bulk action runs: the classic page ignores the click too
       if (s.lock.readonly) { notify(s.lock.reason, true); return true; }
       if (s.offline) { notify(R.TEXT.offline, true); return true; }
       return false;
@@ -424,7 +456,7 @@
         if (s === current && !error.status) setOffline(true);
       }).finally(() => {
         if (api.pendingWrites()) { if (s === current) saveState(); return; }
-        if (s === current) saveState();
+        if (s === current) { saveState(); scheduleRefresh(); }
         w.failed = false;
         if (!w.resync) return;
         const reopen = w.reopen;
@@ -494,6 +526,59 @@
       patch();
       if (item.id !== s.focusId && inList) focusCard(item.id);
     }
+    /* R3.1 "Giữ tất cả" / "Dùng đề xuất" (classic bulkKeep / bulkAccept + runBlocking). */
+    async function bulk(kind) {
+      if (refuse()) return;
+      const current = s, plan = R.bulkPlan(s.queue, s.filter, kind);
+      if (plan.error) { notify(plan.error, plan.error === R.TEXT.bulkUnsupported); return; }
+      if (!await ask(plan.confirm)) return;
+      if (s !== current || refuse()) return;
+      await runBlocking(async () => {
+        for (const filter of plan.filters) { // Quảng cáo: visual_logo, then text; a failure stops the rest (classic)
+          const result = await current.api.write(kind, {filter});
+          if (s === current && result && result.body && Array.isArray(result.body.items)) apply(result.body, true);
+        }
+        if (s === current) scheduleRefresh();
+      });
+    }
+    /* The dialog is locked while it runs: buttons, keys, polling. It first waits for the pending writes. */
+    async function runBlocking(task) {
+      const current = s;
+      setBusy(true);
+      try {
+        if (pending()) await current.api.idle();
+        if (s === current) await task();
+      } catch (error) {
+        if (s === current) { notify(error.message, true); if (!error.status) setOffline(true); } else if (deps.toast) deps.toast(error.message, true);
+      } finally {
+        if (s === current) setBusy(false);
+      }
+    }
+    function setBusy(value) {
+      s.busy = value;
+      if (s.queue && rootEl.querySelector('.rv-cards')) patch(); else tools();
+    }
+    /* R3.2 "Xuất video" (P12, classic finalizeExport): wait for the writes, refuse with the gate message when an
+     * item still lacks a final decision, then the V2 export dialog; it closes this dialog once the export is queued. */
+    async function startExport() {
+      if (!s || s.exporting || refuse()) return;
+      const current = s;
+      s.exporting = true; tools();
+      try {
+        if (pending()) { await current.api.idle(); if (s !== current) return; }
+        if (s.unsynced) { await resync(null); if (s !== current) return; } // a write failed: check the saved queue, not the local one
+        if (!s.queue || s.queue.status !== 'READY_FOR_EDIT_PLAN') { notify(C.EXPORT_GATE_MESSAGE, true); return; }
+        if (refuse()) return;
+        const resources = await current.api.resources().catch(() => current.resources || null);
+        if (s !== current) return;
+        if (resources) s.resources = resources;
+        await deps.exportDialog(s.id, {resources, onQueued: () => { if (s === current) deps.requestClose(s.view); }});
+      } catch (error) {
+        if (s === current) notify(error.message, true);
+      } finally {
+        if (s === current) { s.exporting = false; tools(); }
+      }
+    }
     function togglePlay() {
       const x = s.map.get(s.focusId);
       if (!x || !R.hasPlayer(x)) return;
@@ -503,7 +588,7 @@
     /* P9, as the classic onKeyDown: 1–4 decide the selected card, ←/→ select (stop at the ends), Space plays,
      * Z undoes. Off while typing, with Ctrl/Alt/Meta, while the confirm is open; held keys repeat only ←/→. */
     function onKey(event) {
-      if (!s || !dialog.open || confirmBox.open || !s.queue) return;
+      if (!s || !dialog.open || confirmBox.open || !s.queue || document.querySelector('#modal[open]')) return;
       if (event.defaultPrevented || event.ctrlKey || event.metaKey || event.altKey || isTyping(event.target)) return;
       const k = event.key;
       if (event.repeat && k !== 'ArrowLeft' && k !== 'ArrowRight') return;
@@ -527,7 +612,8 @@
       const job = deps.getJob(id);
       s = {id, view, job: job || {id, name: ''}, api: null, queue: null, map: new Map(), identity: '', version: '', list: [], rendered: 0, mediaKey: null,
         filter: 'pending', sticky: new Set(), focusId: null, zoomId: null, exp: null, lock: R.lockState(job, null), timer: null, loading: false,
-        evidence: new Map(), evidenceLoading: new Map(), techOpen: new Set(), undo: [], confirming: false, offline: false, wrote: false, saveTimer: null, unsynced: false};
+        evidence: new Map(), evidenceLoading: new Map(), techOpen: new Set(), undo: [], confirming: false, offline: false, wrote: false, saveTimer: null, unsynced: false,
+        busy: false, exporting: false, resources: null, refreshTimer: null};
       stats.opens++;
       player.reset();
       if (!dialog.open) dialog.showModal();
@@ -540,7 +626,7 @@
     function close() {
       if (!s) return;
       answerConfirm(false);
-      clearInterval(s.timer); clearTimeout(prefetchTimer); clearTimeout(s.saveTimer); s = null;
+      clearInterval(s.timer); clearTimeout(prefetchTimer); clearTimeout(s.saveTimer); clearTimeout(s.refreshTimer); s = null;
       clearTimeout(toastTimer); toastBox.hidden = true;
       player.release();
       if (more) more.disconnect(); more = null;
@@ -563,10 +649,12 @@
       const el = event.target.closest('[data-review]');
       if (!el || !s) return;
       const action = el.dataset.review, card = el.closest('article.rv-card'), x = card && s.map.get(card.dataset.item);
-      if (['decide', 'clear', 'region', 'studio', 'platform', 'undo'].includes(action) && event.detail) el.blur(); // Space must not click it again
+      if (['decide', 'clear', 'region', 'studio', 'platform', 'undo', 'bulk'].includes(action) && event.detail) el.blur(); // Space must not click it again
       if (action === 'close') deps.requestClose(s.view);
       else if (action === 'filter' && s.queue && el.dataset.filter !== s.filter) setFilter(el.dataset.filter);
       else if (action === 'undo') undo();
+      else if (action === 'bulk') bulk(el.dataset.kind === 'bulkAccept' ? 'bulkAccept' : 'bulkKeep');
+      else if (action === 'export') startExport();
       else if (action === 'goto') gotoCard(el.dataset.owner);
       else if (!x) return;
       else if (action === 'decide') { select(x.id); decide(x.id, el.dataset.decision, el.dataset.decision === 'BLUR' && R.needsFullFrame(x)); }

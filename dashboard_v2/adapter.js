@@ -5,8 +5,10 @@
  *  - POST sends Content-Type: application/json and X-BiliFlow-Token.
  *  - A POST answered 403 refreshes the token (GET /api/session) and is sent again exactly once.
  *  - No other write is ever repeated (408, network error, 409, 400, 5xx surface to the user), except the
- *    review decisions of one job (plan 6.7): a serial chain like the classic writeChain, where a network
- *    error or a status >= 500 is sent again after 300 ms, then 900 ms (the same body: it sets one decision).
+ *    review writes of one job (plan 6.7: decision, clear, bulk-keep, bulk-accept): a serial chain like the
+ *    classic writeChain, where a network error or a status >= 500 is sent again after 300 ms, then 900 ms
+ *    (the same body: it sets one decision, or keeps / accepts the still undecided items of a filter).
+ *    finalize is never repeated (dispatch).
  *  - GET is retried only when the user asks; a GET 403 never refreshes the token.
  *  - Polling responses carry a sequence number; an older response never replaces a newer one.
  *  - The token lives only in this closure: never in a URL, localStorage or a log line.
@@ -163,10 +165,11 @@
         frameUrl: (item, t, key) => path('frame', {item: String(item), t: String(t), k: key}),
         videoUrl: key => path('video', {k: key}),
         mediaUrl: p => C.endpoints.media[1].replace('{path}', encodeURIComponent(String(p))),
-        /* operation 'decision' {id, decision, full_frame, note, remember_*?} or 'clear' {id}, body as given.
-         * Resolves {body: server queue, last: no other write of this job waits}; rejects after the retries. */
+        /* operation 'decision' {id, decision, full_frame, note, remember_*?}, 'clear' {id}, 'bulkKeep' / 'bulkAccept'
+         * {filter}, body as given. Resolves {body: server queue, last: no other write of this job waits}; rejects
+         * after the retries. A bulk write queued after decisions waits for them (the classic runBlocking). */
         write(operation, body) {
-          if (operation !== 'decision' && operation !== 'clear') return Promise.reject(new AdapterError(400, 'Thao tác ghi không hợp lệ.'));
+          if (!['decision', 'clear', 'bulkKeep', 'bulkAccept'].includes(operation)) return Promise.reject(new AdapterError(400, 'Thao tác ghi không hợp lệ.'));
           const descriptor = C.request(operation, job, body), w = writer(job.id);
           w.pending++;
           const run = async () => {

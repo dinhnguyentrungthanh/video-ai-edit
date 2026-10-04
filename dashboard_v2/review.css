@@ -141,6 +141,13 @@
 [data-theme="dark"] .rv-toast { background: #293f60; color: #d0e4ff; border-color: #7296c6; }
 [data-theme="dark"] .rv-toast.error { background: #452d3b; color: #ffafbb; border-color: #8b5068; }
 @media (hover: none) { .rv-keys { display: none; } }
+/* R3: the export state line; the resources line and the confirm sentence of the export dialog (#modal). */
+.rv-export-line { margin: 2px 0 0; font-size: 12px; color: var(--text); overflow-wrap: anywhere; }
+.export-resources { display: flex; flex-wrap: wrap; gap: 6px 14px; margin: 0 0 12px; padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px; font-size: 12px; color: var(--muted); }
+.export-resources strong { color: var(--text); }
+.modal-body .export-confirm { font-weight: 600; color: var(--text); }
+.modal-body .export-confirm.error { color: #aa263e; }
+[data-theme="dark"] .modal-body .export-confirm.error { color: #ffafbb; }
 @media (max-width: 1099px) {
   #review-dialog { width: calc(100vw - 24px); height: calc(100dvh - 24px); }
   .rv-cards { grid-template-columns: minmax(0, 760px); justify-content: center; }
