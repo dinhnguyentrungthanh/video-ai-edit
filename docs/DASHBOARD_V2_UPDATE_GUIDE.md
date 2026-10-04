@@ -382,7 +382,7 @@ Hướng dẫn cho người dùng: `docs/DASHBOARD_V2_PHONE.md`. Code: `src/bili
 | POST `/api/phone-mode` `{enabled: bool, port?}` | `127.0.0.1:8765` + token | Bật (mã mới; đang bật thì giữ mã) / tắt (đóng listener, mã và cookie hết hiệu lực). Không khởi động lại Control Center |
 | GET `/api/phone-mode` | điện thoại (đã có cookie) | `{remote:true, enabled:true, pc_only:[…]}`, không có mã |
 | GET `/`, `/dashboard-v2/`, `/phone-login` không cookie | điện thoại | Trang nhập mã (401); `?code=` đúng → trang nối (meta refresh) + `Set-Cookie: biliflow_phone=<HMAC>; HttpOnly; SameSite=Strict; Path=/` |
-| POST `/phone-login` (form `code=`) | điện thoại | Như trên; sai → 401 (còn N lần); lần sai thứ 10 → 403 khóa tới lần bật sau |
+| POST `/phone-login` (form `code=`) | điện thoại | Như trên; sai → 401 (còn N lần); lần sai thứ 10 → 403 khóa nhập mã. Khi đang khóa: chỉ xét khóa mở đặc biệt `UNLOCK_KEY`. Đúng → 401 “Đã gỡ khóa” (đặt lại số lần sai, **không** cấp cookie, vẫn cần mã 8 ký tự); sai → 403 (còn N lần); 5 lần sai hoặc đã gỡ 3 lần → khóa mở bị khóa tới lần bật sau |
 | Mọi đường khác không cookie | điện thoại | 401 JSON |
 | `/` có cookie | điện thoại | 303 → `/dashboard-v2/` |
 | POST chỉ-PC | điện thoại | 403 `{error: "Chỉ làm trên PC: …", code: "pc_only"}`: source-cleanup, source-archive, source-archive/restore, source-recycle-check, shutdown, ai/config, ai/login, logo-memory/class, logo-memory/delete, phone-mode |

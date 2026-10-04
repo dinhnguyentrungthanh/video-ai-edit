@@ -31,7 +31,13 @@ BiliFlow không tự sửa Firewall. Nếu lỡ bấm Cancel thì điện thoạ
    - Link không có mã: gõ mã 8 ký tự vào ô **"Mã truy cập"** rồi bấm **Vào BiliFlow**. Chữ hoa hay chữ thường đều được.
 3. Trình duyệt nhớ mã trong phiên. Tắt chế độ điện thoại thì phải nhập mã mới. Đóng hẳn trình duyệt cũng có thể phải nhập lại.
 
-**Nhập sai mã 10 lần** thì việc nhập mã bị khóa tới lần bật sau. Trên PC, tắt rồi bật lại chế độ điện thoại để có mã mới.
+**Nhập sai mã 10 lần** thì việc nhập mã bị khóa. Có hai cách gỡ:
+
+- **Khóa mở đặc biệt:** khi trang báo "Đã khóa nhập mã", gõ khóa mở đặc biệt vào ô **"Khóa mở đặc biệt"**. Khóa này do bạn chọn (câu 9 của kế hoạch). Nhập đúng thì khóa được gỡ và số lần sai về 0, **sau đó vẫn phải nhập mã 8 ký tự** trên PC. Khóa mở không tự cho vào BiliFlow.
+  - Nhập sai khóa mở 5 lần thì khóa mở cũng bị khóa.
+  - Mỗi lần bật chỉ gỡ được 3 lần; quá 3 lần cũng bị khóa.
+  - Khi khóa mở đã bị khóa, chỉ còn cách tắt rồi bật lại trên PC.
+- **Trên PC:** tắt rồi bật lại chế độ điện thoại để có mã mới; mọi bộ đếm về 0.
 
 ## 4. Trên điện thoại làm được gì
 
@@ -65,3 +71,4 @@ BiliFlow không tự sửa Firewall. Nếu lỡ bấm Cancel thì điện thoạ
 - Lệnh ghi (POST) cần thêm token phiên và Origin đúng của listener.
 - Bật/tắt chỉ nhận từ `127.0.0.1` kèm token phiên; bật/tắt không khởi động lại Control Center.
 - Mã: 8 ký tự ngẫu nhiên, không gồm các ký tự dễ nhầm như `0/o`, `1/l/i`.
+- Khóa mở đặc biệt (`UNLOCK_KEY` trong `src/biliflow/phone_access.py`) nằm trong mã nguồn, nên nó chỉ gỡ khóa, không bao giờ tự cấp cookie. Giới hạn: 5 lần sai, 3 lần gỡ mỗi lần bật.

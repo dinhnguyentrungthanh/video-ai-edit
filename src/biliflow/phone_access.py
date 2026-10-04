@@ -26,6 +26,14 @@ CODE_ALPHABET = "abcdefghjkmnpqrstuvwxyz23456789"
 CODE_LENGTH = 8
 DEFAULT_PORT = 8767  # 8765 Control Center, 8766 Golden Label
 MAX_FAILED_ATTEMPTS = 10
+# User decision (plan §8, question 9): once code entry is locked, this special key only lifts the
+# lock and resets the count; the 8-character code of this enable is still required afterwards.
+# Wrong keys are counted too: MAX_UNLOCK_ATTEMPTS of them lock the key until the next enable.
+UNLOCK_KEY = "2007"
+MAX_UNLOCK_ATTEMPTS = 5
+# The key is in the source, so it may lift the lock only a few times per enable; otherwise it
+# would give unlimited code guesses (10 per unlock).
+MAX_UNLOCKS = 3
 COOKIE_NAME = "biliflow_phone"
 PRIVATE_NETWORKS = tuple(ipaddress.IPv4Network(net) for net in ("10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16"))
 
@@ -37,9 +45,17 @@ NO_WIFI_MESSAGE = "Không tìm thấy Wi-Fi nhà (địa chỉ {address}); chế
 PORT_MESSAGE = "Cổng chế độ điện thoại phải từ 1024 đến 65535 và khác cổng 8765 của Control Center."
 PORT_BUSY_MESSAGE = "Không mở được {address}:{port}: {error}. Cổng có thể đang bận."
 LOCKED_MESSAGE = (
-    "Đã nhập sai mã quá nhiều lần. Nhập mã bị khóa tới lần bật chế độ điện thoại sau "
+    "Đã nhập sai mã quá nhiều lần nên nhập mã đang bị khóa. Nhập khóa mở đặc biệt để gỡ khóa, "
+    "hoặc tắt rồi bật lại chế độ điện thoại trên PC để có mã mới."
+)
+UNLOCK_LOCKED_MESSAGE = (
+    "Khóa mở đã bị khóa (nhập sai quá nhiều lần hoặc đã dùng hết lượt mở). Nhập mã bị khóa tới lần bật "
+    "chế độ điện thoại sau "
     "(tắt rồi bật lại trên PC để có mã mới)."
 )
+UNLOCKED_MESSAGE = "Đã gỡ khóa. Nhập mã truy cập 8 ký tự hiện trên PC."
+WRONG_UNLOCK_MESSAGE = "Khóa mở không đúng. Nhập mã vẫn đang bị khóa."
+
 PC_ONLY_SOURCE = "Chỉ làm trên PC: dọn, lưu trữ, khôi phục video gốc và kiểm tra lại Thùng rác không làm qua điện thoại."
 PC_ONLY_POSTS = {
     "/api/source-cleanup": PC_ONLY_SOURCE,
@@ -113,6 +129,9 @@ class PhoneAccess:
         self._secret: bytes | None = None
         self.failed_attempts = 0
         self.locked = False
+        self.unlock_failures = 0
+        self.unlock_locked = False
+        self.unlocks = 0
 
     # ------------------------------------------------------------------ lifecycle
     @property
@@ -133,6 +152,7 @@ class PhoneAccess:
             code, secret = new_code(), secrets.token_bytes(32)
             self.address, self._code, self._secret = host, code, secret
             self.failed_attempts, self.locked = 0, False
+            self.unlock_failures, self.unlock_locked, self.unlocks = 0, False, 0
             try:
                 server = _PhoneServer((host, port), handler_factory(self))
             except OSError as error:
@@ -152,6 +172,7 @@ class PhoneAccess:
             self._code = self._secret = None
             self.address = self.port = None
             self.failed_attempts, self.locked = 0, False
+            self.unlock_failures, self.unlock_locked, self.unlocks = 0, False, 0
         if server is not None:
             server.shutdown()
             server.server_close()
@@ -168,6 +189,11 @@ class PhoneAccess:
             "locked": self.locked,
             "failed_attempts": self.failed_attempts,
             "max_failed_attempts": MAX_FAILED_ATTEMPTS,
+            "unlock_failures": self.unlock_failures,
+            "unlock_locked": self.unlock_locked,
+            "max_unlock_attempts": MAX_UNLOCK_ATTEMPTS,
+            "unlocks": self.unlocks,
+            "max_unlocks": MAX_UNLOCKS,
             "default_port": DEFAULT_PORT,
         }
         if include_secret:
@@ -214,13 +240,30 @@ class PhoneAccess:
         return morsel is not None and hmac.compare_digest(morsel.value.encode("utf-8"), expected.encode("utf-8"))
 
     def try_code(self, given: Any) -> str:
-        """'ok', 'wrong' or 'locked'. Each wrong code counts; the 10th wrong one locks entry."""
+        """'ok', 'wrong', 'locked', 'unlocked', 'wrong_unlock' or 'unlock_locked'.
+
+        Each wrong code counts; the 10th wrong one locks entry. While locked, only UNLOCK_KEY
+        is checked: it lifts the lock ('unlocked') but never opens anything by itself.
+        """
         text = str(given or "").strip().lower()[:64]
         with self._lock:
             if self._code is None:
                 return "wrong"
             if self.locked:
-                return "locked"
+                if self.unlock_locked:
+                    return "unlock_locked"
+                if hmac.compare_digest(text.encode("utf-8"), UNLOCK_KEY.encode("utf-8")):
+                    if self.unlocks >= MAX_UNLOCKS:
+                        self.unlock_locked = True
+                        return "unlock_locked"
+                    self.unlocks += 1
+                    self.locked, self.failed_attempts = False, 0
+                    return "unlocked"
+                self.unlock_failures += 1
+                if self.unlock_failures >= MAX_UNLOCK_ATTEMPTS:
+                    self.unlock_locked = True
+                    return "unlock_locked"
+                return "wrong_unlock"
             if hmac.compare_digest(text.encode("utf-8"), self._code.encode("utf-8")):
                 return "ok"
             self.failed_attempts += 1
@@ -228,6 +271,10 @@ class PhoneAccess:
                 self.locked = True
                 return "locked"
             return "wrong"
+
+    def unlock_attempts_left(self) -> int:
+        with self._lock:
+            return max(0, MAX_UNLOCK_ATTEMPTS - self.unlock_failures)
 
     def attempts_left(self) -> int:
         with self._lock:

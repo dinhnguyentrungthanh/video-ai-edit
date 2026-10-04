@@ -143,13 +143,14 @@ def _phone_access(center: Any) -> phone_access.PhoneAccess:
 
 
 def _phone_page(title: str, message: str, *, form: bool, attempts_left: int | None = None,
-                redirect: str | None = None) -> bytes:
+                redirect: str | None = None, unlock: bool = False) -> bytes:
     """Small page of the phone listener: the code form, a refusal, or the hop to V2."""
     import html as _html
     note = (f"<p class=\"left\">Còn {attempts_left} lần nhập.</p>" if attempts_left is not None else "")
     body = (
         "<form method=\"post\" action=\"/phone-login\" autocomplete=\"off\">"
-        "<label>Mã truy cập (8 ký tự, hiện trên PC)<input name=\"code\" inputmode=\"text\" "
+        f"<label>{'Khóa mở đặc biệt' if unlock else 'Mã truy cập (8 ký tự, hiện trên PC)'}"
+        "<input name=\"code\" inputmode=\"text\" "
         "autocapitalize=\"none\" autocomplete=\"one-time-code\" maxlength=\"32\" required autofocus></label>"
         "<button type=\"submit\">Vào BiliFlow</button></form>" if form else ""
     )
@@ -2061,14 +2062,25 @@ def _phone_handler_class(center: ControlCenter, phone: phone_access.PhoneAccess)
                 self.send_page(200, _phone_page("Đã xác nhận mã", "Đang mở BiliFlow…", form=False, redirect=V2),
                                cookie=cookie)
             elif outcome == "locked":
-                self.send_page(403, _phone_page("Đã khóa nhập mã", phone_access.LOCKED_MESSAGE, form=False))
+                # The form stays: the special key can lift the lock (plan §8, question 9).
+                self.send_page(403, _phone_page("Đã khóa nhập mã", phone_access.LOCKED_MESSAGE, form=True, unlock=True))
+            elif outcome == "wrong_unlock":
+                self.send_page(403, _phone_page("Đã khóa nhập mã", phone_access.WRONG_UNLOCK_MESSAGE, form=True,
+                                                attempts_left=phone.unlock_attempts_left(), unlock=True))
+            elif outcome == "unlock_locked":
+                self.send_page(403, _phone_page("Đã khóa nhập mã", phone_access.UNLOCK_LOCKED_MESSAGE, form=False))
+            elif outcome == "unlocked":
+                self.send_page(401, _phone_page("Đã gỡ khóa", phone_access.UNLOCKED_MESSAGE, form=True,
+                                                attempts_left=phone.attempts_left()))
             else:
                 self.send_page(401, _phone_page("Mã không đúng", "Mã không đúng. Xem lại mã trên PC.", form=True,
                                                 attempts_left=phone.attempts_left()))
 
         def refuse_without_access(self, path: str) -> None:
-            if phone.status()["locked"] and path in ENTRY_PATHS:
-                self.send_page(403, _phone_page("Đã khóa nhập mã", phone_access.LOCKED_MESSAGE, form=False))
+            state = phone.status()
+            if state["locked"] and path in ENTRY_PATHS:
+                message = phone_access.UNLOCK_LOCKED_MESSAGE if state["unlock_locked"] else phone_access.LOCKED_MESSAGE
+                self.send_page(403, _phone_page("Đã khóa nhập mã", message, form=not state["unlock_locked"], unlock=True))
             elif path in ENTRY_PATHS:
                 self.send_page(401, _phone_page("BiliFlow trên điện thoại", "Nhập mã truy cập hiện trên PC.",
                                                 form=True))

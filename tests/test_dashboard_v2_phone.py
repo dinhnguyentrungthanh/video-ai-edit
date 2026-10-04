@@ -161,6 +161,83 @@ class PhoneModeTests(unittest.TestCase):
         self.assertEqual(code, 200)
         self.assertEqual(len(header(headers, "Set-Cookie")), 1)
 
+    def lock(self, form):
+        for _ in range(phone_access.MAX_FAILED_ATTEMPTS):
+            form("wrongcod")
+        self.assertTrue(self.phone.status()["locked"])
+
+    def test_p1_the_special_key_only_lifts_the_lock(self):
+        """Question 9: 2007 lifts the lock and resets the count; the real code is still needed."""
+        status = self.enable()
+        form = lambda code: request(self.port, "/phone-login", method="POST", body=f"code={code}".encode(),
+                                    headers={"Content-Type": "application/x-www-form-urlencoded"})
+        code, _, _ = form(phone_access.UNLOCK_KEY)  # not locked: just a wrong code, nothing opens
+        self.assertEqual(code, 401)
+        self.assertEqual(self.phone.status()["failed_attempts"], 1)
+        self.lock(form)
+        code, _, body = self.get("/")
+        self.assertEqual(code, 403)
+        self.assertIn("Khóa mở đặc biệt".encode(), body)
+        self.assertNotIn(phone_access.UNLOCK_KEY.encode(), body, "the page never shows the key")
+        code, headers, body = form(phone_access.UNLOCK_KEY)
+        self.assertEqual(code, 401)
+        self.assertEqual(header(headers, "Set-Cookie"), [], "the key never gives a cookie by itself")
+        self.assertIn("Đã gỡ khóa".encode(), body)
+        state = self.phone.status()
+        self.assertEqual((state["locked"], state["failed_attempts"]), (False, 0))
+        self.assertEqual(self.get("/api/status")[0], 401)
+        code, headers, _ = form(status["code"])
+        self.assertEqual(code, 200)
+        self.assertEqual(len(header(headers, "Set-Cookie")), 1)
+
+    def test_p1_wrong_special_keys_lock_the_key_until_the_next_enable(self):
+        status = self.enable()
+        form = lambda code: request(self.port, "/phone-login", method="POST", body=f"code={code}".encode(),
+                                    headers={"Content-Type": "application/x-www-form-urlencoded"})
+        self.lock(form)
+        for attempt in range(1, phone_access.MAX_UNLOCK_ATTEMPTS):
+            code, _, body = form("1234")
+            self.assertEqual(code, 403, attempt)
+            self.assertIn(f"Còn {phone_access.MAX_UNLOCK_ATTEMPTS - attempt} lần".encode(), body)
+        code, _, _ = form(status["code"])  # the 5th wrong key: even the real code counts as one
+        self.assertEqual(code, 403)
+        self.assertTrue(self.phone.status()["unlock_locked"])
+        code, headers, body = form(phone_access.UNLOCK_KEY)
+        self.assertEqual(code, 403)
+        self.assertEqual(header(headers, "Set-Cookie"), [])
+        self.assertTrue(self.phone.status()["locked"])
+        self.assertNotIn(b'action="/phone-login"', self.get("/")[2], "no form once the key is locked too")
+        self.phone.disable()
+        again = self.enable()
+        self.assertEqual((again["locked"], again["unlock_locked"], again["unlock_failures"]), (False, False, 0))
+        self.assertEqual(form(again["code"])[0], 200)
+
+    def test_p1_the_special_key_lifts_the_lock_only_a_few_times_per_enable(self):
+        self.enable()
+        for round_ in range(phone_access.MAX_UNLOCKS):
+            self.phone.locked = True
+            self.assertEqual(self.phone.try_code(phone_access.UNLOCK_KEY), "unlocked", round_)
+        self.phone.locked = True
+        self.assertEqual(self.phone.try_code(phone_access.UNLOCK_KEY), "unlock_locked")
+        self.assertTrue(self.phone.status()["locked"])
+        self.phone.disable()
+        self.enable()
+        self.phone.locked = True
+        self.assertEqual(self.phone.try_code(phone_access.UNLOCK_KEY), "unlocked")
+
+    def test_p1_the_special_key_counter_is_safe_under_parallel_attempts(self):
+        self.enable()
+        self.phone.locked = True
+        outcomes = []
+        threads = [threading.Thread(target=lambda: outcomes.append(self.phone.try_code("9999"))) for _ in range(40)]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join()
+        self.assertEqual(self.phone.status()["unlock_failures"], phone_access.MAX_UNLOCK_ATTEMPTS)
+        self.assertEqual(outcomes.count("wrong_unlock"), phone_access.MAX_UNLOCK_ATTEMPTS - 1)
+        self.assertEqual(self.phone.try_code(phone_access.UNLOCK_KEY), "unlock_locked")
+
     def test_p1_the_code_form_works_with_the_origin_a_browser_sends(self):
         status = self.enable()
         code, headers, _ = self.get("/")
