@@ -195,7 +195,7 @@ Bảng ở mục 7 có hai cột kết quả: **Cloud** và **Máy thật**.
 | ID | Hạng mục | Cloud | Máy thật | Bằng chứng |
 | --- | --- | --- | --- | --- |
 | E1 | Kéo nhánh về một worktree. Chạy full suite trên Windows (`.venv\Scripts\python.exe -m unittest discover -s tests -p "test_*.py"`) và `node dashboard_v2/verify.cjs` | — | [x] | 2026-10-04, c616bef, worktree `temp/wt-dashboard-v2`, `.venv` của thư mục chính và `PYTHONPATH=src`: 1215 test OK (25 skip, 159 s); verify.cjs 28/28; verify-adapter 15/15. Worktree cần một `input/placeholder.mp4` rỗng (đã gitignore) cho 28 test của `test_job_pipeline` và `test_job_ocr_option`, vì chúng lấy một `.mp4` trong `input/`. Log: `temp/ui-plan/dashboard-v2-check/full-suite-2.log` |
-| E2 | Khởi động lại Control Center trên code nhánh, chỉ khi người dùng đồng ý và không có job nào chạy | — | [ ] | 2026-10-04: thư mục chính chuyển sang `869dcf5` (detached; `main` vẫn f6996bb) khi Control Center đang tắt và không job nào chạy. Người dùng tự mở bằng `Start-BiliFlow.cmd` khi test. Quay lại bản cũ: tắt Control Center rồi `git switch main` |
+| E2 | Khởi động lại Control Center trên code nhánh, chỉ khi người dùng đồng ý và không có job nào chạy | — | [x] | 2026-10-04: thư mục chính chuyển sang `869dcf5` (detached; `main` vẫn f6996bb) khi Control Center đang tắt và không job nào chạy. Người dùng tự mở bằng `Start-BiliFlow.cmd` khi test. Quay lại bản cũ: tắt Control Center rồi `git switch main` 2026-10-04 14:03: theo yêu cầu người dùng, máy thật dừng bằng `Stop-BiliFlow.cmd` khi không có job nào chạy, chuyển thư mục chính sang `634669a` (detached; `main` vẫn f6996bb) rồi mở lại bằng `Start-BiliFlow-Phone.cmd` trong cửa sổ riêng |
 | E3 | So `/dashboard-v2` với `/` (chỉ GET): số video từng nhóm, hàng đợi, tiến độ, revision và lỗi của toàn bộ job thật | — | [ ] | Chưa làm trên dữ liệu thật. Trên dữ liệu giả, 6 nhóm đã trùng nhưng có 2 chỗ hiển thị lệch (mục 11) |
 | E4 | Mở trang duyệt từ V2 đúng job; ảnh, khung hình và video hiện đúng | — | [ ] | 2026-10-04: nút Duyệt mở trang duyệt cũ `/review/{id}`, đúng thiết kế; người dùng giữ trang cũ cho lần merge này (14.4). Chờ người dùng xác nhận đúng job, ảnh, khung hình, video |
 | E5 | Thao tác an toàn do người dùng bấm: ẩn/hiện một job đã hủy; tạm dừng/tiếp tục hàng đợi khi rảnh | — | [x] | 2026-10-04, người dùng, dữ liệu thật trên `869dcf5`: ẩn rồi hiện lại job đã hủy, tạm dừng rồi tiếp tục hàng đợi đều chạy. Phát hiện U1 (14.4): danh sách tự đóng mục gập sau mỗi lần tải lại |
@@ -358,6 +358,7 @@ Nhật ký đợt 1:
 
 | Ngày | Commit | Việc đã làm | Kết quả | Còn lại |
 | --- | --- | --- | --- | --- |
+| 2026-10-04 | 634669a (thư mục chính) | Theo yêu cầu người dùng, máy thật dừng Control Center bằng `Stop-BiliFlow.cmd` khi không có job chạy (cổng 8765 và 8767 đóng, file trạng thái được dọn), chuyển thư mục chính sang `634669a` (detached; `main` vẫn f6996bb), mở lại bằng `Start-BiliFlow-Phone.cmd` trong cửa sổ riêng (14:03; chế độ điện thoại bật; V2 phục vụ đúng `app.js` mới). Người dùng test trên PC, laptop và điện thoại. Máy thật tái hiện lỗi người dùng báo trên bản xem thử chỉ đọc | Tìm được U2 (mục 16): "Chi tiết" bị kéo lên đầu sau mỗi lần tải lại, với mọi job | Cloud sửa U2 (đợt 6); người dùng test tiếp |
 | 2026-10-04 | c91746f (đợt 5) | Kéo đợt 5 về (code và tài liệu ở be79454, c91746f sửa dòng nhật ký). Kiểm nhanh, không review dài (người dùng muốn nhanh): full suite, đọc diff code, fingerprint, launcher, cú pháp các lệnh Firewall trong hướng dẫn (không chạy lệnh Firewall nào) | Full suite 1269 OK (25 skip) ngay lần đầu, 235 s, gồm node gates; `Batch5` 4/4 trên socket thật của Windows; D2 trùng byte; fingerprint: không file nào trong 42 đường dẫn được băm của 10 stage đổi so với `main` f6996bb (10 stage `none`); launcher ASCII, parse 0 lỗi; 4 khối PowerShell mục 2 parse 0 lỗi, khối 1 chọn đúng `cpython-3.11.16`; không có dòng attribution. Đọc diff M1/M3: không thấy lỗi. Ghi chú nhỏ: code đợt 5 nằm trong commit tên `docs:` (be79454); không viết lại lịch sử | Người dùng dừng Control Center; máy thật chuyển thư mục chính sang c91746f (detached); người dùng mở lại bằng `Start-BiliFlow-Phone.cmd` rồi test đầy đủ PC + điện thoại + laptop (mục 7, 12.4, 13.3, 14.4); Firewall theo mục 2 mới (tùy chọn, người dùng tự chạy) |
 | 2026-10-04 | 111bad5 (đợt 4 + U1) | Kéo đợt 4 (eb29eb6) và U1 (111bad5) về. Full suite trên 901ed71; node gates; fingerprint; kiểm U1 bằng trình duyệt trên bản xem thử chỉ đọc; một agent riêng review bảo mật đợt 4 (chỉ đọc code, chạy class thật với socket giả). Agent lỡ gọi thật 3 lệnh sửa Firewall; Windows từ chối vì agent không có quyền admin; máy thật kiểm lại: số rule và các rule Python không đổi, không có rule mới | Full suite 1265 OK (25 skip) ngay lần đầu; verify 28/28; verify-adapter 17/17; `node --check` 9/9; 68 test V2 OK trên 111bad5; fingerprint 10 stage `none` (`fingerprint-batch4.txt`); fixture D2 không đổi; launcher ASCII; chỉ sửa file phần điện thoại, launcher, tài liệu, test và `app.js`. U1 đạt. Review bảo mật: không có lỗi nghiêm trọng, cao hay trung bình; 4 lỗi thấp (dưới bảng) | Đợt 5 (mục 15), rồi người dùng test đầy đủ PC + điện thoại + laptop |
 | 2026-10-04 | 869dcf5 (code) | Người dùng test phần PC (bước 3–4) trên dữ liệu thật. Máy thật tái hiện lỗi cuộn trên bản xem thử chỉ đọc (dữ liệu giả, POST bị chặn), xong thì tắt và xóa root tạm | E5 đạt. E4: trang duyệt cũ, đúng thiết kế; người dùng giữ trang cũ cho lần merge này. Tìm được U1 (14.4) | Các bước PC còn lại; U1 giao cloud (14.4) |
@@ -840,3 +841,62 @@ Người dùng quyết định (2026-10-04): gộp việc này vào trang duyệ
 | M4 | Nút Quay lại Dashboard của trang duyệt mở từ V2 về lại V2; `/review/{id}` không tham số vẫn trùng byte | — | — | Chuyển sang phase trang duyệt V2 (người dùng, 2026-10-04) |
 
 **Sau đợt 5:** máy thật kéo về kiểm nhanh (test liên quan, full suite, fingerprint; không chạy review dài); người dùng chuyển thư mục chính sang bản mới và test đầy đủ PC + điện thoại + laptop; chỉ merge vào `main` khi người dùng yêu cầu. **Đã kiểm ở c91746f** (mục 11, 2026-10-04): đạt; chờ người dùng test đầy đủ.
+
+## 16. Đợt 6 (giao ngày 2026-10-04): lỗi từ lần test đầy đủ
+
+Người dùng test đầy đủ trên `634669a` (PC, laptop, điện thoại) với dữ liệu thật (2026-10-04).
+
+Ràng buộc của 12.3, 13, 14 và 15 vẫn giữ nguyên:
+- không sửa file nằm trong fingerprint cache, không thêm thư viện;
+- `127.0.0.1:8765` giữ nguyên hành vi, D2 trùng byte;
+- không tự sửa Windows Firewall;
+- chế độ điện thoại mặc định tắt;
+- không test nào bind vào địa chỉ Wi-Fi thật.
+
+### 16.1. Việc cần làm
+
+- **U2. "Chi tiết" (drawer) bị kéo lên đầu sau mỗi lần tải lại.**
+  - Người dùng thấy (PC, laptop, điện thoại): bấm "Chi tiết" của video đang chờ quét hoặc đang quét, cuộn xuống; khoảng
+    3 s sau khung chi tiết nhảy lên đầu.
+  - Máy thật tái hiện trên bản xem thử chỉ đọc (handler thật, root tạm, 11 job giả, POST bị chặn), ở `#videos`:
+    - mở "Chi tiết" của job `mau-11-can-metadata` (không phải job đang quét), mở 3 mục gập, đặt `.drawer.scrollTop = 400`
+      (cuộn tối đa 7011);
+    - sau một lần tải lại: `.drawer` là node mới, `scrollTop = 0`; 3 mục gập vẫn mở.
+
+    Vậy lỗi có ở mọi job; job đang quét hoặc chờ quét chỉ dễ thấy hơn.
+  - Nguyên nhân:
+    - live store gọi `emit()` sau mỗi lần poll 3 s, kể cả khi dữ liệu không đổi (`adapter.js:236`);
+    - `onSnapshot()` luôn gọi `refreshDrawer()` khi có drawer mở (`app.js:496`, `499`, `501`);
+    - `refreshDrawer()` dựng lại toàn bộ `#drawer-root` qua `openDrawer(currentJob, true)`, và lưu/trả `scrollTop` của
+      `.drawer-body` (`app.js:210-215`). Nhưng phần tử cuộn là `aside.drawer` (`styles.css`: `.drawer{position:fixed;…;overflow:auto}`;
+      `.drawer-body` chỉ có padding), nên khung mới luôn bắt đầu ở 0.
+  - Sửa, chỉ trong `dashboard_v2/app.js`:
+    - `refreshDrawer()` lưu và trả `scrollTop` của phần tử cuộn thật `#drawer-root .drawer` (giữ cả `.drawer-body` phòng
+      khi CSS đổi);
+    - như U1: tách chuỗi HTML của drawer (`drawerHtml(j)`) khỏi `openDrawer`. Nếu chuỗi mới giống chuỗi đang hiển thị thì
+      không đụng DOM: giữ node, cuộn, mục gập, focus, vùng chọn chữ, và ảnh poster không bị tải lại mỗi 3 s;
+    - khi nội dung đổi (vd. % tiến độ của video đang quét), dựng lại rồi trả đúng cuộn, mục gập và focus như hiện nay. Có
+      thể chỉ thay phần tiến độ (`section.progress-summary`) nếu gọn hơn;
+    - xem các vùng cuộn khác bị dựng lại theo poll (hộp `#modal` đang mở, trang Cài đặt…); chỗ nào có cùng lỗi thì sửa
+      cùng cách và ghi vào bằng chứng.
+  - Không đổi: nội dung và thứ tự hiển thị của drawer, các nút thao tác, khóa chỉ-PC, `live.html`/`index.html`.
+
+### 16.2. Test
+
+- `browser-check.cjs`, ở 1440 px và 390 px:
+  - mở "Chi tiết" của một job không đổi giữa hai lần poll, mở các mục gập, cuộn `.drawer` xuống (vd. 400 px); chờ ít nhất
+    2 lần poll → `scrollTop` giữ nguyên (±2 px), mục gập vẫn mở, `.drawer` vẫn là cùng node;
+  - làm lại với một job có tiến độ đổi giữa hai lần poll (server giả trả % khác nhau) → `scrollTop` giữ nguyên, mục gập
+    vẫn mở, % mới hiện ra;
+  - focus đang ở một nút trong drawer → vẫn ở nút đó sau lần tải lại.
+- Chạy lại như 13.2: node gates, `tests.test_dashboard_v2_*`, test Control Center liên quan, lệnh A4 (10 stage `none`), D2.
+
+### 16.3. Checklist đợt 6
+
+| ID | Hạng mục | Cloud | Máy thật | Bằng chứng |
+| --- | --- | --- | --- | --- |
+| U2 | "Chi tiết" giữ vị trí cuộn, mục gập và focus qua các lần tải lại; không dựng lại khi nội dung không đổi | [ ] | [ ] | |
+
+**Sau đợt 6:** máy thật kéo về kiểm nhanh và kiểm U2 bằng trình duyệt trên bản xem thử chỉ đọc. Khi người dùng đồng ý và
+không có job chạy, máy thật dừng Control Center, chuyển thư mục chính sang bản mới rồi mở lại. Người dùng test tiếp phần còn
+lại; chỉ merge vào `main` khi người dùng yêu cầu.
