@@ -255,6 +255,14 @@ Câu hỏi đợt 3 (cloud, 2026-10-04). **Người dùng đã trả lời câu 
 
 ## 9. Nhật ký cloud (mục mới nhất ở trên cùng)
 
+**Tóm tắt phiên cloud đợt 4, 2026-10-04 (L1–L4 xong trên cloud; chưa test trên máy thật):** giới hạn 6 kết nối mỗi thiết bị và hạn chót 5 s thật tính từ lúc kết nối, có event khi bị giới hạn; `PHONE_LOGIN` một lần mỗi thiết bị mỗi lần bật; tắt chế độ cắt cả kết nối đang mở và video đang phát trên điện thoại, PC không ảnh hưởng; hướng dẫn Firewall sửa (không bấm Cancel, rule gắn Python + cổng 8767) và dòng in launcher. Còn lại: máy thật kiểm đợt 4 (nhất là rule Firewall mới), người dùng test điện thoại/laptop (P7–P9, câu 10–11); vẫn mô phỏng: trang Tải video, bản demo.
+
+| Ngày | Commit | Việc đã làm | Test đã chạy | Còn lại |
+| --- | --- | --- | --- | --- |
+| 2026-10-04 | eb29eb6, (commit docs này) | L1–L4 (mục 14.1): `phone_access.py` (`_PhoneServer` theo IP, theo dõi socket, event giới hạn, login một lần), `control_center.py` (Timer hạn chót), hướng dẫn mục 2 và 7, dòng in launcher; 6 test mới trong `tests/test_dashboard_v2_phone_hardening.py`; điền 14.3 | test_dashboard_v2_* 68 OK (contract 10, frontend 3, route 9, status 2, phone 15, hardening 29); verify 28/28; verify-adapter 17/17; browser-check 17/17; test Control Center liên quan như đợt trước (test_control_center 52/53, test_skip_export 26/30: lỗi PowerShell cũ; còn lại OK); Chromium thật: đăng nhập điện thoại, trang duyệt 375 px; A4 10 stage `none` | Máy thật kiểm đợt 4; người dùng test điện thoại và laptop rồi mới merge |
+
+Nhật ký đợt 3:
+
 **Tóm tắt phiên cloud đợt 3, 2026-10-04 (H1–H6 xong trên cloud; chưa test trên máy thật):**
 
 - **Đã khớp (đã test trên cloud):**
@@ -669,9 +677,9 @@ Người dùng đồng ý làm đợt 4 trước khi test trên điện thoại 
 
 | ID | Hạng mục | Cloud | Máy thật | Bằng chứng |
 | --- | --- | --- | --- | --- |
-| L1 | Giới hạn kết nối theo IP; hạn chót thật 5 s trước khi có cookie; event khi bị giới hạn | [ ] | [ ] | |
-| L2 | Event `PHONE_LOGIN` có giới hạn | [ ] | [ ] | |
-| L3 | Tắt chế độ đóng cả kết nối đang mở, kể cả video đang phát | [ ] | [ ] | |
-| L4 | Hướng dẫn: không bấm Cancel; rule Firewall gắn Python và cổng 8767; mục 7 ghi đúng; dòng in của launcher | [ ] | [ ] | |
+| L1 | Giới hạn kết nối theo IP; hạn chót thật 5 s trước khi có cookie; event khi bị giới hạn | [x] | [ ] | `tests.test_dashboard_v2_phone_hardening.Batch4LowFindings` (listener 127.0.0.1, `lan` giả, IP giả qua `process_request` với socketpair): IP đã có 2/2 kết nối → kết nối thứ 3 của IP đó bị đóng ngay (< 1 s), IP khác vẫn nhận 401 bình thường; kết nối gửi 1 byte mỗi 0,3 s bị cắt khoảng `GATE_TIMEOUT_SECONDS` (test đặt 1 s) sau lúc kết nối (< 2,5 s) và slot được trả lại; kết nối có cookie không bị hạn chót cắt (test H1 cũ: body tới sau 1,6 s vẫn 200); 6 lần bị từ chối → 1 event `PHONE_CONNECTIONS_LIMITED` (`ip`, `limit: per_ip`), khung PC thấy, hết khoảng thời gian thì ghi thêm 1. Hằng số 6 và 60 s kiểm trong test |
+| L2 | Event `PHONE_LOGIN` có giới hạn | [x] | [ ] | Cùng file: 4 lần nhập đúng từ 127.0.0.1 + 2 lần từ 10.0.0.9 → đúng 2 event `PHONE_LOGIN`; bật lại → thiết bị được ghi lại 1 lần |
+| L3 | Tắt chế độ đóng cả kết nối đang mở, kể cả video đang phát | [x] | [ ] | Cùng file: video 256 MB (file thưa) đang tải qua listener điện thoại và qua `127.0.0.1` cùng lúc; tắt chế độ → luồng điện thoại kết thúc < 2 s và số kết nối về 0; luồng PC vẫn nhận dữ liệu |
+| L4 | Hướng dẫn: không bấm Cancel; rule Firewall gắn Python và cổng 8767; mục 7 ghi đúng; dòng in của launcher | [x] | [ ] | `docs/DASHBOARD_V2_PHONE.md` mục 2: khung “Không bấm Cancel”; rule `-Program $Python -Protocol TCP -LocalPort 8767 -Profile Private -RemoteAddress LocalSubnet`, `$Python` tìm bằng `cpython-3.11.*-windows-x86_64-none` (không ghi cứng bản vá, bỏ qua junction) + lệnh kiểm tiến trình đang nghe 8767; dọn rule Block, rule Public của Python và rule chỉ theo cổng cũ; mục 7 ghi đúng giới hạn sau L1–L3. Launcher (ASCII) in “KHONG bam Cancel” và cách tạo rule. Test L4 kiểm các điểm này. Máy thật cần thử rule trước khi chốt |
 
 **Sau đợt 4:** máy thật kéo về kiểm như đợt 3; người dùng test phần điện thoại và laptop (P7, P8, P9, câu 10–11) trên bản đã sửa; chỉ merge vào `main` khi người dùng yêu cầu.
