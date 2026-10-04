@@ -94,8 +94,12 @@ class PhoneModeTests(unittest.TestCase):
     def get(self, path, **kw):
         return request(self.port, path, **kw)
 
+    def form(self, code):
+        return request(self.port, "/phone-login", method="POST", body=f"code={code}".encode(),
+                       headers={"Content-Type": "application/x-www-form-urlencoded"})
+
     def login(self, code):
-        status, headers, body = self.get("/?code=" + code)
+        status, headers, body = self.form(code)
         cookie = header(headers, "Set-Cookie")
         return status, (cookie[0].split(";", 1)[0] if cookie else None), body
 
@@ -123,7 +127,7 @@ class PhoneModeTests(unittest.TestCase):
         code, cookie, body = self.login(status["code"])
         self.assertEqual(code, 200)
         self.assertIn(b'http-equiv="refresh" content="0;url=/dashboard-v2/"', body)
-        _, headers, _ = self.get("/?code=" + status["code"])
+        _, headers, _ = self.form(status["code"])
         set_cookie = header(headers, "Set-Cookie")[0]
         for flag in ("HttpOnly", "SameSite=Strict", "Path=/"):
             self.assertIn(flag, set_cookie)
@@ -146,7 +150,7 @@ class PhoneModeTests(unittest.TestCase):
             code, _, body = form("wrongcod")
             self.assertEqual(code, 401, attempt)
             self.assertIn(f"Còn {phone_access.MAX_FAILED_ATTEMPTS - attempt} lần".encode(), body)
-        code, _, body = self.get("/?code=nopenope")  # the 10th wrong code (link form) locks
+        code, _, body = form("nopenope")  # the 10th wrong code locks
         self.assertEqual(code, 403)
         self.assertTrue(self.phone.status()["locked"])
         code, headers, _ = form(status["code"])
@@ -251,6 +255,21 @@ class PhoneModeTests(unittest.TestCase):
         code, headers, _ = send(f"http://127.0.0.1:{self.port}")
         self.assertEqual(code, 200)
         self.assertEqual(len(header(headers, "Set-Cookie")), 1)
+
+    def test_p1_a_code_in_a_link_never_logs_in_and_is_not_an_attempt(self):
+        """Question 12: the code is typed on the phone; ?code= is ignored everywhere."""
+        status = self.enable()
+        self.assertNotIn("link", status)
+        self.assertNotIn("?code=", json.dumps(status))
+        for path in ("/?code=", "/dashboard-v2/?code=", "/phone-login?code="):
+            with self.subTest(path=path):
+                code, headers, body = self.get(path + status["code"])
+                self.assertEqual(code, 401)
+                self.assertEqual(header(headers, "Set-Cookie"), [])
+                self.assertIn(b'action="/phone-login"', body)
+        self.assertEqual(self.phone.status()["failed_attempts"], 0)
+        _, pc_headers, pc_body = request(self.pc_port, "/api/phone-mode")
+        self.assertNotIn(b"?code=", pc_body)
 
     def test_p1_a_cookie_from_the_previous_enable_no_longer_opens_anything(self):
         status = self.enable()

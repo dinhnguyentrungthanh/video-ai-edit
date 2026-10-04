@@ -154,8 +154,7 @@ def _phone_page(title: str, message: str, *, form: bool, attempts_left: int | No
         "autocapitalize=\"none\" autocomplete=\"one-time-code\" maxlength=\"32\" required autofocus></label>"
         "<button type=\"submit\">Vào BiliFlow</button></form>" if form else ""
     )
-    # A same-site refresh (not a redirect) so the SameSite=Strict cookie is sent even when the
-    # link was opened from another app.
+    # A same-site refresh after the form, so the new SameSite=Strict cookie is sent with V2.
     refresh = f"<meta http-equiv=\"refresh\" content=\"0;url={_html.escape(redirect)}\">" if redirect else ""
     hop = f"<p><a href=\"{_html.escape(redirect)}\">Mở BiliFlow</a></p>" if redirect else ""
     return (
@@ -2014,7 +2013,8 @@ def _phone_handler_class(center: ControlCenter, phone: phone_access.PhoneAccess)
     """Handler of the phone listener: the Control Center handler behind the access-code gate.
 
     Every request needs the Host <ip>:<port> of the listener and the access-code cookie,
-    except the code page itself. Writes also need the session token (inherited do_POST),
+    except the code page itself (the code is typed, never taken from a link).
+    Writes also need the session token (inherited do_POST),
     a same-origin Origin when one is sent, and are refused for the PC-only actions.
     """
     base = _handler_class(center)
@@ -2092,11 +2092,8 @@ def _phone_handler_class(center: ControlCenter, phone: phone_access.PhoneAccess)
                 return
             parsed = urllib.parse.urlparse(self.path)
             if not self.has_access():
-                code = urllib.parse.parse_qs(parsed.query).get("code", [""])[0]
-                if code and parsed.path in ENTRY_PATHS:
-                    self.answer_code(code)
-                else:
-                    self.refuse_without_access(parsed.path)
+                # The code is only typed into the form (question 12): a ?code= link is ignored.
+                self.refuse_without_access(parsed.path)
                 return
             if parsed.path in ("/", "/phone-login"):
                 # V2 is the phone page; the classic dashboard stays on the PC.

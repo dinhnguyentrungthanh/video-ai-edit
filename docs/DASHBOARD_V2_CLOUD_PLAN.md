@@ -224,7 +224,7 @@ git worktree remove ../bf-base
 
 **Người dùng đã trả lời câu 1–6 ngày 2026-10-04:** xem mục 12.1. Câu hỏi mới của đợt 2 đánh số tiếp từ 7.
 
-Câu hỏi đợt 2 (cloud, 2026-10-04). **Người dùng đã trả lời câu 7–9** (xem 12.6); câu 10–12 còn chờ.
+Câu hỏi đợt 2 (cloud, 2026-10-04). **Người dùng đã trả lời câu 7–12** (xem 12.6). Câu 10 người dùng chưa hiểu: cloud đã giải thích lại bằng lời và ảnh, đang chờ chọn.
 
 7. **Nhớ logo khi duyệt qua điện thoại.** Lệnh duyệt cảnh (`review/decision`) có tùy chọn `remember_studio_logo` / `remember_platform_logo`, ghi **thêm** vào bộ nhớ logo. Hiện nó vẫn chạy qua điện thoại, vì là một phần của duyệt cảnh, không phải sửa/xóa bộ nhớ. Giữ, hay muốn chặn riêng tùy chọn nhớ logo khi duyệt qua điện thoại?
 8. **Chọn địa chỉ Wi-Fi.** Giống Golden Label, listener nghe địa chỉ của card mạng đi ra mạng nhà (route mặc định). Nếu PC bật VPN hoặc có card ảo (Hyper-V/WSL) mang địa chỉ 10.x/172.x, địa chỉ chọn được có thể là của VPN, tức là mở cho mạng VPN đó. Giữ cách tự chọn (cửa sổ in rõ địa chỉ), hay muốn cho chọn/khóa địa chỉ cụ thể?
@@ -266,7 +266,8 @@ Câu hỏi đợt 2 (cloud, 2026-10-04). **Người dùng đã trả lời câu 
 
 | Ngày | Commit | Việc đã làm | Test đã chạy | Còn lại |
 | --- | --- | --- | --- | --- |
-| 2026-10-04 | (commit này, sau 4f0c349) | Câu 7–9 của người dùng (12.6): giữ nhớ logo khi duyệt qua điện thoại, tự chọn địa chỉ; thêm khóa mở đặc biệt `2007` kiểu chỉ-mở-khóa, giới hạn 5 lần sai và 3 lần gỡ mỗi lần bật; khung PC hiện lượt gỡ còn lại; hướng dẫn và guide cập nhật | test_dashboard_v2_phone 13 OK; verify 28/28; verify-adapter 17/17; browser-check 17/17; contract/route/status/frontend OK; Chromium đăng nhập thật OK; A4 `none` | Câu 10–12; P6–P8 và cột Máy thật |
+| 2026-10-04 | (commit này, sau a2cc434) | Câu 10–12: câu 11 giữ; câu 12 bỏ đăng nhập bằng `?code=` (chỉ nhập tay), file khởi động và khung PC in link không mã; câu 10 giải thích lại | test_dashboard_v2_phone 14 OK; verify 28/28; verify-adapter 17/17; browser-check 17/17; contract/route/status/frontend OK; Chromium thật: link `?code=` không vào được, gõ mã vào được | Câu 10; P6–P8 và cột Máy thật |
+| 2026-10-04 | a2cc434 | Câu 7–9 của người dùng (12.6): giữ nhớ logo khi duyệt qua điện thoại, tự chọn địa chỉ; thêm khóa mở đặc biệt `2007` kiểu chỉ-mở-khóa, giới hạn 5 lần sai và 3 lần gỡ mỗi lần bật; khung PC hiện lượt gỡ còn lại; hướng dẫn và guide cập nhật | test_dashboard_v2_phone 13 OK; verify 28/28; verify-adapter 17/17; browser-check 17/17; contract/route/status/frontend OK; Chromium đăng nhập thật OK; A4 `none` | Câu 10–12; P6–P8 và cột Máy thật |
 | 2026-10-04 | ef9ad52, a80ab59, 4f0c349 | Đợt 2: G1–G3 (12.2); chế độ điện thoại (12.3): `src/biliflow/phone_access.py` (chỉ `control_center.py` import), listener điện thoại + `/api/phone-mode`, khung V2, `Start-BiliFlow-Phone.cmd` + `Start-BiliFlow.ps1 -Phone`, hướng dẫn `docs/DASHBOARD_V2_PHONE.md`; điền 12.4, câu 7–12 | verify 28/28; verify-adapter 17/17; browser-check 17/17; test_dashboard_v2_* 33 OK (contract 10, frontend 3, route 9, status 2, phone 9); các test Control Center như đợt 1; A4 `none`; Chromium trên handler thật (đăng nhập điện thoại, trang duyệt 375 px) | P6–P8 và cột Máy thật của 12.4; câu 7–12 |
 
 Nhật ký đợt 1:
@@ -428,12 +429,15 @@ Thứ tự làm: 12.2 trước, 12.3 sau. Bảng kết quả ở 12.4.
 | P8 | Laptop trong Wi-Fi nhà: như P7 | — | [ ] | |
 | P9 | Trang duyệt cũ ở 375 px: ghi nhận cách hiển thị và đề xuất, không sửa | [x] | [ ] | Chromium 375 px trên handler thật, root tạm, 1 cảnh 18+: trang không tràn ngang (scrollWidth 375); 4 nút quyết định 150×67 px, dễ bấm; hàng chip bộ lọc cuộn ngang (3 chip và ô “Thêm” nằm ngoài màn hình, không có dấu hiệu cuộn); chữ nhỏ nhất 10 px; nhãn “phím 1–4” vô nghĩa trên điện thoại; nút quyết định nằm dưới video, phải cuộn. Không sửa. Đề xuất: câu 10 mục 8 |
 
-### 12.6. Quyết định của người dùng cho câu 7–9 (2026-10-04)
+### 12.6. Quyết định của người dùng cho câu 7–12 (2026-10-04)
 
 | # | Quyết định | Đã làm |
 | --- | --- | --- |
 | 7 | Duyệt cảnh qua điện thoại vẫn được nhớ logo, giống trên laptop/PC | Không đổi code; `review/decision` có `remember_*_logo` vẫn chạy qua điện thoại |
 | 8 | Tự chọn địa chỉ Wi-Fi | Không đổi (`lan_address()` như Golden Label) |
+| 10 | Chưa hiểu câu hỏi | Không đổi trang duyệt cũ. Cloud giải thích lại bằng ảnh chụp 375 px và chờ người dùng chọn |
+| 11 | Trên điện thoại, `/` chuyển thẳng sang V2 | Không đổi (đã làm như vậy) |
+| 12 | Nhập mã tay, không để mã trong link | Bỏ đăng nhập bằng `?code=`: link in ra và khung PC chỉ có `http://<ip>:8767/` + mã; `?code=` bị bỏ qua (không cookie, không tính lần sai); status không còn trường `link`. Test mới + Chromium thật: link có `?code=` chỉ hiện ô nhập mã |
 | 9 | Đồng ý khóa sau 10 lần sai, **thêm khóa mở đặc biệt `2007`**; người dùng chọn kiểu “chỉ mở khóa” | `phone_access.UNLOCK_KEY = "2007"`, chỉ có tác dụng khi đang khóa: gỡ khóa và đặt lại số lần sai, không cấp cookie, vẫn phải nhập mã 8 ký tự. Sai 5 lần (`MAX_UNLOCK_ATTEMPTS`) hoặc đã gỡ 3 lần trong một lần bật (`MAX_UNLOCKS`, thêm để khóa trong mã nguồn không mở đường dò mã vô hạn) thì khóa mở bị khóa tới lần bật sau. Trang không bao giờ hiện khóa; ô nhập đổi nhãn thành “Khóa mở đặc biệt”. Khung PC cho biết còn bao nhiêu lượt gỡ |
 
 ### 12.5. Tự review bảo mật chế độ điện thoại (cloud, trước khi push)
@@ -441,7 +445,7 @@ Thứ tự làm: 12.2 trước, 12.3 sau. Bảng kết quả ở 12.4.
 | Mặt | Kiểm tra | Kết luận |
 | --- | --- | --- |
 | Xác thực | Mã 8 ký tự từ 31 ký tự (≈ 8,5·10¹¹ tổ hợp), `secrets`; so sánh hằng thời gian; đếm lần sai trong khóa luồng (không vượt được bằng request song song); khóa sau 10 lần sai. Khóa mở `2007` (câu 9) có trong mã nguồn nên coi như công khai: nó chỉ gỡ khóa, không cấp cookie; tối đa 5 lần sai và 3 lần gỡ mỗi lần bật, nên tổng số lần thử mã 8 ký tự mỗi lần bật ≤ 40 (test song song 40 luồng: bộ đếm đúng). Cookie là HMAC-SHA256 của mã với khóa ngẫu nhiên 32 byte tạo lại mỗi lần bật, nên tắt/bật làm mọi cookie cũ vô hiệu | Đạt. Rủi ro còn lại: người trong Wi-Fi có thể cố tình khóa nhập mã (câu 9) |
-| Rò mã / token | Mã chỉ trả ở GET `/api/phone-mode` của `127.0.0.1` (đọc được chỉ từ PC; Host check chặn rebinding). Điện thoại chỉ nhận `{remote:true}`. Token phiên chỉ trả sau khi có cookie. Cookie không chứa mã. Server không ghi log request. Trang nối sau `?code=` dùng `Referrer-Policy: same-origin` nên link có mã không bị gửi sang trang khác. Mã vẫn nằm trong lịch sử trình duyệt điện thoại (câu 12) và đi qua Wi-Fi dạng HTTP | Đạt trong phạm vi Wi-Fi nhà; HTTP được cảnh báo ở hướng dẫn, ở khung V2 và trang nhập mã |
+| Rò mã / token | Mã chỉ trả ở GET `/api/phone-mode` của `127.0.0.1` (đọc được chỉ từ PC; Host check chặn rebinding). Điện thoại chỉ nhận `{remote:true}`. Token phiên chỉ trả sau khi có cookie. Cookie không chứa mã. Server không ghi log request. Mã chỉ được gõ vào form (câu 12), không bao giờ nằm trong URL, nên không vào lịch sử trình duyệt. Mã và cookie vẫn đi qua Wi-Fi dạng HTTP | Đạt trong phạm vi Wi-Fi nhà; HTTP được cảnh báo ở hướng dẫn, ở khung V2 và trang nhập mã |
 | DNS rebinding / CSRF | Host phải trùng đúng `ip:cổng`; POST cần cookie SameSite=Strict, token phiên ở header và Origin đúng; trang nhập mã `frame-ancestors 'none'`; mọi response vẫn có `X-Frame-Options: SAMEORIGIN` | Đạt |
 | Thao tác chỉ-PC | Chặn ở listener điện thoại **trước** mọi xử lý (403 `pc_only`), không dựa vào giao diện; bật/tắt chế độ chỉ ở listener `127.0.0.1` (kiểm cả `client_address` và cờ listener). Test gửi đủ 10 đường dẫn qua điện thoại → 403, qua PC → không bị chặn | Đạt. Riêng nhớ logo khi duyệt vẫn chạy qua điện thoại (câu 7) |
 | Bind | Chỉ IPv4 riêng, kiểm **trước** khi bind; không `0.0.0.0`; `allow_reuse_address = False`; cổng 1024–65535, khác 8765 | Đạt. Địa chỉ tự chọn có thể là của VPN (câu 8) |

@@ -5,7 +5,8 @@ an extra listener, off by default, bound only to the PC's private IPv4 address (
 172.16/12, 192.168/16) on its own port, never 0.0.0.0 or a public address. Every request
 needs a cookie proving the random 8-character access code (HttpOnly, SameSite=Strict,
 constant-time check); after MAX_FAILED_ATTEMPTS wrong codes, code entry stays locked until
-the next time the mode is turned on. The Host header must be exactly <ip>:<port> (DNS
+the next time the mode is turned on. The code is always typed into the code page, never put
+in a link (question 12), so it stays out of browser history. The Host header must be exactly <ip>:<port> (DNS
 rebinding). Writes still need the session token, and PC_ONLY_POSTS are refused there.
 
 Imported only by control_center.py (outside the stage-cache fingerprint).
@@ -197,8 +198,8 @@ class PhoneAccess:
             "default_port": DEFAULT_PORT,
         }
         if include_secret:
+            # No link with the code in it (question 12): the code is always typed on the phone.
             value["code"] = self._code if on else None
-            value["link"] = f"http://{self.address}:{self.port}/?code={self._code}" if on else None
         return value
 
     def status(self, *, include_secret: bool = False) -> dict[str, Any]:

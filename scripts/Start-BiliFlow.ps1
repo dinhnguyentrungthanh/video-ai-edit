@@ -48,8 +48,8 @@ function Enable-PhoneMode([string]$Url) {
     $Line = '=' * 64
     Write-Host $Line
     Write-Host '  BILIFLOW TREN DIEN THOAI / LAPTOP (cung Wi-Fi nha)'
-    Write-Host "  Mo tren dien thoai:  $($Result.link)"
-    Write-Host "  Hoac vao $($Result.url) va nhap ma:  $($Result.code)"
+    Write-Host "  Mo tren dien thoai:  $($Result.url)"
+    Write-Host "  Nhap ma truy cap:    $($Result.code)"
     Write-Host '  Lan dau Windows hoi cho Python qua tuong lua: chon Private networks (khong chon Public).'
     Write-Host '  Chi dung trong Wi-Fi nha: ket noi HTTP, khong ma hoa.'
     Write-Host '  Tat: nut "Tat che do dien thoai" trong Dashboard V2 > Cai dat tren PC, hoac Stop-BiliFlow.cmd (tat ca hai).'

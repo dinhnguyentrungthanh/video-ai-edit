@@ -178,8 +178,7 @@ function phonePanel(){
   const body=p.enabled?
     '<div class="key-value"><span>Trạng thái</span><span><strong>Đang bật</strong>'+(p.locked?' · đã khóa nhập mã (sai '+p.failed_attempts+' lần)':p.failed_attempts?' · '+p.failed_attempts+'/'+p.max_failed_attempts+' lần nhập sai':'')+'</span></div>'+
     '<div class="key-value"><span>Mở trên điện thoại</span><span class="mono phone-link">'+esc(p.url)+'</span></div>'+
-    '<div class="key-value"><span>Mã truy cập</span><span class="mono phone-code">'+esc(p.code)+'</span></div>'+
-    '<div class="key-value"><span>Hoặc mở thẳng</span><span class="mono phone-link">'+esc(p.link)+'</span></div>'+
+    '<div class="key-value"><span>Mã truy cập</span><span class="mono phone-code">'+esc(p.code)+'</span></div><p class="muted">Mở link trên điện thoại rồi gõ mã vào ô “Mã truy cập”.</p>'+
     (p.locked?'<p class="notice">Đã nhập sai mã quá nhiều lần nên nhập mã đang bị khóa. '+(p.unlock_locked?'Khóa mở đặc biệt cũng đã bị khóa; tắt rồi bật lại để có mã mới.':'Trên điện thoại có thể gỡ bằng khóa mở đặc biệt (còn '+Math.max(0,(p.max_unlocks||0)-(p.unlocks||0))+' lượt), sau đó vẫn phải nhập mã; hoặc tắt rồi bật lại để có mã mới.')+'</p>':'')+
     '<div class="action-grid"><button class="danger" data-action="phone-toggle" data-enabled="0">Tắt chế độ điện thoại</button></div>':
     '<div class="key-value"><span>Trạng thái</span><span>Đang tắt</span></div><p class="muted">Bật để điện thoại hoặc laptop cùng Wi-Fi nhà mở được BiliFlow bằng link và mã. Mã đổi mỗi lần bật.</p>'+

@@ -11,8 +11,10 @@ Chế độ này cho điện thoại hoặc laptop **cùng Wi-Fi nhà** mở Das
    - Control Center đang chạy: file này **dùng lại** nó và chỉ bật chế độ điện thoại. Không khởi động lại, không mở Control Center thứ hai, job đang chạy không bị ảnh hưởng.
    - Control Center đang chạy bản cũ chưa có chế độ này: file báo rõ và **không** tự khởi động lại. Khi không có video nào đang xử lý, tắt bằng `Stop-BiliFlow.cmd` rồi chạy lại `Start-BiliFlow-Phone.cmd`.
 2. Cửa sổ in ra:
-   - `Mo tren dien thoai: http://192.168.x.x:8767/?code=xxxxxxxx`: link mở thẳng, có sẵn mã;
-   - `Hoac vao http://192.168.x.x:8767/ va nhap ma: xxxxxxxx`: link không kèm mã, và mã 8 ký tự.
+   - `Mo tren dien thoai: http://192.168.x.x:8767/`: link để mở trên điện thoại;
+   - `Nhap ma truy cap: xxxxxxxx`: mã 8 ký tự.
+
+   Link không bao giờ kèm mã, để mã không nằm lại trong lịch sử trình duyệt của điện thoại.
 3. Trình duyệt trên PC mở **Dashboard V2 → Cài đặt**. Khung **"Mở trên điện thoại"** hiện cùng link và mã, kèm nút **Tắt chế độ điện thoại**. Nút **Bật** cũng nằm ở đây.
 
 ## 2. Windows Firewall (chỉ lần đầu)
@@ -26,10 +28,9 @@ BiliFlow không tự sửa Firewall. Nếu lỡ bấm Cancel thì điện thoạ
 ## 3. Mở trên điện thoại hoặc laptop
 
 1. Điện thoại hoặc laptop phải nối **cùng Wi-Fi nhà** với PC.
-2. Mở trình duyệt và vào link đã in ra.
-   - Link có `?code=...`: vào thẳng.
-   - Link không có mã: gõ mã 8 ký tự vào ô **"Mã truy cập"** rồi bấm **Vào BiliFlow**. Chữ hoa hay chữ thường đều được.
-3. Trình duyệt nhớ mã trong phiên. Tắt chế độ điện thoại thì phải nhập mã mới. Đóng hẳn trình duyệt cũng có thể phải nhập lại.
+2. Mở trình duyệt và vào link đã in ra, ví dụ `http://192.168.1.23:8767/`.
+3. Gõ mã 8 ký tự vào ô **"Mã truy cập"** rồi bấm **Vào BiliFlow**. Chữ hoa hay chữ thường đều được.
+4. Trình duyệt nhớ mã trong phiên. Tắt chế độ điện thoại thì phải nhập mã mới. Đóng hẳn trình duyệt cũng có thể phải nhập lại.
 
 **Nhập sai mã 10 lần** thì việc nhập mã bị khóa. Có hai cách gỡ:
 

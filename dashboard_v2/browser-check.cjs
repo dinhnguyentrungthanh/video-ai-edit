@@ -41,7 +41,7 @@ let refuseNextCancel = false;
 let remoteMode = false, phoneOn = false, phoneCode = 'abcd2345';
 const phoneStatus = () => remoteMode ? {remote: true, enabled: true} : {remote: false, enabled: phoneOn,
   url: phoneOn ? 'http://192.168.1.23:8767/' : null, code: phoneOn ? phoneCode : null,
-  link: phoneOn ? 'http://192.168.1.23:8767/?code=' + phoneCode : null, locked: false, failed_attempts: 0, max_failed_attempts: 10};
+  locked: false, failed_attempts: 0, max_failed_attempts: 10};
 const PC_ONLY = ['/api/source-cleanup', '/api/source-archive', '/api/source-archive/restore', '/api/source-recycle-check',
   '/api/shutdown', '/api/ai/config', '/api/ai/login', '/api/logo-memory/class', '/api/logo-memory/delete', '/api/phone-mode'];
 const status = () => ({version: '0.7.24', started: true, scheduler_paused: false, queue: {length: 2, paused: false},
