@@ -310,25 +310,38 @@ test('Live store: pause() stops /api/status polling while the review dialog is o
   const f = fake({'GET /api/status': {status: 200, body: {version: 't', jobs: []}}});
   const store = A.createLiveStore(adapterWith(f));
   const statuses = () => f.calls.filter(c => c.path === '/api/status').length;
-  store.start(20);
-  await new Promise(r => setTimeout(r, 70));
-  store.pause();
-  await new Promise(r => setTimeout(r, 10));
-  const before = statuses();
-  await new Promise(r => setTimeout(r, 90));
-  assert.equal(statuses(), before, 'no poll while paused');
-  store.resume();
-  await new Promise(r => setTimeout(r, 5));
-  assert.equal(statuses(), before + 1, 'one refresh at once on resume');
-  store.stop();
-  assert.equal(typeof store.review(5).queue, 'function');
+  const sleep = ms => new Promise(r => setTimeout(r, ms));
+  try {
+    store.start(20);
+    await sleep(70);
+    store.pause();
+    await sleep(10);
+    const before = statuses();
+    await sleep(90); // several 20 ms ticks (Windows timers are ~15 ms coarse): none may poll
+    assert.equal(statuses(), before, 'no poll while paused');
+    // R0-T1: stop the interval first, so the count below only sees what resume() does.
+    store.stop();
+    const stopped = statuses();
+    store.resume();
+    await sleep(5);
+    assert.equal(statuses(), stopped + 1, 'one refresh at once on resume');
+    store.resume();
+    await sleep(5);
+    assert.equal(statuses(), stopped + 1, 'resume() without pause() does nothing');
+    assert.equal(typeof store.review(5).queue, 'function');
+  } finally {
+    store.stop(); // a failed assert must not leave the interval keeping node alive
+  }
 });
 
 (async () => {
   for (const [name, fn] of tests) {
-    await fn();
+    try { await fn(); } catch (error) { error.message = name + ': ' + error.message; throw error; }
     passed++;
     process.stdout.write('OK ' + name + '\n');
   }
   process.stdout.write(JSON.stringify({passed, failed: 0}) + '\n');
-})().catch(error => { console.error(error); process.exitCode = 1; });
+})().catch(error => {
+  // R0-T1: exit even if a failed test left a timer running (a store that was never stopped).
+  process.stderr.write(String(error && error.stack || error) + '\n', () => process.exit(1));
+});
