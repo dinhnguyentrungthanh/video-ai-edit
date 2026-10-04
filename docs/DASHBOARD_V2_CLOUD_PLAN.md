@@ -362,7 +362,7 @@ Nhật ký đợt 1:
 | Ngày | Commit | Việc đã làm | Kết quả | Còn lại |
 | --- | --- | --- | --- | --- |
 | 2026-10-04 | 26c680d (thư mục chính) | Đợt 6 chỉ đổi `dashboard_v2/app.js`, `browser-check.cjs` và tài liệu; lúc đó có job đang quét nên máy thật **không** khởi động lại Control Center, chỉ chuyển thư mục chính sang `26c680d` (V2 phục vụ `app.js` mới từ đĩa ngay; job đang quét không bị ảnh hưởng vì không file Python nào đổi). Người dùng tải lại trang và test U2. Máy thật đọc `/api/status` (chỉ đọc) để đếm video chọn được ở "Hoàn tất" | U2 người dùng xác nhận đạt. Tìm được U3 (mục 17): 25 video hoàn tất/bỏ qua đều không dọn hay lưu trữ được, nhưng thanh chọn không nói lý do | Cloud làm U3 (đợt 7) |
-| 2026-10-04 | d1bc18a (đợt 6) | Kéo đợt 6 về (code ở b547180, chỉ `dashboard_v2/app.js` và `browser-check.cjs`). Kiểm nhanh: test V2, A4, đọc diff; kiểm U2 bằng trình duyệt trên bản xem thử chỉ đọc (handler thật, root tạm, job giả; đổi % tiến độ của job giả đang quét trong DB của root tạm giữa hai lần poll), xong thì tắt và xóa root tạm | `tests.test_dashboard_v2_*` 72 OK (gồm node gates, D2 trùng byte); A4: không file nào trong 42 đường dẫn được băm đổi so với `main` (10 stage `none`); không có dòng attribution. U2 đạt ở cả 3 ca (16.3) | Hỏi người dùng rồi dừng và mở lại Control Center sang bản mới; người dùng test tiếp |
+| 2026-10-04 | d1bc18a (đợt 6) | Kéo đợt 6 về (code ở b547180, chỉ `dashboard_v2/app.js` và `browser-check.cjs`). Kiểm nhanh: test V2, A4, đọc diff; kiểm U2 bằng trình duyệt trên bản xem thử chỉ đọc (handler thật, root tạm, job giả; đổi % tiến độ của job giả đang quét trong DB của root tạm giữa hai lần poll), xong thì tắt và xóa root tạm | `tests.test_dashboard_v2_*` 72 OK (gồm node gates, D2 trùng byte); A4: không file nào trong 42 đường dẫn được băm đổi so với `main` (10 stage `none`); không có dòng attribution. U2 đạt ở cả 3 ca (16.3) | Hỏi người dùng rồi dừng và mở lại Control Center sang bản mới; người dùng test tiếp (thực tế không khởi động lại: xem dòng sau) |
 | 2026-10-04 | 634669a (thư mục chính) | Theo yêu cầu người dùng, máy thật dừng Control Center bằng `Stop-BiliFlow.cmd` khi không có job chạy (cổng 8765 và 8767 đóng, file trạng thái được dọn), chuyển thư mục chính sang `634669a` (detached; `main` vẫn f6996bb), mở lại bằng `Start-BiliFlow-Phone.cmd` trong cửa sổ riêng (14:03; chế độ điện thoại bật; V2 phục vụ đúng `app.js` mới). Người dùng test trên PC, laptop và điện thoại. Máy thật tái hiện lỗi người dùng báo trên bản xem thử chỉ đọc | Tìm được U2 (mục 16): "Chi tiết" bị kéo lên đầu sau mỗi lần tải lại, với mọi job | Cloud sửa U2 (đợt 6); người dùng test tiếp |
 | 2026-10-04 | c91746f (đợt 5) | Kéo đợt 5 về (code và tài liệu ở be79454, c91746f sửa dòng nhật ký). Kiểm nhanh, không review dài (người dùng muốn nhanh): full suite, đọc diff code, fingerprint, launcher, cú pháp các lệnh Firewall trong hướng dẫn (không chạy lệnh Firewall nào) | Full suite 1269 OK (25 skip) ngay lần đầu, 235 s, gồm node gates; `Batch5` 4/4 trên socket thật của Windows; D2 trùng byte; fingerprint: không file nào trong 42 đường dẫn được băm của 10 stage đổi so với `main` f6996bb (10 stage `none`); launcher ASCII, parse 0 lỗi; 4 khối PowerShell mục 2 parse 0 lỗi, khối 1 chọn đúng `cpython-3.11.16`; không có dòng attribution. Đọc diff M1/M3: không thấy lỗi. Ghi chú nhỏ: code đợt 5 nằm trong commit tên `docs:` (be79454); không viết lại lịch sử | Người dùng dừng Control Center; máy thật chuyển thư mục chính sang c91746f (detached); người dùng mở lại bằng `Start-BiliFlow-Phone.cmd` rồi test đầy đủ PC + điện thoại + laptop (mục 7, 12.4, 13.3, 14.4); Firewall theo mục 2 mới (tùy chọn, người dùng tự chạy) |
 | 2026-10-04 | 111bad5 (đợt 4 + U1) | Kéo đợt 4 (eb29eb6) và U1 (111bad5) về. Full suite trên 901ed71; node gates; fingerprint; kiểm U1 bằng trình duyệt trên bản xem thử chỉ đọc; một agent riêng review bảo mật đợt 4 (chỉ đọc code, chạy class thật với socket giả). Agent lỡ gọi thật 3 lệnh sửa Firewall; Windows từ chối vì agent không có quyền admin; máy thật kiểm lại: số rule và các rule Python không đổi, không có rule mới | Full suite 1265 OK (25 skip) ngay lần đầu; verify 28/28; verify-adapter 17/17; `node --check` 9/9; 68 test V2 OK trên 111bad5; fingerprint 10 stage `none` (`fingerprint-batch4.txt`); fixture D2 không đổi; launcher ASCII; chỉ sửa file phần điện thoại, launcher, tài liệu, test và `app.js`. U1 đạt. Review bảo mật: không có lỗi nghiêm trọng, cao hay trung bình; 4 lỗi thấp (dưới bảng) | Đợt 5 (mục 15), rồi người dùng test đầy đủ PC + điện thoại + laptop |
@@ -936,8 +936,14 @@ Ràng buộc như mục 16.
       - khi có: hiện "N video chọn được";
     - "Chọn tối đa 50" chọn video dọn **hoặc** lưu trữ được, cùng quy tắc với ô tick. Hiện nay nút này chỉ chọn video dọn
       được (`app.js:433`).
-  - Không đổi: khóa chỉ-PC trên điện thoại (dọn/lưu trữ vẫn bị chặn qua điện thoại), hộp xác nhận trước khi dọn/lưu trữ,
-    giới hạn 50.
+  - Qua điện thoại (`state.remote`), hiện thanh chọn chưa báo chỉ-PC:
+    - hai nút "Dọn video gốc", "Lưu trữ" không dùng `pcOnly(...)` (`app.js:50`) như các nút chỉ-PC khác;
+    - bấm vào vẫn mở hộp xem trước (GET), đến bước xác nhận mới bị máy chủ từ chối (403 `pc_only`). Máy chủ chặn đúng,
+      nhưng giao diện gây hiểu nhầm.
+
+    Sửa: khi `state.remote`, thanh chọn ghi "Dọn và lưu trữ chỉ làm trên PC". Ô tick và hai nút này mờ, có lý do
+    `C.PC_ONLY_REASON`.
+  - Không đổi: máy chủ chặn dọn/lưu trữ qua điện thoại (`PC_ONLY_POSTS`), hộp xác nhận trước khi dọn/lưu trữ, giới hạn 50.
 
 ### 17.2. Test
 
@@ -945,19 +951,21 @@ Ràng buộc như mục 16.
   - "Hoàn tất" toàn video không chọn được → không ô tick nào bật; mỗi dòng có ô tick mờ kèm lý do; thanh chọn báo không có
     video nào chọn được; "Chọn tối đa 50" mờ;
   - danh sách lẫn → chỉ video chọn được có ô tick bật; "Chọn tối đa 50" chọn đúng video dọn hoặc lưu trữ được, tối đa 50;
-  - bấm ô tick mờ không đổi gì; qua điện thoại (remote) dọn/lưu trữ vẫn bị khóa.
+  - bấm ô tick mờ không đổi gì;
+  - qua điện thoại (`remote: true`), dù có video chọn được: ô tick và hai nút dọn/lưu trữ mờ, có lý do chỉ-PC; không
+    mở hộp xem trước.
 - Chạy lại gate như 16.2: node gates, `tests.test_dashboard_v2_*`, A4, D2.
 
 ### 17.3. Checklist đợt 7
 
 | ID | Hạng mục | Cloud | Máy thật | Bằng chứng |
 | --- | --- | --- | --- | --- |
-| U3 | "Hoàn tất": mọi dòng có cột chọn, video không chọn được có ô mờ kèm lý do; thanh chọn nói rõ khi không có video nào chọn được; "Chọn tối đa 50" theo cùng quy tắc với ô tick | [ ] | [ ] | |
+| U3 | "Hoàn tất": mọi dòng có cột chọn, video không chọn được có ô mờ kèm lý do; thanh chọn nói rõ khi không có video nào chọn được; "Chọn tối đa 50" theo cùng quy tắc với ô tick; qua điện thoại thanh chọn báo chỉ-PC | [ ] | [ ] | |
 
 **Sau đợt 7:** máy thật kéo về kiểm nhanh. Nếu đợt này chỉ đổi file giao diện thì chuyển thư mục chính sang bản mới mà không
 khởi động lại Control Center; người dùng tải lại trang và test.
 
 **Ghi nhận cho sau merge (chưa làm).** Người dùng có thể muốn mở trang ra Internet để vào bằng 3G (2026-10-04). Việc này
 cần một phase bảo mật riêng, có plan và người dùng duyệt trước khi làm: HTTPS, đăng nhập mạnh, giới hạn truy cập, không mở
-cổng trần ra Internet (ví dụ đi qua VPN). Hướng dẫn Firewall ở `docs/DASHBOARD_V2_PHONE.md` mục 2 hiện là tùy chọn;
-người dùng bỏ qua phần này (2026-10-04).
+cổng trần ra Internet (ví dụ đi qua VPN). Trong đợt test này người dùng bỏ qua bước Firewall ở
+`docs/DASHBOARD_V2_PHONE.md` mục 2 (2026-10-04).
