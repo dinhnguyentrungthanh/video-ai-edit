@@ -197,8 +197,8 @@ Bảng ở mục 7 có hai cột kết quả: **Cloud** và **Máy thật**.
 | E1 | Kéo nhánh về một worktree. Chạy full suite trên Windows (`.venv\Scripts\python.exe -m unittest discover -s tests -p "test_*.py"`) và `node dashboard_v2/verify.cjs` | — | [x] | 2026-10-04, c616bef, worktree `temp/wt-dashboard-v2`, `.venv` của thư mục chính và `PYTHONPATH=src`: 1215 test OK (25 skip, 159 s); verify.cjs 28/28; verify-adapter 15/15. Worktree cần một `input/placeholder.mp4` rỗng (đã gitignore) cho 28 test của `test_job_pipeline` và `test_job_ocr_option`, vì chúng lấy một `.mp4` trong `input/`. Log: `temp/ui-plan/dashboard-v2-check/full-suite-2.log` |
 | E2 | Khởi động lại Control Center trên code nhánh, chỉ khi người dùng đồng ý và không có job nào chạy | — | [ ] | 2026-10-04: thư mục chính chuyển sang `869dcf5` (detached; `main` vẫn f6996bb) khi Control Center đang tắt và không job nào chạy. Người dùng tự mở bằng `Start-BiliFlow.cmd` khi test. Quay lại bản cũ: tắt Control Center rồi `git switch main` |
 | E3 | So `/dashboard-v2` với `/` (chỉ GET): số video từng nhóm, hàng đợi, tiến độ, revision và lỗi của toàn bộ job thật | — | [ ] | Chưa làm trên dữ liệu thật. Trên dữ liệu giả, 6 nhóm đã trùng nhưng có 2 chỗ hiển thị lệch (mục 11) |
-| E4 | Mở trang duyệt từ V2 đúng job; ảnh, khung hình và video hiện đúng | — | [ ] | |
-| E5 | Thao tác an toàn do người dùng bấm: ẩn/hiện một job đã hủy; tạm dừng/tiếp tục hàng đợi khi rảnh | — | [ ] | |
+| E4 | Mở trang duyệt từ V2 đúng job; ảnh, khung hình và video hiện đúng | — | [ ] | 2026-10-04: nút Duyệt mở trang duyệt cũ `/review/{id}`, đúng thiết kế; người dùng giữ trang cũ cho lần merge này (14.4). Chờ người dùng xác nhận đúng job, ảnh, khung hình, video |
+| E5 | Thao tác an toàn do người dùng bấm: ẩn/hiện một job đã hủy; tạm dừng/tiếp tục hàng đợi khi rảnh | — | [x] | 2026-10-04, người dùng, dữ liệu thật trên `869dcf5`: ẩn rồi hiện lại job đã hủy, tạm dừng rồi tiếp tục hàng đợi đều chạy. Phát hiện U1 (14.4): danh sách tự đóng mục gập sau mỗi lần tải lại |
 | E6 | Xuất một video do người dùng bấm từ V2: kiểm ba lựa chọn dung lượng trong dialog, xuất thật một lần | — | [ ] | |
 | E7 | Dọn / lưu trữ / khôi phục: chỉ xem preview trong V2; thao tác thật chỉ người dùng tự bấm (theo `AGENTS.md`) | — | [ ] | |
 | E8 | Rollback: `/` vẫn là dashboard cũ; tắt V2 không đổi dữ liệu | — | [ ] | |
@@ -351,6 +351,7 @@ Nhật ký đợt 1:
 
 | Ngày | Commit | Việc đã làm | Kết quả | Còn lại |
 | --- | --- | --- | --- | --- |
+| 2026-10-04 | 869dcf5 (code) | Người dùng test phần PC (bước 3–4) trên dữ liệu thật. Máy thật tái hiện lỗi cuộn trên bản xem thử chỉ đọc (dữ liệu giả, POST bị chặn), xong thì tắt và xóa root tạm | E5 đạt. E4: trang duyệt cũ, đúng thiết kế; người dùng giữ trang cũ cho lần merge này. Tìm được U1 (14.4) | Các bước PC còn lại; U1 giao cloud (14.4) |
 | 2026-10-04 | 869dcf5 (đợt 3) | Kéo đợt 3 về. Một agent riêng review bảo mật lại (chỉ đọc code, chạy handler thật với socket giả, không mở cổng). Chạy thử H5 bằng server giả trên 127.0.0.1. Làm E9 (mục 7), rồi cho thư mục chính chạy thử `869dcf5` (detached) để người dùng test; `main` vẫn f6996bb | Full suite 1259 OK (25 skip) ngay lần đầu; verify 28/28; verify-adapter 17/17; `node --check` 9/9; fingerprint 10 stage `none` (`fingerprint-batch3.txt`); fixture D2 không đổi; không file cấm nào bị sửa. H5 11/11. Review bảo mật: không có lỗi nghiêm trọng, cao hay trung bình; 3 lỗi thấp (L1–L3) và 2 chỗ sai trong hướng dẫn (dưới bảng) | Người dùng test trên PC, điện thoại và laptop (E2–E8, P6–P9); đợt 4 (mục 14), người dùng đã đồng ý |
 | 2026-10-04 | 949f935 (đợt 2) | Kéo đợt 2 về. Sửa 2 lỗi chỉ có trong test và chỉ lộ ra trên Windows (dưới bảng). Một agent riêng review bảo mật chế độ điện thoại; nó chỉ đọc code và không mở cổng nào | Full suite 1236 OK (25 skip) sau khi sửa test; verify 28/28; verify-adapter 17/17; fingerprint 10 stage `none`; không file cấm nào bị sửa. Review bảo mật: không có lỗi nghiêm trọng hay cao; 2 trung bình, 4 thấp (S1–S6 dưới bảng) | P6–P9 trên máy thật; sửa S1–S6 |
 | 2026-10-04 | c616bef (bảng này commit ở 6df60d3) | Kéo nhánh về `temp/wt-dashboard-v2`; điền cột Máy thật ở mục 7. Bản xem thử chỉ đọc trên handler thật: root tạm `temp\v2-preview-*`, 11 job giả, cổng 8796, chặn mọi POST, không chạy scheduler/watcher, không đọc dữ liệu thật | Full suite 1215 OK (25 skip); verify 28/28; verify-adapter 15/15; fingerprint 10 stage không đổi; V2 trùng 6 nhóm với `/`; 0 lỗi console/CSP; 375 px không tràn. **Tìm được 2 chỗ V2 hiển thị sai hoặc thiếu so với `/`** (dưới bảng) | Sửa 2 chỗ dưới bảng. Câu hỏi mục 8 chờ người dùng trả lời. C4, C5, C6 (Tab/Escape), C7 và E2–E9 cần Control Center thật chạy code nhánh, nghĩa là phải khởi động lại; việc này chỉ làm khi người dùng đồng ý và không có job nào chạy |
@@ -681,5 +682,37 @@ Người dùng đồng ý làm đợt 4 trước khi test trên điện thoại 
 | L2 | Event `PHONE_LOGIN` có giới hạn | [x] | [ ] | Cùng file: 4 lần nhập đúng từ 127.0.0.1 + 2 lần từ 10.0.0.9 → đúng 2 event `PHONE_LOGIN`; bật lại → thiết bị được ghi lại 1 lần |
 | L3 | Tắt chế độ đóng cả kết nối đang mở, kể cả video đang phát | [x] | [ ] | Cùng file: video 256 MB (file thưa) đang tải qua listener điện thoại và qua `127.0.0.1` cùng lúc; tắt chế độ → luồng điện thoại kết thúc < 2 s và số kết nối về 0; luồng PC vẫn nhận dữ liệu |
 | L4 | Hướng dẫn: không bấm Cancel; rule Firewall gắn Python và cổng 8767; mục 7 ghi đúng; dòng in của launcher | [x] | [ ] | `docs/DASHBOARD_V2_PHONE.md` mục 2: khung “Không bấm Cancel”; rule `-Program $Python -Protocol TCP -LocalPort 8767 -Profile Private -RemoteAddress LocalSubnet`, `$Python` tìm bằng `cpython-3.11.*-windows-x86_64-none` (không ghi cứng bản vá, bỏ qua junction) + lệnh kiểm tiến trình đang nghe 8767; dọn rule Block, rule Public của Python và rule chỉ theo cổng cũ; mục 7 ghi đúng giới hạn sau L1–L3. Launcher (ASCII) in “KHONG bam Cancel” và cách tạo rule. Test L4 kiểm các điểm này. Máy thật cần thử rule trước khi chốt |
+
+### 14.4. Lỗi giao diện từ lần test PC của người dùng (giao thêm sau khi L1–L4 đã push)
+
+Người dùng test phần PC trên `869dcf5` với dữ liệu thật (2026-10-04).
+
+- **U1. Danh sách tự đóng các mục gập sau mỗi lần tải lại, nên màn hình bị đẩy lên.**
+  - Người dùng thấy: kéo xuống trong danh sách, vài giây sau màn hình bị đẩy lên.
+  - Máy thật tái hiện trên bản xem thử chỉ đọc (dữ liệu giả, Chromium 1280×640, `#videos`):
+    - mở "Đã hủy (1)", kéo xuống cuối: `scrollY` 820, trang cao 1460;
+    - sau lần tải lại kế tiếp: mục gập đóng, trang cao 1363, `scrollY` bị kẹp còn 723;
+    - không mở mục gập thì `scrollY` giữ nguyên qua các lần tải lại.
+
+    Dữ liệu thật có nhiều job đã hủy, đã ẩn, đã lưu trữ hơn, nên bị đẩy xa hơn nhiều.
+  - Nguyên nhân:
+    - `store.start(3000)` gọi `onSnapshot()` mỗi 3 s, kể cả khi dữ liệu không đổi, và `render()` thay toàn bộ `#main`;
+    - `onSnapshot()` giữ focus và `window.scrollY`, nhưng không giữ `<details open>`: `details.fold` ở `listBody()`, và `details.phone-events` ở trang Cài đặt khi focus không nằm trong `#main`;
+    - ô `<select id="sort">` đang mở cũng bị đóng khi dựng lại.
+  - Sửa, chỉ trong `dashboard_v2/app.js` (được thêm thuộc tính `data-*`):
+    - giữ trạng thái mở của mọi `<details>` trong `#main` theo khóa ổn định (vd. `data-fold="cancelled|hidden|archived"`), như `refreshDrawer()` đang làm cho drawer; khôi phục trước `window.scrollTo(0, y)`;
+    - bỏ qua lần dựng lại khi markup mới giống hệt markup đang hiển thị;
+    - khi một `<select>` trong `#main` đang có focus, không dựng lại `#main`, giống cách trang Cài đặt đang được giữ; chỉ cập nhật thanh điều hướng và phần dung lượng.
+  - Test: thêm vào `browser-check.cjs` hoặc một gate tương đương:
+    - mở mục gập, cuộn xuống, phát một snapshot mới có dữ liệu đổi → mục gập vẫn mở, `scrollY` giữ nguyên;
+    - snapshot giống hệt → `#main` không bị thay (giữ nguyên node).
+- **Trang duyệt.** Không phải lỗi: trên bản live, nút Duyệt mở trang duyệt cũ `/review/{id}`, đúng thiết kế (mục 9: bản live không có cảnh duyệt). Người dùng quyết định ngày 2026-10-04:
+  - giữ trang duyệt cũ cho lần merge này;
+  - trang duyệt kiểu V2 làm sau merge, với plan riêng;
+  - cloud **không** làm gì cho việc này ở đợt 4.
+
+| ID | Hạng mục | Cloud | Máy thật | Bằng chứng |
+| --- | --- | --- | --- | --- |
+| U1 | Tải lại không đóng mục gập, không đóng ô chọn đang mở, không đẩy màn hình | [ ] | [ ] | |
 
 **Sau đợt 4:** máy thật kéo về kiểm như đợt 3; người dùng test phần điện thoại và laptop (P7, P8, P9, câu 10–11) trên bản đã sửa; chỉ merge vào `main` khi người dùng yêu cầu.
