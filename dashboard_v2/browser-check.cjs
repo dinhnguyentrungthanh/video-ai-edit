@@ -21,7 +21,7 @@ if (!pw) { process.stdout.write('SKIP browser-check: Playwright is not installed
 const ROOT = __dirname;
 const TOKEN = 'browser-token';
 const ASSETS = new Set(['styles.css', 'theme.css', 'contracts.js', 'adapter.js', 'download-demo.js', 'app.js', 'mock-data.js', 'demo-store.js',
-  'review.css', 'review-core.js', 'review-media.js', 'review-cards.js', 'review.js',
+  'review.css', 'review-core.js', 'review-detail.js', 'review-media.js', 'review-cards.js', 'review.js',
   ...fs.readdirSync(path.join(ROOT, 'assets')).map(f => 'assets/' + f)]);
 const TYPES = {'.css': 'text/css', '.js': 'text/javascript', '.svg': 'image/svg+xml', '.html': 'text/html'};
 

@@ -32,14 +32,14 @@
    * logo, an opening check, Visual AI advice, NEEDS_MORE_CONTEXT, advisory candidates, a card without image. */
   const KINDS = [
     {category:'adult',review_kind:'adult',priority:'high',suggested:'CUT',moments:3,label:'Cảnh nhạy cảm'},
-    {category:'visual_logo',review_kind:'logo_overlay',priority:'high',suggested:'BLUR',region:[60,40,260,96],label:'Logo góc trái'},
-    {category:'visual_logo',review_kind:'logo_candidate',candidate_type:null,priority:'normal',suggested:'KEEP',label:'Logo toàn khung'},
+    {category:'visual_logo',review_kind:'logo_overlay',priority:'high',suggested:'BLUR',region:[60,40,260,96],label:'Logo góc trái',model:{vlm_confirmation:'CONFIRMED',vlm_answer:'YES | logo góc trái',vlm_source:'qwen'},reason:'Visual brand/logo candidate'},
+    {category:'visual_logo',review_kind:'logo_candidate',candidate_type:null,priority:'normal',suggested:'KEEP',label:'Logo toàn khung',boxes:[[120,60,220,90,''],[1500,70,300,100,'covered']],reason:'Full-frame promotional material'},
     {category:'text',review_kind:'in_film_text',priority:'normal',suggested:'KEEP',region:[420,880,1080,120],label:'Chữ trong phim'},
     {category:'gore',review_kind:'gore',priority:'high',suggested:'BLUR',label:'Cảnh máu'},
     {category:'violence',review_kind:'violence',priority:'normal',suggested:'KEEP',moments:2,label:'Cảnh đánh nhau'},
     {category:'text',review_kind:'logo_overlay',priority:'normal',suggested:'BLUR',region:[1500,60,360,110],label:'Chữ quảng cáo góc phải'},
     {category:'visual_logo',review_kind:'platform_logo',candidate_type:'platform_logo',platform_logo:{name:'Nền tảng mẫu'},priority:'high',suggested:'BLUR',region:[1620,940,250,90],label:'Logo nền tảng mẫu'},
-    {category:'visual_logo',review_kind:'opening_promotion',candidate_type:'opening_boundary',priority:'context',suggested:null,label:'Đoạn mở đầu'},
+    {category:'visual_logo',review_kind:'opening_promotion',candidate_type:'opening_boundary',priority:'context',suggested:null,label:'Đoạn mở đầu',reason:'The first video window is retained once so external intros are not silently missed'},
     {category:'adult',review_kind:'adult',priority:'normal',suggested:'KEEP',ai:{suggested_decision:'BLUR',confidence:0.93,classification:'logo thương hiệu'},label:'Cảnh cần xem lại'}
   ];
   const PALETTES = ['sage','amber','blue','rose','violet'];
@@ -50,11 +50,28 @@
     const moments = k.moments || 1, intervals = Array.from({length: moments}, (_, m) => ({start_seconds: start + m * (end - start) / moments, end_seconds: start + (m + 0.6) * (end - start) / moments}));
     return {id: (advisory ? 'advisory-' : k.category + '-') + job.id + '-' + String(i).padStart(4, '0'), category: k.category, review_kind: k.review_kind,
       candidate_type: k.candidate_type === undefined ? null : k.candidate_type, priority: advisory ? 'context' : k.priority, start_seconds: start, end_seconds: end,
-      labels: [k.label], reasons: [], preview_images: (i % 13 === 12 && !advisory) ? [] : ['demo/poster-' + PALETTES[i % PALETTES.length] + '.svg'],
+      labels: [k.label], reasons: k.reason ? [k.reason] : [], max_score: Math.round((0.5 + (i % 7) * 0.06) * 1000) / 1000, preview_images: (i % 13 === 12 && !advisory) ? [] : ['demo/poster-' + PALETTES[i % PALETTES.length] + '.svg'],
       suggested_decision: k.suggested, suggested_region_source_pixels: k.region ? {x: k.region[0], y: k.region[1], width: k.region[2], height: k.region[3]} : null,
       source_frame_size: [1920, 1080], temporal_policy: moments > 1 ? 'discrete_detected_intervals' : null, detected_intervals: intervals,
-      ...(k.platform_logo ? {platform_logo: k.platform_logo} : {}), ...(k.ai ? {ai_visual_audit: k.ai} : {}), ...(advisory ? {advisory: true} : {}),
+      ...(k.platform_logo ? {platform_logo: k.platform_logo} : {}), ...(k.ai ? {ai_visual_audit: {...k.ai, region_assessment: 'vùng chữ', reasoning: 'Dữ liệu mẫu: chữ trong khung giống logo thương hiệu.'}} : {}), ...(advisory ? {advisory: true} : {}),
+      ...(k.model ? {model_evidence: k.model} : {}),
+      ...(k.boxes ? {evidence_regions: k.boxes.map(b => ({x: b[0], y: b[1], width: b[2], height: b[3], sources: ['visual_ai'], ...(b[4] ? {covered_by: 'visual_logo-' + job.id + '-0001'} : {})})), evidence_frame_size: [1920, 1080]} : {}),
       decision: null, decision_region_source_pixels: null};
+  }
+  /* Evidence of one item in the shape of review_evidence.py: ≤24 frames (one "strongest", seeds), seeds with
+   * known sample times or only windows (an older scan), detected intervals, the video availability. */
+  function reviewEvidence(x, options) {
+    options = options || {};
+    const start = Number(x.start_seconds), end = Number(x.end_seconds), len = Math.max(.5, end - start), n = options.frames === false ? 0 : (options.count || 12);
+    const frames = Array.from({length: n}, (_, i) => ({t: Math.round((start + len * (i + .5) / n) * 1000) / 1000, kind: i === Math.floor(n / 2) ? 'strongest' : i % 3 === 0 ? 'seed' : 'context', score: Math.round((.3 + .04 * i) * 1000) / 1000}));
+    const peak = n ? frames[Math.floor(n / 2)] : {t: Math.round((start + len / 2) * 1000) / 1000, score: .81};
+    const known = options.known !== false;
+    return {frames, strongest: {t: peak.t, score: peak.score}, sample_fps: 2, ignored_ref_count: options.ignored || 0,
+      seeds: known ? {known: true, count: 4, threshold: .45, samples: frames.filter(f => f.kind === 'seed').map(f => ({t: f.t, score: f.score}))}
+        : {known: false, count: 6, threshold: .45, windows: [{start, end: start + len / 2, count: 6}]},
+      detected_intervals: (x.detected_intervals || []).map(d => ({start: d.start_seconds, end: d.end_seconds})),
+      context: {extended: [{start: Math.max(0, start - 1), end: end + 1}], threshold: .4},
+      video: options.video || {available: true, mime: 'video/webm', reason: null}};
   }
   function reviewQueue(job, options) {
     options = options || {};
@@ -79,6 +96,7 @@
   }
   root.BFMock = {
     reviewQueue,
+    reviewEvidence,
     create() {
       const jobs=structuredClone(fixtures).map(j=>{
         if(j.review_summary){

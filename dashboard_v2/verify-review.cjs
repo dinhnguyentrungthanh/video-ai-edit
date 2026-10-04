@@ -234,4 +234,111 @@ check('500 synthetic items: every filter list is built in well under a frame', (
   process.stdout.write('   500 items, 11 filters: ' + ms.toFixed(2) + ' ms per pass\n');
 });
 
+/* R1: media and evidence texts of a card against the classic functions (a second sandbox). */
+const D = require('./review-detail.js');
+const MEDIA_CONSTS = ['esc', 'clock', 'mmss', 'span', 'SAFETY', 'KIND_NAMES', 'SCENE_WORDS'];
+const MEDIA_FUNCS = ['isSafety', 'momentsOf', 'isScene', 'catName', 'sceneLogo', 'studioEligible', 'isLogoItem', 'actionName', 'regionOwner', 'thumbTime',
+  'momentIndex', 'pickStrip', 'pickSceneStrip', 'pickFor', 'stripFrames', 'tlPos', 'thin', 'renderTimeline', 'nextMomentAfter', 'videoReason', 'viText',
+  'labelsReasonsHtml', 'visualAiHtml', 'evidenceHtml', 'regionName', 'regionDetailHtml', 'decisionScope', 'scopeBlock', 'overlapCoverage', 'regionOverlap',
+  'trackCoversFullVideo', 'aiModelLine', 'memoryMatch', 'memoryBrandName', 'readingLabel', 'boxesFromMemory', 'evidenceMediaHtml', 'techDetails'];
+const mediaSource = MEDIA_CONSTS.map(n => line(new RegExp('^const ' + n + '='))).concat(MEDIA_FUNCS.map(n => line(new RegExp('^function ' + n + '\\(')))).join('\n');
+const media = {};
+vm.createContext(media);
+vm.runInContext(`let queue=null,mediaKey=null,techOpen=false;const timelineBox={innerHTML:''};const pstate={start:0,end:0,moments:null};
+const $=s=>s==='#timeline'?timelineBox:null;function markMoment(){}
+${mediaSource}
+globalThis.classic={load(q){queue=q;},key(k){mediaKey=k;},
+  timeline(x,ev){pstate.start=Number(x.start_seconds);pstate.end=Number(x.end_seconds);renderTimeline(x,ev);return timelineBox.innerHTML;},
+  next(t,ms){pstate.moments=ms;return nextMomentAfter(t);},
+  fn:{thumbTime,momentIndex,pickStrip,pickSceneStrip,pickFor,stripFrames,thin,videoReason,viText,labelsReasonsHtml,visualAiHtml,evidenceHtml,regionDetailHtml,regionOwner,
+    decisionScope,scopeBlock,overlapCoverage,aiModelLine,readingLabel,evidenceMediaHtml,techDetails}};`, media);
+const old = media.classic;
+const evidenceCases = (x, i) => [Mock.reviewEvidence(x), Mock.reviewEvidence(x, {known: false, count: 24, ignored: 2}), Mock.reviewEvidence(x, {count: 5}),
+  Mock.reviewEvidence(x, {frames: false, video: {available: false, reason: ['source_cleaned', 'source_missing', 'unsupported_container'][i % 3]}}), null];
+
+check('R1 strip: the same ≤8 frames as the classic stripFrames (evidence or report previews), "Rõ nhất" first', () => {
+  let n = 0;
+  for (const q of [QUEUES.mixed30, QUEUES.edge, QUEUES.big500]) {
+    q.items.concat(q.advisory_items).slice(0, 80).forEach((x, i) => {
+      for (const ev of evidenceCases(x, i)) for (const key of [null, 'mk']) {
+        old.key(key);
+        const classicStrip = old.fn.stripFrames(x, ev), ours = R.stripFrames(x, ev, !!key);
+        same(ours.map(f => f.path ? {t: f.t, kind: f.kind, src: '/media/' + encodeURIComponent(f.path)} : f), classicStrip, x.id + ' strip');
+        assert.ok(ours.length <= 8);
+        const first = R.peakFirst(ours);
+        if (ours.some(f => f.kind === 'strongest')) assert.equal(first[0].kind, 'strongest');
+        same(first.slice().sort((a, b) => (a.t ?? 0) - (b.t ?? 0)).map(f => f.t), ours.map(f => f.t), x.id + ' only the order changes');
+        n++;
+      }
+    });
+  }
+  const frames = Array.from({length: 30}, (_, i) => ({t: i, kind: i === 17 ? 'strongest' : i % 4 ? 'context' : 'seed', score: i / 30}));
+  same(R.pickStrip(frames), old.fn.pickStrip(frames));
+  const ms = [{start: 2, end: 4}, {start: 10, end: 11}, {start: 20, end: 26}];
+  same(R.pickSceneStrip(frames, ms), old.fn.pickSceneStrip(frames, ms));
+  for (const p of ['a/b-12.5s.jpg', 'x-3s.PNG', 'y.jpg', '', null]) assert.equal(R.thumbTime(p), old.fn.thumbTime(p));
+  assert.ok(n >= 1270, 'strips compared: ' + n);
+});
+check('R1 timeline: the classic markup (bars, moments, windows, ticks, peak) for every sample item', () => {
+  for (const q of [QUEUES.mixed30, QUEUES.edge]) {
+    q.items.concat(q.advisory_items).forEach((x, i) => {
+      for (const ev of evidenceCases(x, i)) assert.equal(R.timelineHtml(x, ev) + '<div class="head" id="thead" hidden></div>', old.timeline(x, ev), x.id);
+    });
+  }
+  const ms = [{start: 2, end: 4}, {start: 10, end: 11}];
+  for (const t of [0, 2, 4.2, 9.99, 11, 30]) { assert.equal(R.nextMomentAfter(t, ms), old.next(t, ms)); assert.equal(R.momentIndex(t, ms), old.fn.momentIndex(t, ms)); }
+  const scene = QUEUES.mixed30.items.find(x => R.isScene(x)), m = R.momentsOf(scene);
+  const gap = (m[0].end + m[1].start) / 2, ratio = ((gap - scene.start_seconds) / (scene.end_seconds - scene.start_seconds) * 96 + 2) / 100;
+  same(R.seekTarget(scene, ratio), {t: m[1].start, moment: 1}, 'a click in a gap goes to the start of the next moment');
+  same(R.seekTarget(scene, 1), {t: m[m.length - 1].start, moment: m.length - 1});
+  const single = QUEUES.mixed30.items.find(x => x.category === 'gore');
+  same(R.seekTarget(single, 0.5), {t: single.start_seconds + (single.end_seconds - single.start_seconds) * 0.5, moment: -1});
+});
+check('R1 video reasons and probe statuses are the classic ones', () => {
+  for (const key of [null, 'mk']) for (const reason of [undefined, 'unsupported_container', 'source_changed', 'source_missing', 'source_cleaned', 'source_unknown', 'decode_error', 'demo']) {
+    old.key(key); assert.equal(R.videoReason(reason ? {reason} : null, !!key), old.fn.videoReason(reason ? {reason} : null));
+  }
+  same([404, 409, 410, 415, 206, 206, 403, 0].map((s, i) => R.probeReason(s, i === 5 ? 3 : 0)), ['source_missing', 'source_changed', 'source_cleaned', 'unsupported_container', null, 'decode_error', null, null]);
+});
+check('R1 "Chi tiết kỹ thuật" and evidence texts equal the classic markup', () => {
+  for (const q of [QUEUES.mixed30, QUEUES.edge, QUEUES.demo101]) {
+    old.load(q);
+    q.items.concat(q.advisory_items).forEach((x, i) => {
+      const ev = evidenceCases(x, i)[i % 5];
+      assert.equal('<details class="tech"><summary>Chi tiết kỹ thuật</summary><div class="tech-body">' + D.techBody(q, x, ev) + '</div></details>', old.fn.techDetails(x, ev, false), x.id);
+      same(D.decisionScope(q, x), old.fn.decisionScope(x)); assert.equal(D.overlapCoverage(q, x), old.fn.overlapCoverage(x));
+      assert.equal(D.labelsReasonsHtml(x), old.fn.labelsReasonsHtml(x)); assert.equal(D.visualAiHtml(x), old.fn.visualAiHtml(x));
+      assert.equal(D.evidenceHtml(ev), old.fn.evidenceHtml(ev)); assert.equal(D.aiModelLine(x), old.fn.aiModelLine(x));
+    });
+  }
+  const memory = {category: 'visual_logo', max_score: 0.97, model_evidence: {vlm_source: 'approved_brand_memory', vlm_answer: 'MEMORY_MATCH | Kênh <b>A</b>', vlm_confirmation: 'MATCHED'}};
+  assert.equal(D.aiModelLine(memory), old.fn.aiModelLine(memory));
+  assert.match(D.aiModelLine(memory), /&lt;b&gt;A&lt;\/b&gt;/, 'queue strings are escaped');
+});
+check('R1 zoomed evidence: yellow AI boxes, red approved boxes and the legend match evidenceMediaHtml; 360 px crop', () => {
+  const unescape = t => t.replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&');
+  let boxes = 0;
+  for (const q of [QUEUES.mixed30, QUEUES.edge]) {
+    old.load(q);
+    const blurred = q.items.find(x => x.review_kind === 'logo_overlay' && x.category === 'visual_logo');
+    blurred.decision = 'BLUR'; blurred.decision_region_source_pixels = blurred.suggested_region_source_pixels;
+    for (const x of q.items.concat(q.advisory_items)) {
+      const view = D.evidenceView(q, x), owner = old.fn.regionOwner(x), r = owner && (owner.suggested_region_source_pixels || owner.decision_region_source_pixels);
+      if (view.mode === 'region') { assert.ok(owner && r && r !== 'FULL_FRAME'); continue; }
+      if (x.category !== 'visual_logo') { assert.equal(view.mode, 'none'); continue; }
+      const images = ['a.jpg'], approved = R.sceneLogo(x) && owner && owner.id !== x.id && r && r !== 'FULL_FRAME' ? owner : null;
+      const html = old.fn.evidenceMediaHtml(x, images, p => '/media/' + p, approved, approved ? r : undefined);
+      const data = /data-boxes="([^"]*)"/.exec(html), legend = /<div class="evidence-legend">(.*?)<\/div>/.exec(html);
+      same(view.marks, data ? JSON.parse(unescape(data[1])) : [], x.id + ' marks');
+      assert.equal(view.legend, legend ? unescape(legend[1]) : '', x.id + ' legend');
+      boxes += view.marks.length;
+    }
+  }
+  assert.ok(boxes >= 4, 'boxes compared: ' + boxes);
+  const crop = D.cropRect({x: 60, y: 40, width: 260, height: 96}, [1920, 1080], 640, 360);
+  assert.equal(crop.width, 360); assert.ok(crop.height >= 100);
+  assert.ok(crop.red.x > 0 && crop.red.y > 0 && crop.red.x + crop.red.w < 360, JSON.stringify(crop));
+  assert.ok(!/document\.|fetch\(|innerHTML|setTimeout/.test(fs.readFileSync(path.join(__dirname, 'review-detail.js'), 'utf8')), 'review-detail.js is pure');
+});
+
 process.stdout.write(JSON.stringify({passed, failed: 0}) + '\n');

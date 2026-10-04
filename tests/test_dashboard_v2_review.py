@@ -42,7 +42,7 @@ from biliflow.scheduler import JobScheduler
 ROOT = Path(__file__).resolve().parents[1]
 NODE = shutil.which("node")
 CLASSIC = json.loads((ROOT / "tests" / "fixtures" / "dashboard_v2_classic_pages.json").read_text(encoding="utf-8"))
-NEW_FILES = ("review.css", "review-core.js", "review-media.js", "review-cards.js", "review.js")
+NEW_FILES = ("review.css", "review-core.js", "review-detail.js", "review-media.js", "review-cards.js", "review.js")
 FAKE_LAN = "127.0.0.1"
 CSP_LITERAL = ("default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; "
                "connect-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'self'")
@@ -132,7 +132,7 @@ class ReviewR0Serving(unittest.TestCase):
 
     def test_both_pages_and_the_demo_server_load_the_new_files_in_order(self):
         tags = ('<link rel="stylesheet" href="review.css">'
-                '', '<script defer src="review-core.js"></script><script defer src="review-media.js"></script>'
+                '', '<script defer src="review-core.js"></script><script defer src="review-detail.js"></script><script defer src="review-media.js"></script>'
                 '<script defer src="review-cards.js"></script><script defer src="review.js"></script><script defer src="app.js"></script>')
         for page in ("live.html", "index.html"):
             text = (DASHBOARD_V2_DIR / page).read_text(encoding="utf-8")

@@ -200,8 +200,91 @@
     const f = FILTERS.concat(MORE_FILTERS).find(x => x[0] === filter); return f ? f[1] : '';
   }
 
+  /* R1, media of a card (classic thumbTime, momentIndex, pickStrip, pickSceneStrip, stripFrames, tlPos,
+   * renderTimeline, videoReason; verify-review.cjs compares them). */
+  function thumbTime(p) { const m = /-(\d+(?:\.\d+)?)s\.(?:jpg|jpeg|png)$/i.exec(String(p || '')); return m ? Number(m[1]) : null; }
+  function momentIndex(t, ms) { return ms.findIndex(m => t >= m.start - .05 && t <= m.end + .05); }
+  function nextMomentAfter(t, ms) { return (ms || []).findIndex(m => m.start > t + .01); }
+  function pickStrip(frames, n = 8) {
+    const list = (frames || []).slice().sort((a, b) => a.t - b.t);
+    if (list.length <= n) return list;
+    const chosen = new Set(), strongest = list.findIndex(f => f.kind === 'strongest');
+    if (strongest >= 0) chosen.add(strongest);
+    const take = (indexes, slots) => {
+      if (slots <= 0 || !indexes.length) return;
+      if (indexes.length <= slots) { indexes.forEach(i => chosen.add(i)); return; }
+      for (let s = 0; s < slots; s++) chosen.add(indexes[Math.min(indexes.length - 1, Math.floor((s + .5) * indexes.length / slots))]);
+    };
+    const seeds = list.map((f, i) => f.kind === 'seed' && !chosen.has(i) ? i : -1).filter(i => i >= 0);
+    take(seeds, Math.ceil((n - chosen.size) / 2));
+    take(list.map((_f, i) => chosen.has(i) ? -1 : i).filter(i => i >= 0), n - chosen.size);
+    return [...chosen].sort((a, b) => a - b).slice(0, n).map(i => list[i]);
+  }
+  function pickSceneStrip(frames, ms, n = 8) {
+    const list = (frames || []).filter(f => momentIndex(f.t, ms) >= 0).sort((a, b) => a.t - b.t);
+    if (list.length <= n) return list;
+    const rank = f => f.kind === 'strongest' ? 3 : f.kind === 'seed' ? 2 : 1, groups = ms.map(() => []);
+    list.forEach(f => groups[momentIndex(f.t, ms)].push(f));
+    let order = ms.map((_m, i) => i).filter(i => groups[i].length);
+    if (order.length > n) {
+      const strong = list.find(f => f.kind === 'strongest'), picked = new Set(strong ? [momentIndex(strong.t, ms)] : []);
+      for (let s = 0; picked.size < n && s < order.length; s++) picked.add(order[Math.min(order.length - 1, Math.floor((s + .5) * order.length / n))]);
+      order = [...picked];
+    }
+    const chosen = new Set();
+    for (const i of order) {
+      if (chosen.size >= n) break;
+      const mid = (ms[i].start + ms[i].end) / 2;
+      chosen.add(groups[i].slice().sort((a, b) => rank(b) - rank(a) || (Number(b.score) || 0) - (Number(a.score) || 0) || Math.abs(a.t - mid) - Math.abs(b.t - mid))[0]);
+    }
+    if (chosen.size < n) for (const f of pickStrip(list.filter(f => !chosen.has(f)), n - chosen.size)) chosen.add(f);
+    return [...chosen].sort((a, b) => a.t - b.t);
+  }
+  function pickFor(x, frames) { return isScene(x) ? pickSceneStrip(frames, momentsOf(x), 8) : pickStrip(frames, 8); }
+  /* Evidence frames when the video can be read (a media key, not cleaned or missing), else ≤8 report previews.
+   * R1 puts the "Rõ nhất" frame first in the strip; the frames keep their time order otherwise. */
+  function stripFrames(x, ev, hasKey) {
+    if (ev && hasKey && (ev.frames || []).length && !['source_cleaned', 'source_missing'].includes(ev?.video?.reason)) return pickFor(x, ev.frames).map(f => ({t: f.t, kind: f.kind, remote: true}));
+    const ms = momentsOf(x), inside = p => { const t = thumbTime(p); return !isScene(x) || t == null || momentIndex(t, ms) >= 0; };
+    return (x.preview_images || []).filter(inside).slice(0, 8).map(p => ({t: thumbTime(p), kind: 'preview', path: p}));
+  }
+  function peakFirst(frames) { const i = frames.findIndex(f => f.kind === 'strongest'); return i > 0 ? [frames[i]].concat(frames.slice(0, i), frames.slice(i + 1)) : frames; }
+  function tlPos(t, start, end) { const len = Math.max(.001, end - start); return 2 + 96 * Math.min(1, Math.max(0, (Number(t) - start) / len)); }
+  function thin(values, limit) { if (values.length <= limit) return values; const out = []; for (let s = 0; s < limit; s++) out.push(values[Math.floor((s + .5) * values.length / limit)]); return out; }
+  /* The classic renderTimeline markup (without its single playhead): bars, detector ticks and the peak. */
+  function timelineHtml(x, ev) {
+    const start = Number(x.start_seconds), end = Number(x.end_seconds), pos = t => tlPos(t, start, end);
+    const bar = (a, b, cls, extra = '') => { const left = pos(a), right = pos(b); return `<div class="${cls}"${extra} style="left:${left.toFixed(2)}%;width:${Math.max(.6, right - left).toFixed(2)}%"></div>`; };
+    const segments = ev?.detected_intervals?.length ? ev.detected_intervals : (x.detected_intervals || []).map(d => ({start: d.start_seconds, end: d.end_seconds}));
+    let html;
+    if (isScene(x)) html = '<div class="gapline" style="left:2%;width:96%"></div>' + momentsOf(x).map((m, i) => bar(m.start, m.end, 'mo', ` data-i="${i}" title="Khoảnh khắc ${i + 1}: ${mmss(m.start)}–${mmss(m.end)}"`)).join('');
+    else html = (segments.length ? segments : [{start: x.start_seconds, end: x.end_seconds}]).map(s => bar(s.start, s.end, 'seg')).join('');
+    const seeds = ev?.seeds;
+    if (seeds && !seeds.known) html += (seeds.windows || []).map(w => bar(w.start, w.end, 'win')).join('');
+    const ticks = seeds?.known ? thin((seeds.samples || []).map(s => s.t), 120) : (ev?.frames || []).filter(f => f.kind === 'seed').map(f => f.t);
+    html += ticks.map(t => `<div class="hit" style="left:${pos(t).toFixed(2)}%"></div>`).join('');
+    const peak = ev?.strongest?.t ?? thumbTime((x.preview_images || [])[0]);
+    if (peak != null) html += `<div class="peak" style="left:${pos(peak).toFixed(2)}%" title="Rõ nhất lúc ${mmss(peak)}"></div>`;
+    return html;
+  }
+  /* A click at `ratio` of the timeline width (the classic handler): a time in the range; a scene snaps
+   * a gap to the start of the next moment (or the last one). */
+  function seekTarget(x, ratio) {
+    const start = Number(x.start_seconds), end = Number(x.end_seconds), ms = isScene(x) ? momentsOf(x) : null;
+    let t = start + Math.min(1, Math.max(0, (ratio * 100 - 2) / 96)) * (end - start), moment = -1;
+    if (ms) { moment = momentIndex(t, ms); if (moment < 0) { moment = nextMomentAfter(t, ms); if (moment < 0) moment = ms.length - 1; t = ms[moment].start; } }
+    return {t, moment};
+  }
+  const VIDEO_REASONS = {unsupported_container:'Trình duyệt không phát được định dạng video này; hãy xem dải khung hình.',source_changed:'Video nguồn đã thay đổi sau khi quét; chỉ xem được khung hình.',source_missing:'Không tìm thấy video nguồn.',source_cleaned:'Video gốc đã được dọn vào Thùng rác; chỉ xem được ảnh đã lưu trong report.',source_unknown:'Không rõ video nguồn.',decode_error:'Trình duyệt không giải mã được video này; hãy xem dải khung hình.'};
+  function videoReason(info, hasKey) { if (!hasKey) return 'Trang này chỉ có ảnh xem trước, không phát video.'; return VIDEO_REASONS[info?.reason] || 'Không phát được video trong trình duyệt; hãy xem dải khung hình.'; }
+  /* Media status codes of a probe → reason (classic videoFailed): 2xx with a media error 3/4 = decode error. */
+  function probeReason(status, mediaErrorCode) {
+    return {404:'source_missing',409:'source_changed',410:'source_cleaned',415:'unsupported_container'}[status] || (status >= 200 && status < 300 && (mediaErrorCode === 3 || mediaErrorCode === 4) ? 'decode_error' : null);
+  }
+
   return {SAFETY,KIND_NAMES,STATUS,FILTERS,MORE_FILTERS,FILTER_IDS,TEXT,isSafety,momentsOf,isScene,studioEligible,platformEligible,sceneLogo,hasPlayer,
     isLogoItem,isAdItem,needsFullFrame,catName,actionName,sceneName,statusOf,mmss,span,visible,byTime,listItems,itemMap,countsFrom,statusFrom,progress,progressText,
     nextNote,initialFilter,pickFocus,nextUndecided,step,queueIdentity,queueVersion,bulkFilters,bulkCount,lockState,canExport,regionOwner,regionBox,
-    frameAspect,scopeWarning,filterLabel};
+    frameAspect,scopeWarning,filterLabel,thumbTime,momentIndex,nextMomentAfter,pickStrip,pickSceneStrip,pickFor,stripFrames,peakFirst,tlPos,thin,timelineHtml,
+    seekTarget,VIDEO_REASONS,videoReason,probeReason};
 });

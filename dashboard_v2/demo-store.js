@@ -51,12 +51,12 @@
           if (!reviews.has(j.id)) reviews.set(j.id, Mock.reviewQueue(j));
           return structuredClone(reviews.get(j.id));
         },
-        session: async () => ({media_key: 'demo-key'}),
-        mediaKey: () => 'demo-key',
+        session: async () => ({media_key: null}), // no media key: the demo has no video or frames (report images only)
+        mediaKey: () => null,
         resources: async () => ({source_bytes: j.source_size_bytes, report_bytes: 18e6, disk_free_bytes: 312e9, estimated_preview_seconds: 40, estimated_preview_megabytes_range: [180, 260]}),
         exportState: async () => ({status: j.state, output: j.output_path || null, error: j.error || null, render_progress: j.render_progress || null,
           source_cleaned: !!j.source_cleaned, source_archived: !!j.source_archived, source_name: j.name + '.mp4'}),
-        evidence: async () => ({frames: [], video: {available: false, reason: 'demo'}}),
+        evidence: async item => { const q = reviews.get(j.id), x = q && q.items.concat(q.advisory_items).find(i => i.id === item); return x ? Mock.reviewEvidence(x, {video: {available: false, reason: 'source_unknown'}}) : null; },
         probeVideo: async () => 404,
         frameUrl: () => '',
         videoUrl: () => '',
