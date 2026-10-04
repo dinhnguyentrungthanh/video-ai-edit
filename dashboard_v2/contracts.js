@@ -20,7 +20,8 @@
     finalize:['POST','/api/jobs/{id}/review/finalize'],decision:['POST','/api/jobs/{id}/review/decision'],clear:['POST','/api/jobs/{id}/review/clear'],bulkKeep:['POST','/api/jobs/{id}/review/bulk-keep'],bulkAccept:['POST','/api/jobs/{id}/review/bulk-accept'],
     ai:['GET','/api/ai'],aiConfig:['POST','/api/ai/config'],aiCheck:['POST','/api/ai/check'],aiLogin:['POST','/api/ai/login'],
     cleanupPreview:['GET','/api/source-cleanup/preview'],cleanup:['POST','/api/source-cleanup'],archivePreview:['GET','/api/source-archive/preview'],archive:['POST','/api/source-archive'],restore:['POST','/api/source-archive/restore'],recheck:['POST','/api/source-recycle-check'],
-    logoPage:['GET','/logo-memory'],logos:['GET','/api/logo-memory'],logoFrame:['GET','/api/logo-memory/frame'],logoClass:['POST','/api/logo-memory/class'],logoDelete:['POST','/api/logo-memory/delete']
+    logoPage:['GET','/logo-memory'],logos:['GET','/api/logo-memory'],logoFrame:['GET','/api/logo-memory/frame'],logoClass:['POST','/api/logo-memory/class'],logoDelete:['POST','/api/logo-memory/delete'],
+    phoneStatus:['GET','/api/phone-mode'],phoneMode:['POST','/api/phone-mode']
   };
   const cleaned = j => !!j && (!!j.source_cleaned || ['PENDING','RECYCLED'].includes(j.source_cleanup?.state));
   const archived = j => !!j && (!!j.source_archived || ['PENDING','ARCHIVED','RESTORING'].includes(j.source_archive?.state));
@@ -42,6 +43,9 @@
   const sourceLine = sourceLineInfo;
   /* Same text as export_guards.SOURCE_MISSING_MESSAGE (checked by tests/test_dashboard_v2_contract.py). */
   const SOURCE_MISSING_MESSAGE = 'Video gốc không còn trong input; không thể xuất.';
+  /* Phone mode (batch 2): these actions are refused by the phone listener (403 pc_only). */
+  const pcOnlyOps = ['cleanup','archive','restore','recheck'];
+  const PC_ONLY_REASON = 'Chỉ làm trên PC: dọn, lưu trữ, khôi phục video gốc và kiểm tra lại Thùng rác không làm qua điện thoại.';
   function reviewStats(j) {
     const r=j.review_summary||{},d=r.decisions||{};
     const total=Number(r.main_items)||0,resolved=['KEEP','BLUR','CUT'].reduce((n,k)=>n+(Number(d[k])||0),0);
@@ -77,7 +81,10 @@
   function operations(j, ctx) {
     ctx = ctx || {};
     const actions = [];
-    function add(id,label,enabled,reason) { actions.push({id,label,enabled:!!enabled,reason:enabled?'':reason||'Thao tác chưa sẵn sàng.'}); }
+    function add(id,label,enabled,reason) {
+      if (ctx.remote && pcOnlyOps.includes(id)) { enabled = false; reason = PC_ONLY_REASON; }
+      actions.push({id,label,enabled:!!enabled,reason:enabled?'':reason||'Thao tác chưa sẵn sàng.'});
+    }
     const sourceReason = archived(j) ? 'Video đang được lưu trữ. Khôi phục trước khi xử lý.' : cleaned(j) ? 'Khôi phục đúng video từ Thùng rác về input trước.' : 'Không tìm thấy video gốc.';
     const sourceOK = !locked(j);
     if (['DISCOVERED','NEEDS_METADATA'].includes(j.state)) add('start','Thiết lập & bắt đầu',sourceOK,sourceReason);
@@ -131,5 +138,5 @@
     if (ep[1].includes('{id}') && (!Number.isInteger(job?.id) || job.id<=0)) throw new Error('Thiếu job id hợp lệ.');
     return {operation:id,method:ep[0],path:ep[1].replace('{id}',job?.id),body:body||{}};
   }
-  return {SOURCE_MISSING_MESSAGE,sourceLine,formatStamp,formatBytes,detectors,tabs,labels,scanning,pausable,rerunnable,endpoints,cleaned,archived,hidden,locked,inFlight,eligible,reviewStats,tab,phase,overviewLabels,overviewMatch,operations,primary,validateScan,exportSelection,request};
+  return {pcOnlyOps,PC_ONLY_REASON,SOURCE_MISSING_MESSAGE,sourceLine,formatStamp,formatBytes,detectors,tabs,labels,scanning,pausable,rerunnable,endpoints,cleaned,archived,hidden,locked,inFlight,eligible,reviewStats,tab,phase,overviewLabels,overviewMatch,operations,primary,validateScan,exportSelection,request};
 });

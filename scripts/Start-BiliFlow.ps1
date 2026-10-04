@@ -1,7 +1,10 @@
 param(
     [int]$Port = 8765,
     [switch]$NoBrowser,
-    [switch]$RefreshExisting
+    [switch]$RefreshExisting,
+    # Also open BiliFlow to a phone or laptop on the home Wi-Fi (access code; Start-BiliFlow-Phone.cmd).
+    [switch]$Phone,
+    [int]$PhonePort = 8767
 )
 
 $BiliflowRoot = Split-Path -Parent $PSScriptRoot
@@ -24,6 +27,41 @@ function Get-RunningUrl {
     } catch { return $null }
 }
 
+function Enable-PhoneMode([string]$Url) {
+    # Turns on the phone listener of the running Control Center (no restart) and prints link and code.
+    $State = Get-Content -LiteralPath $StatePath -Raw | ConvertFrom-Json
+    $Headers = @{ 'X-BiliFlow-Token' = [string]$State.token }
+    $Body = @{ enabled = $true; port = $PhonePort } | ConvertTo-Json -Compress
+    try {
+        $Result = Invoke-RestMethod -Uri ($Url + 'api/phone-mode') -Method Post -Headers $Headers `
+            -ContentType 'application/json' -Body $Body -TimeoutSec 15
+    } catch {
+        $Status = $null
+        if ($_.Exception.Response) { $Status = [int]$_.Exception.Response.StatusCode }
+        if ($Status -eq 404) {
+            throw ('The running Control Center has no phone mode yet (older build). It was NOT restarted. ' +
+                   'When no video is processing, stop it with Stop-BiliFlow.cmd, then run Start-BiliFlow-Phone.cmd again.')
+        }
+        $Detail = if ($_.ErrorDetails -and $_.ErrorDetails.Message) { $_.ErrorDetails.Message } else { $_.Exception.Message }
+        throw "Phone mode could not start: $Detail"
+    }
+    $Line = '=' * 64
+    Write-Host $Line
+    Write-Host '  BILIFLOW TREN DIEN THOAI / LAPTOP (cung Wi-Fi nha)'
+    Write-Host "  Mo tren dien thoai:  $($Result.link)"
+    Write-Host "  Hoac vao $($Result.url) va nhap ma:  $($Result.code)"
+    Write-Host '  Lan dau Windows hoi cho Python qua tuong lua: chon Private networks (khong chon Public).'
+    Write-Host '  Chi dung trong Wi-Fi nha: ket noi HTTP, khong ma hoa.'
+    Write-Host '  Tat: nut "Tat che do dien thoai" trong Dashboard V2 > Cai dat tren PC, hoac Stop-BiliFlow.cmd (tat ca hai).'
+    Write-Host $Line
+}
+
+function Open-Page([string]$Url) {
+    if ($NoBrowser) { return }
+    # Phone mode opens the V2 settings, where the "Mo tren dien thoai" panel shows link and code.
+    if ($Phone) { Start-Process ($Url + 'dashboard-v2/#settings') } else { Start-Process $Url }
+}
+
 $LauncherMutex = [Threading.Mutex]::new($false, 'Local\BiliFlowControlCenterLauncher')
 $OwnsLauncherMutex = $false
 try {
@@ -44,14 +82,17 @@ try {
         if (-not $Url) {
             throw 'The existing BiliFlow launch did not become ready within 45 seconds.'
         }
-        if (-not $NoBrowser) { Start-Process $Url }
+        if ($Phone) { Enable-PhoneMode $Url }
+        Open-Page $Url
         exit 0
     }
 
     $ExistingUrl = Get-RunningUrl
     if ($ExistingUrl) {
         Write-Host "BiliFlow is already running: $ExistingUrl"
-        if (-not $NoBrowser) { Start-Process $ExistingUrl }
+        # Reused as is: the phone mode is switched on in the running Control Center, never a second one.
+        if ($Phone) { Enable-PhoneMode $ExistingUrl }
+        Open-Page $ExistingUrl
         exit 0
     }
 
@@ -89,7 +130,8 @@ try {
         throw "BiliFlow did not start. Check $ErrLog"
     }
     Write-Host "BiliFlow Control Center: $Url"
-    if (-not $NoBrowser) { Start-Process $Url }
+    if ($Phone) { Enable-PhoneMode $Url }
+    Open-Page $Url
 } finally {
     if ($OwnsLauncherMutex) {
         $LauncherMutex.ReleaseMutex()

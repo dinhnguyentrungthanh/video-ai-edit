@@ -89,6 +89,7 @@
       refresh: () => Promise.resolve(state),
       loadAI: () => Promise.resolve(),
       loadMemory: () => Promise.resolve(state),
+      loadPhone: () => Promise.resolve(state),
       start() {},
       stop() {},
       async dispatch(operation, job, body) {

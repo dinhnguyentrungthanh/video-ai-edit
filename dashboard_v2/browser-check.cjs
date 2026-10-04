@@ -37,6 +37,13 @@ jobs.push({...jobs.find(j => j.id === 105), id: 117, job_key: 'demo-video-117', 
 let polls = 0;
 const posts = [];
 let refuseNextCancel = false;
+// Fake phone mode: the PC sees the code; with remoteMode the page behaves as on the phone listener.
+let remoteMode = false, phoneOn = false, phoneCode = 'abcd2345';
+const phoneStatus = () => remoteMode ? {remote: true, enabled: true} : {remote: false, enabled: phoneOn,
+  url: phoneOn ? 'http://192.168.1.23:8767/' : null, code: phoneOn ? phoneCode : null,
+  link: phoneOn ? 'http://192.168.1.23:8767/?code=' + phoneCode : null, locked: false, failed_attempts: 0, max_failed_attempts: 10};
+const PC_ONLY = ['/api/source-cleanup', '/api/source-archive', '/api/source-archive/restore', '/api/source-recycle-check',
+  '/api/shutdown', '/api/ai/config', '/api/ai/login', '/api/logo-memory/class', '/api/logo-memory/delete', '/api/phone-mode'];
 const status = () => ({version: '0.7.24', started: true, scheduler_paused: false, queue: {length: 2, paused: false},
   active: {job_id: 102, stage: 'visual_logo', pid: 1}, jobs, source_cleanup_running: false, detector_options: [],
   resources: {cpu_percent: 10 + (polls % 5), memory: {percent: 40, used_bytes: 1, total_bytes: 2}, disk: {percent: 60, free_bytes: 3e11, total_bytes: 1e12}, gpu: null}});
@@ -56,6 +63,7 @@ const server = http.createServer((req, res) => {
     if (m && ASSETS.has(m[1])) return send(res, 200, fs.readFileSync(path.join(ROOT, m[1])), TYPES[path.extname(m[1])]);
     if (p === '/api/session') return send(res, 200, {token: TOKEN});
     if (p === '/api/status') { polls++; return send(res, 200, status()); }
+    if (p === '/api/phone-mode') return send(res, 200, phoneStatus());
     if (p === '/api/ai') return send(res, 200, {ready: true, config: {enabled: true, model: 'gpt-5.6-luna', reasoning_effort: 'medium'}, models: ['gpt-5.6-luna'], efforts: ['low', 'medium'], message: 'Đã kết nối (giả)'});
     if (p === '/api/logo-memory') return send(res, 200, {memory_sha256: 'c'.repeat(64), records: [{key: 'k1', labels: ['iQIYI'], memory_class: 'platform_logo', platform: 'iqiyi', frames: 1, frame_urls: []}], backups: []});
     if (/^\/review\/\d+$/.test(p)) return send(res, 200, '<!doctype html><title>review</title><h1>Trang duyệt cũ</h1>', 'text/html');
@@ -67,6 +75,8 @@ const server = http.createServer((req, res) => {
   req.on('end', () => {
     if (req.headers['x-biliflow-token'] !== TOKEN) return send(res, 403, {error: 'Phiên Control Center không hợp lệ'});
     posts.push({path: p, body: JSON.parse(body || '{}'), type: req.headers['content-type']});
+    if (remoteMode && PC_ONLY.includes(p)) return send(res, 403, {error: 'Chỉ làm trên PC: (giả)', code: 'pc_only'});
+    if (p === '/api/phone-mode') { phoneOn = JSON.parse(body).enabled; if (phoneOn) phoneCode = phoneCode === 'abcd2345' ? 'wxyz6789' : 'abcd2345'; return send(res, 200, phoneStatus()); }
     setTimeout(() => {
       if (p.endsWith('/cancel') && refuseNextCancel) { refuseNextCancel = false; return send(res, 409, {error: 'Trạng thái vừa đổi', code: 'state_changed'}); }
       send(res, 200, p.endsWith('/finalize') ? {status: 'QUEUED'} : {});
@@ -277,6 +287,59 @@ async function check(name, fn) { await fn(); passed++; results.push(name); proce
       await openJob(117);
       assert.match(await page.locator('.drawer .source-line').textContent(), /Lần dọn trước không thành công: Thùng rác không phản hồi/);
       await page.keyboard.press('Escape');
+    });
+
+    await check('Phone panel on the PC: turn on shows link and a new code, turn off clears it', async () => {
+      if (await page.locator('.drawer').count()) await page.keyboard.press('Escape');
+      await page.goto(base + '/dashboard-v2/#settings');
+      await page.waitForSelector('[data-action="phone-toggle"][data-enabled="1"]');
+      assert.match(await page.locator('.phone-panel').textContent(), /Private networks/);
+      assert.match(await page.locator('.phone-panel').textContent(), /Wi-Fi nhà/);
+      await page.locator('[data-action="phone-toggle"][data-enabled="1"]').click();
+      await page.waitForSelector('.phone-code');
+      const first = await page.locator('.phone-code').textContent();
+      assert.match(await page.locator('.phone-panel').textContent(), /http:\/\/192\.168\.1\.23:8767\//);
+      await page.locator('[data-action="phone-toggle"][data-enabled="0"]').click();
+      await page.waitForSelector('[data-action="phone-toggle"][data-enabled="1"]');
+      assert.equal(await page.locator('.phone-code').count(), 0);
+      await page.locator('[data-action="phone-toggle"][data-enabled="1"]').click();
+      await page.waitForSelector('.phone-code');
+      assert.notEqual(await page.locator('.phone-code').textContent(), first, 'a new code each time');
+      assert.deepEqual(posts.slice(-3).map(x => [x.path, x.body.enabled]), [['/api/phone-mode', true], ['/api/phone-mode', false], ['/api/phone-mode', true]]);
+    });
+
+    await check('Opened through the phone: PC-only actions are disabled with the reason, 375 px fits', async () => {
+      remoteMode = true;
+      await page.setViewportSize({width: 375, height: 800});
+      await page.goto(base + '/dashboard-v2/?remote#settings');
+      await page.waitForSelector('.phone-panel h2');
+      assert.match(await page.locator('.phone-panel h2').textContent(), /Đang mở qua điện thoại/);
+      assert.equal(await page.locator('[data-action="phone-toggle"]').count(), 0, 'no switch on the phone');
+      assert.ok(!/abcd2345|wxyz6789/.test(await page.content()), 'the phone never sees the code');
+      for (const sel of ['[data-action="shutdown"]', '[data-action="ai-save"]', '[data-action="ai-login"]']) {
+        const button = page.locator(sel).first();
+        assert.equal(await button.isDisabled(), true, sel);
+        assert.match(await button.getAttribute('title'), /Chỉ làm trên PC/);
+      }
+      const [sw, iw] = await page.evaluate(() => [document.documentElement.scrollWidth, window.innerWidth]);
+      assert.ok(sw <= iw, 'settings 375: ' + sw);
+      await page.goto(base + '/dashboard-v2/?remote1#overview');
+      await page.waitForSelector('[data-action="scheduler"]');
+      assert.equal(await page.locator('[data-action="scheduler"]').first().isDisabled(), false, 'queue pause stays available');
+      await page.goto(base + '/dashboard-v2/?remote2#videos');
+      await page.waitForSelector('#search');
+      await openJob(105);
+      const cleanup = page.locator('.drawer [data-op="cleanup"]');
+      assert.equal(await cleanup.isDisabled(), true);
+      assert.match(await cleanup.getAttribute('title'), /Chỉ làm trên PC/);
+      const [sw2, iw2] = await page.evaluate(() => [document.documentElement.scrollWidth, window.innerWidth]);
+      assert.ok(sw2 <= iw2, 'drawer 375: ' + sw2);
+      await page.keyboard.press('Escape');
+      await page.goto(base + '/dashboard-v2/?remote3#logos');
+      await page.waitForSelector('[data-action="logo-delete"]');
+      assert.equal(await page.locator('[data-action="logo-delete"]').first().isDisabled(), true);
+      remoteMode = false;
+      await page.setViewportSize({width: 1280, height: 900});
     });
 
     await check('No page error and no request outside the origin', async () => {

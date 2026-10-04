@@ -68,6 +68,8 @@ test('Every operation of guide section 4 uses its real path and body', async () 
     ['recheck', null, {kind: 'source_cleanup', id: 901}, '/api/source-recycle-check'],
     ['logoClass', null, {key: 'k', memory_class: 'platform_logo', platform: 'iqiyi', expected_sha256: 'a'.repeat(64)}, '/api/logo-memory/class'],
     ['logoDelete', null, {key: 'k', expected_sha256: 'a'.repeat(64)}, '/api/logo-memory/delete'],
+    ['phoneMode', null, {enabled: true}, '/api/phone-mode'],
+    ['phoneMode', null, {enabled: false}, '/api/phone-mode'],
   ];
   for (const [op, target, body] of cases) await a.dispatch(op, target, body);
   const posts = f.posts();
@@ -223,6 +225,37 @@ test('Live store: a refused file action is not followed by any other write', asy
   const store = A.createLiveStore(adapterWith(f));
   await assert.rejects(() => store.fileAction('archive', [3], 'p'), e => e.status === 409 && e.code === 'busy');
   assert.equal(f.posts().length, 1);
+});
+
+test('Phone mode: the PC store keeps the status with its code; the phone store only learns it is remote', async () => {
+  const pcStatus = {remote: false, enabled: true, url: 'http://192.168.1.5:8767/', code: 'abcd2345', locked: false};
+  const f = fake({'GET /api/phone-mode': {status: 200, body: pcStatus}, 'GET /api/status': {status: 200, body: {jobs: []}},
+    'POST /api/phone-mode': {status: 200, body: {remote: false, enabled: false, code: null}}});
+  const store = A.createLiveStore(adapterWith(f));
+  await store.loadPhone();
+  assert.deepEqual(store.snapshot().phone, pcStatus); assert.equal(store.snapshot().remote, false);
+  await store.refresh();
+  assert.equal(store.snapshot().phone.code, 'abcd2345', 'a status poll keeps the phone panel');
+  await store.dispatch('phoneMode', null, {enabled: false});
+  assert.equal(store.snapshot().phone.enabled, false);
+  const posts = f.posts(); assert.equal(posts.length, 1); assert.deepEqual(posts[0].body, {enabled: false});
+  const g = fake({'GET /api/phone-mode': {status: 200, body: {remote: true, enabled: true}}});
+  const remote = A.createLiveStore(adapterWith(g));
+  await remote.loadPhone();
+  assert.equal(remote.snapshot().remote, true);
+  const old = fake({'GET /api/phone-mode': {status: 404, body: {error: 'Không tìm thấy'}}});
+  const legacy = A.createLiveStore(adapterWith(old));
+  await legacy.loadPhone();
+  assert.deepEqual(legacy.snapshot().phone, {unavailable: true});
+});
+
+test('Phone mode: a 403 pc_only refusal is shown, without token refresh or resend', async () => {
+  const f = fake({'POST /api/source-cleanup': {status: 403, body: {error: 'Chỉ làm trên PC: dọn…', code: 'pc_only'}}});
+  const a = adapterWith(f);
+  await assert.rejects(() => a.dispatch('cleanup', null, {job_ids: [1], preview_id: 'p'}),
+    e => e.status === 403 && /Chỉ làm trên PC/.test(e.message));
+  assert.equal(f.posts().length, 1, 'pc_only is not a token problem: one POST, no token refresh');
+  assert.equal(f.sessions().length, 1);
 });
 
 (async () => {

@@ -78,7 +78,7 @@ class EndpointContractTests(unittest.TestCase):
             concrete = template.replace("{id}", "7").replace("{path}", "x")
             other = post_routes if method == "GET" else get_routes
             if any(re.fullmatch(pattern, concrete) for pattern in other) and \
-                    template not in ("/api/source-archive/restore",):
+                    template not in ("/api/source-archive/restore", "/api/phone-mode"):
                 wrong.append(f"{name}: {method} {template} also matches the other method")
         self.assertEqual(wrong, [])
 
@@ -173,6 +173,24 @@ class StateGroupTests(unittest.TestCase):
         html = control_center._dashboard_html()
         self.assertIn("value:'Thiếu video gốc',detail:SOURCE_MISSING_MESSAGE", html)
         self.assertIn("'Thiếu video gốc',C.SOURCE_MISSING_MESSAGE", (ROOT / "dashboard_v2" / "app.js").read_text(encoding="utf-8"))
+
+    def test_pc_only_reason_and_operations_match_the_phone_listener(self) -> None:
+        from biliflow import phone_access
+        out = json.loads(_node("const C=require('./dashboard_v2/contracts.js');"
+                               "const j={id:3,state:'COMPLETED',source_present:true,cleanup:{eligible:true},archive:{eligible:true},"
+                               "source_cleanup:{id:9,state:'RECYCLED',verified:false}};"
+                               "console.log(JSON.stringify({reason:C.PC_ONLY_REASON,ops:C.pcOnlyOps,"
+                               "pc:C.operations(j,{}).filter(a=>C.pcOnlyOps.includes(a.id)).map(a=>[a.id,a.enabled]),"
+                               "remote:C.operations(j,{remote:true}).filter(a=>C.pcOnlyOps.includes(a.id)).map(a=>[a.id,a.enabled,a.reason])}))"))
+        self.assertEqual(out["reason"], phone_access.PC_ONLY_SOURCE)
+        endpoints = json.loads(_node("console.log(JSON.stringify(require('./dashboard_v2/contracts.js').endpoints))"))
+        for op in out["ops"]:
+            self.assertIn(endpoints[op][1], phone_access.PC_ONLY_POSTS, op)
+        self.assertTrue(all(enabled for _, enabled in out["pc"]))
+        self.assertTrue(out["remote"])
+        for _, enabled, reason in out["remote"]:
+            self.assertFalse(enabled)
+            self.assertEqual(reason, phone_access.PC_ONLY_SOURCE)
 
     def test_the_presenter_no_longer_claims_a_missing_source_is_in_input(self) -> None:
         app = (ROOT / "dashboard_v2" / "app.js").read_text(encoding="utf-8")

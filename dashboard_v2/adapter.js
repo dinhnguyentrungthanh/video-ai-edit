@@ -95,7 +95,8 @@
       if (!token) await refreshToken();
       const headers = () => ({'Content-Type': 'application/json', 'X-BiliFlow-Token': token});
       let response = await send('POST', path, payload, headers());
-      if (response.status === 403) {
+      // A pc_only refusal (phone listener) is not a session problem: no refresh, no resend.
+      if (response.status === 403 && !(response.body && response.body.code === 'pc_only')) {
         // The Control Center restarted (new token) or the tab is stale: one refresh, one resend.
         await refreshToken();
         response = await send('POST', path, payload, headers());
@@ -138,6 +139,8 @@
       },
       loadAI: () => get(C.endpoints.ai[1]),
       loadMemory: () => get(C.endpoints.logos[1]),
+      /* Phone mode: on the PC the status (code included); on the phone only {remote: true}. */
+      loadPhone: () => get(C.endpoints.phoneStatus[1]),
       health: () => get(C.endpoints.health[1]),
       /* Read-only preview right before a cleanup / archive. */
       async preview(kind, ids) {
@@ -207,6 +210,8 @@
       logos: memory ? normalizeLogos(memory) : (previous.logos || []),
       memory_sha256: memory ? memory.memory_sha256 : (previous.memory_sha256 || null),
       memory_loaded: !!memory || !!previous.memory_loaded,
+      phone: previous.phone || null,
+      remote: !!previous.remote,
       offline: false,
       requests: [],
     };
@@ -217,7 +222,7 @@
     options = options || {};
     let snap = {mode: 'live', jobs: [], logos: [], active: null, queue: {length: 0, paused: false}, resources: {cpu_percent: 0, memory: {percent: 0}, disk: {}, gpu: null}, ai: {ready: false, config: {}, message: 'Đang tải…'}, offline: false, loading: true, requests: []};
     const listeners = new Set();
-    let ai = null, memory = null, timer = null;
+    let ai = null, memory = null, timer = null, phone = null;
     const emit = () => listeners.forEach(fn => fn(snap));
 
     async function refresh() {
@@ -234,6 +239,17 @@
     async function loadAI() {
       try { ai = await adapter.loadAI(); snap = {...snap, ai}; emit(); } catch (_) { /* the settings page shows the last state */ }
     }
+    async function loadPhone() {
+      try {
+        phone = await adapter.loadPhone();
+        snap = {...snap, phone, remote: phone.remote === true};
+        emit();
+      } catch (_) { /* an older Control Center has no phone mode: the panel says so */
+        snap = {...snap, phone: {unavailable: true}};
+        emit();
+      }
+      return snap;
+    }
     async function loadMemory() {
       memory = await adapter.loadMemory();
       snap = {...snap, logos: normalizeLogos(memory), memory_sha256: memory.memory_sha256, memory_loaded: true};
@@ -248,14 +264,20 @@
       refresh,
       loadAI,
       loadMemory,
+      loadPhone,
       start(intervalMs) {
-        refresh(); loadAI();
-        if (!timer && intervalMs) timer = setInterval(() => { refresh(); if (ai && ai.login_running) loadAI(); }, intervalMs);
+        refresh(); loadAI(); loadPhone();
+        if (!timer && intervalMs) timer = setInterval(() => {
+          refresh();
+          if (ai && ai.login_running) loadAI();
+          if (phone && phone.enabled && !phone.remote) loadPhone(); // failed attempts / lock on the PC panel
+        }, intervalMs);
       },
       stop() { clearInterval(timer); timer = null; },
       async dispatch(operation, job, body) {
         const result = await adapter.dispatch(operation, job, body);
         if (['aiConfig', 'aiCheck', 'aiLogin'].includes(operation)) { ai = result.body; snap = {...snap, ai}; }
+        if (operation === 'phoneMode') { phone = result.body; snap = {...snap, phone, remote: false}; emit(); return result; }
         if (operation === 'shutdown') { snap = {...snap, offline: true, stopping: true}; emit(); return result; }
         await refresh();
         return result;
