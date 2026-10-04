@@ -255,6 +255,10 @@ Câu hỏi đợt 3 (cloud, 2026-10-04). **Người dùng đã trả lời câu 
 
 ## 9. Nhật ký cloud (mục mới nhất ở trên cùng)
 
+| Ngày | Commit | Việc đã làm | Test đã chạy | Còn lại |
+| --- | --- | --- | --- | --- |
+| 2026-10-04 | (commit U1) | U1 (mục 14.4): tải lại không đóng mục gập, không thay `#main` khi markup không đổi, không dựng lại khi ô chọn đang có focus; chỉ `dashboard_v2/app.js` và `browser-check.cjs` | browser-check 18/18 (thêm U1); verify 28/28; verify-adapter 17/17; test_dashboard_v2_frontend/contract/route OK; A4 `none` | Máy thật kiểm đợt 4 + U1 trên dữ liệu thật; người dùng test điện thoại và laptop rồi mới merge |
+
 **Tóm tắt phiên cloud đợt 4, 2026-10-04 (L1–L4 xong trên cloud; chưa test trên máy thật):** giới hạn 6 kết nối mỗi thiết bị và hạn chót 5 s thật tính từ lúc kết nối, có event khi bị giới hạn; `PHONE_LOGIN` một lần mỗi thiết bị mỗi lần bật; tắt chế độ cắt cả kết nối đang mở và video đang phát trên điện thoại, PC không ảnh hưởng; hướng dẫn Firewall sửa (không bấm Cancel, rule gắn Python + cổng 8767) và dòng in launcher. Còn lại: máy thật kiểm đợt 4 (nhất là rule Firewall mới), người dùng test điện thoại/laptop (P7–P9, câu 10–11); vẫn mô phỏng: trang Tải video, bản demo.
 
 | Ngày | Commit | Việc đã làm | Test đã chạy | Còn lại |
@@ -713,6 +717,6 @@ Người dùng test phần PC trên `869dcf5` với dữ liệu thật (2026-10-
 
 | ID | Hạng mục | Cloud | Máy thật | Bằng chứng |
 | --- | --- | --- | --- | --- |
-| U1 | Tải lại không đóng mục gập, không đóng ô chọn đang mở, không đẩy màn hình | [ ] | [ ] | |
+| U1 | Tải lại không đóng mục gập, không đóng ô chọn đang mở, không đẩy màn hình | [x] | [ ] | Chỉ sửa `dashboard_v2/app.js`: mục gập có `data-fold` (`cancelled`/`hidden`/`archived`, `phone-events`), trạng thái mở được giữ qua `render()` và `refreshList()`, khôi phục trước `window.scrollTo`; `onSnapshot()` bỏ qua lần dựng lại khi markup mới giống hệt markup đang hiển thị; `<select>` trong `#main` đang có focus thì chỉ cập nhật thanh điều hướng/drawer. `node dashboard_v2/browser-check.cjs` → 18/18, thêm check U1 (1280×640, `#videos`): mở “Đã hủy”, cuộn xuống cuối; snapshot giống hệt → `.list-section` giữ nguyên node; dữ liệu đổi → dựng lại, mục gập vẫn mở, `scrollY` giữ nguyên; `#sort` có focus → không bị thay, vẫn focus; mất focus → dựng lại, mục gập vẫn mở |
 
 **Sau đợt 4:** máy thật kéo về kiểm như đợt 3; người dùng test phần điện thoại và laptop (P7, P8, P9, câu 10–11) trên bản đã sửa; chỉ merge vào `main` khi người dùng yêu cầu.

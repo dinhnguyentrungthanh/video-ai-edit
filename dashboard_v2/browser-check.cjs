@@ -366,6 +366,43 @@ async function check(name, fn) { await fn(); passed++; results.push(name); proce
       await page.setViewportSize({width: 1280, height: 900});
     });
 
+    await check('U1: polling keeps open folds, the scroll position and a focused select', async () => {
+      if (await page.locator('.drawer').count()) await page.keyboard.press('Escape');
+      await page.setViewportSize({width: 1280, height: 640});
+      await page.goto(base + '/dashboard-v2/?u1#videos');
+      await page.waitForSelector('#search');
+      await page.locator('[data-action="filter"][data-filter="all"]').first().click();
+      await page.fill('#search', '');
+      await page.locator('details.fold[data-fold="cancelled"] summary').click();
+      assert.equal(await page.locator('details.fold[data-fold="cancelled"]').getAttribute('open'), '');
+      await page.evaluate(() => window.scrollTo(0, document.documentElement.scrollHeight));
+      const y = await page.evaluate(() => window.scrollY);
+      assert.ok(y > 100, 'the page scrolls: ' + y);
+      // Identical snapshot: #main keeps its nodes.
+      await page.evaluate(() => { document.querySelector('#main .list-section').dataset.mark = 'kept'; });
+      await waitPoll(); await waitPoll();
+      assert.equal(await page.locator('#main .list-section[data-mark="kept"]').count(), 1, 'no rebuild without a change');
+      // Changed snapshot: rebuilt, the fold stays open and the page does not jump.
+      jobs.find(j => j.id === 104).progress = 0.5;
+      jobs.find(j => j.id === 102).progress = (jobs.find(j => j.id === 102).progress + 0.01) % 1;
+      await waitPoll(); await waitPoll();
+      assert.equal(await page.locator('#main .list-section[data-mark="kept"]').count(), 0, 'rebuilt after a change');
+      assert.equal(await page.locator('details.fold[data-fold="cancelled"]').evaluate(d => d.open), true, 'the fold stays open');
+      assert.equal(await page.evaluate(() => window.scrollY), y, 'scrollY unchanged');
+      // A focused select is not rebuilt.
+      await page.locator('#sort').focus();
+      await page.evaluate(() => { document.getElementById('sort').dataset.mark = 'same'; });
+      jobs.find(j => j.id === 104).progress = 0.25;
+      await waitPoll(); await waitPoll();
+      assert.equal(await page.locator('#sort[data-mark="same"]').count(), 1, 'the open select is not replaced');
+      assert.equal(await page.evaluate(() => document.activeElement && document.activeElement.id), 'sort');
+      await page.locator('h1').click();
+      await waitPoll(); await waitPoll();
+      assert.equal(await page.locator('#sort[data-mark="same"]').count(), 0, 'rebuilt once the select lost focus');
+      assert.equal(await page.locator('details.fold[data-fold="cancelled"]').evaluate(d => d.open), true);
+      await page.setViewportSize({width: 1280, height: 900});
+    });
+
     await check('No page error and no request outside the origin', async () => {
       assert.deepEqual(errors, []);
       assert.deepEqual(external, []);
