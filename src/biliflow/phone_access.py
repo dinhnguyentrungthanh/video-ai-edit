@@ -47,7 +47,11 @@ COOKIE_NAME = "biliflow_phone"
 AUTO_OFF_SECONDS = 8 * 3600        # H3: turned off 8 hours after it was turned on
 ADDRESS_CHECK_SECONDS = 60          # H3: turned off when the PC's Wi-Fi address changes
 MAX_CONNECTIONS = 32                # H1: further connections are closed at once
-MAX_CONNECTIONS_PER_IP = 6          # L1: one device cannot take every connection
+# L1/M1: one device cannot take every connection. Only connections that have not shown the cookie
+# count against this (a browser opens up to 6 at once; streams and loaded pages hold theirs), so a
+# little headroom over 6. Devices behind one NAT share it.
+MAX_CONNECTIONS_PER_IP = 8
+STREAM_WRITE_TIMEOUT_SECONDS = 60.0  # M1: a phone video stream whose reader stops is closed; it resumes with Range
 LIMITED_EVENT_INTERVAL_SECONDS = 60.0  # L1: at most one PHONE_CONNECTIONS_LIMITED event per interval
 GATE_TIMEOUT_SECONDS = 5.0          # H1/L1: a connection without the cookie is closed this long after it was accepted
 ERROR_LOG_INTERVAL_SECONDS = 10.0   # H1: at most one error line per interval, with a skipped count
@@ -92,6 +96,7 @@ PC_ONLY_POSTS = {
     "/api/logo-memory/delete": "Chỉ làm trên PC: không xóa bộ nhớ logo qua điện thoại.",
     "/api/phone-mode": "Chỉ làm trên PC: bật/tắt chế độ điện thoại chỉ làm trên PC.",
 }
+BODY_CUT_MESSAGE = "Request body was cut"
 PC_ONLY_DEFAULT = "Chỉ làm trên PC: thao tác này không làm qua điện thoại."
 PC_ONLY_VISUAL_AUDIT = "Chỉ làm trên PC: Visual AI Audit gửi ảnh ra ngoài máy."
 # H2: the phone listener accepts only these POST routes (full match); everything else is PC-only
@@ -179,6 +184,7 @@ class _PhoneServer(ThreadingHTTPServer):
         self._slots = threading.BoundedSemaphore(max_connections)
         self._max_per_ip = max_per_ip
         self._per_ip: dict[str, int] = {}
+        self._counted: dict[Any, str] = {}  # M1: cookieless connections, counted against their IP
         self._open: set[Any] = set()  # L3: accepted sockets, closed when the mode is turned off
         self._conn_lock = threading.Lock()
         self._closed = False
@@ -202,6 +208,7 @@ class _PhoneServer(ThreadingHTTPServer):
                 refused = "total"
             if not refused:
                 self._per_ip[ip] = self._per_ip.get(ip, 0) + 1
+                self._counted[request] = ip
                 self._open.add(request)
         if refused:
             self.shutdown_request(request)
@@ -214,14 +221,26 @@ class _PhoneServer(ThreadingHTTPServer):
             self._release(request, ip)
             raise
 
+    def _uncount(self, request: Any) -> None:
+        """Drop `request` from its IP's cookieless count (once). Caller holds _conn_lock."""
+        ip = self._counted.pop(request, None)
+        if ip is None:
+            return
+        left = self._per_ip.get(ip, 1) - 1
+        if left > 0:
+            self._per_ip[ip] = left
+        else:
+            self._per_ip.pop(ip, None)
+
+    def promote(self, request: Any) -> None:
+        """M1: the connection showed a valid cookie; it no longer counts against its IP (only the 32)."""
+        with self._conn_lock:
+            self._uncount(request)
+
     def _release(self, request: Any, ip: str) -> None:
         with self._conn_lock:
             self._open.discard(request)
-            left = self._per_ip.get(ip, 1) - 1
-            if left > 0:
-                self._per_ip[ip] = left
-            else:
-                self._per_ip.pop(ip, None)
+            self._uncount(request)
         self._slots.release()
 
     def process_request_thread(self, request: Any, client_address: Any) -> None:
@@ -241,6 +260,10 @@ class _PhoneServer(ThreadingHTTPServer):
             except OSError:
                 pass
         return len(sockets)
+
+    def open_connections(self) -> int:
+        with self._conn_lock:
+            return len(self._open)
 
     def connections_of(self, ip: str) -> int:
         with self._conn_lock:

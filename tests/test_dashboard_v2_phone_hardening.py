@@ -556,7 +556,7 @@ class Batch4LowFindings(HardeningBase):
             self.assertEqual(len(events), 2)
             for sock in (first, *refused):
                 sock.close()
-        self.assertEqual(phone_access.MAX_CONNECTIONS_PER_IP, 6)
+        self.assertEqual(phone_access.MAX_CONNECTIONS_PER_IP, 8)  # M1: 6–8 cookieless per device
         self.assertEqual(phone_access.LIMITED_EVENT_INTERVAL_SECONDS, 60.0)
 
     def test_l1_a_trickling_connection_is_cut_at_the_deadline(self):
@@ -620,7 +620,8 @@ class Batch4LowFindings(HardeningBase):
         phone_stream = start(self.port, self.host, f"Cookie: {cookie}\r\n")
         pc_stream = start(self.pc_port, f"127.0.0.1:{self.pc_port}")
         time.sleep(0.5)  # both servers are now blocked writing
-        self.assertEqual(self.phone._server.connections_of("127.0.0.1"), 1)
+        self.assertEqual(self.phone._server.connections_of("127.0.0.1"), 0, "M1: a stream with the cookie is not counted per IP")
+        self.assertEqual(self.phone._server.open_connections(), 1)
         server = self.phone._server
         started = time.monotonic()
         self.phone.disable()
@@ -638,7 +639,7 @@ class Batch4LowFindings(HardeningBase):
         self.assertTrue(ended)
         self.assertLess(time.monotonic() - started, 2.0, "the phone stream ends with the mode")
         time.sleep(0.2)
-        self.assertEqual(server.connections_of("127.0.0.1"), 0)
+        self.assertEqual(server.open_connections(), 0)
         # The PC stream keeps flowing.
         pc_stream.settimeout(5)
         received = sum(len(pc_stream.recv(1 << 20)) for _ in range(5))
@@ -657,10 +658,124 @@ class Batch4LowFindings(HardeningBase):
         self.assertNotRegex(firewall, r"cpython-3\.11\.\d+-windows", "no hard-coded patch number")
         self.assertNotIn("kết nối chưa có cookie bị đóng sau 5 s;", guide)
         self.assertIn("5 s sau lúc kết nối", guide)
-        self.assertIn("mỗi thiết bị (mỗi IP) tối đa 6", guide)
+        self.assertIn("mỗi thiết bị (mỗi IP) tối đa 8", guide)
         launcher = (ROOT / "scripts" / "Start-BiliFlow.ps1").read_bytes()
         self.assertTrue(all(byte < 128 for byte in launcher), "Windows PowerShell 5.1 reads the script as ANSI")
         self.assertIn(b"KHONG bam Cancel", launcher)
+
+
+class Batch5(HardeningBase):
+    """Plan §15: M1 cookieless-only per-IP limit and a phone stream write timeout, M2 firewall guide,
+    M3 cut POST bodies, M4 the review page's back button returns to V2."""
+
+    def fake_client(self, ip):
+        server_end, client_end = socket.socketpair()
+        client_end.settimeout(5)
+        self.phone._server.process_request(server_end, (ip, 40000))
+        return client_end
+
+    def test_m1_connections_with_the_cookie_do_not_count_against_the_device(self):
+        with mock.patch.object(phone_access, "GATE_TIMEOUT_SECONDS", 5.0):
+            self.enable(max_per_ip=3)
+            cookie = self.cookie()
+            # Ten connections that showed the cookie, held open by an unfinished POST body.
+            head = (f"POST /api/scheduler HTTP/1.1\r\nHost: {self.host}\r\nCookie: {cookie}\r\n"
+                    "X-BiliFlow-Token: test-token\r\nContent-Type: application/json\r\n"
+                    "Content-Length: 16\r\n\r\n").encode()
+            held = []
+            for _ in range(10):
+                sock = self.fake_client("10.0.0.5")
+                sock.sendall(head)
+                held.append(sock)
+                time.sleep(0.05)
+            time.sleep(0.3)
+            server = self.phone._server
+            self.assertEqual(server.connections_of("10.0.0.5"), 0, "promoted connections are not counted per IP")
+            self.assertEqual(server.open_connections(), 10, "all ten are being served")
+            # Cookieless connections of the same device are still limited.
+            silent = [self.fake_client("10.0.0.5") for _ in range(3)]
+            time.sleep(0.2)
+            over = self.fake_client("10.0.0.5")
+            self.assertEqual(over.recv(10), b"", "the 4th cookieless connection is closed at once")
+            other = self.fake_client("10.0.0.6")
+            other.sendall(f"GET / HTTP/1.1\r\nHost: {self.host}\r\n\r\n".encode())
+            self.assertTrue(other.recv(65536).startswith(b"HTTP/1.0 401"), "another device is unaffected")
+            for sock in held:
+                sock.sendall(b'{"paused": true}')
+                self.assertTrue(sock.recv(4096).startswith(b"HTTP/1.0 200"))
+            for sock in (*held, *silent, over, other):
+                sock.close()
+
+    def test_m1_a_stalled_phone_stream_is_closed_but_the_pc_stream_is_not(self):
+        big = self.root / "big.mp4"
+        with big.open("wb") as handle:
+            handle.truncate(256 * 1024 * 1024)
+        self.center.media_key_valid = lambda job_id, key: True
+        self.center.review_video = lambda job_id: (big, "video/mp4")
+        with mock.patch.object(phone_access, "STREAM_WRITE_TIMEOUT_SECONDS", 1.0):
+            self.enable()
+            cookie = self.cookie()
+
+            def start(port, host, extra=""):
+                sock = socket.create_connection(("127.0.0.1", port), timeout=10)
+                sock.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 4096)
+                sock.sendall(f"GET /api/jobs/1/review/video?k=x HTTP/1.1\r\nHost: {host}\r\n{extra}\r\n".encode())
+                sock.recv(4096)
+                return sock
+
+            phone_stream = start(self.port, self.host, f"Cookie: {cookie}\r\n")
+            pc_stream = start(self.pc_port, f"127.0.0.1:{self.pc_port}")
+            server = self.phone._server
+            deadline = time.monotonic() + 8
+            while server.open_connections() and time.monotonic() < deadline:
+                time.sleep(0.1)  # neither client reads: only the phone side gives up
+            self.assertEqual(server.open_connections(), 0, "the stalled phone stream was closed")
+            pc_stream.settimeout(5)
+            self.assertGreater(len(pc_stream.recv(1 << 16)), 0, "the PC stream still flows after the same wait")
+            phone_stream.close()
+            pc_stream.close()
+        self.assertEqual(phone_access.STREAM_WRITE_TIMEOUT_SECONDS, 60.0)
+
+    def test_m3_a_cut_post_body_is_400_and_runs_nothing(self):
+        self.enable()
+        cookie = self.cookie()
+        self.center.scheduler = mock.Mock()
+        for path, body in (("/api/scheduler", b'{"paused":'), ("/api/jobs/1/ai-audit", b'{"visual"')):
+            with self.subTest(path=path):
+                head = (f"POST {path} HTTP/1.1\r\nHost: {self.host}\r\nCookie: {cookie}\r\n"
+                        "X-BiliFlow-Token: test-token\r\nContent-Type: application/json\r\n"
+                        "Content-Length: 64\r\n\r\n").encode()
+                with socket.create_connection(("127.0.0.1", self.port), timeout=10) as sock:
+                    sock.sendall(head + body)
+                    sock.shutdown(socket.SHUT_WR)  # 10 bytes of 64, then the client stops sending
+                    reply = b""
+                    while chunk := sock.recv(4096):
+                        reply += chunk
+                self.assertTrue(reply.startswith(b"HTTP/1.0 400"), reply[:80])
+                self.assertIn(phone_access.BODY_CUT_MESSAGE.encode(), reply)
+        self.assertIsNone(self.store.setting("scheduler_paused"))
+        self.center.start_ai_audit.assert_not_called()
+        status, _, body = self.phone_post("/api/scheduler", {"paused": True}, cookie)
+        self.assertEqual((status, json.loads(body)), (200, {"paused": True}), "a whole body still runs")
+        # The PC listener is unchanged (its Handler.body() is not touched).
+        source = Path(control_center.__file__).read_text(encoding="utf-8")
+        self.assertIn('value = json.loads(self.rfile.read(length) or b"{}")', source)
+
+    def test_m2_the_firewall_guide_uses_the_safe_commands_in_order(self):
+        guide = (ROOT / "docs" / "DASHBOARD_V2_PHONE.md").read_text(encoding="utf-8")
+        firewall = guide[guide.index("## 2. Windows Firewall"):guide.index("## 3.")]
+        for needle in ("Sort-Object { [version]", "if ($Python -and (Test-Path -LiteralPath $Python -PathType Leaf))",
+                       "Get-NetFirewallRule -DisplayName $RuleName -ErrorAction SilentlyContinue | Remove-NetFirewallRule",
+                       "Where-Object { $_.Program -ieq $Python }", "Disable-NetFirewallRule", "Enable-NetFirewallRule",
+                       "junction", "làm lại bước 2–3"):
+            self.assertIn(needle, firewall, needle)
+        self.assertNotIn("phải trùng `$Python`", firewall)
+        self.assertNotIn("Sort-Object Name", firewall)
+        order = [firewall.index(marker) for marker in ("Đặt Wi-Fi nhà là Private", "Tạo rule", "Thử:",
+                                                      "Chỉ khi điện thoại đã vào được")]
+        self.assertEqual(order, sorted(order), "Private → rule → try → clean up")
+        self.assertIn("8 này", guide)
+        self.assertIn("cùng một NAT", guide)
 
 
 if __name__ == "__main__":

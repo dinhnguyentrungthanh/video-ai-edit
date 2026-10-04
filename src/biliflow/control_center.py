@@ -2155,6 +2155,9 @@ def _phone_handler_class(center: ControlCenter, phone: phone_access.PhoneAccess)
             """The cookie is valid: no deadline, the usual request timeout (video streams lift it)."""
             if self._gate is not None:
                 self._gate.cancel()
+            promote = getattr(self.server, "promote", None)
+            if promote is not None:
+                promote(self.request)  # M1: no longer counted against this device's cookieless limit
             self.timeout = REQUEST_TIMEOUT_SECONDS
             with contextlib.suppress(OSError):
                 self.connection.settimeout(REQUEST_TIMEOUT_SECONDS)
@@ -2168,11 +2171,37 @@ def _phone_handler_class(center: ControlCenter, phone: phone_access.PhoneAccess)
                 self.connection.settimeout(1.0)
                 self.drain_body()
 
+        def stream_video(self, source: Path, mime: str) -> None:
+            """M1: a phone stream gets a finite write timeout (the PC stream keeps none); the player
+            asks again with Range when it resumes."""
+            self.connection.settimeout(phone_access.STREAM_WRITE_TIMEOUT_SECONDS)
+            try:
+                stream_file(self, source, mime, getattr(center, "_stopping", None))
+            except OSError:
+                self.close_connection = True  # a stalled or vanished reader: the connection is dropped
+            finally:
+                with contextlib.suppress(OSError):
+                    self.connection.settimeout(self.timeout)
+
+        def checked_body(self) -> dict[str, Any]:
+            """M3: like Handler.body(), but a body shorter than Content-Length is a 400, never `{}`."""
+            length = content_length(self.headers)
+            if length > 65536:
+                raise ValueError("Request is too large")
+            data = self.rfile.read(length) if length else b""
+            if len(data) != length:
+                self.close_connection = True
+                raise ValueError(phone_access.BODY_CUT_MESSAGE)
+            value = json.loads(data or b"{}")
+            if not isinstance(value, dict):
+                raise ValueError("JSON object required")
+            return value
+
         def body(self) -> dict[str, Any]:
             # ai-audit: the phone handler already read the body to check `visual`.
             if self._cached_body is not None:
                 return self._cached_body
-            return super().body()
+            return self.checked_body()
 
         def host_allowed(self, *, drain: bool = False) -> bool:
             if phone.host_ok(self.headers.get("Host")):
@@ -2309,7 +2338,7 @@ def _phone_handler_class(center: ControlCenter, phone: phone_access.PhoneAccess)
                     self.send_json(403, {"error": "Phiên Control Center không hợp lệ"})
                     return
                 try:
-                    body = super().body()
+                    body = self.checked_body()
                 except TimeoutError:
                     self.request_timed_out()
                     return
