@@ -70,6 +70,7 @@ test('Every operation of guide section 4 uses its real path and body', async () 
     ['logoDelete', null, {key: 'k', expected_sha256: 'a'.repeat(64)}, '/api/logo-memory/delete'],
     ['phoneMode', null, {enabled: true}, '/api/phone-mode'],
     ['phoneMode', null, {enabled: false}, '/api/phone-mode'],
+    ['phoneMode', null, {extend: true}, '/api/phone-mode'],
   ];
   for (const [op, target, body] of cases) await a.dispatch(op, target, body);
   const posts = f.posts();

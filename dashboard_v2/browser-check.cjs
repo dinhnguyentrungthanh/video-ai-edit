@@ -38,10 +38,10 @@ let polls = 0;
 const posts = [];
 let refuseNextCancel = false;
 // Fake phone mode: the PC sees the code; with remoteMode the page behaves as on the phone listener.
-let remoteMode = false, phoneOn = false, phoneCode = 'abcd2345';
+let remoteMode = false, phoneOn = false, phoneCode = 'abcd2345', phoneExtended = false;
 const phoneStatus = () => remoteMode ? {remote: true, enabled: true} : {remote: false, enabled: phoneOn,
   url: phoneOn ? 'http://192.168.1.23:8767/' : null, code: phoneOn ? phoneCode : null,
-  locked: false, failed_attempts: 0, max_failed_attempts: 10, expires_at: phoneOn ? 1790000000 : null,
+  locked: false, failed_attempts: 0, max_failed_attempts: 10, expires_at: phoneOn ? (phoneExtended ? 1790028800 : 1790000000) : null,
   last_disabled_reason_text: phoneOn ? null : 'hết 8 giờ',
   events: phoneOn ? [{type: 'PHONE_CODE_WRONG', message: 'Thiết bị 192.168.1.50 nhập sai mã', at: 1789990000, ip: '192.168.1.50'}] : []};
 const PC_ONLY = ['/api/source-cleanup', '/api/source-archive', '/api/source-archive/restore', '/api/source-recycle-check',
@@ -78,6 +78,7 @@ const server = http.createServer((req, res) => {
     if (req.headers['x-biliflow-token'] !== TOKEN) return send(res, 403, {error: 'Phiên Control Center không hợp lệ'});
     posts.push({path: p, body: JSON.parse(body || '{}'), type: req.headers['content-type']});
     if (remoteMode && PC_ONLY.includes(p)) return send(res, 403, {error: 'Chỉ làm trên PC: (giả)', code: 'pc_only'});
+    if (p === '/api/phone-mode' && JSON.parse(body).extend) { phoneExtended = true; return send(res, 200, phoneStatus()); }
     if (p === '/api/phone-mode') { phoneOn = JSON.parse(body).enabled; if (phoneOn) phoneCode = phoneCode === 'abcd2345' ? 'wxyz6789' : 'abcd2345'; return send(res, 200, phoneStatus()); }
     setTimeout(() => {
       if (p.endsWith('/cancel') && refuseNextCancel) { refuseNextCancel = false; return send(res, 409, {error: 'Trạng thái vừa đổi', code: 'state_changed'}); }
@@ -303,6 +304,11 @@ async function check(name, fn) { await fn(); passed++; results.push(name); proce
       assert.match(await page.locator('.phone-panel').textContent(), /http:\/\/192\.168\.1\.23:8767\//);
       assert.match(await page.locator('.phone-panel').textContent(), /Tự tắt lúc/);
       assert.match(await page.locator('.phone-events').textContent(), /192\.168\.1\.50 nhập sai mã/);
+      const before = await page.locator('.phone-panel').textContent();
+      await page.locator('[data-action="phone-extend"]').click();
+      await page.waitForFunction(b => document.querySelector('.phone-panel').textContent !== b, before);
+      assert.equal(await page.locator('.phone-code').textContent(), first, 'extending keeps the code');
+      assert.deepEqual(posts[posts.length - 1].body, {extend: true});
       await page.locator('[data-action="phone-toggle"][data-enabled="0"]').click();
       await page.waitForSelector('[data-action="phone-toggle"][data-enabled="1"]');
       assert.equal(await page.locator('.phone-code').count(), 0);
@@ -310,7 +316,8 @@ async function check(name, fn) { await fn(); passed++; results.push(name); proce
       await page.locator('[data-action="phone-toggle"][data-enabled="1"]').click();
       await page.waitForSelector('.phone-code');
       assert.notEqual(await page.locator('.phone-code').textContent(), first, 'a new code each time');
-      assert.deepEqual(posts.slice(-3).map(x => [x.path, x.body.enabled]), [['/api/phone-mode', true], ['/api/phone-mode', false], ['/api/phone-mode', true]]);
+      assert.deepEqual(posts.slice(-4).map(x => [x.path, x.body.enabled ?? (x.body.extend ? 'extend' : null)]),
+        [['/api/phone-mode', true], ['/api/phone-mode', 'extend'], ['/api/phone-mode', false], ['/api/phone-mode', true]]);
     });
 
     await check('Opened through the phone: PC-only actions are disabled with the reason, 375 px fits', async () => {

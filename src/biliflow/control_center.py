@@ -211,6 +211,10 @@ def _phone_access(center: Any) -> phone_access.PhoneAccess:
                     store.add_event(None, event_type, message, level=level, payload=payload or None)
 
             value = phone_access.PhoneAccess(on_event=store_event)
+            if store is not None:
+                # Question 14: the panel shows the latest phone events and the last state after a restart.
+                with contextlib.suppress(Exception):
+                    value.restore_history(store.events(None, limit=500))
             center.phone = value
         return value
 
@@ -1982,10 +1986,17 @@ def _handler_class(center: ControlCenter) -> type[BaseHTTPRequestHandler]:
                     if not self.loopback_client():
                         self.send_json(403, {"error": phone_access.PC_ONLY_POSTS[path], "code": "pc_only"})
                         return
+                    phone = _phone_access(center)
+                    if "extend" in body:
+                        # Question 15: "Gia hạn thêm 8 giờ" on the PC panel; same code, new deadline.
+                        if body.get("extend") is not True:
+                            raise ValueError("extend phải là true")
+                        result = {"remote": False, **phone.extend()}
+                        self.send_json(200, result)
+                        return
                     enabled = body.get("enabled")
                     if not isinstance(enabled, bool):
                         raise ValueError("enabled phải là true hoặc false")
-                    phone = _phone_access(center)
                     if enabled:
                         port = body.get("port", phone_access.DEFAULT_PORT)
                         result = phone.enable(lambda access: _phone_handler_class(center, access), port=port)

@@ -411,6 +411,88 @@ class H4Events(HardeningBase):
         self.assertNotIn(self.code, json.dumps(phone))
 
 
+class Q14Q15ExtendAndHistory(HardeningBase):
+    def pc_post(self, payload):
+        body = json.dumps(payload).encode()
+        return http(self.pc_port, "POST", "/api/phone-mode", host=f"127.0.0.1:{self.pc_port}",
+                    headers={"Content-Type": "application/json", "X-BiliFlow-Token": "test-token"}, body=body)
+
+    def test_extend_pushes_the_auto_off_back_and_keeps_the_code(self):
+        """Question 15: 'Gia hạn thêm 8 giờ' (here the test lifetime) from now, same code."""
+        status = self.enable(lifetime_seconds=0.8, check_seconds=5)
+        time.sleep(0.5)
+        code, _, body = self.pc_post({"extend": True})
+        extended = json.loads(body)
+        self.assertEqual(code, 200)
+        self.assertEqual(extended["code"], status["code"])
+        self.assertGreater(extended["expires_at"], status["expires_at"] + 0.3)
+        time.sleep(0.5)  # past the first deadline
+        self.assertTrue(self.phone.enabled, "the extension moved the deadline")
+        deadline = time.monotonic() + 5
+        while self.phone.enabled and time.monotonic() < deadline:
+            time.sleep(0.05)
+        self.assertEqual(self.phone.status()["last_disabled_reason"], "expired")
+        kinds = [e["event_type"] for e in self.store.events(None)]
+        self.assertIn("PHONE_MODE_EXTENDED", kinds)
+        self.assertEqual(self.pc_post({"extend": True})[0], 400, "nothing to extend once off")
+        self.assertEqual(self.pc_post({"extend": "yes"})[0], 400)
+
+    def test_extend_is_pc_only(self):
+        self.enable()
+        cookie = self.cookie()
+        status, _, body = self.phone_post("/api/phone-mode", {"extend": True}, cookie)
+        self.assertEqual((status, json.loads(body)["code"]), (403, "pc_only"))
+        self.assertEqual(self.phone_post("/api/phone-mode", {"extend": True}, cookie, token=None)[0], 403)
+
+    def restarted(self):
+        """A new Control Center process: a fresh PhoneAccess built from the same store."""
+        self.phone.disable()
+        fresh = ControlCenter.__new__(ControlCenter)
+        fresh.store = self.store
+        access = _phone_access(fresh)
+        access._lan = lambda: FAKE_LAN
+        return access
+
+    def test_after_a_restart_the_latest_events_and_the_last_state_come_back(self):
+        """Question 14: the PC panel shows the latest phone events and why it is off."""
+        self.enable()
+        self.cookie()
+        http(self.port, "POST", "/phone-login", host=self.host,
+             headers={"Content-Type": "application/x-www-form-urlencoded"}, body=b"code=nope")
+        access = self.restarted()  # the previous run turned it off by hand ("user")
+        status = access.status(include_secret=True)
+        self.assertFalse(status["enabled"])
+        self.assertEqual(status["last_disabled_reason"], "user")
+        self.assertIsNotNone(status["last_disabled_at"])
+        kinds = [e["type"] for e in status["events"]]
+        self.assertEqual(kinds[0], "PHONE_MODE_DISABLED", "newest first")
+        self.assertIn("PHONE_CODE_WRONG", kinds)
+        self.assertIn("PHONE_LOGIN", kinds)
+        self.assertTrue(all(e.get("restored") for e in status["events"]))
+        self.assertTrue(any(e.get("ip") == "127.0.0.1" for e in status["events"]))
+        self.assertNotIn(self.code, json.dumps(status))
+        self.assertLessEqual(len(status["events"]), 10)
+
+    def test_a_run_that_stopped_while_on_reads_as_stopped(self):
+        self.store.add_event(None, "PHONE_MODE_ENABLED", "Bật chế độ điện thoại tại 192.168.1.5:8767",
+                             payload={"address": "192.168.1.5", "port": 8767})
+        fresh = ControlCenter.__new__(ControlCenter)
+        fresh.store = self.store
+        status = _phone_access(fresh).status(include_secret=True)
+        self.assertEqual((status["enabled"], status["last_disabled_reason"]), (False, "stopped"))
+        self.assertEqual(status["last_disabled_reason_text"], "Control Center dừng")
+        self.assertEqual(status["events"][0]["type"], "PHONE_MODE_ENABLED")
+
+    def test_no_history_is_fine(self):
+        fresh = ControlCenter.__new__(ControlCenter)
+        fresh.store = JobStore(self.root / "state" / "other.sqlite3")
+        try:
+            status = _phone_access(fresh).status(include_secret=True)
+            self.assertEqual((status["last_disabled_reason"], status["events"]), (None, []))
+        finally:
+            fresh.store.close()
+
+
 class H6SmallFixes(HardeningBase):
     def test_try_code_gives_the_cookie_in_the_same_call(self):
         self.enable()

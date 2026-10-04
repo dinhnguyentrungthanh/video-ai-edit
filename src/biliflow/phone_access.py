@@ -26,6 +26,7 @@ import sys
 import threading
 import time
 from collections import deque
+from datetime import datetime
 from http.server import ThreadingHTTPServer
 from typing import Any, Callable
 
@@ -143,6 +144,13 @@ def new_code() -> str:
     return "".join(secrets.choice(CODE_ALPHABET) for _ in range(CODE_LENGTH))
 
 
+def _epoch(stamp: Any) -> float | None:
+    try:
+        return datetime.fromisoformat(str(stamp)).timestamp()
+    except (TypeError, ValueError):
+        return None
+
+
 def post_policy(path: str) -> tuple[bool, str | None, bool]:
     """(allowed on the phone, refusal reason, explicitly classified) for a POST path."""
     if any(pattern.fullmatch(path) for pattern in PHONE_ALLOWED_POSTS):
@@ -220,6 +228,8 @@ class PhoneAccess:
         self.last_disabled_reason: str | None = None
         self.last_disabled_at: float | None = None
         self.events: deque[dict[str, Any]] = deque(maxlen=RECENT_EVENTS)
+        self._deadline: float | None = None   # monotonic deadline read by the watchdog (extendable)
+        self._lifetime = AUTO_OFF_SECONDS
         self._reset_counters()
 
     def _reset_counters(self) -> None:
@@ -273,28 +283,35 @@ class PhoneAccess:
             self._server = server
             self.enabled_at = time.time()
             self.expires_at = self.enabled_at + lifetime_seconds
+            self._lifetime = lifetime_seconds
+            self._deadline = time.monotonic() + lifetime_seconds
             self._thread = threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.5},
                                             name="biliflow-phone", daemon=True)
             self._thread.start()
             stop = self._watch_stop = threading.Event()
-            threading.Thread(target=self._watch, args=(server, stop, lifetime_seconds, check_seconds, host),
+            threading.Thread(target=self._watch, args=(server, stop, check_seconds, host),
                              name="biliflow-phone-watch", daemon=True).start()
             status = self._status(include_secret=True)
         self._event("PHONE_MODE_ENABLED", f"Bật chế độ điện thoại tại {host}:{self.port}",
                     address=host, port=self.port, expires_in_seconds=int(lifetime_seconds))
         return status
 
-    def _watch(self, server: Any, stop: threading.Event, lifetime: float, every: float, address: str) -> None:
-        """H3: turn the mode off after `lifetime` seconds, or when the PC's Wi-Fi address changes."""
-        deadline = time.monotonic() + lifetime
+    def _watch(self, server: Any, stop: threading.Event, every: float, address: str) -> None:
+        """H3: turn the mode off at the deadline (extendable), or when the PC's Wi-Fi address changes."""
         while not stop.is_set():
+            with self._lock:
+                deadline = self._deadline if self._server is server else None
+            if deadline is None:
+                return
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 self.disable("expired", only=server)
                 return
             if stop.wait(min(every, remaining)):
                 return
-            if time.monotonic() >= deadline:
+            with self._lock:
+                deadline = self._deadline if self._server is server else None
+            if deadline is None or time.monotonic() >= deadline:
                 continue
             try:
                 current = self._lan()
@@ -320,7 +337,7 @@ class PhoneAccess:
             self._watch_stop = None
             self._code = self._secret = None
             self.address = self.port = None
-            self.enabled_at = self.expires_at = None
+            self.enabled_at = self.expires_at = self._deadline = None
             self.last_disabled_reason = reason if reason in DISABLE_REASONS else "user"
             self.last_disabled_at = time.time()
             self._reset_counters()
@@ -331,6 +348,49 @@ class PhoneAccess:
                     f"Tắt chế độ điện thoại ({DISABLE_REASONS.get(reason, reason)})",
                     reason=self.last_disabled_reason, address=address, port=port, **extra)
         return self.status(include_secret=True)
+
+    def extend(self, seconds: float | None = None) -> dict[str, Any]:
+        """Question 15: push the auto-off back to `seconds` (default 8 hours) from now; same code."""
+        with self._lock:
+            if self._server is None:
+                raise ValueError("Chế độ điện thoại đang tắt; bật lại trên PC.")
+            lifetime = self._lifetime if seconds is None else seconds
+            self._deadline = time.monotonic() + lifetime
+            self.expires_at = time.time() + lifetime
+            expires_at, address, port = self.expires_at, self.address, self.port
+        self._event("PHONE_MODE_EXTENDED",
+                    f"Gia hạn chế độ điện thoại thêm {int(lifetime // 3600) or round(lifetime)} "
+                    f"{'giờ' if lifetime >= 3600 else 'giây'}",
+                    address=address, port=port, expires_in_seconds=int(lifetime))
+        return self.status(include_secret=True)
+
+    def restore_history(self, stored_events: list[dict[str, Any]]) -> None:
+        """Question 14: after a restart, show the latest phone events and the last off reason.
+
+        `stored_events` are JobStore.events() rows (newest first). A last ENABLED event without a
+        later DISABLED one means the Control Center stopped while the mode was on.
+        """
+        phone = [row for row in stored_events if str(row.get("event_type", "")).startswith("PHONE_")]
+        entries = []
+        for row in reversed(phone[:RECENT_EVENTS]):
+            payload = row.get("payload") if isinstance(row.get("payload"), dict) else {}
+            entries.append({"type": row.get("event_type"), "message": row.get("message"),
+                            "at": _epoch(row.get("created_at")), "restored": True,
+                            **{key: value for key, value in payload.items() if key not in ("type", "message", "at")}})
+        state = next((row for row in phone if row.get("event_type") in ("PHONE_MODE_ENABLED", "PHONE_MODE_DISABLED")),
+                     None)
+        with self._lock:
+            if self._server is not None:
+                return
+            self.events.extend(entries)
+            if state is None:
+                return
+            if state.get("event_type") == "PHONE_MODE_DISABLED":
+                reason = (state.get("payload") or {}).get("reason")
+                self.last_disabled_reason = reason if reason in DISABLE_REASONS else "user"
+            else:
+                self.last_disabled_reason = "stopped"
+            self.last_disabled_at = _epoch(state.get("created_at"))
 
     # ------------------------------------------------------------------ status
     def _status(self, *, include_secret: bool) -> dict[str, Any]:

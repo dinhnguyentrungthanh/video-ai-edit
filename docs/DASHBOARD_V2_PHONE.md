@@ -86,7 +86,7 @@ Remove-NetFirewallRule -DisplayName "BiliFlow phone mode (TCP 8767)"
 - Trên PC: Dashboard V2 → Cài đặt → **Tắt chế độ điện thoại**. Listener đóng ngay và mã cũ hết hiệu lực.
 - Hoặc `Stop-BiliFlow.cmd`: tắt Control Center, và chế độ điện thoại tắt theo.
 - **Tự tắt:**
-  - sau **8 giờ** kể từ lúc bật (khung trên PC hiện giờ sẽ tắt);
+  - sau **8 giờ** kể từ lúc bật (khung trên PC hiện giờ sẽ tắt). Muốn dùng lâu hơn: bấm **Gia hạn thêm 8 giờ** trong khung trên PC; giờ tắt tính lại 8 giờ kể từ lúc bấm, mã giữ nguyên;
   - khi **địa chỉ Wi-Fi của PC đổi**, ví dụ đổi Wi-Fi hoặc mất mạng; kiểm tra mỗi phút.
 - Khung "Mở trên điện thoại" cho biết lần tắt gần nhất vì sao: người dùng tắt, hết 8 giờ, đổi địa chỉ, hoặc Control Center dừng.
 - Mỗi lần bật lại sẽ có mã mới.
@@ -95,7 +95,9 @@ Remove-NetFirewallRule -DisplayName "BiliFlow phone mode (TCP 8767)"
 
 ## 6. Nhật ký
 
-Khung "Mở trên điện thoại" trên PC hiện khoảng 10 việc gần nhất: bật, tắt (kèm lý do), thiết bị nhập đúng mã, nhập sai mã, bị khóa, gỡ khóa bằng khóa mở, nhập sai khóa mở, khóa mở bị khóa. Mỗi dòng ghi **địa chỉ IP của thiết bị**, không bao giờ ghi mã, khóa mở hay cookie. Các việc này cũng được lưu vào nhật ký sự kiện của Control Center (`PHONE_*`).
+Khung "Mở trên điện thoại" trên PC hiện khoảng 10 việc gần nhất: bật, tắt (kèm lý do), thiết bị nhập đúng mã, nhập sai mã, bị khóa, gỡ khóa bằng khóa mở, nhập sai khóa mở, khóa mở bị khóa. Mỗi dòng ghi **địa chỉ IP của thiết bị**, không bao giờ ghi mã, khóa mở hay cookie. Các việc này cũng được lưu vào nhật ký sự kiện của Control Center (`PHONE_*`). Gia hạn cũng được ghi.
+
+Sau khi khởi động lại Control Center, khung đọc lại các việc gần nhất từ nhật ký sự kiện và cho biết lần tắt gần nhất vì sao. Nếu lần chạy trước dừng trong lúc chế độ đang bật, khung ghi "Control Center dừng".
 
 ## 7. Ghi chú kỹ thuật
 

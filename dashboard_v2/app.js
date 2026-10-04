@@ -181,7 +181,7 @@ function phonePanel(){
     '<div class="key-value"><span>Mã truy cập</span><span class="mono phone-code">'+esc(p.code)+'</span></div><p class="muted">Mở link trên điện thoại rồi gõ mã vào ô “Mã truy cập”.</p>'+
     (p.expires_at?'<div class="key-value"><span>Tự tắt lúc</span><span>'+esc(new Date(p.expires_at*1000).toLocaleString('vi-VN'))+' (sau 8 giờ, hoặc khi địa chỉ Wi-Fi đổi)</span></div>':'')+
     (p.locked?'<p class="notice">Đã nhập sai mã quá nhiều lần nên nhập mã đang bị khóa. '+(p.unlock_locked?'Khóa mở đặc biệt cũng đã bị khóa; tắt rồi bật lại để có mã mới.':'Trên điện thoại có thể gỡ bằng khóa mở đặc biệt (còn '+Math.max(0,(p.max_unlocks||0)-(p.unlocks||0))+' lượt), sau đó vẫn phải nhập mã; hoặc tắt rồi bật lại để có mã mới.')+'</p>':'')+
-    '<div class="action-grid"><button class="danger" data-action="phone-toggle" data-enabled="0">Tắt chế độ điện thoại</button></div>':
+    '<div class="action-grid"><button class="secondary" data-action="phone-extend">Gia hạn thêm 8 giờ</button><button class="danger" data-action="phone-toggle" data-enabled="0">Tắt chế độ điện thoại</button></div>':
     '<div class="key-value"><span>Trạng thái</span><span>Đang tắt'+(p.last_disabled_reason_text?' · lần trước tắt vì '+esc(p.last_disabled_reason_text):'')+'</span></div><p class="muted">Bật để điện thoại hoặc laptop cùng Wi-Fi nhà mở được BiliFlow bằng link và mã. Mã đổi mỗi lần bật.</p>'+
     '<div class="action-grid"><button class="primary" data-action="phone-toggle" data-enabled="1">Bật chế độ điện thoại</button></div>';
   const events=Array.isArray(p.events)&&p.events.length?'<details class="detail-section phone-events"><summary>Nhật ký gần đây ('+p.events.length+')</summary><ul class="confirm-list">'+p.events.map(e=>'<li><strong>'+esc(e.message||e.type)+'</strong><small>'+esc(new Date((e.at||0)*1000).toLocaleString('vi-VN'))+(e.ip?' · '+esc(e.ip):'')+'</small></li>').join('')+'</ul></details>':'';
@@ -426,6 +426,11 @@ document.addEventListener('click',async event=>{
   else if(action==='phone-toggle'){
     if(!LIVE||state.remote||el.dataset.busy)return;el.dataset.busy='1';el.disabled=true;const on=el.dataset.enabled==='1';
     try{await store.dispatch('phoneMode',null,{enabled:on});state=store.snapshot();toast(on?'Đã bật chế độ điện thoại. Mã mới hiện trong khung.':'Đã tắt chế độ điện thoại; mã cũ hết hiệu lực.');}
+    catch(e){toast(e.message,true);}finally{delete el.dataset.busy;render();}
+  }
+  else if(action==='phone-extend'){
+    if(!LIVE||state.remote||el.dataset.busy)return;el.dataset.busy='1';el.disabled=true;
+    try{await store.dispatch('phoneMode',null,{extend:true});state=store.snapshot();toast('Đã gia hạn: chế độ điện thoại tự tắt sau 8 giờ kể từ bây giờ. Mã giữ nguyên.');}
     catch(e){toast(e.message,true);}finally{delete el.dataset.busy;render();}
   }
   else if(action==='ai-check'){if(el.dataset.busy)return;el.dataset.busy='1';try{await mutate('aiCheck',null,{});state=store.snapshot();toast(state.ai.message);render();}catch(e){toast(e.message,true);}finally{delete el.dataset.busy;}}

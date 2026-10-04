@@ -239,7 +239,7 @@ Câu hỏi đợt 2 (cloud, 2026-10-04). **Người dùng đã trả lời câu 
 11. **`/` trên điện thoại** chuyển thẳng sang `/dashboard-v2/`; dashboard cũ chỉ mở trên PC. Nút “Quay lại Dashboard” của trang duyệt cũ trên điện thoại vì vậy cũng về V2. Giữ?
 12. **Mã trong link.** Theo mẫu Golden Label, link in ra có `?code=…`, nên mã nằm trong lịch sử trình duyệt của điện thoại cho tới lần bật sau. Giữ, hay chỉ in link không mã và luôn nhập mã tay?
 
-Câu hỏi đợt 3 (cloud, 2026-10-04):
+Câu hỏi đợt 3 (cloud, 2026-10-04). **Người dùng đã trả lời câu 14–16** (xem 13.4); câu 13 người dùng chưa rõ, cloud đã giải thích lại.
 
 13. **Fixture D2 không phải đổi.** Dòng báo "Đang mở cho điện thoại" ở `/` chỉ thêm khi chế độ điện thoại **đang bật**. Khi tắt (mặc định), `/` vẫn trùng byte với fixture f6996bb, nên fixture không cập nhật; test mới kiểm cả hai trạng thái. Mục 13 có dặn cập nhật fixture; giữ cách này?
 14. **Nhật ký trên khung PC chỉ của lần chạy hiện tại.** Khung "Mở trên điện thoại" hiện 10 event gần nhất từ bộ nhớ của Control Center đang chạy. Event vẫn được lưu lâu dài trong nhật ký sự kiện (`PHONE_*`), nhưng sau khi khởi động lại thì khung trống cho tới event đầu tiên. Có cần đọc lại từ nhật ký khi khởi động không?
@@ -269,7 +269,8 @@ Câu hỏi đợt 3 (cloud, 2026-10-04):
 
 | Ngày | Commit | Việc đã làm | Test đã chạy | Còn lại |
 | --- | --- | --- | --- | --- |
-| 2026-10-04 | a7514df, (commit docs này) | Đợt 3: H1–H6 (mục 13.1) trong `phone_access.py`, `control_center.py`, `Start-BiliFlow.ps1`, V2 (khung PC, khóa Visual audit), hướng dẫn; test mới `tests/test_dashboard_v2_phone_hardening.py`; điền 13.3, câu 13–16 | test_dashboard_v2_* 57 OK (contract 10, frontend 3, route 9, status 2, phone 15, hardening 18); verify 28/28; verify-adapter 17/17; browser-check 17/17; các test Control Center như đợt trước (6 lỗi PowerShell); Chromium thật: đăng nhập điện thoại, trang duyệt 375 px; A4 `none` | Máy thật kiểm đợt 3; người dùng test toàn bộ rồi mới merge |
+| 2026-10-04 | (commit này, sau f202276) | Câu 14: đọc lại event và trạng thái sau khởi động lại; câu 15: gia hạn thêm 8 giờ (API + nút V2); câu 16 giữ; câu 13 giải thích lại | test phone + hardening 38 OK (thêm 5 test); verify-adapter 17/17 (thêm `extend`); browser-check 17/17 (nút gia hạn giữ mã); A4 `none` | Câu 13; máy thật kiểm đợt 3 |
+| 2026-10-04 | a7514df, f202276 | Đợt 3: H1–H6 (mục 13.1) trong `phone_access.py`, `control_center.py`, `Start-BiliFlow.ps1`, V2 (khung PC, khóa Visual audit), hướng dẫn; test mới `tests/test_dashboard_v2_phone_hardening.py`; điền 13.3, câu 13–16 | test_dashboard_v2_* 57 OK (contract 10, frontend 3, route 9, status 2, phone 15, hardening 18); verify 28/28; verify-adapter 17/17; browser-check 17/17; các test Control Center như đợt trước (6 lỗi PowerShell); Chromium thật: đăng nhập điện thoại, trang duyệt 375 px; A4 `none` | Máy thật kiểm đợt 3; người dùng test toàn bộ rồi mới merge |
 
 Nhật ký đợt 2:
 
@@ -590,6 +591,15 @@ Mọi ràng buộc của 12.3 vẫn giữ nguyên:
 | H4 | Event bật/tắt/sai mã/khóa/gỡ khóa có IP, không chứa mã hay cookie; khung PC hiện các event gần nhất | [x] | [ ] | Cùng file: luồng đủ 8 loại event `PHONE_*` lưu vào store; mọi event của thiết bị có `ip`; dump toàn bộ event không chứa mã, giá trị cookie, chữ đã gõ hay khóa mở; event khóa ở mức WARN; `/api/phone-mode` trên PC trả ≤ 10 event, mới nhất trước, không có mã; listener điện thoại không trả `events`. browser-check: khung PC hiện “Nhật ký gần đây” |
 | H5 | Launcher báo đúng trạng thái sau lỗi không phải HTTP | [-] | [ ] | Cloud không có PowerShell. `Enable-PhoneMode`: lỗi không có HTTP status → `Get-PhoneStatus` → “IS on” (in link và mã) / “NOT on” / “unknown”. Máy thật cần thử, ví dụ chặn tạm hoặc làm chậm request |
 | H6 | `try_code` trả cookie trong một lần giữ khóa; hướng dẫn Firewall có rule riêng cho cổng 8767 | [x] | [ ] | `try_code(text, ip=…)` trả `(outcome, cookie)` trong một lần giữ khóa; `set_cookie_header` đã bỏ (test kiểm). Hướng dẫn có `New-NetFirewallRule … -LocalPort 8767 -Profile Private -RemoteAddress LocalSubnet` và `Remove-NetFirewallRule`, cách dự phòng cho Python, cảnh báo rule Block khi đã bấm Cancel, và ghi chú một mã cho mọi thiết bị |
+
+### 13.4. Quyết định của người dùng cho câu 13–16 (2026-10-04)
+
+| # | Quyết định | Đã làm |
+| --- | --- | --- |
+| 13 | Chưa rõ câu hỏi | Không đổi; cloud giải thích lại bằng lời, chờ trả lời |
+| 14 | Đọc lại các việc gần nhất và trạng thái của nó sau khi khởi động lại | `PhoneAccess.restore_history()` khi tạo: tối đa 20 event `PHONE_*` gần nhất (khung hiện 10) và lý do tắt gần nhất; lần chạy trước dừng khi đang bật → “Control Center dừng” |
+| 15 | Thêm gia hạn | Nút “Gia hạn thêm 8 giờ” ở khung PC → POST `/api/phone-mode` `{extend:true}`: giờ tắt = bây giờ + 8 giờ, giữ mã, ghi event `PHONE_MODE_EXTENDED`; chỉ PC |
+| 16 | Chấp nhận tự tắt khi bật/tắt VPN làm đổi địa chỉ | Không đổi |
 
 **Sau đợt 3:**
 1. Máy thật kéo về kiểm như đợt 2.
