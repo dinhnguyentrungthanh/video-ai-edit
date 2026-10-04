@@ -17,6 +17,15 @@
 - Next: a Claude cloud session follows `docs/DASHBOARD_V2_CLOUD_PLAN.md`.
   - Its work: mapping, the adapter, an opt-in `/dashboard-v2` route, and the cloud-safe tests marked in its checklist.
   - The local machine then tests the remaining items before any merge.
+- 2026-10-04: the cloud finished phases 0–3 (c616bef). Local check passed:
+  - full suite: 1215 tests OK;
+  - V2 gates pass;
+  - stage-cache fingerprints unchanged.
+- Two display gaps were found. Batch 2 is planned in `docs/DASHBOARD_V2_CLOUD_PLAN.md` §12:
+  - the gap fixes;
+  - `render_request` sent by the backend;
+  - a phone/laptop mode on the home Wi-Fi.
+- Not merged; Control Center not restarted.
 
 ## Export identity, proven-export reuse, HTTP request limits, short-export rate cap (2026-10-03) — branch `fix/export-identity-http`, merged into `main`; needs a Control Center restart
 

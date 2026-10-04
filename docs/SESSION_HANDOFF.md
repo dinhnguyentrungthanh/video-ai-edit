@@ -49,7 +49,27 @@ Always confirm this section with `git status` and `git log` because it becomes s
   - Its plan and checklist: `docs/DASHBOARD_V2_CLOUD_PLAN.md`.
     - It does cloud-safe work first: mapping, the adapter with a fake transport, and an opt-in `/dashboard-v2` route.
     - It marks what it tested and leaves live-data checks to the local machine.
-  - Before merging into `main`, drop the untracked `dashboard_v2/` copy and the uncommitted V2 notes in the main tree; they are identical to the branch.
+  - Before merging into `main`, move the untracked `dashboard_v2/` copy to `temp\` and drop the uncommitted V2 notes in the main tree.
+    - They are byte-identical to the branch's first commit e044a18, which is pushed, so nothing is lost.
+    - The user agreed on 2026-10-04.
+- 2026-10-03: the cloud session finished phases 0–3 (up to c616bef):
+  - the adapter and live store;
+  - an opt-in `/dashboard-v2/` route with a file whitelist and its own CSP;
+  - `/` and `/review/{id}` byte-identical to f6996bb.
+- 2026-10-04: checked on the local machine in worktree `temp/wt-dashboard-v2`.
+  - Results:
+    - full suite: 1215 tests OK, 25 skipped;
+    - `verify.cjs` 28/28 and `verify-adapter.cjs` 15/15;
+    - stage-cache fingerprints unchanged for all 10 stages.
+  - A read-only preview found two display gaps against `/`:
+    - a missing source shown as present;
+    - no "previous cleanup/archive failed" notice.
+    - The preview ran the real handler on a temporary root with synthetic jobs and blocked every POST.
+  - The user answered the cloud's six questions and asked for batch 2:
+    - fix both gaps;
+    - send `render_request` from the backend;
+    - add a phone/laptop mode for the home Wi-Fi, modelled on Golden Label's `--phone`.
+  - All of it is in `docs/DASHBOARD_V2_CLOUD_PLAN.md` sections 11 and 12. Not merged; Control Center not restarted.
 
 ## Current work — 2026-10-03 export identity, proven-export reuse, HTTP request limits, short-export rate cap (branch `fix/export-identity-http`, merged into `main`; Control Center restart pending)
 
