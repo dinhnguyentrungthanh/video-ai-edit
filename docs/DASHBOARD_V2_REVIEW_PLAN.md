@@ -172,6 +172,12 @@ Các điểm dưới đây là chỗ trang cũ hiển thị chưa đúng (A7). S
 - **S8 (theo bản mẫu V2, người dùng có thể bỏ).** Video đã "Bỏ qua (không xuất)" mở hộp duyệt ở chế độ chỉ xem, kèm câu
   "Bấm “Mở lại để xuất” ở Dashboard để sửa". Đây là cách `readonlyReview` của bản mẫu đang làm (`app.js:360`). Trang cũ
   cho sửa, và sửa có thể làm mất trạng thái bỏ qua (B2).
+- **S9 (người dùng chọn 2026-10-04, sau khi thử U-R2).** Thẻ chỉ mượn khung đỏ của một thẻ logo khác (`regionOwner(x)`
+  khác chính thẻ đó, ví dụ "Kiểm tra đoạn kết" mượn vùng của "Logo nền tảng iQIYI") không có 2 nút vùng. Thay vào đó là
+  dòng "Khung đỏ là vùng logo của thẻ “<tên thẻ chủ>” (<thời gian áp dụng>) — đang: <quyết định của thẻ chủ>" và nút
+  "Đi tới thẻ logo"; khung đỏ trên ảnh của thẻ mượn vẽ nét đứt kèm thời gian áp dụng. Chỉ thẻ sở hữu vùng còn nút vùng.
+  Trang cũ hiện nút vùng trên cả thẻ mượn; khi hai thẻ nằm cạnh nhau, nút của hai thẻ đổi cùng một quyết định nên
+  trông như bị "nhảy chung" (R2-B2). Payload không đổi; chỉ bớt nút trên thẻ mượn.
 
 ## 6. Thiết kế
 
@@ -429,6 +435,13 @@ Nhánh: `feat/dashboard-v2`, làm tiếp, chưa merge (người dùng quyết đ
 - **Ghi nhận thêm cho R4 (chưa sửa):** ở 375 px, hàng công cụ "Giữ tất cả / Dùng đề xuất / ↶ Hoàn tác" rộng hơn khung 21 px (cuộn ngang, không có dấu hiệu cuộn), giống hàng chip; vùng chạm dưới 44 px: nút tên thẻ (cao 21 px), nút vùng (38 px) (P17).
 - **Ghi chú:** khi tab bị ẩn, hộp không poll (đúng thiết kế, như trang cũ), nên mất kết nối chỉ được báo khi một lệnh ghi lỗi hoặc khi tab hiện lại.
 
+**Người dùng tìm được khi thử U-R2 (giao cùng R3):**
+
+- **R2-B2. Nút vùng trên thẻ mượn khung đỏ "nhảy chung" với thẻ logo (người dùng chọn cách sửa S9).**
+  - Người dùng thử job thật: thẻ "Kiểm tra đoạn kết" (48:34–48:40, không có vùng riêng) và thẻ "Logo nền tảng iQIYI" (48:35–48:39, vùng khoanh đỏ áp dụng 48:36.0–48:40.0) nằm cạnh nhau. Bấm "Đây là tiêu đề/nội dung phim — giữ lại" ở thẻ trái rồi "Đây là logo thương hiệu — làm mờ" ở thẻ phải → nút của cả hai thẻ cùng đổi theo, không chọn riêng được.
+  - Không phải lỗi ghi: thẻ trái chỉ mượn vùng của thẻ iQIYI (`regionOwner`, giống trang cũ), nên nút vùng ở cả hai thẻ đều gửi quyết định cho thẻ iQIYI. Dữ liệu cuối cùng đúng ý người dùng (đoạn kết Giữ, logo iQIYI Làm mờ vùng). Ảnh của thẻ trái là khung 48:34.6, trước khi logo xuất hiện, nên khung đỏ trông như đè lên chữ tiêu đề phim dù vùng chỉ làm mờ từ 48:36.0.
+  - Sửa theo S9 (mục 5): thẻ mượn vùng không có nút vùng (cả trong "Chi tiết kỹ thuật" của thẻ an toàn), có dòng ghi thẻ chủ, thời gian áp dụng, quyết định hiện tại và nút "Đi tới thẻ logo" (chọn và cuộn tới thẻ chủ, chuyển sang "Tất cả" nếu bộ lọc đang ẩn nó); khung đỏ trên thẻ mượn vẽ nét đứt kèm thời gian áp dụng. Thẻ sở hữu vùng giữ nguyên nút vùng. Test: verify-review liệt kê S9 là chỗ khác có chủ ý; thẻ mượn không có nút vùng, nút "Đi tới thẻ logo" chọn đúng thẻ chủ; browser-check cảnh đoạn kết + logo nền tảng cạnh nhau.
+
 ### 7.4. R3: hàng loạt và xuất video
 
 - **R3.1** "Giữ tất cả" / "Dùng đề xuất" cho các cảnh đang lọc, ánh xạ bộ lọc, xác nhận có số mục (S1), khóa hộp khi
@@ -446,6 +459,7 @@ Nhánh: `feat/dashboard-v2`, làm tiếp, chưa merge (người dùng quyết đ
 | R3.3 | Khớp `export_dialog.py` | [ ] | [ ] | |
 | R3.4 | S2, S3 | [ ] | [ ] | |
 | R2-B1 | Lệnh ghi lỗi lúc mất kết nối: có kết nối lại thì thẻ và số đếm về đúng queue của server | [ ] | [ ] | |
+| R2-B2 | S9: thẻ mượn khung đỏ không có nút vùng, có dòng ghi thẻ chủ và nút "Đi tới thẻ logo"; khung đỏ nét đứt kèm thời gian áp dụng | [ ] | [ ] | |
 
 ### 7.5. R4: điện thoại, chuyển nút Duyệt, nghiệm thu (mốc thử 2)
 
@@ -539,6 +553,7 @@ Nhánh: `feat/dashboard-v2`, làm tiếp, chưa merge (người dùng quyết đ
 
 | Ngày | Commit | Việc đã làm | Kết quả | Còn lại |
 | --- | --- | --- | --- | --- |
+| 2026-10-04 | 536025d (thư mục chính) | Người dùng đồng ý chuyển thư mục chính sang `536025d` rồi tự bật Control Center; bắt đầu thử U-R2 trên job thật. Nút "Duyệt cảnh" vẫn mở trang cũ (đúng kế hoạch, R4.3 mới chuyển); hộp mới mở bằng "Duyệt (bản mới, thử)" trong bảng chi tiết | Hộp mở đúng tên video, số cảnh, ảnh; tìm được R2-B2 (nút vùng trên thẻ mượn khung đỏ "nhảy chung"); người dùng chọn cách sửa S9; dữ liệu của job đúng ý người dùng | Người dùng thử tiếp U-R2 bước 2–4; cloud sửa R2-B1 và R2-B2 cùng R3 |
 | 2026-10-04 | d152ef3 (R1-B1, R2) | Máy thật kéo về và kiểm nhanh: diff chỉ đổi `dashboard_v2/`, test và plan (`control_center.py` và `DASHBOARD_V2_FILES` không đổi), không có dòng attribution; full suite; `node --check` 18 file; `verify.cjs`, `verify-adapter.cjs` 5 lần lúc máy bận vì full suite, `verify-review.cjs`; A4; D2 (test trong full suite). Bản xem thử có ghi trên handler thật (chỉ decision/clear vào queue của root tạm, POST khác 403) với clip ffmpeg, queue giả, job đang xuất và job đã Bỏ qua, công tắc mất kết nối và ghi chậm; thử ở 1440/1024/375 px, sáng và tối; xong thì tắt và xóa root tạm. Các browser-check cần Playwright nên dựa vào cloud. Thư mục chính vẫn ở `652f207`; Control Center đang tắt | 1278 OK (25 bỏ qua); 29/29; 27/27 ×5; 24/24; A4 `none`; R1-B1, R2.1–R2.3 và R2.5–R2.7 đạt; 11 lệnh ghi đúng dạng trang cũ, 24/24 thẻ khớp queue; tìm được R2-B1 (R2.4 `[!]`) | Cloud sửa R2-B1 cùng R3; người dùng thử U-R2 (mục 8.3 bước 1–4): cần chuyển thư mục chính và chạy Control Center bản mới, chờ người dùng đồng ý |
 | 2026-10-04 | b8b458f, 539e6a6, (commit docs này) | Cloud sửa R1-B1 rồi làm R2 (mục 7.3): quyết định trong thẻ, nút vùng, nhớ logo, minh họa trên ảnh, hộp xác nhận V2 (S5), hàng ghi tuần tự theo job trong adapter, "Đang lưu…/Đã lưu", đồng bộ lại khi lỗi, hoàn tác, "Tự chuyển cảnh", sticky, phím tắt, khóa và mất kết nối; demo store ghi trong bộ nhớ. Không route mới, không file phục vụ mới (`DASHBOARD_V2_FILES` giữ nguyên), `PHONE_ALLOWED_POSTS` và endpoint của `contracts.js` không đổi, CSP không đổi. Test mới: `browser-check-review-write.cjs` và `review-fake-server.cjs` (server giả dùng chung với `browser-check-review.cjs`, có trang cũ thật ở `/classic/<id>`), lớp `ReviewR2Writes` trong `tests/test_dashboard_v2_review.py`. Tự review bảo mật: chuỗi queue qua `esc()`, body chỉ có các trường của trang cũ, cờ nhớ chỉ khi `true`, không `confirm()`/`alert()`, không `blob:`, chỉ `adapter.js` gọi `fetch` | `node --check` mọi file; verify 29/29; verify-adapter 27/27; verify-review 24/24 (2820 ca quyết định so với trang cũ); browser-check 20/20; browser-check-review 26/26; browser-check-review-write 17/17 (14 body giống trang cũ thật; 1440/1024/390 px × sáng/tối); test_dashboard_v2_* 81 OK (review 8 gồm test route thật); test Control Center liên quan như trước (test_control_center: 1 lỗi cũ thiếu PowerShell; test_skip_export 26/30: lỗi thiếu PowerShell cũ; review_workflow, export_dialog, logo_memory_admin, source_cleanup_http, source_archive_http, export_identity, golden_label_app OK); A4 10 stage `none`; D2 trùng byte | Máy thật kiểm R2 (mục 8.2: bản xem thử cho phép ghi nhưng chỉ vào root tạm); sau đó người dùng thử U-R2 (mục 8.3 bước 1–4), cần khởi động lại Control Center |
 | 2026-10-04 | ea2adcc (R1, R0-T1) | Máy thật kéo về và kiểm nhanh: đọc diff (`control_center.py` chỉ thêm `review-detail.js` vào whitelist), full suite, `node --check`, `verify.cjs`, `verify-adapter.cjs` 8 lần lúc máy bận, `verify-review.cjs`, A4. Dựng bản xem thử trên handler thật với clip ffmpeg và queue giả trong root tạm; thử ở 1440/1024/375 px, sáng và tối; xong thì tắt và xóa root tạm. Thư mục chính vẫn ở `652f207` | 1277 OK; 28/28; 21/21 ×8; 17/17; A4 `none`; R0-T1 và R1.1–R1.6 đạt; tìm được R1-B1 | Cloud làm R2 kèm R1-B1; sau R2 người dùng thử (U-R2), cần khởi động lại Control Center |
