@@ -14,6 +14,7 @@ import socket
 import threading
 import time
 import unittest
+import urllib.parse
 from http.server import ThreadingHTTPServer
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -776,6 +777,32 @@ class Batch5(HardeningBase):
         self.assertEqual(order, sorted(order), "Private → rule → try → clean up")
         self.assertIn("8 này", guide)
         self.assertIn("cùng một NAT", guide)
+
+    def test_m4_the_review_back_button_returns_to_v2_only_when_opened_from_v2(self):
+        CLASSIC = json.loads((ROOT / "tests" / "fixtures" / "dashboard_v2_classic_pages.json").read_text(encoding="utf-8"))
+        pc = f"127.0.0.1:{self.pc_port}"
+        _, _, plain = http(self.pc_port, "GET", "/review/1", host=pc)
+        self.assertEqual(hashlib.sha256(plain).hexdigest(), CLASSIC["review_job_1_token_test_sha256"], "D2 byte for byte")
+        _, _, page = http(self.pc_port, "GET", "/review/1?from=v2&view=videos", host=pc)
+        self.assertIn(b"onclick=\"location.href='/dashboard-v2/#videos'\"", page)
+        self.assertNotIn(b"onclick=\"location.href='/'\"", page)
+        self.assertEqual(page.replace(b"/dashboard-v2/#videos", b"/"), plain, "only the back button changes")
+        for view in ('"><script>alert(1)</script>', "videos#x", "../", "", "SETTINGS"):
+            with self.subTest(view=view):
+                query = "from=v2&view=" + urllib.parse.quote(view)
+                _, _, page = http(self.pc_port, "GET", "/review/1?" + query, host=pc)
+                self.assertIn(b"location.href='/dashboard-v2/#overview'", page)
+                self.assertNotIn(b"<script>alert", page)
+        _, _, page = http(self.pc_port, "GET", "/review/1?view=videos", host=pc)
+        self.assertEqual(page, plain, "without from=v2 nothing changes")
+        # Through the phone listener: back to V2 and the phone layout fixes are still there.
+        self.enable()
+        cookie = self.cookie()
+        _, _, page = http(self.port, "GET", "/review/1?from=v2&view=queue", host=self.host, headers={"Cookie": cookie})
+        self.assertIn(b"location.href='/dashboard-v2/#queue'", page)
+        self.assertIn(b'id="phone-review"', page)
+        app = (ROOT / "dashboard_v2" / "app.js").read_text(encoding="utf-8")
+        self.assertIn("'?from=v2&view='+encodeURIComponent(view)", app)
 
 
 if __name__ == "__main__":

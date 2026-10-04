@@ -221,7 +221,7 @@ async function check(name, fn) { await fn(); passed++; results.push(name); proce
 
     await check('Duyệt cảnh opens the existing review page of the same job', async () => {
       await openJob(101);
-      await Promise.all([page.waitForURL(/\/review\/101$/), page.locator('.drawer [data-op="review"]').first().click()]);
+      await Promise.all([page.waitForURL(/\/review\/101\?from=v2&view=videos$/), page.locator('.drawer [data-op="review"]').first().click()]);
       await page.goto(base + '/dashboard-v2/#overview');
       await page.waitForSelector('.kpi');
     });

@@ -432,7 +432,7 @@ function logoAction(key,remove){
 }
 function jobAction(id,operation){
   const j=getJob(id),a=j&&ops(j).find(x=>x.id===operation);if(!a||!a.enabled)return;
-  if(operation==='review'){if(LIVE)location.assign('/review/'+encodeURIComponent(j.id));else reviewModal(j);}
+  if(operation==='review'){if(LIVE)location.assign('/review/'+encodeURIComponent(j.id)+'?from=v2&view='+encodeURIComponent(view));else reviewModal(j);}
   else if(operation==='start'||operation==='rerun')scanForm(j,operation==='rerun');
   else if(operation==='finalize')exportModal(j);
   else if(operation==='audit')auditModal(j);

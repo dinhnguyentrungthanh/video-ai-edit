@@ -190,6 +190,25 @@ def _with_phone_notice(html: str, center: Any) -> str:
     return html.replace("<body>", "<body>" + notice, 1)
 
 
+DASHBOARD_V2_VIEWS = ("overview", "downloads", "videos", "queue", "logos", "settings")
+REVIEW_BACK_BUTTON = "onclick=\"location.href='/'\""
+
+
+def _review_back_to_v2(html: str, query: str) -> str:
+    """M4: with ?from=v2, the classic review page's back button opens /dashboard-v2/#<view>.
+
+    Only a view from DASHBOARD_V2_VIEWS is used (anything else → overview); nothing else from the
+    URL reaches the page. Without from=v2 the page is returned unchanged.
+    """
+    params = urllib.parse.parse_qs(query or "")
+    if params.get("from") != ["v2"]:
+        return html
+    view = (params.get("view") or [""])[0]
+    if view not in DASHBOARD_V2_VIEWS:
+        view = "overview"
+    return html.replace(REVIEW_BACK_BUTTON, f"onclick=\"location.href='/dashboard-v2/#{view}'\"", 1)
+
+
 def _review_page_for_phone(html: str) -> str:
     """The classic review page plus REVIEW_PHONE_STYLE/SCRIPT, for the phone listener only."""
     if "</head>" not in html or "</body>" not in html:
@@ -1863,6 +1882,8 @@ def _handler_class(center: ControlCenter) -> type[BaseHTTPRequestHandler]:
                     job_id = int(match.group(1))
                     prefix = f"/api/jobs/{job_id}/review"
                     html = _interactive_html(center.token).replace("'/api/", f"'{prefix}/")
+                    # M4: opened from V2 → its back button returns to V2; otherwise byte for byte as before.
+                    html = _review_back_to_v2(html, parsed.query)
                     self.send_bytes(200, html.encode(), "text/html; charset=utf-8")
                 elif match := re.fullmatch(r"/api/jobs/(\d+)/review/(queue|session|resources|export)", path):
                     job_id, kind = int(match.group(1)), match.group(2)
@@ -2285,6 +2306,7 @@ def _phone_handler_class(center: ControlCenter, phone: phone_access.PhoneAccess)
                 job_id = int(match.group(1))
                 prefix = f"/api/jobs/{job_id}/review"
                 html = _interactive_html(center.token).replace("'/api/", f"'{prefix}/")
+                html = _review_back_to_v2(html, parsed.query)
                 self.send_bytes(200, _review_page_for_phone(html).encode(), "text/html; charset=utf-8")
                 return
             if parsed.path == "/api/phone-mode":
