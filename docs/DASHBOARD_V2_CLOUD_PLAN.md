@@ -239,7 +239,7 @@ Câu hỏi đợt 2 (cloud, 2026-10-04). **Người dùng đã trả lời câu 
 11. **`/` trên điện thoại** chuyển thẳng sang `/dashboard-v2/`; dashboard cũ chỉ mở trên PC. Nút “Quay lại Dashboard” của trang duyệt cũ trên điện thoại vì vậy cũng về V2. Giữ?
 12. **Mã trong link.** Theo mẫu Golden Label, link in ra có `?code=…`, nên mã nằm trong lịch sử trình duyệt của điện thoại cho tới lần bật sau. Giữ, hay chỉ in link không mã và luôn nhập mã tay?
 
-Câu hỏi đợt 3 (cloud, 2026-10-04). **Người dùng đã trả lời câu 14–16** (xem 13.4); câu 13 người dùng chưa rõ, cloud đã giải thích lại.
+Câu hỏi đợt 3 (cloud, 2026-10-04). **Người dùng đã trả lời câu 13–16** (xem 13.4). Không còn câu hỏi mở.
 
 13. **Fixture D2 không phải đổi.** Dòng báo "Đang mở cho điện thoại" ở `/` chỉ thêm khi chế độ điện thoại **đang bật**. Khi tắt (mặc định), `/` vẫn trùng byte với fixture f6996bb, nên fixture không cập nhật; test mới kiểm cả hai trạng thái. Mục 13 có dặn cập nhật fixture; giữ cách này?
 14. **Nhật ký trên khung PC chỉ của lần chạy hiện tại.** Khung "Mở trên điện thoại" hiện 10 event gần nhất từ bộ nhớ của Control Center đang chạy. Event vẫn được lưu lâu dài trong nhật ký sự kiện (`PHONE_*`), nhưng sau khi khởi động lại thì khung trống cho tới event đầu tiên. Có cần đọc lại từ nhật ký khi khởi động không?
@@ -269,7 +269,8 @@ Câu hỏi đợt 3 (cloud, 2026-10-04). **Người dùng đã trả lời câu 
 
 | Ngày | Commit | Việc đã làm | Test đã chạy | Còn lại |
 | --- | --- | --- | --- | --- |
-| 2026-10-04 | (commit này, sau f202276) | Câu 14: đọc lại event và trạng thái sau khởi động lại; câu 15: gia hạn thêm 8 giờ (API + nút V2); câu 16 giữ; câu 13 giải thích lại | test phone + hardening 38 OK (thêm 5 test); verify-adapter 17/17 (thêm `extend`); browser-check 17/17 (nút gia hạn giữ mã); A4 `none` | Câu 13; máy thật kiểm đợt 3 |
+| 2026-10-04 | (commit này, sau b77e179) | Ghi câu trả lời câu 13: giữ cách dòng báo chỉ khi đang bật, fixture D2 không đổi | — (chỉ docs) | Máy thật kiểm đợt 3; người dùng test toàn bộ rồi mới merge |
+| 2026-10-04 | b77e179 | Câu 14: đọc lại event và trạng thái sau khởi động lại; câu 15: gia hạn thêm 8 giờ (API + nút V2); câu 16 giữ; câu 13 giải thích lại | test phone + hardening 38 OK (thêm 5 test); verify-adapter 17/17 (thêm `extend`); browser-check 17/17 (nút gia hạn giữ mã); A4 `none` | Câu 13; máy thật kiểm đợt 3 |
 | 2026-10-04 | a7514df, f202276 | Đợt 3: H1–H6 (mục 13.1) trong `phone_access.py`, `control_center.py`, `Start-BiliFlow.ps1`, V2 (khung PC, khóa Visual audit), hướng dẫn; test mới `tests/test_dashboard_v2_phone_hardening.py`; điền 13.3, câu 13–16 | test_dashboard_v2_* 57 OK (contract 10, frontend 3, route 9, status 2, phone 15, hardening 18); verify 28/28; verify-adapter 17/17; browser-check 17/17; các test Control Center như đợt trước (6 lỗi PowerShell); Chromium thật: đăng nhập điện thoại, trang duyệt 375 px; A4 `none` | Máy thật kiểm đợt 3; người dùng test toàn bộ rồi mới merge |
 
 Nhật ký đợt 2:
@@ -596,7 +597,7 @@ Mọi ràng buộc của 12.3 vẫn giữ nguyên:
 
 | # | Quyết định | Đã làm |
 | --- | --- | --- |
-| 13 | Chưa rõ câu hỏi | Không đổi; cloud giải thích lại bằng lời, chờ trả lời |
+| 13 | Giữ (sau khi cloud giải thích lại) | Dòng báo ở `/` chỉ hiện khi chế độ điện thoại đang bật; khi tắt `/` trùng byte bản chụp mẫu f6996bb nên fixture D2 không đổi; test kiểm cả hai trạng thái |
 | 14 | Đọc lại các việc gần nhất và trạng thái của nó sau khi khởi động lại | `PhoneAccess.restore_history()` khi tạo: tối đa 20 event `PHONE_*` gần nhất (khung hiện 10) và lý do tắt gần nhất; lần chạy trước dừng khi đang bật → “Control Center dừng” |
 | 15 | Thêm gia hạn | Nút “Gia hạn thêm 8 giờ” ở khung PC → POST `/api/phone-mode` `{extend:true}`: giờ tắt = bây giờ + 8 giờ, giữ mã, ghi event `PHONE_MODE_EXTENDED`; chỉ PC |
 | 16 | Chấp nhận tự tắt khi bật/tắt VPN làm đổi địa chỉ | Không đổi |
