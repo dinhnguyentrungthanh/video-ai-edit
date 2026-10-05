@@ -4,6 +4,9 @@
  * R4.1 (P17): touch targets of 44 px on a phone and on any touch screen, text ≥ 12 px, a fading edge on the chip row. */
 #review-dialog { width: min(1280px, 96vw); max-width: none; height: calc(100dvh - 32px); max-height: none; padding: 0; overflow: hidden; border-radius: var(--radius); }
 #review-dialog[open] { display: flex; flex-direction: column; }
+/* R4-B3: no backdrop blur behind this large dialog (theme.css blurs every dialog's backdrop): with Chrome on some
+ * Windows GPUs the whole dialog flickered on hover and scroll. The tint stays. */
+#review-dialog::backdrop { -webkit-backdrop-filter: none; backdrop-filter: none; }
 #review-root { display: flex; flex-direction: column; flex: 1; min-height: 0; }
 .rv-head { flex: none; padding: 18px 22px 12px; border-bottom: 1px solid var(--line); display: grid; gap: 10px; }
 .rv-title-row { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; }
@@ -29,7 +32,7 @@
 .rv-auto { display: flex; align-items: center; gap: 7px; font-size: 13px; color: var(--muted); }
 .rv-card { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; overflow: hidden; content-visibility: auto; contain-intrinsic-size: auto 420px; }
 .rv-card.on { border-color: var(--mint); box-shadow: 0 0 0 2px var(--mint); }
-.rv-art { position: relative; display: block; width: 100%; background: #e3e9f2; overflow: hidden; cursor: pointer; container-type: inline-size; }
+.rv-art { position: relative; display: block; width: 100%; background: #e3e9f2; overflow: hidden; cursor: pointer; }
 .rv-art img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; opacity: 0; transition: opacity .15s; }
 .rv-art.loaded img { opacity: 1; }
 .rv-video { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; background: #000; opacity: 0; pointer-events: none; z-index: 1; }
@@ -126,9 +129,11 @@
 .rv-region.borrowed { border-style: dashed; }
 .rv-region em { position: absolute; left: -3px; top: calc(100% + 2px); padding: 1px 5px; border-radius: 4px; font: 600 11px system-ui, sans-serif; font-style: normal; color: #fff; background: #c4243d; }
 /* R4-B1: a box label never leaves the image (review-cards.js labelPlace): right-aligned for a box in the right half,
- * above when there is more room above, inside the box when neither side has room; it wraps within --room of the
- * image width (100cqw: .rv-art is the size container). */
-.rv-region em, .rv-aibox em { box-sizing: border-box; width: max-content; max-width: calc(var(--room, 1) * 100cqw - 4px); overflow-wrap: anywhere; }
+ * above when there is more room above, inside the box when neither side has room; it wraps within the image width
+ * left on that side: --room box widths (100% + 6px: the box's border box, the label's containing block being its
+ * padding box). R4-B3: no size container on every card image (it was 100cqw), one candidate for the flicker seen on
+ * hover and scroll. */
+.rv-region em, .rv-aibox em { box-sizing: border-box; width: max-content; max-width: calc(var(--room, 1) * (100% + 6px) - 4px); overflow-wrap: anywhere; }
 .rv-region.lr em { left: auto; right: -3px; }
 .rv-aibox.lr em { left: auto; right: 0; }
 .rv-region.up em, .rv-aibox.up em { top: auto; bottom: calc(100% + 2px); }

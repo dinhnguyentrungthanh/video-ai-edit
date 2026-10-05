@@ -12,12 +12,13 @@
   const pct = v => (Math.round(v * 10000) / 100) + '%';
   /* R4-B1: the label of a box over the image stays inside the image. It hangs from the side of the box with more
    * room: right edge to right edge for a box in the right half, below or above, inside the box when neither fits.
-   * --room is the share of the image width it may use (review.css wraps it there). Shares of the frame in, the
-   * box's class and style out. */
+   * --room is the image width it may use, in box widths (review.css wraps it there; R4-B3: no container query).
+   * Shares of the frame in, the box's class and style out. */
   function labelPlace(left, top, width, height) {
     const right = left + width / 2 > 0.5, below = 1 - top - height, above = top;
     const vertical = Math.max(below, above) < 0.12 ? ' lin' : below >= above ? '' : ' up';
-    return {cls: (right ? ' lr' : '') + vertical, room: ';--room:' + (Math.round((right ? left + width : 1 - left) * 10000) / 10000)};
+    const room = (right ? left + width : 1 - left) / Math.max(width, 0.01);
+    return {cls: (right ? ' lr' : '') + vertical, room: ';--room:' + (Math.round(room * 10000) / 10000)};
   }
   const BATCH = 24;
 
