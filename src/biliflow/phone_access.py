@@ -109,6 +109,11 @@ PHONE_ALLOWED_POSTS = tuple(re.compile(pattern) for pattern in (
     r"/api/jobs/\d+/(?:start|resume|pause|stop-after-stage|cancel|retry|rerun|skip|unskip|hide|unhide)",
     r"/api/jobs/\d+/ai-audit",
     r"/api/jobs/\d+/review/(?:decision|clear|bulk-keep|bulk-accept|finalize)",
+    # "Tải video": the phone pastes links and drives tasks; files land on the PC.
+    r"/api/downloads",
+    r"/api/downloads/\d+/(?:rename|choose|stop|resume|cancel|retry|remove)",
+    r"/api/downloads/settings",
+    r"/api/downloads/cleanup-temp",
 ))
 AI_AUDIT_ROUTE = re.compile(r"/api/jobs/\d+/ai-audit")
 

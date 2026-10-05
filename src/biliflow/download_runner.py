@@ -276,7 +276,7 @@ class YtDlpRunner:
             try:
                 process.wait(KILL_WAIT_SECONDS)
             except subprocess.TimeoutExpired:
-                pass  # a survivor: the recorded pid lets the next start kill it
+                pass  # it ignored the kill (access denied): nothing more can be done from here
         for stream in (process.stdout, process.stderr):
             if stream is not None and not stream.closed:
                 stream.close()

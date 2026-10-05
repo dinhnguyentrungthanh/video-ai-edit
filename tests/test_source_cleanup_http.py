@@ -870,6 +870,7 @@ class StartupAndShutdownTests(unittest.TestCase):
                 self.assertIs(center.recycler, recycle_bin.send_to_recycle_bin)
                 self.assertIs(center.bin_info, recycle_bin.volume_bin_info)
             finally:
+                center.stop_downloads()
                 center.store.close()
                 center.lock.close()
 

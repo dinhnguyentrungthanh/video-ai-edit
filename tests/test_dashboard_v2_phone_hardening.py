@@ -20,7 +20,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest import mock
 
-from biliflow import control_center, logo_memory_admin, phone_access
+from biliflow import control_center, download_api, logo_memory_admin, phone_access
 from biliflow.control_center import ControlCenter, _handler_class, _phone_access, _phone_handler_class
 from biliflow.job_store import JobStore
 from biliflow.review_evidence import ReviewFrameCache
@@ -205,6 +205,7 @@ def _do_post_routes() -> list[str]:
     routes = re.findall(r'path == "([^"]+)"', block)
     routes += re.findall(r're\.fullmatch\(r"([^"]+)", path\)', block)
     routes += [logo_memory_admin.API_CLASS, logo_memory_admin.API_DELETE]
+    routes += list(download_api.POST_ROUTES)
     return routes
 
 
@@ -230,6 +231,8 @@ class H2AllowList(HardeningBase):
         allowed = sorted(path for path in examples if phone_access.post_policy(path)[0])
         self.assertIn("/api/scheduler", allowed)
         self.assertIn("/api/jobs/7/ai-audit", allowed)
+        self.assertIn("/api/downloads", allowed)
+        self.assertIn("/api/downloads/7/cancel", allowed)
         for pc_only in ("/api/shutdown", "/api/source-cleanup", "/api/logo-memory/delete", "/api/phone-mode"):
             self.assertNotIn(pc_only, allowed)
 

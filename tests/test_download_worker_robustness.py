@@ -8,6 +8,7 @@ Temporary roots and the fake yt-dlp only.
 import json
 import os
 import shutil
+import time
 import unittest
 from unittest import mock
 
@@ -230,6 +231,63 @@ class SweepAndSummaryTests(WorkerCase):
             return _Entries(entries)
         with mock.patch("biliflow.download_files.os.scandir", scandir):
             self.assertEqual(self.worker.temp_summary()["total_temp_bytes"], 5)
+
+
+class StartAndReconcileTests(WorkerCase):
+    """D2 review: a failing start-up step or one stuck task never stops the queue."""
+
+    def test_the_loop_starts_even_when_recovery_and_the_sweep_fail(self):
+        def broken_sweep(now=None):
+            self.worker._last_sweep = time.monotonic()  # like sweep(): the next try is an hour later
+            raise PermissionError(5, "Access is denied")
+        self.scenario(probe={"json": video()})
+        task, = self.add()
+        self.worker.sweep = broken_sweep
+        self.worker.poll_seconds = 0.05
+        with mock.patch.object(self.worker, "recover", mock.Mock(side_effect=RuntimeError("bad state row"))):
+            self.worker.start()
+        self.assertTrue(wait_for(lambda: self.state(task["id"]) == "COMPLETED"))
+        # The passes after the failing sweep succeed; they keep the latest error (and its time).
+        self.assertTrue(wait_for(lambda: "Access is denied" in (self.worker.last_error or "")))
+        time.sleep(0.3)
+        self.assertIn("Access is denied", self.worker.last_error)
+        self.assertTrue(self.worker.last_error_at)
+
+    def test_one_task_that_cannot_be_settled_does_not_block_the_others(self):
+        stuck, queued = self.add(CLIP, OTHER)
+        temp = self.root / "temp" / "downloads" / str(stuck["id"]) / "abc.mp4"
+        temp.parent.mkdir(parents=True)
+        temp.write_bytes(b"y" * 10)
+        self.store.transition(stuck["id"], {"QUEUED"}, "PUBLISHING", output_path=str(self.root / "input" / "x.mp4"),
+                              output_size=10, output_sha256="0" * 64, temp_file=str(temp))
+        (self.root / "input" / "x.mp4").write_bytes(b"x" * 10)
+        self.scenario(probe={"json": video()}, download={"id": "other"})
+
+        def held(path):
+            raise PermissionError(32, "The process cannot access the file")
+        with mock.patch("biliflow.download_upkeep.sha256_file", held):
+            self.assertEqual(self.worker.recover(), {})  # logged, not raised
+            self.assertIn("Lượt " + str(stuck["id"]), self.worker.last_error)
+            self.worker.dispatch()
+            self.assertTrue(self.worker.wait_idle(20))
+        self.assertEqual(self.state(queued["id"]), "COMPLETED")
+        self.assertEqual(self.state(stuck["id"]), "PUBLISHING")
+        self.worker.dispatch()  # the file is readable again: settled from the files
+        self.assertEqual(self.state(stuck["id"]), "INTERRUPTED")
+
+    def test_remove_keeps_the_row_while_its_temp_folder_is_held(self):
+        task, = self.add()
+        self.worker.stop(task["id"])
+        folder = self.root / "temp" / "downloads" / str(task["id"])
+        folder.mkdir(parents=True)
+        handle = (folder / "a.part").open("wb")
+        self.addCleanup(handle.close)
+        with self.assertRaises(DownloadActionError):
+            self.worker.remove(task["id"])
+        self.assertIsNotNone(self.store.get(task["id"]))
+        handle.close()
+        self.assertTrue(self.worker.remove(task["id"])["removed"])
+        self.assertIsNone(self.store.get(task["id"]))
 
 
 if __name__ == "__main__":

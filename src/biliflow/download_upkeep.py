@@ -27,12 +27,13 @@ CLOSED = frozenset({"COMPLETED", "CANCELLED", "EXPIRED"})
 
 class DownloadUpkeep:
     """Mixin of DownloadWorker (store, _lock, _controls, downloads_dir, cache_pruner, _event,
-    _fail, _remove_temp, _temp_gone and _finish_cancel come from the worker)."""
+    _fail, _note_error, _remove_temp, _temp_gone and _finish_cancel come from the worker)."""
 
     def temp_summary(self) -> dict[str, Any]:
-        """Temp bytes of the tasks "Dọn file tạm" would clean, for the confirmation."""
-        with self._lock:
-            tasks = [task for task in self.store.tasks_in(TEMP_CLEANABLE) if task["id"] not in self._controls]
+        """Temp bytes of the tasks "Dọn file tạm" would clean, for the confirmation (no lock: the
+        snapshot never waits for a slow step that holds it)."""
+        running = self._controls.copy()
+        tasks = [task for task in self.store.tasks_in(TEMP_CLEANABLE) if task["id"] not in running]
         sizes = {task["id"]: tree_size(self.downloads_dir / str(task["id"])) for task in tasks}
         return {"tasks": len(tasks), "bytes": sum(sizes.values()),
                 "total_temp_bytes": tree_size(self.downloads_dir)}
@@ -71,24 +72,31 @@ class DownloadUpkeep:
         """Settle tasks a previous Control Center left running; never restart a download."""
         counts: Counter[str] = Counter()
         for task in self.store.tasks_in(SLOT_STATES):  # every running state, PUBLISHING, CANCELLING
-            self._kill_leftover(task)
-            state = task["state"]
-            if state == "WAITING_SPACE":
-                moved = self.store.transition(task["id"], {state}, "QUEUED", error_message=None)
-            elif state == "CANCELLING":
-                self._finish_cancel(task)
-                moved = self.store.get(task["id"])
-            elif state == "PUBLISHING":
-                moved = self._recover_publish(task)
-            else:
-                moved = self.store.transition(task["id"], {state}, "INTERRUPTED", speed=None, eta=None,
-                                              pid=None, pid_created=None)
-                if moved:
-                    self._event(moved, "INTERRUPTED", "Control Center khởi động lại giữa chừng; "
-                                "bấm Tiếp tục hoặc Thử lại.", level="WARNING")
+            try:
+                moved = self._recover_one(task)
+            except Exception as error:  # noqa: BLE001 - the loop's _reconcile tries this task again
+                self._note_error(f"Lượt {task['id']}: {type(error).__name__}: {error}")
+                continue
             if moved:
-                counts[f"{state}->{moved['state']}"] += 1
+                counts[f"{task['state']}->{moved['state']}"] += 1
         return dict(counts)
+
+    def _recover_one(self, task: dict[str, Any]) -> dict[str, Any] | None:
+        self._kill_leftover(task)
+        state = task["state"]
+        if state == "WAITING_SPACE":
+            return self.store.transition(task["id"], {state}, "QUEUED", error_message=None)
+        if state == "CANCELLING":
+            self._finish_cancel(task)
+            return self.store.get(task["id"])
+        if state == "PUBLISHING":
+            return self._recover_publish(task)
+        moved = self.store.transition(task["id"], {state}, "INTERRUPTED", speed=None, eta=None,
+                                      pid=None, pid_created=None)
+        if moved:
+            self._event(moved, "INTERRUPTED", "Control Center khởi động lại giữa chừng; "
+                        "bấm Tiếp tục hoặc Thử lại.", level="WARNING")
+        return moved
 
     def _recover_publish(self, task: dict[str, Any]) -> dict[str, Any] | None:
         output = Path(task["output_path"]) if task["output_path"] else None

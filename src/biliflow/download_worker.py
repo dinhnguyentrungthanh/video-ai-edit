@@ -112,6 +112,7 @@ class DownloadWorker(DownloadUpkeep):
         self.publish_wait_seconds = PUBLISH_LOCK_WAIT_SECONDS
         self.cancel_retry_seconds = CANCEL_RETRY_SECONDS
         self.last_error: str | None = None
+        self.last_error_at: str | None = None
         self._cancel_retry_at: dict[int, float] = {}
         self._lock = threading.RLock()
         self._publish_lock = threading.Lock()
@@ -124,23 +125,31 @@ class DownloadWorker(DownloadUpkeep):
 
     # ----------------------------------------------------------------- lifecycle
     def start(self) -> dict[str, int]:
-        self.downloads_dir.mkdir(parents=True, exist_ok=True)
-        recovered = self.recover()
-        self.sweep()
+        """Settle what a previous run left, then start the loop (which sweeps first); the loop
+        always starts, an error only shows in the snapshot."""
+        recovered: dict[str, int] = {}
+        try:
+            self.downloads_dir.mkdir(parents=True, exist_ok=True)
+            recovered = self.recover()
+        except Exception as error:  # noqa: BLE001 - queued tasks must still run
+            self._note_error(f"{type(error).__name__}: {error}")
         self._loop = threading.Thread(target=self._run, name="biliflow-download-worker", daemon=True)
         self._loop.start()
         return recovered
 
     def shutdown(self, timeout: float = 20.0) -> None:
+        """Every running tree is killed at once (not one after another); one deadline for all."""
+        deadline = time.monotonic() + timeout
         self._stopping.set()
         self._wake.set()
         with self._lock:
             controls = list(self._controls.values())
-        for control in controls:
-            control.request("shutdown")
-        self.wait_idle(timeout)
+        killers = [threading.Thread(target=control.request, args=("shutdown",), daemon=True) for control in controls]
+        for killer in killers:
+            killer.start()
+        self.wait_idle(max(0.0, deadline - time.monotonic()))
         if self._loop is not None and self._loop is not threading.current_thread():
-            self._loop.join(timeout)
+            self._loop.join(max(0.0, deadline - time.monotonic()))
 
     def wait_idle(self, timeout: float = 30.0) -> bool:
         deadline = time.monotonic() + timeout
@@ -156,15 +165,22 @@ class DownloadWorker(DownloadUpkeep):
 
     def _run(self) -> None:
         while not self._stopping.is_set():
-            try:
-                self.dispatch()
-                if self._last_sweep is None or time.monotonic() - self._last_sweep >= self.sweep_seconds:
-                    self.sweep()
-                self.last_error = None
-            except Exception as error:  # keep the loop alive; the snapshot shows the error
-                self.last_error = f"{type(error).__name__}: {error}"
+            for step in (self.dispatch, self._sweep_when_due):
+                try:
+                    step()
+                except Exception as error:  # keep the loop alive; the snapshot shows the error
+                    self._note_error(f"{type(error).__name__}: {error}")
             self._wake.wait(self.poll_seconds)
             self._wake.clear()
+
+    def _note_error(self, text: str) -> None:
+        """The latest error stays in the snapshot, with its time, until a newer one replaces it."""
+        self.last_error = text
+        self.last_error_at = self.store.clock().isoformat()
+
+    def _sweep_when_due(self) -> None:
+        if self._last_sweep is None or time.monotonic() - self._last_sweep >= self.sweep_seconds:
+            self.sweep()
 
     def slots(self) -> int:
         try:
@@ -174,8 +190,8 @@ class DownloadWorker(DownloadUpkeep):
         return min(MAX_SLOTS, max(1, value))
 
     def running_ids(self) -> set[int]:
-        with self._lock:
-            return set(self._controls)
+        # No lock: the snapshot must not wait for a slow step under the lock; dict.copy() is atomic.
+        return set(self._controls.copy())
 
     # ------------------------------------------------------------------ dispatch
     def dispatch(self) -> list[int]:
@@ -218,14 +234,14 @@ class DownloadWorker(DownloadUpkeep):
                 self._fail(task_id, RUNNING | {"PUBLISHING"}, "INTERNAL_ERROR",
                            f"Lỗi nội bộ: {type(error).__name__}: {error}")
             except Exception as failure:  # noqa: BLE001 - the database failed; _reconcile settles it later
-                self.last_error = f"{type(failure).__name__}: {failure}"
+                self._note_error(f"{type(failure).__name__}: {failure}")
         finally:
             # One step under the lock: an action sees the thread (and asks it) or a settled task.
             with self._lock:
                 try:
                     self._settle(task_id, control)
                 except Exception as error:  # noqa: BLE001 - _reconcile settles it on a later pass
-                    self.last_error = f"{type(error).__name__}: {error}"
+                    self._note_error(f"{type(error).__name__}: {error}")
                 finally:
                     if self._controls.get(task_id) is control:
                         del self._controls[task_id]
@@ -252,23 +268,27 @@ class DownloadWorker(DownloadUpkeep):
         ``cancel_retry_seconds``; a running state whose thread could not record its end
         (a failed database write) becomes INTERRUPTED; PUBLISHING is checked like at start.
         """
-        now = time.monotonic()
         for task in self.store.tasks_in(SLOT_STATES):
-            if task["id"] in self._controls:
-                continue
-            if task["state"] == "CANCELLING":
-                if now >= self._cancel_retry_at.get(task["id"], 0.0):
-                    self._finish_cancel(task, report=False)
-            elif task["state"] == "PUBLISHING":
-                self._recover_publish(task)
-            elif task["state"] == "WAITING_SPACE":
-                self.store.transition(task["id"], {"WAITING_SPACE"}, "QUEUED", error_message=None)
-            else:
-                moved = self.store.transition(task["id"], {task["state"]}, "INTERRUPTED", speed=None, eta=None,
-                                              pid=None, pid_created=None)
-                if moved:
-                    self._event(moved, "INTERRUPTED", "Lượt tải dừng bất thường; bấm Tiếp tục hoặc Thử lại.",
-                                level="WARNING")
+            if task["id"] not in self._controls:
+                try:
+                    self._reconcile_one(task, time.monotonic())
+                except Exception as error:  # noqa: BLE001 - one stuck task never blocks the queue
+                    self._note_error(f"Lượt {task['id']}: {type(error).__name__}: {error}")
+
+    def _reconcile_one(self, task: dict[str, Any], now: float) -> None:
+        if task["state"] == "CANCELLING":
+            if now >= self._cancel_retry_at.get(task["id"], 0.0):
+                self._finish_cancel(task, report=False)
+        elif task["state"] == "PUBLISHING":
+            self._recover_publish(task)
+        elif task["state"] == "WAITING_SPACE":
+            self.store.transition(task["id"], {"WAITING_SPACE"}, "QUEUED", error_message=None)
+        else:
+            moved = self.store.transition(task["id"], {task["state"]}, "INTERRUPTED", speed=None, eta=None,
+                                          pid=None, pid_created=None)
+            if moved:
+                self._event(moved, "INTERRUPTED", "Lượt tải dừng bất thường; bấm Tiếp tục hoặc Thử lại.",
+                            level="WARNING")
 
     # --------------------------------------------------------------- task steps
     def _event(self, task: dict[str, Any], kind: str, message: str, *, level: str = "INFO",
@@ -449,7 +469,7 @@ class DownloadWorker(DownloadUpkeep):
     def _publish(self, task: dict[str, Any], control: ProcessControl) -> None:
         task_id = task["id"]
         if not self.input_dir.is_dir():
-            return self._fail(task_id, {"PUBLISHING"}, "NO_INPUT_DIR", f"Không thấy thư mục {self.input_dir}.")
+            return self._fail(task_id, {"PUBLISHING"}, "NO_INPUT_DIR", "Không thấy thư mục input của BiliFlow.")
         source = Path(task["temp_file"])
         stem = sanitize_name(task["desired_name"] or task["original_title"] or "",
                              fallback=task["video_id"] or f"video-{task_id}")
@@ -633,6 +653,8 @@ class DownloadWorker(DownloadUpkeep):
             if task["state"] not in FINAL_STATES or task_id in self._controls:
                 raise DownloadActionError("Chỉ xóa được lượt đã kết thúc; dừng hoặc hủy trước.")
             freed = self._remove_temp(task)
+            if not self._temp_gone(task_id):  # the row stays with its folder; nothing is left unaccounted
+                raise DownloadActionError("Chưa xóa được file tạm của lượt này (file đang bị giữ); thử lại sau.")
             self.store.delete_task(task_id)
         return {"id": task_id, "removed": True, "freed_bytes": freed}
 

@@ -60,6 +60,11 @@ PHONE_POSTS_LITERAL = (
     r"/api/jobs/\d+/(?:start|resume|pause|stop-after-stage|cancel|retry|rerun|skip|unskip|hide|unhide)",
     r"/api/jobs/\d+/ai-audit",
     r"/api/jobs/\d+/review/(?:decision|clear|bulk-keep|bulk-accept|finalize)",
+    # "Tải video" (video download plan, D2).
+    r"/api/downloads",
+    r"/api/downloads/\d+/(?:rename|choose|stop|resume|cancel|retry|remove)",
+    r"/api/downloads/settings",
+    r"/api/downloads/cleanup-temp",
 )
 # SHA-256 of JSON.stringify(contracts.js endpoints, keys sorted) at the start of R0 (50 endpoints).
 ENDPOINTS_SHA256 = "06c1dd42737de31d040ae78dd9d31aaf00b8b320f861cb4a0bfff429b35f0c9a"

@@ -2,7 +2,7 @@
 
 Cập nhật: 2026-10-05. Nhánh `feat/video-download` (tách từ `feat/dashboard-v2` a7d8f18), worktree `E:\DungChung\BiliFlow\temp\wt-video-download`.
 
-Trạng thái: **D0, D1 xong** (2026-10-05): công cụ đã cài và khóa phiên bản, kiểm tra giấy phép đạt; backend tải (hàng đợi, yt-dlp, kiểm tra, chuyển vào input, phục hồi, dọn) có test với yt-dlp giả. Tiếp theo D2. Phiên làm tính năng báo người dùng bằng tiếng Việt sau mỗi bước.
+Trạng thái: **D0, D1, D2 xong** (2026-10-05): công cụ đã cài và khóa phiên bản, kiểm tra giấy phép đạt; backend tải (hàng đợi, yt-dlp, kiểm tra, chuyển vào input, phục hồi, dọn) có test với yt-dlp giả; API `/api/downloads…` và `/api/storage-summary` nối vào Control Center (PC và điện thoại) có test route. Tiếp theo D3 (giao diện). Phiên làm tính năng báo người dùng bằng tiếng Việt sau mỗi bước.
 
 Trang `#downloads` của Dashboard V2 hiện chỉ là mô phỏng (`dashboard_v2/download-demo.js`, timer trong `app.js`). Các yêu cầu tích hợp ở `docs/DASHBOARD_V2_UPDATE_GUIDE.md` (mục "Trang Tải video" và "Adapter command / PowerShell") vẫn áp dụng; kế hoạch này chốt các điểm còn để ngỏ ở đó.
 
@@ -219,11 +219,12 @@ Phục hồi (bổ sung 4.9): lưu `pid` và thời điểm tạo của tiến t
 
 ## 5. API
 
-Mọi POST dùng `X-BiliFlow-Token` và kiểm tra Origin như các route hiện có.
+Mọi POST dùng `X-BiliFlow-Token` và kiểm tra Host như các route hiện có (trên điện thoại thêm cookie mã truy cập, Origin cùng nguồn và danh sách route cho phép).
 
 | Lệnh | Việc |
 |---|---|
-| `GET /api/downloads` | snapshot: lượt, cài đặt, nguồn (id, label, domains), số liệu chỗ trống |
+| `GET /api/downloads` | snapshot: lượt, bộ đếm, cài đặt (`slots`, `max_slots`), nguồn (id, label, domains, local), cảnh báo cấu hình, chỗ trống, file tạm, lượt đang chạy, lỗi gần nhất của worker và thời điểm |
+| `GET /api/downloads/<id>` | một lượt cùng sự kiện của attempt hiện tại và log đã che |
 | `POST /api/downloads` | `{source_id, urls[], rights_confirmed: true}`; trả về các lượt mới hoặc lỗi cho cả lô |
 | `POST /api/downloads/<id>/rename` | `{name}`; chỉ trước PUBLISHING |
 | `POST /api/downloads/<id>/choose` | `{entry_index}`; chỉ ở NEEDS_CHOICE |
@@ -235,6 +236,21 @@ Mọi POST dùng `X-BiliFlow-Token` và kiểm tra Origin như các route hiện
 Điện thoại:
 - Thêm các route POST của `/api/downloads…` vào `phone_access.PHONE_ALLOWED_POSTS`, có test.
 - `source-cleanup`, `source-archive*` và `source-recycle-check` vẫn chỉ cho PC.
+
+Đã làm ở D2 (2026-10-05):
+- `download_api.py` (`DownloadService`): route, `public_task` chỉ trả tên file trong `input` (không trả đường dẫn đầy đủ hay thư mục tạm). Lô sai: 400 `BATCH_REJECTED` kèm lỗi từng dòng. Thao tác sai trạng thái: 409. Không thấy lượt: 404.
+- `storage_summary.py`: mục "Dung lượng", tính ở luồng nền, giữ 5 phút; lỗi của một phần (Thùng rác, số dọn được) chỉ hiện ở phần đó. Số "dọn được" dùng cùng đánh giá chỉ đọc của gợi ý "Dọn video gốc" (`ControlCenter.cleanable_sources`), không hash, không hỏi Thùng rác.
+- `control_center.py`: tạo dịch vụ trong `__init__` (cơ sở dữ liệu tải lỗi thì route tải trả 503, quét và duyệt vẫn chạy); chạy worker trong `serve()` sau scheduler và watcher; dừng trong `stop()` và khi `serve()` kết thúc (lượt đang tải thành INTERRUPTED, bấm Tiếp tục để tải nối).
+- Thân POST tối đa 64 KB như các route khác (20 link × 2048 ký tự vẫn vừa).
+- Sau review D2 (security-reviewer: 3 MEDIUM, 5 LOW, đã sửa hết):
+  - Đường dẫn thư mục cài đặt trong lỗi, sự kiện, log yt-dlp, chỗ trống và lỗi worker được thay bằng `<BiliFlow>` trước khi tới trang hay điện thoại.
+  - Id dài hơn 12 chữ số trả 404 (không làm tràn số của SQLite).
+  - Vòng lặp worker luôn chạy, kể cả khi phục hồi lúc khởi động hay lượt dọn định kỳ lỗi; một lượt không xử lý được (ví dụ file đang bị chương trình khác giữ) chỉ ghi lỗi, không chặn các lượt khác.
+  - Lỗi gần nhất của hàng tải được giữ kèm thời điểm (`worker_error`, `worker_error_at` trong snapshot) cho tới khi có lỗi mới; lượt chạy sau không xóa nó.
+  - Khi tắt, mọi cây tiến trình bị dừng cùng lúc, chung một hạn chờ.
+  - "Xóa" chỉ xóa dòng khi thư mục tạm của lượt đã hết; file còn bị giữ thì báo lỗi và giữ dòng.
+  - Bấm làm mới "Dung lượng" trong lúc đang tính thì tính thêm một lượt sau lượt đang chạy.
+  - Snapshot đọc `running` và file tạm không chờ khóa của worker.
 
 ## 6. Giao diện (`#downloads`)
 
@@ -323,3 +339,4 @@ Test D1/D2 phải gồm:
 | 2026-10-05 | a59c6f2 | Người dùng chốt yêu cầu, ranh giới và cách làm; tạo nhánh và worktree; ghi kế hoạch | Chưa cài, chưa code | D0 ở một phiên local mới |
 | 2026-10-05 | (commit này) | D0. Người dùng đồng ý: 8 gói PyPI vào `.venv` chính (yt-dlp 2026.8.19, yt-dlp-ejs 0.8.0, requests 2.34.2, urllib3 2.7.0, charset-normalizer 3.5.0, brotli 1.2.0, websockets 17.0.1, pycryptodomex 3.23.0; bản theo extra `pin` của yt-dlp; tải bằng `tools\uv` với cache ở `cache\uv`; dry-run trước: chỉ thêm, không đổi gói nào); Deno 2.9.7 chép từ bản WinGet có sẵn (SHA-256 `e020f3e2…` trùng `deno-x86_64-pc-windows-msvc.sha256sum` của bản phát hành), không tải. Người dùng chọn "Giữ cache quét" (3.1): `config/download_tools.json`, `download_tools.py` + lệnh `audit`, `requirements.lock.txt`, `.gitignore` cho `config/download_sources.local.json`, `THIRD_PARTY_NOTICES.md` | Máy thật: `python -m yt_dlp --version` → 2026.08.19, `deno --version` → 2.9.7, `deno eval` chạy, chạy từ `E:\…\tools\deno`; yt-dlp `-v` thấy `yt_dlp_ejs-0.8.0`, `JS runtimes: deno-2.9.7`, ffmpeg 9.0.1 của dự án, không có plugin. Cache Deno ghi vào `E:\…\cache\deno`; ổ C không có thư mục yt-dlp/Deno mới (so trước và sau). `download_tools audit --tools-root E:\DungChung\BiliFlow`: `allowed: true`, 0 chặn, `mutagen` và `curl_cffi` không có. `license-audit` (model): 9 cho phép, 0 chặn. Test `test_download_tools` + `test_license_policy` OK | D1 |
 | 2026-10-05 | (commit này) | D1: `download_sources`, `download_store`, `download_probe`, `download_runner`, `download_files`, `download_worker` + `download_upkeep`, `cleanup.DOWNLOAD_CACHE_POLICIES`, yt-dlp giả `tests/fake_yt_dlp.py`. Hai agent review (python, security): 1 HIGH, 6 MEDIUM, 9 LOW; đã sửa theo mục "Bổ sung sau review D1" (4.10); còn để lại: `create_time` không đọc được thì lưu 0 và lần khởi động sau không dừng tiến trình đó (an toàn: không bao giờ dừng nhầm pid) | 155 test D1 OK (yt-dlp giả, không mạng, root tạm). Full suite 1466 test: chỉ 28 lỗi có sẵn của `test_job_pipeline`/`test_job_ocr_option` vì worktree không có `input/*.mp4` (không liên quan). `python -P -m yt_dlp --version` chạy; `json.py` trong thư mục làm việc không che được module chuẩn khi có `-P` | D2 |
+| 2026-10-05 | (commit này) | D2: `download_api.py` (route, `public_task`, che đường dẫn cài đặt), `storage_summary.py`, nối vào `control_center.py` (tạo trong `__init__`, chạy trong `serve()`, dừng trong `stop()`; lỗi cơ sở dữ liệu tải → 503, quét vẫn chạy), 4 mẫu route mới trong `phone_access.PHONE_ALLOWED_POSTS`. Review D2 (security-reviewer): 3 MEDIUM, 5 LOW, đã sửa hết (mục 5, "Sau review D2"). Còn để lại (LOW): bước kiểm tra bằng ffmpeg không ngắt được khi tắt (lần khởi động sau ghi INTERRUPTED); hash lại file ở `_recover_publish` trong khóa (đường hiếm) | 262 test tải, route, điện thoại, dashboard OK (2 test hợp đồng V2 chỉ đỏ khi có `contracts.js` của D3 chưa commit). Full suite trên bản D1 + đúng các file D2: 1473 test, chỉ 28 lỗi có sẵn của `test_job_pipeline`/`test_job_ocr_option` (worktree không có `input/*.mp4`). Không POST vào Control Center thật; test route chạy Control Center trên root tạm | D3 |
