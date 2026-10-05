@@ -1,0 +1,14 @@
+{
+  "version": 1,
+  "note": "Mẫu. Chép thành download_sources.local.json (file đó không vào git) rồi thay tên miền ví dụ bằng tên miền thật, chỉ sau khi đã thăm dò trang và thấy yt-dlp trả về đúng phim. Không thêm trang cần đăng nhập, cookie hay có DRM.",
+  "sources": [
+    {
+      "id": "phim-mau",
+      "label": "Trang phim (mẫu)",
+      "domains": ["phim.example"],
+      "min_duration_seconds": 600,
+      "allow_multi_entry": true,
+      "notes": "Trang trả về nhiều video (quảng cáo, trailer, phim): bỏ mục ngắn hơn 10 phút, mục dài nhất thắng khi dài ít nhất gấp đôi mục kế tiếp, không thì hỏi người dùng."
+    }
+  ]
+}

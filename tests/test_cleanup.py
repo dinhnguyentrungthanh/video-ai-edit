@@ -87,5 +87,59 @@ class CleanupTests(unittest.TestCase):
             self.assertEqual([path.exists() for path in paths], [False, False, True, True])
 
 
+class DownloadCacheTests(unittest.TestCase):
+    def make_cache(self, root, relative, *, age_days):
+        path = root / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(b"cached")
+        stamp = (datetime.now(timezone.utc) - timedelta(days=age_days)).timestamp()
+        os.utime(path, (stamp, stamp))
+        return path
+
+    def test_policies_are_one_gigabyte_and_thirty_days(self):
+        from biliflow.cleanup import DOWNLOAD_CACHE_POLICIES
+        self.assertEqual(set(DOWNLOAD_CACHE_POLICIES), {"cache/yt-dlp", "cache/deno"})
+        for policy in DOWNLOAD_CACHE_POLICIES.values():
+            self.assertEqual((policy["max_age"], policy["max_bytes"]), (timedelta(days=30), 1024**3))
+        # The scan worker's pruning never touches the download caches.
+        self.assertFalse(set(DOWNLOAD_CACHE_POLICIES) & set(FILE_CACHE_POLICIES))
+
+    def test_old_download_caches_are_pruned_and_new_ones_kept(self):
+        from biliflow.cleanup import prune_download_caches
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            old = self.make_cache(root, "cache/deno/gen/old.js", age_days=31)
+            new = self.make_cache(root, "cache/yt-dlp/youtube-sigfuncs/new.json", age_days=1)
+            other = self.make_cache(root, "cache/visual-logo/old.json.gz", age_days=31)
+            result = prune_download_caches(root)
+            self.assertEqual(result["removed_files"], 1)
+            self.assertFalse(old.exists())
+            self.assertTrue(new.exists())
+            self.assertTrue(other.exists())
+
+    def test_a_locked_download_cache_file_is_skipped(self):
+        from biliflow.cleanup import prune_download_caches
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            locked = self.make_cache(root, "cache/deno/dep_analysis_cache_v2", age_days=40)
+            free = self.make_cache(root, "cache/deno/gen/free.js", age_days=40)
+            real_unlink = Path.unlink
+
+            def unlink(path, missing_ok=False):
+                if path.name == locked.name:
+                    raise PermissionError("in use")
+                return real_unlink(path, missing_ok=missing_ok)
+            with patch.object(Path, "unlink", unlink):
+                result = prune_download_caches(root)
+                with self.assertRaises(PermissionError):
+                    # The scan caches keep their old behaviour.
+                    with patch.dict(FILE_CACHE_POLICIES, {"cache/deno": {"max_age": timedelta(days=30),
+                                                                         "max_bytes": 1024**3}}):
+                        prune_file_caches(root)
+            self.assertEqual(result["removed_files"], 1)
+            self.assertTrue(locked.exists())
+            self.assertFalse(free.exists())
+
+
 if __name__ == "__main__":
     unittest.main()
