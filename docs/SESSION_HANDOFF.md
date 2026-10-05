@@ -40,6 +40,7 @@ Always confirm this section with `git status` and `git log` because it becomes s
   - Phone and laptop layout (P17): 44 px touch targets on a phone and on any touch screen; text ≥ 12 px; a fading chip row; the tools row wraps; a full-screen dialog when the phone is held sideways.
   - A check through the real phone listener on a temporary root (`tests.test_dashboard_v2_review.ReviewR4PhoneListener`, Playwright).
   - R3-N1 blocked: one Esc closes only the dialog on top. The reason is under the R4 table of the plan.
+  - The local check of R4 (`4c7ac3c`) passed R4.3, R4.4 and R3-N1, skipped R4.2 (no Playwright there) and found R4-B1 (a box label cut by the card image). The cloud fixed R4-B1 in `fcfe616`; it waits for the local recheck.
 - Stronger logo cover in exports (`0334f8c`, made on the local machine, see CHANGELOG):
   - A new export hides a reviewed regional logo with FFmpeg `delogo`, then a blur that grows with the region.
   - The export identity is unchanged: an older export still counts as proven, and "Dọn video gốc" / "Lưu trữ" / "Xuất video" treat it as before.

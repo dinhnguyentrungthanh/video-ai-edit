@@ -15,6 +15,7 @@ Status: on branch `feat/dashboard-v2`, made in a Claude cloud session (batch R4 
   - new `ReviewR4PhoneListener` in `tests/test_dashboard_v2_review.py`: the real handlers and the phone listener on 127.0.0.1 with a temporary root, a synthetic clip and a synthetic queue, driven by `browser-check-review-phone.cjs`. It checks the cookie, at most 2 frames at once, the clip with Range (206), and that every POST is in `PHONE_ALLOWED_POSTS` (decision, clear, bulk-keep; never finalize);
   - an R3-N1 check in `browser-check-review-bulk.cjs`; the R4.3 checks in `browser-check.cjs` and `browser-check-review.cjs`.
 - Not changed: `control_center.py`, `DASHBOARD_V2_FILES`, the contract endpoints, `PHONE_ALLOWED_POSTS`, the CSP, the export code (`blur_filter.py`, `final_renderer.py`, `review_workflow.py`, `export_identity.py`); no new route or library.
+- R4-B1, found by the local check (`4c7ac3c`), fixed in `fcfe616`: the "áp dụng …" label of a borrowed red box was cut by the image when the box sat in the right half (on a phone only "áp dụng 00:1…" showed). Box labels, the yellow AI ones too, now hang from the side of the box with more room and wrap within the image. The layout check also reports text cut by an `overflow: hidden` box.
 
 # Unreleased — stronger logo cover in exports (delogo, then blur) — 2026-10-04
 
