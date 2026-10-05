@@ -71,8 +71,11 @@
     const view = D.evidenceView(ctx.queue, x);
     if (view.mode !== 'boxes') return '';
     const sw = Number(view.size[0]), sh = Number(view.size[1]), tagged = new Set(view.marks.filter(b => b.a).map(b => b.o));
+    // R4-B2: the approved red box of the logo card whose box this card borrows lies on the dashed box of regionHtml,
+    // which already carries the label ("áp dụng …"); a second label there would cover it. The legend says the rest.
+    const box = R.regionBox(ctx.queue, x), borrowedFrom = borrowedOf(ctx, x, box) ? box.owner : null;
     return '<span class="rv-boxes">' + view.marks.map(b => {
-      const tag = b.a ? 'đã duyệt làm mờ ở thẻ riêng' : b.c && !tagged.has(b.o) ? (tagged.add(b.o), 'watermark — đã có thẻ riêng') : '';
+      const tag = b.a ? (b.o === borrowedFrom ? '' : 'đã duyệt làm mờ ở thẻ riêng') : b.c && !tagged.has(b.o) ? (tagged.add(b.o), 'watermark — đã có thẻ riêng') : '';
       const place = tag ? labelPlace(b.x / sw, b.y / sh, b.w / sw, b.h / sh) : {cls: '', room: ''};
       return '<span class="rv-aibox' + (b.a ? ' approved' : '') + place.cls + '" style="left:' + pct(b.x / sw) + ';top:' + pct(b.y / sh) + ';width:' + pct(b.w / sw) + ';height:' + pct(b.h / sh) + place.room + '">' + (tag ? '<em>' + esc(tag) + '</em>' : '') + '</span>';
     }).join('') + '</span>';
@@ -93,12 +96,15 @@
     return !!owner && owner.decision === 'BLUR' && owner.decision_region_source_pixels !== 'FULL_FRAME';
   }
   const fullBlur = x => x.decision === 'BLUR' && x.decision_region_source_pixels === 'FULL_FRAME';
+  /* S9: the region box (R.regionBox) belongs to another logo card → its borrowedRegion line, else false. Shared by
+   * regionHtml (the dashed box and its label) and aiBoxes (no second label on it, R4-B2). */
+  function borrowedOf(ctx, x, box) { return !!box && box.owner !== x.id && D.borrowedRegion(x, ctx.map.get(box.owner)); }
   /* The red box over the image: solid on the card that owns the region; dashed with the time it applies on a
    * card that borrows another logo card's region (S9). */
   function regionHtml(ctx, x) {
     const box = R.regionBox(ctx.queue, x);
     if (!box) return '';
-    const borrowed = box.owner !== x.id && D.borrowedRegion(x, ctx.map.get(box.owner)), place = borrowed ? labelPlace(box.left, box.top, box.width, box.height) : {cls: '', room: ''};
+    const borrowed = borrowedOf(ctx, x, box), place = borrowed ? labelPlace(box.left, box.top, box.width, box.height) : {cls: '', room: ''};
     return '<span class="rv-region' + (regionBlurred(ctx, x) ? ' blurred' : '') + (borrowed ? ' borrowed' + place.cls : '') + '" style="left:' + pct(box.left) + ';top:' + pct(box.top) + ';width:' + pct(box.width) + ';height:' + pct(box.height) + place.room + '">' +
       (borrowed ? '<em>' + esc('áp dụng ' + borrowed.applies) + '</em>' : '') + '</span>';
   }

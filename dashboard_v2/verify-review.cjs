@@ -633,6 +633,26 @@ check('R3 S9 (R2-B2): a card borrowing another logo card\'s red box has no regio
   assert.ok(header.includes('S9'), 'review-core.js lists S9');
   process.stdout.write('   S9: borrowing cards link to the owner card; the classic page shows region buttons on both\n');
 });
+check('R4-B2: a zoomed card borrowing a logo card\'s red box has one label on that box ("áp dụng …"); the approved red box of the same logo card adds none', () => {
+  const Cards = cardsModule(), {q, logo, end} = s9Queue(), map = R.itemMap(q);
+  // A yellow AI box covered by another card keeps its own label; one covered by the logo card itself has none (the
+  // red box of that card carries "áp dụng …").
+  const own = logo.suggested_region_source_pixels;
+  end.evidence_regions = [{x: 100, y: 900, width: 200, height: 100, sources: ['visual_ai'], covered_by: 'visual_logo-101-0001'},
+    {x: own.x, y: own.y, width: own.width, height: own.height, sources: ['visual_ai'], covered_by: logo.id}];
+  end.evidence_frame_size = [1920, 1080];
+  const ctx = {queue: q, map, focusId: null, zoomId: end.id, readonly: false, techOpen: new Set(), media: () => ({ev: null, hasKey: false, playable: false, reason: '', frameUrl: () => '', mediaUrl: p => '/media/' + p})};
+  const view = D.evidenceView(q, end);
+  assert.equal(view.mode, 'boxes');
+  assert.ok(view.marks.some(b => b.a && b.o === logo.id), 'the zoomed card still draws the approved red box of the logo card');
+  const html = Cards.card(ctx, end), labels = [...html.matchAll(/<em>([^<]*)<\/em>/g)].map(m => m[1]);
+  assert.match(html, /<span class="rv-aibox approved"[^>]*><\/span>/, 'the approved red box, without a label');
+  assert.equal(labels.filter(t => t.startsWith('áp dụng ')).length, 1, 'one "áp dụng …" label');
+  assert.ok(!labels.includes('đã duyệt làm mờ ở thẻ riêng'), 'no second label on the same box: ' + JSON.stringify(labels));
+  assert.equal(labels.filter(t => t === 'watermark — đã có thẻ riêng').length, 1, 'only the yellow box covered by another card has a label: ' + JSON.stringify(labels));
+  assert.equal((html.match(/class="rv-aibox(?: (?!approved)[^"]*)?"/g) || []).length, 2, 'both yellow boxes are drawn');
+  assert.ok(view.legend.includes('Khung đỏ: vùng') && view.legend.includes('đã được duyệt làm mờ ở thẻ riêng'), 'the legend still says the red box is approved on its own card');
+});
 
 /* R3: bulk and export against the classic bulkKeep / bulkAccept (runBlocking, postJson recorded) and EXPORT_DIALOG_JS. */
 const BULK_FUNCS = ['isSafety', 'isLogoItem', 'isAdItem', 'visible', 'bulkFilters', 'decisionsLocked', 'refuseWhileExporting', 'bulkKeep', 'bulkAccept', 'formatStamp'];

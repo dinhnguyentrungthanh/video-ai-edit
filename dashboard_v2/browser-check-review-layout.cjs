@@ -11,6 +11,8 @@
  * - the zoomed card, the confirm and the export dialog over the review dialog fit and keep 44 px targets on the phone;
  * - R4-B1: no visible text is cut by a box with overflow hidden; the "áp dụng …" label of a borrowed red box (S9) stays
  *   inside the image when the box touches the right, left, top or bottom edge, or fills the height (375 and 1440 px);
+ * - R4-B2: box labels over one image never cover each other; zoomed, the approved red box of the same logo card adds
+ *   no second label on the borrowed box;
  * - no POST, no blob:, no console or CSP error.
  * Run: node dashboard_v2/browser-check-review-layout.cjs
  */
@@ -60,6 +62,7 @@ const job101 = jobs.find(j => j.id === 101), saved101 = JSON.stringify({state: j
   const expectClean = (result, size, label) => {
     assert.deepEqual(result.outside, [], label + ': past the window edge');
     assert.deepEqual(result.clipped, [], label + ': text cut by a box with overflow hidden (R4-B1)');
+    assert.deepEqual(result.overlap, [], label + ': box labels over one image cover each other (R4-B2)');
     assert.equal(result.page, false, label + ': the page scrolls sideways');
     if (size.w <= 820) assert.deepEqual(result.scrolling.filter(x => !x.includes('rv-chips')), [], label + ': only the chip row scrolls sideways');
     else assert.deepEqual(result.scrolling, [], label + ': nothing scrolls sideways');
@@ -153,7 +156,13 @@ const job101 = jobs.find(j => j.id === 101), saved101 = JSON.stringify({state: j
             assert.match(m.text, /^áp dụng \d\d:\d\d\.\d–\d\d:\d\d\.\d$/, tag);
             assert.ok(m.inside, tag + ': label inside the image ' + JSON.stringify(m));
             if (size.w <= 820) assert.ok(m.font >= 12, tag + ': 12 px text');
-            assert.deepEqual((await page.evaluate(audit, {touch: size.touch})).clipped, [], tag + ': no text cut');
+            const result = await page.evaluate(audit, {touch: size.touch});
+            assert.deepEqual(result.clipped, [], tag + ': no text cut');
+            assert.deepEqual(result.overlap, [], tag + ': no labels over each other (R4-B2)');
+            if (zoomed) {
+              assert.equal(await card(page, end.id).locator('.rv-aibox.approved').count(), 1, tag + ': the approved red box is drawn');
+              assert.equal(await card(page, end.id).locator('.rv-aibox.approved em').count(), 0, tag + ': without a second label (R4-B2)');
+            }
           }
         }
         await page.close();

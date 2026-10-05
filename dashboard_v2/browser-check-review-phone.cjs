@@ -81,7 +81,7 @@ async function check(name, fn) { await fn(); passed++; process.stderr.write('OK 
       for (const word of PC_ONLY_WORDS) assert.ok(!text.includes(word), 'no PC-only action: ' + word);
       assert.equal(await dialog().locator('[data-op]').count(), 0);
       const result = await page.evaluate(audit, {touch: true});
-      assert.deepEqual([result.outside, result.small, result.tiny, result.clipped, result.page], [[], [], [], [], false], JSON.stringify(result));
+      assert.deepEqual([result.outside, result.small, result.tiny, result.clipped, result.overlap, result.page], [[], [], [], [], [], false], JSON.stringify(result));
       assert.equal(await dialog().locator('a.rv-old').getAttribute('href'), `/review/${job}?from=v2&view=videos`);
     });
 

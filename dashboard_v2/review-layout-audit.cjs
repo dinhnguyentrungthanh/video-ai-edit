@@ -6,6 +6,8 @@
  * - clipped (R4-B1): visible text cut by an ancestor with overflow hidden or clip (the image box of a card, a frame
  *   thumbnail…), up to the nearest scroller (what lies past a scroller can be scrolled into view); only painted
  *   text counts (a card off screen keeps a placeholder size under content-visibility: auto);
+ * - overlap (R4-B2): two visible box labels over one card image (.rv-art em: the "áp dụng …" label of a borrowed red
+ *   box, the labels of the boxes of a zoomed card) that cover each other;
  * - scrolling: the elements that scroll sideways (on a phone only the chip row may);
  * - page: the page itself scrolls sideways.
  * Inside the review dialog and, when open, the dialogs over it (the confirm is inside it; the export dialog is #modal).
@@ -40,7 +42,8 @@ function audit(options) {
     }
     return null;
   };
-  const small = new Set(), tiny = new Set(), outside = new Set(), scrolling = new Set(), clipped = new Set();
+  const painted = el => !el.checkVisibility || el.checkVisibility({contentVisibilityAuto: true});
+  const small = new Set(), tiny = new Set(), outside = new Set(), scrolling = new Set(), clipped = new Set(), overlap = new Set();
   for (const root of roots) {
     for (const el of root.querySelectorAll('*')) {
       if (!shown(el)) continue;
@@ -48,10 +51,16 @@ function audit(options) {
       const text = [...el.childNodes].some(n => n.nodeType === 3 && n.textContent.trim()), r = el.getBoundingClientRect();
       if (text && parseFloat(cs.fontSize) < 12) small.add(label(el) + ' ' + cs.fontSize);
       // A card off screen is not painted (content-visibility: auto) and keeps a placeholder size: nothing to measure there.
-      const painted = !el.checkVisibility || el.checkVisibility({contentVisibilityAuto: true});
-      if (text && painted) { const c = cut(el, r, root); if (c) clipped.add(label(el) + ' "' + el.textContent.trim().slice(0, 40) + '": ' + c); }
+      if (text && painted(el)) { const c = cut(el, r, root); if (c) clipped.add(label(el) + ' "' + el.textContent.trim().slice(0, 40) + '": ' + c); }
       if ((r.right > innerWidth + 1 || r.left < -1) && !scroller(el, root)) outside.add(label(el) + ' ' + Math.round(r.left) + '…' + Math.round(r.right));
       if (/(auto|scroll)/.test(cs.overflowX) && el.scrollWidth > el.clientWidth + 1) scrolling.add(label(el));
+    }
+    for (const art of root.querySelectorAll('.rv-art')) {
+      const labels = [...art.querySelectorAll('em')].filter(el => shown(el) && painted(el)).map(el => [el, el.getBoundingClientRect()]);
+      labels.forEach(([a, ra], i) => labels.slice(i + 1).forEach(([b, rb]) => {
+        const w = Math.min(ra.right, rb.right) - Math.max(ra.left, rb.left), h = Math.min(ra.bottom, rb.bottom) - Math.max(ra.top, rb.top);
+        if (w > 1 && h > 1) overlap.add('"' + a.textContent.trim().slice(0, 30) + '" × "' + b.textContent.trim().slice(0, 30) + '": ' + Math.round(w) + '×' + Math.round(h) + ' px');
+      }));
     }
     if (!touch) continue;
     for (const el of root.querySelectorAll('button, a[href], select, summary, input, label, [data-review="seek"]')) {
@@ -60,7 +69,7 @@ function audit(options) {
       if (r.height < 43.5 || r.width < 43.5) tiny.add(label(el) + ' ' + Math.round(r.width) + '×' + Math.round(r.height));
     }
   }
-  return {small: [...small], tiny: [...tiny], outside: [...outside], scrolling: [...scrolling], clipped: [...clipped],
+  return {small: [...small], tiny: [...tiny], outside: [...outside], scrolling: [...scrolling], clipped: [...clipped], overlap: [...overlap],
     page: document.documentElement.scrollWidth > innerWidth + 1};
 }
 
