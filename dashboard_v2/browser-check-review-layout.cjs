@@ -9,6 +9,8 @@
  *   never changes the header height;
  * - the chip row fades at the side with more chips and keeps its place when a chip is chosen;
  * - the zoomed card, the confirm and the export dialog over the review dialog fit and keep 44 px targets on the phone;
+ * - R4-B1: no visible text is cut by a box with overflow hidden; the "áp dụng …" label of a borrowed red box (S9) stays
+ *   inside the image when the box touches the right, left, top or bottom edge, or fills the height (375 and 1440 px);
  * - no POST, no blob:, no console or CSP error.
  * Run: node dashboard_v2/browser-check-review-layout.cjs
  */
@@ -57,6 +59,7 @@ const job101 = jobs.find(j => j.id === 101), saved101 = JSON.stringify({state: j
   const tap = (page, selector) => touchPages.has(page) ? page.locator(selector).first().tap() : page.locator(selector).first().click();
   const expectClean = (result, size, label) => {
     assert.deepEqual(result.outside, [], label + ': past the window edge');
+    assert.deepEqual(result.clipped, [], label + ': text cut by a box with overflow hidden (R4-B1)');
     assert.equal(result.page, false, label + ': the page scrolls sideways');
     if (size.w <= 820) assert.deepEqual(result.scrolling.filter(x => !x.includes('rv-chips')), [], label + ': only the chip row scrolls sideways');
     else assert.deepEqual(result.scrolling, [], label + ': nothing scrolls sideways');
@@ -120,6 +123,44 @@ const job101 = jobs.find(j => j.id === 101), saved101 = JSON.stringify({state: j
         await page.close();
       });
     }
+
+    await check('R4-B1: the "áp dụng …" label of a borrowed red box stays whole inside the image at every edge, also zoomed (375 × 740 touch and 1440 × 900, light and dark)', async () => {
+      // [left, top, width, height] of the owner's red box, as shares of the frame.
+      const EDGES = {right: [0.86, 0.35, 0.13, 0.12], left: [0.01, 0.35, 0.13, 0.12], 'top right': [0.84, 0, 0.16, 0.1], 'bottom left': [0, 0.9, 0.16, 0.1],
+        'bottom right': [0.85, 0.88, 0.15, 0.12], 'full height, right half': [0.7, 0, 0.3, 1], 'wide, top': [0.05, 0.02, 0.9, 0.08]};
+      const card = (page, id) => page.locator(`#review-dialog article.rv-card[data-item="${id}"]`);
+      for (const theme of ['light', 'dark']) for (const size of [SIZES[0], SIZES[4]]) {
+        const page = await newPage(size, theme);
+        for (const [name, [l, t, w, h]] of Object.entries(EDGES)) {
+          queues.delete(101);
+          const q = queueFor(101), logo = q.items.find(x => x.id === 'visual_logo-101-0007'), end = q.items.find(x => x.id === 'visual_logo-101-0008');
+          const [sw, sh] = logo.source_frame_size.map(Number);
+          logo.decision = 'BLUR';
+          logo.suggested_region_source_pixels = logo.decision_region_source_pixels = {x: Math.round(l * sw), y: Math.round(t * sh), width: Math.round(w * sw), height: Math.round(h * sh)};
+          Object.assign(end, {candidate_type: 'ending_boundary', decision: null, start_seconds: logo.start_seconds + 0.5, end_seconds: logo.end_seconds + 1});
+          await page.goto('about:blank'); // the same address again would not reload the page
+          await page.goto(base + '/dashboard-v2/#review/101/videos');
+          await page.waitForSelector(`#review-dialog article.rv-card[data-item="${end.id}"] .rv-region.borrowed em`);
+          for (const zoomed of [false, true]) {
+            const tag = size.w + ' ' + theme + ' ' + name + (zoomed ? ' zoomed' : '');
+            if (zoomed) { await card(page, end.id).locator('[data-review="zoom"]').click(); await page.waitForSelector(`#review-dialog article.rv-card.zoom[data-item="${end.id}"]`); }
+            await card(page, end.id).locator('.rv-art').scrollIntoViewIfNeeded();
+            const m = await card(page, end.id).locator('.rv-region em').evaluate(em => {
+              const a = em.closest('.rv-art').getBoundingClientRect(), r = em.getBoundingClientRect();
+              return {inside: r.left >= a.left - 0.5 && r.right <= a.right + 0.5 && r.top >= a.top - 0.5 && r.bottom <= a.bottom + 0.5, font: parseFloat(getComputedStyle(em).fontSize),
+                text: em.textContent, box: [r.left - a.left, r.right - a.left, r.top - a.top, r.bottom - a.top].map(Math.round), art: [Math.round(a.width), Math.round(a.height)]};
+            });
+            assert.match(m.text, /^áp dụng \d\d:\d\d\.\d–\d\d:\d\d\.\d$/, tag);
+            assert.ok(m.inside, tag + ': label inside the image ' + JSON.stringify(m));
+            if (size.w <= 820) assert.ok(m.font >= 12, tag + ': 12 px text');
+            assert.deepEqual((await page.evaluate(audit, {touch: size.touch})).clipped, [], tag + ': no text cut');
+          }
+        }
+        await page.close();
+      }
+      queues.delete(101);
+      assert.equal(posts.length, 0, 'nothing sent');
+    });
 
     await check('Phone 390 and 375 px, light and dark: the export dialog over the review dialog fits with 44 px targets; Esc closes only it', async () => {
       const q = queueFor(101);

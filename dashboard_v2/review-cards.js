@@ -10,6 +10,15 @@
   const esc = value => String(value ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
   const GROUPS = {adult:'18+',gore:'Máu me',violence:'Bạo lực',visual_logo:'Logo / quảng cáo',text:'Chữ'};
   const pct = v => (Math.round(v * 10000) / 100) + '%';
+  /* R4-B1: the label of a box over the image stays inside the image. It hangs from the side of the box with more
+   * room: right edge to right edge for a box in the right half, below or above, inside the box when neither fits.
+   * --room is the share of the image width it may use (review.css wraps it there). Shares of the frame in, the
+   * box's class and style out. */
+  function labelPlace(left, top, width, height) {
+    const right = left + width / 2 > 0.5, below = 1 - top - height, above = top;
+    const vertical = Math.max(below, above) < 0.12 ? ' lin' : below >= above ? '' : ' up';
+    return {cls: (right ? ' lr' : '') + vertical, room: ';--room:' + (Math.round((right ? left + width : 1 - left) * 10000) / 10000)};
+  }
   const BATCH = 24;
 
   function groupOf(x) { return GROUPS[x.category] || String(x.category || 'Khác'); }
@@ -64,7 +73,8 @@
     const sw = Number(view.size[0]), sh = Number(view.size[1]), tagged = new Set(view.marks.filter(b => b.a).map(b => b.o));
     return '<span class="rv-boxes">' + view.marks.map(b => {
       const tag = b.a ? 'đã duyệt làm mờ ở thẻ riêng' : b.c && !tagged.has(b.o) ? (tagged.add(b.o), 'watermark — đã có thẻ riêng') : '';
-      return '<span class="rv-aibox' + (b.a ? ' approved' : '') + '" style="left:' + pct(b.x / sw) + ';top:' + pct(b.y / sh) + ';width:' + pct(b.w / sw) + ';height:' + pct(b.h / sh) + '">' + (tag ? '<em>' + esc(tag) + '</em>' : '') + '</span>';
+      const place = tag ? labelPlace(b.x / sw, b.y / sh, b.w / sw, b.h / sh) : {cls: '', room: ''};
+      return '<span class="rv-aibox' + (b.a ? ' approved' : '') + place.cls + '" style="left:' + pct(b.x / sw) + ';top:' + pct(b.y / sh) + ';width:' + pct(b.w / sw) + ';height:' + pct(b.h / sh) + place.room + '">' + (tag ? '<em>' + esc(tag) + '</em>' : '') + '</span>';
     }).join('') + '</span>';
   }
   function zoomExtra(ctx, x) {
@@ -88,8 +98,8 @@
   function regionHtml(ctx, x) {
     const box = R.regionBox(ctx.queue, x);
     if (!box) return '';
-    const borrowed = box.owner !== x.id && D.borrowedRegion(x, ctx.map.get(box.owner));
-    return '<span class="rv-region' + (regionBlurred(ctx, x) ? ' blurred' : '') + (borrowed ? ' borrowed' + (box.top + box.height > 0.84 ? ' up' : '') : '') + '" style="left:' + pct(box.left) + ';top:' + pct(box.top) + ';width:' + pct(box.width) + ';height:' + pct(box.height) + '">' +
+    const borrowed = box.owner !== x.id && D.borrowedRegion(x, ctx.map.get(box.owner)), place = borrowed ? labelPlace(box.left, box.top, box.width, box.height) : {cls: '', room: ''};
+    return '<span class="rv-region' + (regionBlurred(ctx, x) ? ' blurred' : '') + (borrowed ? ' borrowed' + place.cls : '') + '" style="left:' + pct(box.left) + ';top:' + pct(box.top) + ';width:' + pct(box.width) + ';height:' + pct(box.height) + place.room + '">' +
       (borrowed ? '<em>' + esc('áp dụng ' + borrowed.applies) + '</em>' : '') + '</span>';
   }
   function regionBlock(ctx, x) {

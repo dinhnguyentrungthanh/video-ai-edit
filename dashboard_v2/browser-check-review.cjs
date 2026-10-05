@@ -200,8 +200,9 @@ async function check(name, fn) { await fn(); passed++; process.stdout.write('OK 
       assert.equal(await page.locator('.rv-scope').textContent(), 'Không quét trong lượt này: Máu me, Bạo lực. Ít mục hơn không có nghĩa các nhóm này đã an toàn.');
       await page.goto(base + '/dashboard-v2/#review/109/videos'); await page.waitForSelector('#review-dialog[open] .rv-lock');
       assert.match(await page.locator('.rv-lock').textContent(), /^Chỉ xem · Video đã được đánh dấu bỏ qua/);
-      await page.goto(base + '/dashboard-v2/#review/102/videos'); await page.waitForSelector('#review-dialog[open] .rv-message');
-      assert.match(await page.locator('.rv-message').textContent(), /đang được quét lại/);
+      // "Đang tải danh sách cảnh…" comes first; wait for the answer of the queue (a busy machine is slower).
+      await page.goto(base + '/dashboard-v2/#review/102/videos');
+      await page.waitForFunction(() => { const m = document.querySelector('#review-dialog[open] .rv-message'); return m && /đang được quét lại/.test(m.textContent); }, null, {timeout: 10000});
     });
     await check('500 synthetic items: first cards fast, batches of 24, at most 2 images at once, only cards near the view', async () => {
       queues.set(101, Mock.reviewQueue({...jobs.find(j => j.id === 101), duration: '07:26'}, {count: 500, advisory: 20}));

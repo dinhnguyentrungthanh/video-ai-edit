@@ -29,7 +29,7 @@
 .rv-auto { display: flex; align-items: center; gap: 7px; font-size: 13px; color: var(--muted); }
 .rv-card { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; overflow: hidden; content-visibility: auto; contain-intrinsic-size: auto 420px; }
 .rv-card.on { border-color: var(--mint); box-shadow: 0 0 0 2px var(--mint); }
-.rv-art { position: relative; display: block; width: 100%; background: #e3e9f2; overflow: hidden; cursor: pointer; }
+.rv-art { position: relative; display: block; width: 100%; background: #e3e9f2; overflow: hidden; cursor: pointer; container-type: inline-size; }
 .rv-art img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; opacity: 0; transition: opacity .15s; }
 .rv-art.loaded img { opacity: 1; }
 .rv-video { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; background: #000; opacity: 0; pointer-events: none; z-index: 1; }
@@ -39,7 +39,7 @@
 .rv-card.zoom .rv-boxes { display: block; }
 .rv-aibox { position: absolute; box-sizing: border-box; border: 3px dashed #ffc233; }
 .rv-aibox.approved { border: 4px solid #ff304f; }
-.rv-aibox em { position: absolute; left: 0; top: -20px; font: 600 12px system-ui, sans-serif; font-style: normal; color: #ffc233; white-space: nowrap; text-shadow: 0 1px 2px #000; }
+.rv-aibox em { position: absolute; left: 0; top: calc(100% + 2px); font: 600 12px system-ui, sans-serif; font-style: normal; color: #ffc233; text-shadow: 0 1px 2px #000; }
 .rv-aibox.approved em { color: #ff304f; }
 .rv-bar { display: flex; align-items: center; gap: 8px; padding: 8px 12px 0; flex-wrap: wrap; }
 .rv-bar .rv-zoom-btn { margin-left: auto; }
@@ -124,8 +124,15 @@
 .rv-region.blurred { background: #ff304f12; -webkit-backdrop-filter: blur(9px); backdrop-filter: blur(9px); }
 /* S9: a red box borrowed from another logo card: dashed, with the time it applies. */
 .rv-region.borrowed { border-style: dashed; }
-.rv-region em { position: absolute; left: -3px; top: calc(100% + 2px); padding: 1px 5px; border-radius: 4px; font: 600 11px system-ui, sans-serif; font-style: normal; color: #fff; background: #c4243d; white-space: nowrap; }
-.rv-region.up em { top: auto; bottom: calc(100% + 2px); }
+.rv-region em { position: absolute; left: -3px; top: calc(100% + 2px); padding: 1px 5px; border-radius: 4px; font: 600 11px system-ui, sans-serif; font-style: normal; color: #fff; background: #c4243d; }
+/* R4-B1: a box label never leaves the image (review-cards.js labelPlace): right-aligned for a box in the right half,
+ * above when there is more room above, inside the box when neither side has room; it wraps within --room of the
+ * image width (100cqw: .rv-art is the size container). */
+.rv-region em, .rv-aibox em { box-sizing: border-box; width: max-content; max-width: calc(var(--room, 1) * 100cqw - 4px); overflow-wrap: anywhere; }
+.rv-region.lr em { left: auto; right: -3px; }
+.rv-aibox.lr em { left: auto; right: 0; }
+.rv-region.up em, .rv-aibox.up em { top: auto; bottom: calc(100% + 2px); }
+.rv-region.lin em, .rv-aibox.lin em { top: 2px; bottom: auto; }
 .rv-region-block.borrowed { grid-template-columns: minmax(0, 1fr) auto; align-items: center; }
 .rv-card.d-blur-full .rv-art img { filter: blur(14px); }
 .rv-card.d-cut .rv-art img { filter: brightness(.3) grayscale(.4); }
