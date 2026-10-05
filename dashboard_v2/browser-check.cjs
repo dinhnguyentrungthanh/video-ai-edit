@@ -45,7 +45,7 @@ const phoneStatus = () => remoteMode ? {remote: true, enabled: true} : {remote: 
   locked: false, failed_attempts: 0, max_failed_attempts: 10, expires_at: phoneOn ? (phoneExtended ? 1790028800 : 1790000000) : null,
   last_disabled_reason_text: phoneOn ? null : 'hết 8 giờ',
   events: phoneOn ? [{type: 'PHONE_CODE_WRONG', message: 'Thiết bị 192.168.1.50 nhập sai mã', at: 1789990000, ip: '192.168.1.50'}] : []};
-const PC_ONLY = ['/api/source-cleanup', '/api/source-archive', '/api/source-archive/restore', '/api/source-recycle-check',
+const PC_ONLY = ['/api/source-cleanup', '/api/job-delete', '/api/source-archive', '/api/source-archive/restore', '/api/source-recycle-check',
   '/api/shutdown', '/api/ai/config', '/api/ai/login', '/api/logo-memory/class', '/api/logo-memory/delete', '/api/phone-mode'];
 const status = () => ({version: '0.7.24', started: true, scheduler_paused: false, queue: {length: 2, paused: false},
   active: {job_id: 102, stage: 'visual_logo', pid: 1}, jobs, source_cleanup_running: false, detector_options: [],
@@ -480,7 +480,7 @@ async function check(name, fn) { await fn(); passed++; results.push(name); proce
     });
 
     await check('U3: "Hoàn tất" shows a box on every row, the reason when it cannot be ticked, and PC-only on the phone', async () => {
-      const NONE = 'Không có video nào dọn hoặc lưu trữ được';
+      const NONE = 'Không có video nào xóa video gốc hoặc lưu trữ được';
       const MOVED = 'Không thấy bản xuất trong thư mục output (đã bị dời hoặc đổi tên?)';
       const MISSING = 'Video gốc không còn trong thư mục input';
       const OTHER_VOLUME = 'Kho lưu trữ không cùng ổ đĩa với thư mục input; không lưu trữ';
@@ -522,7 +522,7 @@ async function check(name, fn) { await fn(); passed++; results.push(name); proce
           assert.ok(r.status.includes(r.title), 'row ' + r.id + ' shows the reason without a tooltip: ' + r.status);
         }
         const r109 = rows.find(r => r.id === 109), r105 = rows.find(r => r.id === 105);
-        assert.equal(r109.title, 'Dọn: ' + MISSING + ' · Lưu trữ: ' + OTHER_VOLUME, 'archive.reason is added when it differs');
+        assert.equal(r109.title, 'Xóa video gốc: ' + MISSING + ' · Lưu trữ: ' + OTHER_VOLUME, 'archive.reason is added when it differs');
         assert.equal(r105.title, MOVED, 'one reason when cleanup and archive agree');
         assert.equal(r105.why, 'Không chọn được: ' + MOVED);
         const bar = await toolbar();
@@ -568,10 +568,10 @@ async function check(name, fn) { await fn(); passed++; results.push(name); proce
         // 3. Through the phone, even with selectable videos: PC-only, no preview.
         remoteMode = true;
         await openCompleted('remote', 390);
-        await page.waitForFunction(() => document.querySelector('.bulk-toolbar .bulk-label').textContent === 'Dọn và lưu trữ chỉ làm trên PC');
+        await page.waitForFunction(() => document.querySelector('.bulk-toolbar .bulk-label').textContent === 'Xóa video gốc và lưu trữ chỉ làm trên PC');
         const bar3 = await toolbar();
         assert.deepEqual([bar3.pick, bar3.clear, bar3.clean, bar3.archive], [true, true, true, true], JSON.stringify(bar3));
-        assert.match(bar3.cleanTitle, /^Chỉ làm trên PC: dọn, lưu trữ/);
+        assert.match(bar3.cleanTitle, /^Chỉ làm trên PC: xóa video và video gốc, lưu trữ/);
         assert.equal(bar3.archiveTitle, bar3.cleanTitle);
         for (const r of await boxes()) {
           assert.ok(r.box && r.disabled && !r.checked, 'phone row ' + r.id);
@@ -579,7 +579,7 @@ async function check(name, fn) { await fn(); passed++; results.push(name); proce
           assert.equal(r.why, '', 'no per-row reason on the phone: the toolbar says PC only');
         }
         const previews = [];
-        const onRequest = r => { if (/source-(cleanup|archive)/.test(r.url())) previews.push(r.url()); };
+        const onRequest = r => { if (/source-(cleanup|archive)|job-delete/.test(r.url())) previews.push(r.url()); };
         page.on('request', onRequest);
         await page.locator('[data-action="bulk-cleanup"]').click({force: true});
         await page.locator('[data-action="bulk-archive"]').click({force: true});

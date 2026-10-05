@@ -1,8 +1,8 @@
 {
-  "note": "SHA-256 of the classic pages at main f6996bb (before Dashboard V2). /review/1 uses token 'test-token'. Update only when the classic dashboard or review page is changed on purpose.",
+  "note": "SHA-256 of the classic pages. /review/1 (token 'test-token') is unchanged since main f6996bb (before Dashboard V2). / was changed on purpose by D4 of the delete flow (permanent-delete dialogs, lost-videos notice, golden-set lock). Update only when the classic dashboard or review page is changed on purpose.",
   "base_commit": "f6996bb",
-  "dashboard_sha256": "b7d92bb48f7c3a94fe04b311ffed65f7b4a47286d6a093ff20e313469e8a1173",
-  "dashboard_bytes": 89946,
+  "dashboard_sha256": "8a4d5be200ff068a5c79fc47897b6c5361abe9c6b8dd6cd811ded8a3ceddff63",
+  "dashboard_bytes": 101763,
   "review_job_1_token_test_sha256": "a7e24f876093540d18fb9fd13bc8879c9b9b70bfa5c1f67bc03d01b82b868313",
   "review_bytes": 127875
 }

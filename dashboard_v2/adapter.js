@@ -216,10 +216,10 @@
       loadPhone: () => get(C.endpoints.phoneStatus[1]),
       health: () => get(C.endpoints.health[1]),
       review,
-      /* Read-only preview right before a cleanup / archive. */
+      /* Read-only preview right before a cleanup ("Xóa video gốc"), a delete ("Xóa video") or an archive. */
       async preview(kind, ids) {
         const list = positiveIds(ids);
-        const endpoint = kind === 'cleanup' ? C.endpoints.cleanupPreview : kind === 'archive' ? C.endpoints.archivePreview : null;
+        const endpoint = {cleanup: C.endpoints.cleanupPreview, delete: C.endpoints.deletePreview, archive: C.endpoints.archivePreview}[kind] || null;
         if (!endpoint) throw new AdapterError(400, 'Loại xem trước không hợp lệ.');
         return get(endpoint[1] + '?ids=' + encodeURIComponent(list.join(',')));
       },
@@ -363,8 +363,11 @@
       },
       preview: (kind, ids) => adapter.preview(kind, ids),
       async fileAction(kind, ids, previewId) {
-        const operation = kind === 'cleanup' ? 'cleanup' : 'archive';
-        const result = await adapter.dispatch(operation, null, {job_ids: ids, preview_id: previewId});
+        const operation = ['cleanup', 'delete'].includes(kind) ? kind : 'archive';
+        const body = {job_ids: ids, preview_id: previewId};
+        // The dialog's "Tôi hiểu" box was ticked: the server refuses a permanent delete without this (400).
+        if (operation !== 'archive') body.confirm_permanent = true;
+        const result = await adapter.dispatch(operation, null, body);
         await refresh();
         return result.body;
       },

@@ -62,7 +62,8 @@ test('Every operation of guide section 4 uses its real path and body', async () 
     ['shutdown', null, {mode: 'after_stage'}, '/api/shutdown'],
     ['aiConfig', null, {enabled: true, model: 'gpt-5.6-luna', reasoning_effort: 'low'}, '/api/ai/config'],
     ['aiCheck', null, {}, '/api/ai/check'], ['aiLogin', null, {}, '/api/ai/login'],
-    ['cleanup', null, {job_ids: [1, 2], preview_id: 'p1'}, '/api/source-cleanup'],
+    ['cleanup', null, {job_ids: [1, 2], preview_id: 'p1', confirm_permanent: true}, '/api/source-cleanup'],
+    ['delete', null, {job_ids: [5], preview_id: 'p3', confirm_permanent: true}, '/api/job-delete'],
     ['archive', null, {job_ids: [3], preview_id: 'p2'}, '/api/source-archive'],
     ['restore', null, {job_id: 4}, '/api/source-archive/restore'],
     ['recheck', null, {kind: 'source_cleanup', id: 901}, '/api/source-recycle-check'],
@@ -176,9 +177,12 @@ test('A double click sends one POST; a later click sends again', async () => {
 });
 
 test('Previews are GET only, with encoded ids and the 1-50 limit', async () => {
-  const f = fake({'GET /api/source-archive/preview?ids=3%2C4': {status: 200, body: {preview_id: 'x', eligible: []}}});
+  const f = fake({'GET /api/source-archive/preview?ids=3%2C4': {status: 200, body: {preview_id: 'x', eligible: []}},
+    'GET /api/job-delete/preview?ids=111%2C113': {status: 200, body: {preview_id: 'd', eligible: []}}});
   const a = adapterWith(f);
   assert.equal((await a.preview('archive', [3, 4])).preview_id, 'x');
+  assert.equal((await a.preview('delete', [111, 113])).preview_id, 'd');
+  await assert.rejects(() => a.preview('purge', [1]), e => e.status === 400);
   await assert.rejects(() => a.preview('cleanup', []));
   await assert.rejects(() => a.preview('cleanup', Array.from({length: 51}, (_, i) => i + 1)));
   await assert.rejects(() => a.preview('cleanup', [1, -2]));
@@ -228,6 +232,20 @@ test('Live store: a refused file action is not followed by any other write', asy
   assert.equal(f.posts().length, 1);
 });
 
+test('Live store: "Xóa video gốc" and "Xóa video" send confirm_permanent, "Lưu trữ" does not', async () => {
+  const ok = {status: 200, body: {results: []}};
+  const f = fake({'POST /api/source-cleanup': ok, 'POST /api/job-delete': ok, 'POST /api/source-archive': ok, 'GET /api/status': {status: 200, body: {jobs: []}}});
+  const store = A.createLiveStore(adapterWith(f));
+  await store.fileAction('cleanup', [1], 'p1');
+  await store.fileAction('delete', [2, 3], 'p2');
+  await store.fileAction('archive', [4], 'p3');
+  assert.deepEqual(f.posts().map(p => [p.path, p.body]), [
+    ['/api/source-cleanup', {job_ids: [1], preview_id: 'p1', confirm_permanent: true}],
+    ['/api/job-delete', {job_ids: [2, 3], preview_id: 'p2', confirm_permanent: true}],
+    ['/api/source-archive', {job_ids: [4], preview_id: 'p3'}],
+  ]);
+});
+
 test('Phone mode: the PC store keeps the status with its code; the phone store only learns it is remote', async () => {
   const pcStatus = {remote: false, enabled: true, url: 'http://192.168.1.5:8767/', code: 'abcd2345', locked: false};
   const f = fake({'GET /api/phone-mode': {status: 200, body: pcStatus}, 'GET /api/status': {status: 200, body: {jobs: []}},
@@ -251,7 +269,7 @@ test('Phone mode: the PC store keeps the status with its code; the phone store o
 });
 
 test('Phone mode: a 403 pc_only refusal is shown, without token refresh or resend', async () => {
-  const f = fake({'POST /api/source-cleanup': {status: 403, body: {error: 'Chỉ làm trên PC: dọn…', code: 'pc_only'}}});
+  const f = fake({'POST /api/source-cleanup': {status: 403, body: {error: 'Chỉ làm trên PC: xóa video…', code: 'pc_only'}}});
   const a = adapterWith(f);
   await assert.rejects(() => a.dispatch('cleanup', null, {job_ids: [1], preview_id: 'p'}),
     e => e.status === 403 && /Chỉ làm trên PC/.test(e.message));

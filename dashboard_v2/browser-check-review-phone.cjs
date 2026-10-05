@@ -24,7 +24,7 @@ const pw = loadPlaywright();
 if (!pw) { process.stdout.write('SKIP browser-check-review-phone: Playwright is not installed\n'); process.exit(0); }
 const allowed = JSON.parse(process.env.BILIFLOW_PHONE_POSTS || '[]').map(p => new RegExp('^' + p + '$'));
 const {audit} = require('./review-layout-audit.cjs');
-const PC_ONLY_WORDS = ['Dọn video gốc', 'Lưu trữ', 'Khôi phục bản xuất', 'Kiểm tra lại Thùng rác', 'Thùng rác'];
+const PC_ONLY_WORDS = ['Xóa video gốc', 'Xóa video', 'Dọn video mất gốc', 'Dọn video gốc', 'Lưu trữ', 'Khôi phục bản xuất', 'Kiểm tra lại Thùng rác', 'Thùng rác'];
 
 let passed = 0;
 async function check(name, fn) { await fn(); passed++; process.stderr.write('OK ' + name + '\n'); }

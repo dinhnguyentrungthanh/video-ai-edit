@@ -229,4 +229,52 @@ check('Demo store review writes (R2, R3): decision / clear / bulk change the syn
   assert.equal(r.pendingWrites(),0);
   assert.ok(!/fetch\(|XMLHttpRequest/.test(fs.readFileSync(path.join(__dirname,'demo-store.js'),'utf8')));
 });
+check('Delete flow: "Xóa video" follows the server hint, the golden set, the file lock and the phone',()=>{
+  const cancelled=job('CANCELLED',{delete:{eligible:true,kind:'CANCELLED',reason:null,size_bytes:5}});
+  assert.deepEqual([has(cancelled,'delete').label,has(cancelled,'delete').enabled],['Xóa video',true]);
+  assert.equal(has(cancelled,'delete',{aiReady:true,fileBusy:true}).enabled,false);
+  const phone=has(cancelled,'delete',{aiReady:true,remote:true});
+  assert.deepEqual([phone.enabled,phone.reason],[false,C.PC_ONLY_REASON]);
+  const golden=has({...cancelled,protected:'Video thuộc bộ golden'},'delete');
+  assert.deepEqual([golden.enabled,golden.reason],[false,'Video thuộc bộ golden']);
+  const refused=has(job('COMPLETED',{source_present:false,delete:{eligible:false,kind:'LOST',reason:'Video gốc còn trong Thùng rác'}}),'delete');
+  assert.deepEqual([refused.enabled,refused.reason],[false,'Video gốc còn trong Thùng rác']);
+  assert.equal(has(job('COMPLETED'),'delete'),undefined,'no hint, no button');
+  const clean=has(job('COMPLETED',{cleanup:{eligible:true},protected:'Video thuộc bộ golden'}),'cleanup');
+  assert.deepEqual([clean.label,clean.enabled,clean.reason],['Xóa video gốc',false,'Video thuộc bộ golden']);
+  assert.deepEqual(C.permanentOps,['cleanup','delete']);
+  assert.ok(C.pcOnlyOps.includes('delete'));
+  assert.deepEqual(C.endpoints.delete,['POST','/api/job-delete']);
+  assert.deepEqual(C.endpoints.deletePreview,['GET','/api/job-delete/preview']);
+});
+check('Delete flow: "Dọn video mất gốc" lists only eligible lost videos outside the golden set',()=>{
+  const lost=(id,extra={})=>({id,state:'COMPLETED',source_present:false,delete:{eligible:true,kind:'LOST'},...extra});
+  assert.deepEqual(C.lostIds([lost(9),lost(3),lost(4,{protected:'golden'}),lost(5,{delete:{eligible:false,kind:'LOST'}}),
+    {id:6,state:'CANCELLED',delete:{eligible:true,kind:'CANCELLED'}},{id:7,state:'COMPLETED',delete:{eligible:false,kind:null,reason:'x'}},null]),[3,9]);
+  assert.deepEqual(C.lostIds(undefined),[]);
+});
+check('Demo store: permanent deletes remove the video and send confirm_permanent; archive does not',async()=>{
+  const ctx={window:{BFContracts:C},structuredClone};
+  vm.runInNewContext(fs.readFileSync(path.join(__dirname,'mock-data.js'),'utf8'),ctx);
+  const S=require('./demo-store.js').create(C,ctx.window.BFMock),last=()=>{const r=S.snapshot().requests;return r[r.length-1];};
+  const p=await S.preview('delete',[111,113,105]);
+  assert.deepEqual(p.eligible.map(x=>[x.job_id,x.kind]),[[111,'CANCELLED'],[113,'LOST']]);
+  assert.deepEqual(p.ineligible.map(x=>x.job_id),[105]);
+  assert.equal(p.recycle_bin,undefined);
+  assert.equal(p.total_bytes,p.eligible[0].size_bytes);
+  assert.equal(last().path,'/api/job-delete/preview?ids=111,113,105');
+  const r=await S.fileAction('delete',[111,113,105],p.preview_id);
+  assert.deepEqual(r.results.map(x=>[x.job_id,x.status]),[[111,'DELETED'],[113,'DELETED']]);
+  assert.ok(!S.snapshot().jobs.some(j=>[111,113].includes(j.id)));
+  assert.deepEqual([last().method,last().path,last().body.confirm_permanent],['POST','/api/job-delete',true]);
+  const c=await S.preview('cleanup',[105]);
+  assert.equal(c.recycle_bin,undefined);
+  await S.fileAction('cleanup',[105],c.preview_id);
+  assert.deepEqual([last().path,last().body.confirm_permanent],['/api/source-cleanup',true]);
+  assert.ok(!S.snapshot().jobs.some(j=>j.id===105));
+  const a=await S.preview('archive',[109]);
+  assert.ok(a.recycle_bin);
+  await S.fileAction('archive',[109],a.preview_id);
+  assert.deepEqual([last().path,last().body.confirm_permanent],['/api/source-archive',undefined]);
+});
 Promise.all(pending).then(()=>process.stdout.write(JSON.stringify({passed:checks,failed:0})+'\n'),error=>{console.error(error);process.exitCode=1;});

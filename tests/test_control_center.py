@@ -513,12 +513,13 @@ class ControlCenterVisualAuditTests(unittest.TestCase):
         dialog = page.index('<dialog id="cleanup-dialog" aria-labelledby="cleanup-title">')
         self.assertGreater(dialog, page.index('<section id="jobs" class="job-list"></section></section></main>'))
         self.assertLess(dialog, page.index("<script>"))
+        # D4: "Xóa video gốc" deletes for good (docs/DELETE_FLOW_PLAN.md); its dialog no longer promises the bin.
         self.assertIn(
             '<form class="cleanup-form" method="dialog" onsubmit="return false"><h2 id="cleanup-title">'
-            'Chuyển video gốc vào Thùng rác</h2><div id="cleanup-dialog-body" class="cleanup-scroll"></div>'
+            'Xóa vĩnh viễn video gốc</h2><div id="cleanup-dialog-body" class="cleanup-scroll"></div>'
             '<div class="cleanup-actions"><button type="button" id="cleanup-cancel" onclick="closeCleanupDialog()">'
             'Hủy</button><button type="button" class="danger" id="cleanup-confirm" onclick="confirmCleanup()" '
-            'disabled>Chuyển vào Thùng rác</button></div></form></dialog>',
+            'disabled>Xóa vĩnh viễn</button></div></form></dialog>',
             page,
         )
         self.assertIn(f"const SOURCE_CLEANED_MESSAGE='{SOURCE_CLEANED_MESSAGE}';", page)
@@ -526,49 +527,89 @@ class ControlCenterVisualAuditTests(unittest.TestCase):
         self.assertNotIn("__SOURCE", page)
         self.assertNotIn("__EXPORT", page)
         for text in (
+            # The source line of legacy Recycle Bin rows (shared with Dashboard V2) is unchanged.
             "Đã dọn video gốc · ", " (đang ở Thùng rác)",
             " · Windows chưa xác nhận bản ghi trong Thùng rác; hãy kiểm tra Thùng rác.",
             "Đang dọn video gốc…", "Đã khôi phục video gốc (SHA-256 khớp)",
             "Lần dọn trước không thành công: ", "Không còn video gốc trong input", "Chưa dọn được: ",
-            " Chọn</label>", ">Dọn video gốc</button>", "Đang dọn video gốc; chờ lượt hiện tại xong.",
             "Chép lại video gốc vào input để chạy lại (đúng tên: ",
-            'role="group" aria-label="Dọn video gốc"', "Dọn video gốc: ", " video dọn được · đã chọn ",
-            "Chọn tất cả video dọn được", ">Bỏ chọn</button>", "Dọn video gốc đã chọn (",
-            "Chỉ chuyển vào Thùng rác của Windows, không xóa vĩnh viễn.",
-            "Mỗi lần dọn tối đa 50 video; đã chọn 50 video đầu tiên.",
-            "Không lấy được danh sách dọn video gốc: ",
-            "Các video gốc dưới đây sẽ được chuyển vào Thùng rác của Windows (không xóa vĩnh viễn). Report, "
-            "quyết định duyệt, bộ nhớ logo/studio và video đã xuất được giữ nguyên. Dung lượng chỉ được giải "
-            "phóng khi bạn dọn sạch Thùng rác; trước đó bạn có thể khôi phục video từ Thùng rác.",
-            '<p class="cleanup-alert" role="alert">', "<th>Video gốc</th><th>Dung lượng</th>"
-            "<th>Video đã xuất</th><th>Xuất lúc</th>", 'data-label="Video gốc"', 'data-label="Dung lượng"',
-            'data-label="Video đã xuất"', 'data-label="Xuất lúc"', "Đã bỏ qua (không xuất)", "Bỏ qua lúc ",
-            "Tổng cộng: ${n} video · ", " sẽ được giải phóng sau khi dọn sạch Thùng rác.",
-            "Thùng rác của ổ ${rb.volume} đang chứa ", " / giới hạn ", "; sau khi chuyển: ",
-            '<p class="cleanup-block" role="alert">', "Không có video nào dọn được trong lựa chọn này.",
-            "Không thể dọn:", "Chuyển ${n} video vào Thùng rác",
-            "Đang kiểm tra SHA-256 và chuyển vào Thùng rác…",
+            # The card button and the "Hoàn tất" toolbar.
+            " Chọn</label>", ">Xóa video gốc</button>",
+            "const CLEANUP_RUNNING_TITLE='Đang xóa, lưu trữ hoặc khôi phục video gốc; chờ lượt hiện tại xong.';",
+            "Xóa vĩnh viễn video gốc trong input, manifest của bản xuất và dữ liệu của video trong BiliFlow; "
+            "file .mp4 trong output được giữ.",
+            'role="group" aria-label="Xóa video gốc"', "Xóa video gốc: ", " video xóa được · đã chọn ",
+            "Chọn tất cả video xóa được", ">Bỏ chọn</button>", "Xóa video gốc đã chọn (",
+            "Xóa vĩnh viễn, không qua Thùng rác; file .mp4 trong output được giữ.",
+            "Mỗi lần xóa tối đa 50 video; đã chọn 50 video đầu tiên.",
+            # The dialog: what goes for good, what stays, the sizes and the "Tôi hiểu" box.
+            "Không lấy được danh sách xóa video gốc: ",
+            "<p>Các video dưới đây sẽ bị xóa vĩnh viễn: không qua Thùng rác, không khôi phục được.</p><ul>"
+            "<li>Video gốc trong thư mục input.</li><li>Manifest của bản xuất (…-reviewed.mp4.manifest.json).</li>"
+            "<li>Thư mục báo cáo và log của video.</li><li>Video trong BiliFlow, cùng quyết định duyệt của nó.</li>"
+            "</ul><p>Giữ nguyên: file .mp4 đã xuất trong output (không còn gắn với video nào trong BiliFlow), bộ nhớ "
+            "logo/studio và các báo cáo benchmark. Sau khi xóa, video không duyệt hay xuất lại được nữa.</p>",
+            '<p class="cleanup-alert" role="alert">', "<th>Video gốc</th><th>Dung lượng</th><th>Báo cáo, log</th>"
+            "<th>Bản xuất (giữ .mp4)</th><th>Xuất lúc</th>", 'data-label="Video gốc"', 'data-label="Dung lượng"',
+            'data-label="Báo cáo, log">${esc(formatBytes(x.reports_bytes))}', 'data-label="Bản xuất (giữ .mp4)"',
+            'data-label="Xuất lúc"', "Đã bỏ qua (không xuất)", "Bỏ qua lúc ",
+            "Tổng cộng: ${n} video · ${formatBytes(p.total_bytes)} video gốc · ${formatBytes(p.reports_bytes)} "
+            "báo cáo và log sẽ bị xóa vĩnh viễn.",
+            "Không có video nào xóa được trong lựa chọn này.", "<p>Không thể xóa:</p>",
+            '<label class="cleanup-ack"><input type="checkbox" id="cleanup-ack" ${cleanupAck?\'checked\':\'\'} '
+            'onchange="setCleanupAck(this.checked)"> <span>${esc(CLEANUP_ACK_TEXT)}</span></label>',
+            "const CLEANUP_ACK_TEXT='Tôi hiểu: video gốc và dữ liệu của các video này bị xóa vĩnh viễn, không khôi "
+            "phục được; các video này không duyệt hay xuất lại được nữa.';",
+            "Xóa vĩnh viễn ${n} video gốc", "Đang kiểm tra SHA-256 và xóa…",
             "Có thể mất vài phút với nhiều video; đừng tắt BiliFlow.",
-            "/api/source-cleanup/preview?ids=", "post('/api/source-cleanup',{job_ids:ids,preview_id:p.preview_id})",
-            "Đã chuyển ${n} video gốc vào Thùng rác (", "). Dung lượng được giải phóng khi bạn dọn sạch Thùng rác.",
-            "Không chuyển được video gốc nào vào Thùng rác.", " Không dọn được #${x.job_id}: ",
-            ": đã chuyển nhưng Windows chưa xác nhận bản ghi trong Thùng rác; hãy kiểm tra Thùng rác.",
-            "Danh sách đã thay đổi, hãy xem lại.", "Không dọn được: ${e.message}",
+            # Only a ticked box sends, and the request says it is a permanent delete (an older page gets 400).
+            "/api/source-cleanup/preview?ids=", "if(!p||!p.preview_id||!ids.length||!cleanupAck)return;",
+            "post('/api/source-cleanup',{job_ids:ids,preview_id:p.preview_id,confirm_permanent:true})",
+            # The result notice and the selection.
+            "Đã xóa vĩnh viễn ${n} video gốc và xóa ${n} video khỏi BiliFlow.", "Không xóa được video gốc nào.",
+            " Dung lượng video gốc đã xóa: ", " Không xóa được #${x.job_id}: ",
+            "if(['DELETED','PARTIAL'].includes(x.status))cleanupSelection.delete(x.job_id)",
+            "Danh sách đã thay đổi, hãy xem lại.", "Không xóa được: ${e.message}",
         ):
             with self.subTest(text=text):
                 self.assertIn(text, page)
-        # In-memory selection only; the cleanup code never touches localStorage.
+        # Gone from the cleanup code: the Recycle Bin line, the capacity block and the old results.
+        script = page[page.index("<script>"):page.rindex("</script>")]
+        cleanup_code = "".join(_dashboard_function(script, name) for name in (
+            "cleanupControls", "cleanupToolbar", "updateCleanupToolbar", "selectAllCleanup", "openCleanup",
+            "cleanupRow", "renderCleanupDialog", "cleanupResultText", "confirmCleanup"))
+        for text in ("recycle_bin", "rb.volume", "blocked", "cleanup-block", "cleanup-bin", "recycled_count",
+                     "recycled_bytes", "RECYCLED", "UNVERIFIED", "bin_capacity", "bin_unavailable", "Dọn video gốc",
+                     "dọn được", "Thùng rác của Windows", "dọn sạch Thùng rác"):
+            with self.subTest(absent=text):
+                self.assertNotIn(text, cleanup_code)
+        # In-memory selection and tick only; the cleanup code never touches localStorage. A new list
+        # (another preview id) and every close clear the tick.
         self.assertIn(
             "const cleanupSelection=new Set();let cleanupPreview=null,cleanupOpening=false,cleanupPosting=false;",
             page,
         )
-        script = page[page.index("<script>"):page.rindex("</script>")]
+        self.assertIn(
+            "let cleanupAck=false;let deletePreview=null,deleteOpening=false,deletePosting=false,deleteAck=false;", page,
+        )
+        self.assertIn(
+            "if(!p||!cleanupPreview||p.preview_id!==cleanupPreview.preview_id)cleanupAck=false;cleanupPreview=p||null;",
+            page,
+        )
+        self.assertIn("confirmButton.textContent=`Xóa vĩnh viễn ${n} video gốc`;confirmButton.disabled=!cleanupConfirmable()",
+                      page)
+        self.assertIn("cleanupPreview=null;cleanupAck=false}", page)
         for name in ("pruneCleanupSelection", "toggleCleanup", "selectAllCleanup", "clearCleanupSelection",
                      "updateCleanupToolbar", "cleanupControls", "cleanupToolbar", "openCleanup",
-                     "renderCleanupDialog", "confirmCleanup", "closeCleanupDialog", "watchCleanupDialog"):
+                     "renderCleanupDialog", "confirmCleanup", "closeCleanupDialog", "watchCleanupDialog",
+                     "setCleanupAck", "cleanupConfirmable", "cleanupResultText", "deleteDetails"):
             with self.subTest(function=name):
                 body = _dashboard_function(script, name)
                 self.assertNotIn("storage", body.casefold())
+        # A golden-set video ("protected") is never selected for "Xóa video gốc"; its button stays, disabled.
+        self.assertIn("function cleanupEligible(j){return cleanupReady(j)&&!j.protected}", page)
+        self.assertIn("if(cleanupReady(j))a.push(cleanupControls(j));", page)
+        self.assertIn("why=j.protected||(running?CLEANUP_RUNNING_TITLE:'')", page)
         # Errors keep the server's code and body, so a 409 can carry the new preview.
         self.assertIn(
             "if(!r.ok){const e=Error(v.error||r.statusText);e.status=r.status;e.code=v.code||null;e.body=v;throw e}",
@@ -595,6 +636,9 @@ class ControlCenterVisualAuditTests(unittest.TestCase):
         dialog_rule = base[base.index("#cleanup-dialog{"):]
         dialog_rule = dialog_rule[:dialog_rule.index("}")]
         self.assertIn("background:#141923;color:#e8ecf4", dialog_rule)
+        # The "Tôi hiểu" box stands out in red; its checkbox keeps its size.
+        self.assertIn(".cleanup-ack{display:flex;", style)
+        self.assertIn(".cleanup-ack input{flex:none;width:17px;height:17px;", style)
         phone = style[style.index("@media(max-width:680px)"):]
         for rule in (".cleanup-toolbar button{flex:1 1 100%}", ".cleanup-table thead{display:none}",
                      ".cleanup-table tr,.cleanup-table td{display:block}",
@@ -681,7 +725,12 @@ class ControlCenterVisualAuditTests(unittest.TestCase):
                 self.assertTrue(cards[job_id]["hasCleanupPick"])
                 self.assertTrue(cards[job_id]["hasCleanupButton"])
                 self.assertFalse(cards[job_id]["cleanupButtonDisabled"])
+                self.assertEqual(cards[job_id]["cleanupButtonTitle"],
+                                 "Xóa vĩnh viễn video gốc trong input, manifest của bản xuất và dữ liệu của video "
+                                 "trong BiliFlow; file .mp4 trong output được giữ.")
                 self.assertFalse(cards[job_id]["cleanupChecked"])
+                self.assertIsNone(cards[job_id]["deleteButton"])
+                self.assertIsNone(cards[job_id]["protectedNote"])
         self.assertIsNone(cards["42"]["sourceLine"])
         self.assertTrue(cards["45"]["sourceLine"].startswith("Đã khôi phục video gốc (SHA-256 khớp) lúc "))
         self.assertTrue(cards["60"]["hasUnskip"])
@@ -719,11 +768,11 @@ class ControlCenterVisualAuditTests(unittest.TestCase):
         # The toolbar heads the tab.
         toolbar = out["toolbar0"]
         self.assertTrue(toolbar["first"])
-        self.assertEqual(toolbar["summary"], "Dọn video gốc: 3 video dọn được · đã chọn 0 (0 MB)")
-        self.assertEqual(toolbar["run"], {"text": "Dọn video gốc đã chọn (0)", "disabled": True, "title": ""})
-        self.assertEqual(toolbar["all"]["text"], "Chọn tất cả video dọn được")
+        self.assertEqual(toolbar["summary"], "Xóa video gốc: 3 video xóa được · đã chọn 0 (0 MB)")
+        self.assertEqual(toolbar["run"], {"text": "Xóa video gốc đã chọn (0)", "disabled": True, "title": ""})
+        self.assertEqual(toolbar["all"]["text"], "Chọn tất cả video xóa được")
         self.assertTrue(toolbar["none"]["disabled"])
-        self.assertEqual(toolbar["note"], "Chỉ chuyển vào Thùng rác của Windows, không xóa vĩnh viễn.")
+        self.assertEqual(toolbar["note"], "Xóa vĩnh viễn, không qua Thùng rác; file .mp4 trong output được giữ.")
         self.assertEqual(out["selection0"], [])
         # A focused checkbox does not hold the rebuild back (only text fields and selects do).
         self.assertTrue(out["focused_checkbox"])
@@ -731,39 +780,50 @@ class ControlCenterVisualAuditTests(unittest.TestCase):
         # Select all, untick #45 in place, survive a poll, prune when a video leaves the tab.
         self.assertEqual(out["after_all"]["selection"], [42, 45, 60])
         self.assertEqual(out["after_all"]["checked"], {"42": True, "45": True, "60": True})
-        self.assertEqual(out["after_all"]["toolbar"]["run"]["text"], "Dọn video gốc đã chọn (3)")
+        self.assertEqual(out["after_all"]["toolbar"]["run"]["text"], "Xóa video gốc đã chọn (3)")
         self.assertFalse(out["after_all"]["toolbar"]["run"]["disabled"])
         toggle = out["after_toggle"]
         self.assertEqual(toggle["selection"], [42, 60])
         self.assertTrue(toggle["html_unchanged"])
-        self.assertEqual((toggle["run_text"], toggle["run_disabled"]), ("Dọn video gốc đã chọn (2)", False))
-        self.assertEqual(toggle["summary"], "Dọn video gốc: 3 video dọn được · đã chọn 2 (477 MB)")
+        self.assertEqual((toggle["run_text"], toggle["run_disabled"]), ("Xóa video gốc đã chọn (2)", False))
+        self.assertEqual(toggle["summary"], "Xóa video gốc: 3 video xóa được · đã chọn 2 (477 MB)")
         self.assertEqual(out["after_load"]["selection"], [42, 60])
         self.assertEqual(out["after_load"]["checked"], {"42": True, "45": False, "60": True})
         self.assertEqual(out["after_ready"], [42])
         self.assertEqual(out["after_back"], [42])
         self.assertEqual(out["preview_error"], {
-            "notice": "Không lấy được danh sách dọn video gốc: Chọn từ 1 đến 50 video mỗi lần dọn.",
+            "notice": "Không lấy được danh sách xóa video gốc: Chọn từ 1 đến 50 video mỗi lần dọn.",
             "error": True, "open": False,
         })
-        # The preview dialog (ids deduplicated and sorted).
+        # The preview dialog (ids deduplicated and sorted): what goes for good, what stays, the sizes.
         preview = out["preview"]
         self.assertEqual(preview["calls"], ["42,60"])
         self.assertEqual((preview["open"], preview["shown"], preview["focused"]), (True, 1, 1))
-        for text in ("#42 Tập 12.mp4", "240 MB", "Đã bỏ qua (không xuất)", "Bỏ qua lúc ",
-                     "Tổng cộng: 2 video · 477 MB sẽ được giải phóng sau khi dọn sạch Thùng rác.",
-                     "Thùng rác của ổ E: đang chứa 11,0 GB / giới hạn 48,6 GB; sau khi chuyển: 11,5 GB.",
-                     'data-label="Dung lượng"'):
+        for text in ("#42 Tập 12.mp4", "240 MB", "Đã bỏ qua (không xuất)", "Bỏ qua lúc ", 'data-label="Dung lượng"',
+                     '<td data-label="Báo cáo, log">50 MB</td>', "ep-42-reviewed.mp4 (100 MB)",
+                     "Tổng cộng: 2 video · 477 MB video gốc · 70 MB báo cáo và log sẽ bị xóa vĩnh viễn.",
+                     "<li>Video gốc trong thư mục input.</li>", "Manifest của bản xuất (…-reviewed.mp4.manifest.json)",
+                     "Giữ nguyên: file .mp4 đã xuất trong output", "video không duyệt hay xuất lại được nữa."):
             with self.subTest(text=text):
                 self.assertIn(text, preview["body"])
-        self.assertEqual((preview["confirm"], preview["confirmDisabled"]), ("Chuyển 2 video vào Thùng rác", False))
-        # Hủy posts nothing, and confirm without an open preview posts nothing.
-        self.assertEqual(out["cancel"], {"posts": 0, "open": False, "preview_cleared": True})
+        for text in ("Thùng rác của ổ", "dọn sạch Thùng rác", "cleanup-block"):
+            with self.subTest(absent=text):
+                self.assertNotIn(text, preview["body"])
+        # The "Tôi hiểu" box starts unticked, so the confirm starts disabled.
+        self.assertEqual((preview["confirm"], preview["confirmDisabled"]), ("Xóa vĩnh viễn 2 video gốc", True))
+        self.assertEqual((preview["ack"], preview["ackShown"], preview["ackChecked"]), (False, True, False))
+        self.assertEqual(out["unticked"], {"posts": 0, "confirmDisabled": True})
+        self.assertEqual(out["ticked"], {"ack": True, "confirmDisabled": False})
+        self.assertEqual(out["unticked_again"], {"ack": False, "confirmDisabled": True})
+        # Hủy posts nothing and forgets the tick; confirm without an open preview posts nothing.
+        self.assertEqual(out["cancel"], {"posts": 0, "open": False, "preview_cleared": True, "ack_cleared": True})
+        self.assertEqual((out["reopened"]["ack"], out["reopened"]["confirmDisabled"]), (False, True))
         # Two clicks on confirm: one POST of the eligible ids with the preview id; Esc and Hủy do nothing meanwhile.
         posting = out["posting"]
-        self.assertEqual(posting["confirm"], "Đang kiểm tra SHA-256 và chuyển vào Thùng rác…")
+        self.assertEqual(posting["confirm"], "Đang kiểm tra SHA-256 và xóa…")
         self.assertTrue(posting["confirmDisabled"])
         self.assertTrue(posting["cancelDisabled"])
+        self.assertTrue(posting["ack_locked"])
         self.assertTrue(posting["esc_prevented"])
         self.assertTrue(posting["wait_shown"])
         self.assertTrue(posting["open_after_close_click"])
@@ -771,63 +831,81 @@ class ControlCenterVisualAuditTests(unittest.TestCase):
         self.assertTrue(posting["open_after_forced_close"])
         self.assertEqual(posting["reshown"], 1)
         self.assertTrue(posting["preview_kept"])
+        # The POST says it is a permanent delete; the deleted videos leave BiliFlow and the list.
         ok = out["ok"]
-        self.assertEqual(ok["posts"], [{"job_ids": [42, 60], "preview_id": "a" * 64}])
-        self.assertTrue(ok["notice"].startswith("Đã chuyển 2 video gốc vào Thùng rác ("), ok["notice"])
-        self.assertEqual(ok["notice"], "Đã chuyển 2 video gốc vào Thùng rác (477 MB). "
-                                       "Dung lượng được giải phóng khi bạn dọn sạch Thùng rác.")
+        self.assertEqual(ok["posts"], [{"job_ids": [42, 60], "preview_id": "a" * 64, "confirm_permanent": True}])
+        self.assertEqual(ok["notice"], "Đã xóa vĩnh viễn 2 video gốc và xóa 2 video khỏi BiliFlow. "
+                                       "Dung lượng video gốc đã xóa: 477 MB.")
         self.assertFalse(ok["error"])
         self.assertFalse(ok["open"])
+        self.assertFalse(ok["ack"])
         self.assertEqual(ok["selection"], [])
-        self.assertEqual(ok["picks"], [False, False])
-        for line in ok["lines"]:
-            self.assertTrue(line.startswith("Đã dọn video gốc · ") and line.endswith("(đang ở Thùng rác)"), line)
+        self.assertEqual(ok["ids"], [3, 37, 41, 45, 70])
+        self.assertEqual(ok["headings"], [["Đã xuất video", 4], ["Đã bỏ qua (không xuất)", 1]])
         self.assertFalse(ok["esc_prevented_when_idle"])
-        # A blocked preview cannot be confirmed.
-        blocked = out["blocked"]
-        self.assertTrue(blocked["confirmDisabled"])
-        self.assertEqual(blocked["posts"], 0)
-        self.assertIn('<p class="cleanup-block" role="alert">Không thể dọn: Thùng rác của ổ E: đang chứa 11,0 GB',
-                      blocked["body"])
-        # 409 preview_changed: the dialog stays open with the new list; the next POST uses the new id.
+        # 409 preview_changed: the dialog stays open with the new list, unticked; the next POST uses the new id.
         changed = out["changed"]
         self.assertTrue(changed["open"])
         self.assertIn('<p class="cleanup-alert" role="alert">Danh sách đã thay đổi, hãy xem lại.</p>', changed["body"])
         self.assertEqual(changed["preview_id"], "b" * 64)
-        self.assertFalse(changed["confirmDisabled"])
+        self.assertEqual((changed["ack"], changed["ackChecked"], changed["confirmDisabled"]), (False, False, True))
         self.assertFalse(changed["cancelDisabled"])
+        # Busy: the same list keeps its tick and can be sent again.
         busy = out["busy"]
-        self.assertEqual(busy["body_sent"], {"job_ids": [45], "preview_id": "b" * 64})
+        self.assertEqual(busy["body_sent"], {"job_ids": [45], "preview_id": "b" * 64, "confirm_permanent": True})
         self.assertTrue(busy["open"])
-        self.assertIn("Đang dọn video gốc; chờ lần dọn trước xong rồi thử lại.", busy["body"])
-        self.assertIn("Không dọn được: boom", out["other_error"]["body"])
+        self.assertIn("Đang xóa video gốc; chờ lần xóa trước xong rồi thử lại.", busy["body"])
+        self.assertEqual((busy["ack"], busy["ackChecked"], busy["confirmDisabled"]), (True, True, False))
+        # Any other refusal is shown in the dialog (here the 400 a page without confirm_permanent gets).
+        self.assertIn("Không xóa được: Thiếu xác nhận xóa vĩnh viễn (trang này có thể đã cũ).", out["other_error"]["body"])
         self.assertFalse(out["other_error"]["confirmDisabled"])
-        # A partial failure is an error notice; the failed video stays selectable and selected.
+        # DELETED, PARTIAL and FAILED in one go: an error notice with each video's message.
+        self.assertEqual(out["partial_preview"]["call"], "45,61,62")
+        self.assertEqual((out["partial_preview"]["ack"], out["partial_preview"]["confirmDisabled"]), (False, True))
         partial = out["partial"]
-        self.assertIn("Không dọn được #60: File đang được mở", partial["notice"])
-        self.assertTrue(partial["notice"].startswith("Đã chuyển 1 video gốc vào Thùng rác ("))
+        self.assertEqual(partial["post"], {"job_ids": [45, 61, 62], "preview_id": "a" * 64, "confirm_permanent": True})
+        self.assertEqual(
+            partial["notice"],
+            "Đã xóa vĩnh viễn 1 video gốc và xóa 1 video khỏi BiliFlow. Dung lượng video gốc đã xóa: 429 MB. #61: Đã "
+            "xóa video gốc nhưng còn dữ liệu chưa xóa được (reports/jobs/ep-61: đang được mở). Video vẫn có trong danh "
+            "sách và không còn video gốc; bấm “Dọn video mất gốc” để xóa nốt. Không xóa được #62: Video gốc đang được "
+            "mở (ví dụ trong trang duyệt hoặc một trình xem video). Đóng nó rồi thử lại; video gốc vẫn còn.",
+        )
         self.assertTrue(partial["error"])
-        self.assertEqual(partial["selection"], [60])
-        self.assertTrue(partial["line60"].startswith("Lần dọn trước không thành công: File đang được mở"))
-        self.assertTrue(partial["pick60"])
-        self.assertTrue(partial["line45"].startswith("Đã dọn video gốc · "))
-        # Nothing cleanable in the selection.
+        self.assertFalse(partial["open"])
+        # Only the failed video stays selected (and selectable); the deleted one left the list.
+        self.assertEqual(partial["selection"], [62])
+        self.assertTrue(partial["pick62"])
+        self.assertTrue(partial["gone45"])
+        # The PARTIAL video lost its source: no "Xóa video gốc" any more, but "Xóa video" and the notice.
+        self.assertEqual(partial["card61"], {
+            "line": "Không còn video gốc trong input", "tone": "error", "pick": False, "cleanup": False,
+            "del": {"text": "Xóa video", "disabled": False, "title": "Video gốc đã không còn: chỉ xóa video khỏi "
+                    "BiliFlow (quyết định duyệt, báo cáo, log); không đụng tới output."},
+        })
+        self.assertEqual((partial["lost"]["summary"], partial["lost"]["button"], partial["lost"]["first"]),
+                         ("Có 1 video không còn video gốc", "Dọn video mất gốc", True))
+        # Nothing in the selection can go: no box, the confirm stays off.
         nothing = out["nothing"]
         self.assertTrue(nothing["confirmDisabled"])
-        self.assertIn("Không có video nào dọn được trong lựa chọn này.", nothing["body"])
-        self.assertIn("<p>Không thể dọn:</p><ul><li>#3 Tập 3.mp4 — Video gốc không còn trong thư mục input</li></ul>",
+        self.assertFalse(nothing["ackShown"])
+        self.assertIn("Không có video nào xóa được trong lựa chọn này.", nothing["body"])
+        self.assertIn("<p>Không thể xóa:</p><ul><li>#3 Tập 3.mp4 — Video gốc không còn trong thư mục input</li></ul>",
                       nothing["body"])
-        # A running cleanup disables the card button and the toolbar run button.
+        # While a source-file action runs, the card buttons, the toolbar and the notice wait.
         running = out["running"]
+        busy_title = "Đang xóa, lưu trữ hoặc khôi phục video gốc; chờ lượt hiện tại xong."
         self.assertTrue(running["card"])
-        self.assertEqual(running["title"], "Đang dọn video gốc; chờ lượt hiện tại xong.")
+        self.assertEqual(running["title"], busy_title)
         self.assertTrue(running["toolbar"]["run"]["disabled"])
         self.assertTrue(running["static_run_disabled"])
+        self.assertEqual(running["del61"], {"text": "Xóa video", "disabled": True, "title": busy_title})
+        self.assertEqual((running["lost"]["disabled"], running["lost"]["title"]), (True, busy_title))
         # "Chọn tất cả" stops at 50 videos, the lowest ids first.
         limit = out["limit"]
         self.assertEqual((limit["count"], limit["eligible"], limit["first50"]), (50, 56, True))
-        self.assertEqual(limit["notice"], "Mỗi lần dọn tối đa 50 video; đã chọn 50 video đầu tiên.")
-        self.assertEqual(limit["toolbar"]["run"]["text"], "Dọn video gốc đã chọn (50)")
+        self.assertEqual(limit["notice"], "Mỗi lần xóa tối đa 50 video; đã chọn 50 video đầu tiên.")
+        self.assertEqual(limit["toolbar"]["run"]["text"], "Xóa video gốc đã chọn (50)")
 
     def test_dashboard_cancel_and_archive_markup_texts(self):
         page = _dashboard_html()
@@ -1091,7 +1169,7 @@ class ControlCenterVisualAuditTests(unittest.TestCase):
             "archive": {"text": "Lưu trữ đã chọn (2)", "disabled": False,
                         "summary": "Lưu trữ: 2 video lưu trữ được · đã chọn 2 (572 MB). Video gốc vào kho lưu trữ "
                                    "(thư mục archive), bản xuất vào Thùng rác."},
-            "cleanup": "Dọn video gốc đã chọn (3)", "selection": [70, 71, 72],
+            "cleanup": "Xóa video gốc đã chọn (3)", "selection": [70, 71, 72],
         })
         preview = out["preview"]
         self.assertEqual((preview["calls"], preview["open"], preview["confirm"], preview["confirmDisabled"],
@@ -1152,6 +1230,176 @@ class ControlCenterVisualAuditTests(unittest.TestCase):
         # While a source-file action runs, restore and archive wait.
         self.assertEqual((out["running"]["restore"], out["running"]["toolbar"]["disabled"]),
                          ({"disabled": True, "text": "Khôi phục bản xuất"}, True))
+
+    def test_dashboard_job_delete_markup_and_texts(self):
+        page = _dashboard_html()
+        script = page[page.index("<script>"):page.rindex("</script>")]
+        # D4: the "Xóa video" <dialog> is static markup beside the other two (outside #jobs); listeners at boot.
+        dialog = page.index('<dialog id="delete-dialog" aria-labelledby="delete-title">')
+        self.assertGreater(dialog, page.index('<dialog id="archive-dialog"'))
+        self.assertLess(dialog, page.index("<script>"))
+        self.assertIn(
+            '<dialog id="delete-dialog" aria-labelledby="delete-title"><form class="cleanup-form" method="dialog" '
+            'onsubmit="return false"><h2 id="delete-title">Xóa video khỏi BiliFlow</h2><div id="delete-dialog-body" '
+            'class="cleanup-scroll"></div><div class="cleanup-actions"><button type="button" id="delete-cancel" '
+            'onclick="closeDeleteDialog()">Hủy</button><button type="button" class="danger" id="delete-confirm" '
+            'onclick="confirmDelete()" disabled>Xóa vĩnh viễn</button></div></form></dialog>', page,
+        )
+        self.assertIn("watchDeleteDialog();watchArchiveDialog();watchCleanupDialog();(async()=>{", page)
+        for text in (
+            # The card button of a cancelled or lost video ("delete" hint), disabled with the reason.
+            "if(j.delete)a.push(deleteControls(j));", 'onclick="openDelete([${id}],this)"', ">Xóa video</button>",
+            "why=j.protected||(d.eligible!==true?d.reason||'Không xóa được video này.':running?CLEANUP_RUNNING_TITLE:'')",
+            "CANCELLED:['Đã hủy','Video gốc + dữ liệu BiliFlow','Xóa vĩnh viễn video gốc trong input và xóa video "
+            "khỏi BiliFlow (quyết định duyệt, báo cáo, log); không đụng tới output.']",
+            "LOST:['Mất video gốc','Dữ liệu BiliFlow','Video gốc đã không còn: chỉ xóa video khỏi BiliFlow (quyết "
+            "định duyệt, báo cáo, log); không đụng tới output.']",
+            # A golden-set video: its delete buttons are disabled with the reason, also shown as a muted note.
+            "if(j.protected&&(cleanupReady(j)||j.delete))a.push(protectedNote(j));",
+            '<span class="cleanup-note protected-note">${esc(j.protected)}</span>',
+            # "Dọn video mất gốc" heads every tab while lost videos can go.
+            "document.getElementById('jobs').innerHTML=lostNotice()+(content||",
+            "j.delete&&j.delete.kind==='LOST'&&j.delete.eligible===true&&!j.protected",
+            '<div class="lost-notice" role="group" aria-label="Video mất gốc">',
+            "Có ${lost.length} video không còn video gốc", ">Dọn video mất gốc</button>",
+            "Chỉ xóa dữ liệu của các video này trong BiliFlow (quyết định duyệt, báo cáo, log); thư mục output giữ "
+            "nguyên.", " Mỗi lần dọn tối đa ${CLEANUP_LIMIT} video.", "openDelete(ids.slice(0,CLEANUP_LIMIT),button,",
+            # The dialog: each video with its kind, what goes, the sizes and the "Tôi hiểu" box.
+            "/api/job-delete/preview?ids=", "Không lấy được danh sách xóa video: ",
+            "<th>Video</th><th>Loại</th><th>Sẽ xóa</th><th>Video gốc</th><th>Báo cáo, log</th>",
+            "x.kind==='LOST'?'Đã mất':formatBytes(x.size_bytes)",
+            "Video đã hủy: xóa video gốc trong thư mục input, rồi xóa dữ liệu của video trong BiliFlow.",
+            "Video mất video gốc: chỉ xóa dữ liệu của video trong BiliFlow.",
+            "Giữ nguyên: mọi file trong output (bản xuất và manifest), bộ nhớ logo/studio và các báo cáo benchmark.",
+            '<label class="cleanup-ack"><input type="checkbox" id="delete-ack" ${deleteAck?\'checked\':\'\'} '
+            'onchange="setDeleteAck(this.checked)">',
+            "if(!p||!deletePreview||p.preview_id!==deletePreview.preview_id)deleteAck=false;deletePreview=p||null;",
+            "Xóa vĩnh viễn ${n} video", "'Đang kiểm tra SHA-256 và xóa…':'Đang xóa…'",
+            # Only a ticked box sends, and the request says it is a permanent delete.
+            "if(!p||!p.preview_id||!ids.length||!deleteAck)return;",
+            "post('/api/job-delete',{job_ids:ids,preview_id:p.preview_id,confirm_permanent:true})",
+            "d.addEventListener('cancel',e=>{if(deletePosting)e.preventDefault()})",
+            "Đã xóa ${n} video khỏi BiliFlow.", "Không xóa được video nào.",
+        ):
+            with self.subTest(text=text):
+                self.assertIn(text, page)
+        for name in ("deleteControls", "protectedNote", "lostJobs", "lostNotice", "openLostCleanup", "openDelete",
+                     "showDeleteDialog", "deleteRow", "renderDeleteDialog", "setDeleteAck", "deleteConfirmable",
+                     "closeDeleteDialog", "watchDeleteDialog", "deleteResultText", "confirmDelete"):
+            with self.subTest(function=name):
+                self.assertNotIn("storage", _dashboard_function(script, name).casefold())
+        style = page[page.index("<style>"):page.index("</style>")]
+        dialog_rule = style[style.index("#delete-dialog{"):]
+        self.assertIn("background:#141923;color:#e8ecf4", dialog_rule[:dialog_rule.index("}")])
+        for rule in ("#delete-dialog::backdrop{", ".lost-notice{", ".lost-summary{",
+                     "@media(max-width:680px){.lost-notice button{flex:1 1 100%}}"):
+            with self.subTest(rule=rule):
+                self.assertIn(rule, style)
+
+    @unittest.skipUnless(shutil.which("node"), "node is not installed")
+    def test_dashboard_job_delete_in_node(self):
+        out = self.run_dashboard_harness("delete")
+        golden = "Video thuộc bộ nhãn vàng dùng để chấm detector (annotations/golden); BiliFlow không xóa video này"
+        busy = "Đang xóa, lưu trữ hoặc khôi phục video gốc; chờ lượt hiện tại xong."
+        cancelled_title = ("Xóa vĩnh viễn video gốc trong input và xóa video khỏi BiliFlow (quyết định duyệt, báo "
+                           "cáo, log); không đụng tới output.")
+        lost_title = ("Video gốc đã không còn: chỉ xóa video khỏi BiliFlow (quyết định duyệt, báo cáo, log); không "
+                      "đụng tới output.")
+        button = lambda title, disabled=False: {"text": "Xóa video", "disabled": disabled, "title": title}  # noqa: E731
+        cards = out["cards"]
+        # "Xóa video" on the cancelled #2 and on the lost #5 and #6, whatever their tab.
+        self.assertEqual(cards["2"], {"tab": "waiting", "del": button(cancelled_title), "cleanup": None, "pick": False,
+                                      "note": None})
+        for job_id, tab in (("5", "completed"), ("6", "review")):
+            with self.subTest(job=job_id):
+                self.assertEqual(cards[job_id], {"tab": tab, "del": button(lost_title), "cleanup": None,
+                                                 "pick": False, "note": None})
+        # A lost video that cannot go yet: disabled with the server's reason, and no note.
+        self.assertEqual((cards["7"]["del"], cards["7"]["note"]), (button("Còn lệnh xuất video chưa xong", True), None))
+        # Golden set: the delete buttons are disabled with the reason, also shown as a muted note; the golden
+        # #37 has no "Chọn" box and is not counted by the "Hoàn tất" toolbar.
+        self.assertEqual(cards["39"], {"tab": "waiting", "del": button(golden, True), "cleanup": None, "pick": False,
+                                       "note": golden})
+        self.assertEqual(cards["37"], {"tab": "completed", "del": None, "cleanup": {"disabled": True, "title": golden},
+                                       "pick": False, "note": golden})
+        self.assertEqual((cards["8"]["cleanup"]["disabled"], cards["8"]["pick"], cards["8"]["del"]), (False, True, None))
+        self.assertNotIn("3", cards, "the hidden #3 is a compact row, not a card")
+        self.assertEqual(out["toolbar"]["summary"], "Xóa video gốc: 1 video xóa được · đã chọn 0 (0 MB)")
+        self.assertEqual(out["selected"], [8])
+        # The notice heads every tab and counts the hidden #3, not #7 (refused) nor the golden #39.
+        for tab, notice in out["notice"].items():
+            with self.subTest(tab=tab):
+                self.assertEqual(notice, {
+                    "summary": "Có 3 video không còn video gốc", "button": "Dọn video mất gốc", "disabled": False,
+                    "title": None, "first": True,
+                    "note": "Chỉ xóa dữ liệu của các video này trong BiliFlow (quyết định duyệt, báo cáo, log); thư "
+                            "mục output giữ nguyên.",
+                })
+        # "Xóa video" on the cancelled #2: its source and its data go; the box gates the confirm.
+        preview = out["cancelled_preview"]
+        self.assertEqual((preview["calls"], preview["open"], preview["shown"], preview["focused"]), (["2"], True, 1, 1))
+        self.assertEqual(preview["rows"], [["#2 Tập 2.mp4", "Đã hủy", "Video gốc + dữ liệu BiliFlow", "286 MB", "2 MB"]])
+        self.assertEqual(preview["summary"],
+                         "Tổng cộng: 1 video · 286 MB video gốc · 2 MB báo cáo và log sẽ bị xóa vĩnh viễn.")
+        self.assertEqual(preview["ackText"], "Tôi hiểu: video gốc của video đã hủy bị xóa vĩnh viễn (không qua Thùng "
+                                             "rác, không khôi phục được) và các video này bị xóa khỏi BiliFlow.")
+        self.assertEqual((preview["confirm"], preview["confirmDisabled"], preview["ack"]),
+                         ("Xóa vĩnh viễn 1 video", True, False))
+        self.assertEqual(out["cancelled_unticked_posts"], 0)
+        self.assertEqual(out["cancelled_ticked"], {"ack": True, "confirmDisabled": False})
+        posting = out["cancelled_posting"]
+        self.assertEqual((posting["confirm"], posting["confirmDisabled"], posting["cancelDisabled"],
+                          posting["esc_prevented"], posting["wait_shown"], posting["open_after_close_click"]),
+                         ("Đang kiểm tra SHA-256 và xóa…", True, True, True, True, True))
+        done = out["cancelled_done"]
+        self.assertEqual(done["posts"], [{"job_ids": [2], "preview_id": "d" * 64, "confirm_permanent": True}])
+        self.assertEqual((done["notice"], done["error"], done["open"], done["ack"], done["gone"]),
+                         ("Đã xóa 1 video khỏi BiliFlow. Dung lượng video gốc đã xóa: 286 MB.", False, False, False, True))
+        self.assertEqual(done["folds"], [["cancelled", [39]], ["hidden", [3]]])
+        # "Dọn video mất gốc": only BiliFlow's data goes (lowest ids first).
+        lost = out["lost_preview"]
+        self.assertEqual(lost["call"], "3,5,6")
+        self.assertEqual(lost["rows"], [[f"#{n} Tập {n}.mp4", "Mất video gốc", "Dữ liệu BiliFlow", "Đã mất", f"{n} MB"]
+                                        for n in (3, 5, 6)])
+        self.assertEqual(lost["summary"], "Tổng cộng: 3 video · 14 MB báo cáo và log sẽ bị xóa vĩnh viễn.")
+        self.assertEqual(lost["ackText"], "Tôi hiểu: các video này bị xóa khỏi BiliFlow vĩnh viễn, cùng quyết định "
+                                          "duyệt, báo cáo và log của chúng; không khôi phục được.")
+        self.assertEqual((lost["confirm"], lost["confirmDisabled"], lost["alert"]), ("Xóa vĩnh viễn 3 video", True, None))
+        # A changed list is shown unticked; busy keeps the tick of the same list.
+        changed = out["lost_changed"]
+        self.assertEqual((changed["alert"], changed["ack"], changed["confirmDisabled"], [r[0] for r in changed["rows"]]),
+                         ("Danh sách đã thay đổi, hãy xem lại.", False, True, ["#3 Tập 3.mp4", "#5 Tập 5.mp4"]))
+        lost_busy = out["lost_busy"]
+        self.assertEqual(lost_busy["sent"], {"job_ids": [3, 5], "preview_id": "e" * 64, "confirm_permanent": True})
+        self.assertEqual((lost_busy["alert"], lost_busy["ack"], lost_busy["confirmDisabled"], lost_busy["open"]),
+                         ("Đang xóa, lưu trữ hoặc khôi phục video; chờ lượt trước xong rồi thử lại.", True, False, True))
+        # #3 is deleted; #5 keeps a file (PARTIAL), stays in the list and in the notice.
+        lost_done = out["lost_done"]
+        self.assertEqual(lost_done["post"], {"job_ids": [3, 5], "preview_id": "e" * 64, "confirm_permanent": True})
+        self.assertEqual(lost_done["posts"], 4)
+        self.assertEqual(lost_done["notice"], "Đã xóa 1 video khỏi BiliFlow. #5: Còn dữ liệu của video chưa xóa được "
+                                              "(logs/control-center/job-5-x.log: đang được mở). Video vẫn có trong "
+                                              "danh sách; đóng file đang mở rồi bấm “Xóa video” lại.")
+        self.assertEqual((lost_done["error"], lost_done["open"], lost_done["lost"]["summary"]),
+                         (True, False, "Có 2 video không còn video gốc"))
+        self.assertEqual((lost_done["ids"], lost_done["hidden"]), ([5, 6, 7, 8, 37, 39], []))
+        self.assertEqual(out["preview_error"], {
+            "notice": "Không lấy được danh sách xóa video: Chọn từ 1 đến 50 video mỗi lần dọn.", "error": True,
+            "open": False,
+        })
+        # While a source-file action runs, every delete button and the notice wait; the golden reason comes first.
+        running = out["running"]
+        self.assertEqual((running["lost"]["disabled"], running["lost"]["title"]), (True, busy))
+        self.assertEqual((running["del5"], running["del39"]), (button(busy, True), button(golden, True)))
+        self.assertEqual((running["cleanup8"], running["cleanup37"]), ({"disabled": True, "title": busy}, golden))
+        # More than 50 lost videos: the notice says so; the dialog lists the 50 lowest ids and explains why.
+        self.assertEqual(out["many_notice"]["summary"], "Có 62 video không còn video gốc")
+        self.assertTrue(out["many_notice"]["note"].endswith(" Mỗi lần dọn tối đa 50 video."), out["many_notice"])
+        many = out["many"]
+        self.assertEqual((many["count"], many["first"], many["last"], many["rows"], many["confirm"]),
+                         (50, 5, 147, 50, "Xóa vĩnh viễn 50 video"))
+        self.assertEqual(many["alert"], "Có 62 video mất gốc; mỗi lần dọn tối đa 50 video nên danh sách này chỉ có 50 "
+                                        "video đầu tiên. Xóa xong, bấm “Dọn video mất gốc” lần nữa để dọn tiếp.")
 
     def test_status_exposes_the_workers_queue_order(self):
         from biliflow.scheduler import JobScheduler

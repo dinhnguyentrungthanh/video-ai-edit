@@ -11,9 +11,12 @@ const options = [
   {id: 'violence', label: 'Bạo lực', description: ''},
 ];
 const server = {jobs: [], posts: [], actions: [], delays: [], clock: 0, postDelay: 0, refuseNext: false, refuseAction: null, seq: 2, paused: false,
-  previewCalls: [], cleanupPosts: [], cleanupRefuse: null, cleanupResults: null, blocked: null, cleanupRunning: false, cleanupRow: 0};
+  previewCalls: [], cleanupPosts: [], cleanupRefuse: null, cleanupResults: null, cleanupRunning: false};
 // Batch 4: Hủy / Ẩn / Hiện lại, "Kiểm tra lại Thùng rác", "Lưu trữ" and "Khôi phục bản xuất".
 Object.assign(server, {flagPosts: [], recheckPosts: [], recheckFound: false, archivePreviewCalls: [], archivePosts: [], archiveRefuse: null, archiveResults: null, restorePosts: [], restoreRefuse: null, archiveRow: 0});
+// The permanent delete flow (D1, D2): "Xóa video gốc" and "Xóa video" refuse a POST without confirm_permanent: true.
+Object.assign(server, {deletePreviewCalls: [], deletePosts: [], deleteRefuse: null, deleteResults: null, deletePreviewError: null});
+const CONFIRM_PERMANENT_MESSAGE = 'Thiếu xác nhận xóa vĩnh viễn (trang này có thể đã cũ). Tải lại trang, mở lại hộp thoại, đánh dấu “Tôi hiểu” rồi xóa.';
 const TAB_KEYS = ['waiting', 'scan_queue', 'scanning', 'review', 'export', 'completed'];
 // #44 was clicked before #45 (queue_seq), although #45 was touched later.
 for (const id of [44, 45]) server.jobs.push({id, job_key: `ep-${id}`, source_path: `input/Tập ${id}.mp4`, state: 'QUEUED', updated_at: `2026-10-02T13:0${id - 40}:00`, priority: 100, queue_seq: id - 43, pending_stage: 'preflight', detector_groups: ['advertising'], content_style: 'live_action', profile: 'careful', progress: 0, ocr_recognition_batch_size: 1, fast_scan: true, active_queue_path: null});
@@ -44,7 +47,14 @@ async function fakeFetch(url, opt = {}) {
     return response(200, server.preview(ids));
   }
   if (url === '/api/source-cleanup' && opt.method === 'POST') return cleanupPost(JSON.parse(opt.body || '{}'));
-  const flag = /^\/api\/jobs\/(\d+)\/(cancel|hide|unhide)$/.exec(url);
+  if (url.startsWith('/api/job-delete/preview?ids=')) {
+    const ids = url.slice('/api/job-delete/preview?ids='.length);
+    server.deletePreviewCalls.push(ids);
+    if (server.deletePreviewError) { const error = server.deletePreviewError; server.deletePreviewError = null; return response(400, {error}); }
+    return response(200, server.deletePreview(ids));
+  }
+  if (url === '/api/job-delete' && opt.method === 'POST') return deletePost(JSON.parse(opt.body || '{}'));
+  const flag =/^\/api\/jobs\/(\d+)\/(cancel|hide|unhide)$/.exec(url);
   if (flag && opt.method === 'POST') return flagAction(Number(flag[1]), flag[2]);
   if (url === '/api/source-recycle-check' && opt.method === 'POST') return recheckPost(JSON.parse(opt.body || '{}'));
   if (url.startsWith('/api/source-archive/preview?ids=')) {
@@ -95,39 +105,63 @@ async function jobAction(id, name, body) {
   else { server.seq += 1; Object.assign(job, {state: 'QUEUED', current_stage: 'render', pending_stage: 'render', queue_seq: server.seq}); return response(200, {status: 'QUEUED', output: `output/${id}.mp4`, export_size_policy: {mode: body.size_mode}}); }
   return response(200, job);
 }
-// The server side of "Dọn video gốc" (contract sections 11.2 and 11.3), as far as the dashboard sees it.
+// The server side of "Xóa video gốc" (docs/DELETE_FLOW_PLAN.md section 5), as far as the dashboard sees it.
 const fileName = job => job.source_path.split('/').pop();
+const LOST_HINT = {eligible: true, kind: 'LOST', reason: null, size_bytes: 0};
 server.preview = function (idsText) {
   const eligible = [], ineligible = [];
   for (const id of idsText.split(',').map(Number).sort((a, b) => a - b)) {
     const job = server.jobs.find(j => j.id === id), c = job && job.cleanup;
-    if (job && c && c.eligible && !job.source_cleaned) eligible.push({job_id: id, name: fileName(job), file_name: fileName(job), source_path: job.source_path, size_bytes: c.size_bytes, kind: c.kind, output_path: c.output_name ? `output/${c.output_name}` : null, output_name: c.output_name, output_bytes: c.output_bytes, exported_at: c.exported_at, skipped_at: c.skipped_at});
-    else ineligible.push({job_id: id, name: job ? fileName(job) : '', reason: job ? ((c && c.reason) || 'Chỉ dọn được video đã xuất hoặc đã bỏ qua (mục “Hoàn tất”)') : `Không tìm thấy video #${id}`});
+    if (job && c && c.eligible && !job.source_cleaned && !job.protected) eligible.push({job_id: id, name: fileName(job), file_name: fileName(job), source_path: job.source_path, size_bytes: c.size_bytes, kind: c.kind, output_path: c.output_name ? `output/${c.output_name}` : null, output_name: c.output_name, output_bytes: c.output_bytes, exported_at: c.exported_at, skipped_at: c.skipped_at, reports_bytes: job.reports_bytes || 0});
+    else ineligible.push({job_id: id, name: job ? fileName(job) : '', reason: job ? ((c && !c.eligible && c.reason) || job.protected || 'Chỉ dọn được video đã xuất hoặc đã bỏ qua (mục “Hoàn tất”)') : `Không tìm thấy video #${id}`});
   }
-  const total = eligible.reduce((sum, x) => sum + x.size_bytes, 0), used = 11823971925;
-  return {preview_id: server.previewId || 'a'.repeat(64), eligible, ineligible, count: eligible.length, total_bytes: total,
-    recycle_bin: {volume: 'E:', used_bytes: used, items: 7, max_bytes: 52157218816, after_bytes: used + total}, blocked: server.blocked || null};
+  return {preview_id: server.previewId || 'a'.repeat(64), eligible, ineligible, count: eligible.length,
+    total_bytes: eligible.reduce((sum, x) => sum + x.size_bytes, 0), reports_bytes: eligible.reduce((sum, x) => sum + x.reports_bytes, 0)};
 };
-function cleanupRow(job, state, extra = {}) {
-  server.cleanupRow += 1;
-  return {id: server.cleanupRow, state, kind: job.cleanup.kind, size_bytes: job.cleanup.size_bytes, file_name: fileName(job), source_path: job.source_path, created_at: '2026-10-03T09:00:00+07:00', finished_at: '2026-10-03T09:00:05+07:00', restored_at: null, verified: false, error: null, ...extra};
+// The answer of both delete POSTs: DELETED removes the job, PARTIAL leaves it without its source.
+function deleteAnswer(results) {
+  const gone = results.filter(r => r.status === 'DELETED' || r.status === 'PARTIAL'), count = status => results.filter(r => r.status === status).length;
+  return response(200, {results, deleted_count: count('DELETED'), deleted_bytes: gone.reduce((sum, r) => sum + r.size_bytes, 0), failed_count: count('FAILED'), partial_count: count('PARTIAL')});
 }
+function refusal(r) { return response(r.status, {error: r.error, code: r.code, ...(r.preview ? {preview: r.preview} : {})}); }
 async function cleanupPost(body) {
   server.cleanupPosts.push(body);
   if (server.postDelay) await sleep(server.postDelay);
-  if (server.cleanupRefuse) { const r = server.cleanupRefuse; server.cleanupRefuse = null; return response(r.status, {error: r.error, code: r.code, ...(r.preview ? {preview: r.preview} : {})}); }
-  const planned = server.cleanupResults || body.job_ids.map(id => ({job_id: id, status: 'RECYCLED'}));
+  if (body.confirm_permanent !== true) return response(400, {error: CONFIRM_PERMANENT_MESSAGE});
+  if (server.cleanupRefuse) { const r = server.cleanupRefuse; server.cleanupRefuse = null; return refusal(r); }
+  const planned = server.cleanupResults || body.job_ids.map(id => ({job_id: id, status: 'DELETED'}));
   server.cleanupResults = null;
-  const results = planned.map(r => {
+  return deleteAnswer(planned.map(r => {
     const job = server.jobs.find(j => j.id === r.job_id), size = job.cleanup.size_bytes;
-    if (r.status === 'RECYCLED' || r.status === 'UNVERIFIED') {
-      Object.assign(job, {source_cleanup: cleanupRow(job, 'RECYCLED', {verified: r.status === 'RECYCLED'}), source_present: false, source_cleaned: true,
-        cleanup: {...job.cleanup, eligible: false, reason: 'Video gốc đã được dọn trước đó'}});
-    } else if (r.status === 'FAILED') job.source_cleanup = cleanupRow(job, 'FAILED', {error: r.message});
-    return {job_id: r.job_id, name: fileName(job), status: r.status, message: r.message || 'Đã chuyển video gốc vào Thùng rác', size_bytes: size};
-  });
-  const moved = results.filter(r => r.status === 'RECYCLED' || r.status === 'UNVERIFIED');
-  return response(200, {results, recycled_count: moved.length, recycled_bytes: moved.reduce((sum, r) => sum + r.size_bytes, 0), failed_count: results.filter(r => r.status === 'FAILED').length, pending: results.filter(r => r.status === 'PENDING').length});
+    if (r.status === 'DELETED') server.jobs.splice(server.jobs.indexOf(job), 1);
+    else if (r.status === 'PARTIAL') Object.assign(job, {source_present: false, cleanup: {...job.cleanup, eligible: false, reason: 'Video gốc không còn trong thư mục input'}, delete: {...LOST_HINT}});
+    return {job_id: r.job_id, name: fileName(job), status: r.status, message: r.message || 'Đã xóa vĩnh viễn video gốc và xóa video khỏi BiliFlow', size_bytes: size};
+  }));
+}
+// The server side of "Xóa video" and "Dọn video mất gốc" (D2).
+server.deletePreview = function (idsText) {
+  const eligible = [], ineligible = [];
+  for (const id of idsText.split(',').map(Number).sort((a, b) => a - b)) {
+    const job = server.jobs.find(j => j.id === id), d = job && job.delete;
+    if (job && d && d.eligible && !job.protected) eligible.push({job_id: id, name: fileName(job), file_name: fileName(job), source_path: job.source_path, kind: d.kind, state: job.state, size_bytes: d.size_bytes, reports_bytes: job.reports_bytes || 0});
+    else ineligible.push({job_id: id, name: job ? fileName(job) : '', reason: job ? (job.protected || (d && d.reason) || 'Chỉ xóa được video đã hủy hoặc video không còn video gốc') : `Không tìm thấy video #${id}`});
+  }
+  return {preview_id: server.deletePreviewId || 'd'.repeat(64), eligible, ineligible, count: eligible.length,
+    total_bytes: eligible.reduce((sum, x) => sum + x.size_bytes, 0), reports_bytes: eligible.reduce((sum, x) => sum + x.reports_bytes, 0)};
+};
+async function deletePost(body) {
+  server.deletePosts.push(body);
+  if (server.postDelay) await sleep(server.postDelay);
+  if (body.confirm_permanent !== true) return response(400, {error: CONFIRM_PERMANENT_MESSAGE});
+  if (server.deleteRefuse) { const r = server.deleteRefuse; server.deleteRefuse = null; return refusal(r); }
+  const planned = server.deleteResults || body.job_ids.map(id => ({job_id: id, status: 'DELETED'}));
+  server.deleteResults = null;
+  return deleteAnswer(planned.map(r => {
+    const job = server.jobs.find(j => j.id === r.job_id), lost = job.delete.kind === 'LOST', size = job.delete.size_bytes;
+    if (r.status === 'DELETED') server.jobs.splice(server.jobs.indexOf(job), 1);
+    else if (r.status === 'PARTIAL') Object.assign(job, {source_present: false, delete: {...LOST_HINT}});
+    return {job_id: r.job_id, name: fileName(job), status: r.status, message: r.message || (lost ? 'Đã xóa video khỏi BiliFlow' : 'Đã xóa vĩnh viễn video gốc và xóa video khỏi BiliFlow'), size_bytes: size};
+  }));
 }
 // Hủy, Ẩn khỏi danh sách and Hiện lại (batch 4), with the server's 409 codes.
 async function flagAction(id, name) {
@@ -274,7 +308,7 @@ function boot(storageMap, log, extra = {}) {
   dialog.showModal = function () { this.open = true; this.shown = (this.shown || 0) + 1; };
   dialog.close = function () { this.open = false; this.dispatch('close'); };
   statics['cleanup-dialog'] = dialog;
-  statics['cleanup-confirm'] = new FakeElement('BUTTON', {id: 'cleanup-confirm', disabled: true, textContent: 'Chuyển vào Thùng rác'});
+  statics['cleanup-confirm'] = new FakeElement('BUTTON', {id: 'cleanup-confirm', disabled: true, textContent: 'Xóa vĩnh viễn'});
   statics['cleanup-cancel'] = new FakeElement('BUTTON', {id: 'cleanup-cancel', disabled: false, textContent: 'Hủy', focus() { this.focused = (this.focused || 0) + 1; }});
   // Batch 4: the archive <dialog> (static markup like the cleanup one).
   const archiveDialog = new FakeElement('DIALOG', {id: 'archive-dialog', open: false});
@@ -283,6 +317,13 @@ function boot(storageMap, log, extra = {}) {
   statics['archive-dialog'] = archiveDialog;
   statics['archive-confirm'] = new FakeElement('BUTTON', {id: 'archive-confirm', disabled: true, textContent: 'Lưu trữ'});
   statics['archive-cancel'] = new FakeElement('BUTTON', {id: 'archive-cancel', disabled: false, textContent: 'Hủy', focus() { this.focused = (this.focused || 0) + 1; }});
+  // D4: the "Xóa video" <dialog> (static markup like the other two).
+  const deleteDialog = new FakeElement('DIALOG', {id: 'delete-dialog', open: false});
+  deleteDialog.showModal = function () { this.open = true; this.shown = (this.shown || 0) + 1; };
+  deleteDialog.close = function () { this.open = false; this.dispatch('close'); };
+  statics['delete-dialog'] = deleteDialog;
+  statics['delete-confirm'] = new FakeElement('BUTTON', {id: 'delete-confirm', disabled: true, textContent: 'Xóa vĩnh viễn'});
+  statics['delete-cancel'] = new FakeElement('BUTTON', {id: 'delete-cancel', disabled: false, textContent: 'Hủy', focus() { this.focused = (this.focused || 0) + 1; }});
   const sandbox = {
     document, fetch: fakeFetch, localStorage: makeStorage(storageMap), console,
     setTimeout, clearTimeout, setInterval: () => 0, clearInterval: () => {},
@@ -303,7 +344,7 @@ function boot(storageMap, log, extra = {}) {
   const context = vm.createContext(sandbox);
   vm.runInContext(script, context);
   const run = code => vm.runInContext(code, context);
-  return {run, document, jobs: statics.jobs, dialog, archiveDialog, notice: () => document.getElementById('notice').textContent, noticeIsError: () => document.getElementById('notice').className.includes('error')};
+  return {run, document, jobs: statics.jobs, dialog, archiveDialog, deleteDialog, notice:() => document.getElementById('notice').textContent, noticeIsError: () => document.getElementById('notice').className.includes('error')};
 }
 function cards(page) {
   return page.jobs.innerHTML.split('<article class="job"').slice(1).map(chunk => {
@@ -316,7 +357,8 @@ function cards(page) {
     const details = [...chunk.matchAll(/class="status-detail">([^<]*)</g)].map(m => m[1]);
     const exportButton = /<button class="green" onclick="exportVideo\(\d+,this\)" ([^>]*)>([^<]*)</.exec(chunk);
     const pick = new RegExp(`<input type="checkbox" data-cleanup-job="${id}"([^>]*)>`).exec(chunk);
-    const cleanupButton = new RegExp(`<button class="warn" onclick="openCleanup\\(\\[${id}\\],this\\)"([^>]*)>`).exec(chunk);
+    const cleanupButton = new RegExp(`<button class="danger" onclick="openCleanup\\(\\[${id}\\],this\\)"([^>]*)>`).exec(chunk);
+    const deleteButton = new RegExp(`<button class="danger" onclick="openDelete\\(\\[${id}\\],this\\)"([^>]*)>([^<]*)<`).exec(chunk);
     const sourceLine = /<div class="source-line tone-([a-z]+)">([^<]*)</.exec(chunk);
     return {id, badge, queue, scan: values[0], scanDetail: details[0], exportValue: values[3], exportDetail: details[3], hasStart: chunk.includes(`start(${id},`), startDisabled: chunk.includes(`start(${id},this)" disabled>Đang bắt đầu…`), title: /class="job-title">([^<]*)</.exec(chunk)[1], detectors, ocr: ocr ? Number(ocr[1]) : null,
       bucket: attr(chunk, 'data-bucket'), hasSkip: chunk.includes(`onclick="skipJob(${id},`), hasUnskip: chunk.includes(`unskipJob(${id},`), hasCancel: chunk.includes(`cancelJob(${id},`), hasRerun: chunk.includes('class="rerun-panel"'),
@@ -329,6 +371,8 @@ function cards(page) {
       hasExport: chunk.includes('class="export-panel"'), exportDisabled: exportButton ? /disabled/.test(exportButton[1]) : null, exportTitle: exportButton ? attr(exportButton[1], 'title') : null, exportReason: (/class="export-reason">([^<]*)</.exec(chunk) || [null, null])[1], exportError: (/class="export-error"[^>]*>([^<]*)</.exec(chunk) || [null, null])[1],
       hasCleanupPick: !!pick, cleanupChecked: pick ? /\schecked(\s|$)/.test(pick[1]) : null, hasCleanupButton: chunk.includes(`openCleanup([${id}]`),
       cleanupButtonDisabled: cleanupButton ? /\sdisabled(\s|$)/.test(cleanupButton[1]) : null, cleanupButtonTitle: cleanupButton ? attr(cleanupButton[1], 'title') : null,
+      deleteButton: deleteButton ? {text: deleteButton[2], disabled: /\sdisabled(\s|$)/.test(deleteButton[1]), title: attr(deleteButton[1], 'title')} : null,
+      protectedNote: (/class="cleanup-note protected-note">([^<]*)</.exec(chunk) || [null, null])[1],
       sourceLine: sourceLine ? sourceLine[2] : null, sourceTone: sourceLine ? sourceLine[1] : null, cleanupNote: (/class="cleanup-note">([^<]*)</.exec(chunk) || [null, null])[1],
       rerunDisabled: /<button disabled title="[^"]*">Chạy lại kiểm tra<\/button>/.test(chunk), unskipDisabled: /<button class="green" disabled title="[^"]*">Mở lại để xuất<\/button>/.test(chunk)};
   });
@@ -380,8 +424,23 @@ function toolbar(page) {
 }
 function selection(page) { return JSON.parse(page.run('JSON.stringify([...cleanupSelection].sort((a,b)=>a-b))')); }
 function dialogState(page) {
-  const confirm = page.document.getElementById('cleanup-confirm'), cancel = page.document.getElementById('cleanup-cancel');
-  return {open: page.dialog.open, body: page.document.getElementById('cleanup-dialog-body').innerHTML, confirm: confirm.textContent, confirmDisabled: !!confirm.disabled, cancelDisabled: !!cancel.disabled};
+  const confirm = page.document.getElementById('cleanup-confirm'), cancel = page.document.getElementById('cleanup-cancel'), body = page.document.getElementById('cleanup-dialog-body').innerHTML;
+  return {open: page.dialog.open, body, confirm: confirm.textContent, confirmDisabled: !!confirm.disabled, cancelDisabled: !!cancel.disabled,
+    ack: page.run('cleanupAck'), ackShown: body.includes('id="cleanup-ack"'), ackChecked: /id="cleanup-ack" checked/.test(body)};
+}
+// D4: the "Dọn video mất gốc" notice that heads every tab, and the "Xóa video" dialog.
+function lostNoticeState(page) {
+  const html = page.jobs.innerHTML, m = /<div class="lost-notice" role="group" aria-label="Video mất gốc"><span class="lost-summary" id="lost-summary">([^<]*)<\/span><button id="lost-run" class="danger" onclick="openLostCleanup\(this\)"([^>]*)>([^<]*)<\/button><span class="cleanup-note">([^<]*)<\/span><\/div>/.exec(html);
+  return m ? {summary: m[1], button: m[3], disabled: /\sdisabled(\s|$)/.test(m[2]), title: attr(m[2], 'title'), note: m[4], first: m.index === 0} : null;
+}
+function deleteDialogState(page) {
+  const confirm = page.document.getElementById('delete-confirm'), cancel = page.document.getElementById('delete-cancel'), body = page.document.getElementById('delete-dialog-body').innerHTML;
+  const refused = (/<div class="cleanup-ineligible"><p>Không thể xóa:<\/p><ul>([\s\S]*?)<\/ul><\/div>/.exec(body) || [null, ''])[1];
+  return {open: page.deleteDialog.open, confirm: confirm.textContent, confirmDisabled: !!confirm.disabled, cancelDisabled: !!cancel.disabled, ack: page.run('deleteAck'),
+    ackShown: body.includes('id="delete-ack"'), ackText: (/id="delete-ack"[^>]*> <span>([^<]*)<\/span>/.exec(body) || [null, null])[1],
+    rows: [...body.matchAll(/<tr><td data-label="Video">([^<]*)<\/td><td data-label="Loại">([^<]*)<\/td><td data-label="Sẽ xóa">([^<]*)<\/td><td data-label="Video gốc">([^<]*)<\/td><td data-label="Báo cáo, log">([^<]*)<\/td><\/tr>/g)].map(m => m.slice(1, 6)),
+    summary: (/class="cleanup-summary">([^<]*)</.exec(body) || [null, null])[1], alert: (/class="cleanup-alert" role="alert">([^<]*)</.exec(body) || [null, null])[1],
+    ineligible: [...refused.matchAll(/<li>([^<]*)<\/li>/g)].map(m => m[1]), body};
 }
 function tabOf(page, id) { const card = allCards(page).find(c => c.id === id); return card ? card.tab : null; }
 function setDetectors(page, id, values) {
@@ -584,18 +643,17 @@ async function exportScenario() {
 }
 async function cleanupScenario() {
   server.jobs.length = 0;
-  const done = {...BASE, state: 'COMPLETED', progress: 1, active_queue_path: 'q', source_present: true, source_cleaned: false, source_cleanup: null};
+  const done = {...BASE, state: 'COMPLETED', progress: 1, active_queue_path: 'q', source_present: true, source_cleaned: false, source_cleanup: null, protected: null, delete: null};
   const exported = (size, output, extra = {}) => ({eligible: true, kind: 'EXPORTED', reason: null, size_bytes: size, output_name: output, output_bytes: 104857600, exported_at: '2026-10-02T15:00:00+07:00', skipped_at: null, ...extra});
   const skippedHint = size => ({eligible: true, kind: 'SKIPPED', reason: null, size_bytes: size, output_name: null, output_bytes: null, exported_at: null, skipped_at: '2026-10-02T14:00:00+07:00'});
   const row = (id, state, job, size, extra = {}) => ({id, state, kind: 'EXPORTED', size_bytes: size, file_name: job.split('/').pop(), source_path: job, created_at: '2026-10-03T08:00:00+07:00', finished_at: '2026-10-03T08:00:04+07:00', restored_at: null, verified: true, error: null, ...extra});
-  server.jobs.push({...done, id: 42, job_key: 'ep-42', source_path: 'input/Tập 12.mp4', source_size_bytes: 252168775, updated_at: '2026-10-02T15:00:00', cleanup: exported(252168775, 'ep-42-reviewed.mp4')});
-  server.jobs.push({...done, id: 60, job_key: 'ep-60', source_path: 'input/Tập 30.mp4', state: 'SKIPPED', source_size_bytes: 248000000, updated_at: '2026-10-02T14:00:00', skip: {skipped_at: '2026-10-02T14:00:00+07:00'}, cleanup: skippedHint(248000000)});
-  server.jobs.push({...done, id: 45, job_key: 'ep-45', source_path: 'input/Tập 15.mp4', source_size_bytes: 250000000, updated_at: '2026-10-02T13:00:00', source_cleanup: row(1, 'RESTORED', 'input/Tập 15.mp4', 250000000, {restored_at: '2026-10-02T09:00:00+07:00'}), cleanup: exported(250000000, 'ep-45-reviewed.mp4')});
+  server.jobs.push({...done, id: 42, job_key: 'ep-42', source_path: 'input/Tập 12.mp4', source_size_bytes: 252168775, updated_at: '2026-10-02T15:00:00', reports_bytes: 52428800, cleanup: exported(252168775, 'ep-42-reviewed.mp4')});
+  server.jobs.push({...done, id: 60, job_key: 'ep-60', source_path: 'input/Tập 30.mp4', state: 'SKIPPED', source_size_bytes: 248000000, updated_at: '2026-10-02T14:00:00', reports_bytes: 20971520, skip: {skipped_at: '2026-10-02T14:00:00+07:00'}, cleanup: skippedHint(248000000)});
+  server.jobs.push({...done, id: 45, job_key: 'ep-45', source_path: 'input/Tập 15.mp4', source_size_bytes: 250000000, updated_at: '2026-10-02T13:00:00', reports_bytes: 10485760, source_cleanup: row(1, 'RESTORED', 'input/Tập 15.mp4', 250000000, {restored_at: '2026-10-02T09:00:00+07:00'}), cleanup: exported(250000000, 'ep-45-reviewed.mp4')});
   server.jobs.push({...done, id: 41, job_key: 'ep-41', source_path: 'input/Tập 11.mp4', source_size_bytes: 256115645, updated_at: '2026-10-02T12:00:00', source_present: false, source_cleaned: true, source_cleanup: row(2, 'RECYCLED', 'input/Tập 11.mp4', 256115645), cleanup: exported(256115645, 'ep-41-reviewed.mp4', {eligible: false, reason: 'Video gốc đã được dọn trước đó'})});
   server.jobs.push({...done, id: 70, job_key: 'ep-70', source_path: 'input/Tập 40.mp4', state: 'SKIPPED', source_size_bytes: 240000000, updated_at: '2026-10-02T11:30:00', skip: {skipped_at: '2026-10-02T11:00:00+07:00'}, source_present: false, source_cleaned: true, source_cleanup: row(3, 'RECYCLED', 'input/Tập 40.mp4', 240000000, {kind: 'SKIPPED', verified: false}), cleanup: {...skippedHint(240000000), eligible: false, reason: 'Video gốc đã được dọn trước đó'}});
   server.jobs.push({...done, id: 37, job_key: 'ep-37', source_path: 'input/Tập 7.mp4', source_size_bytes: 230000000, updated_at: '2026-10-02T11:00:00', cleanup: exported(230000000, 'ep-37-reviewed.mp4', {eligible: false, reason: 'Không thấy bản xuất trong thư mục output (đã bị dời hoặc đổi tên?)'})});
   server.jobs.push({...done, id: 3, job_key: 'ep-3', source_path: 'input/Tập 3.mp4', source_size_bytes: 220000000, updated_at: '2026-10-02T10:00:00', source_present: false, cleanup: exported(220000000, 'ep-3-reviewed.mp4', {eligible: false, reason: 'Video gốc không còn trong thư mục input'})});
-  server.cleanupRow = 3;
   const job = id => server.jobs.find(j => j.id === id);
   const log = {confirms: [], alerts: [], confirmAnswer: true};
   const page = boot(new Map(), log);
@@ -642,15 +700,26 @@ async function cleanupScenario() {
   server.previewCalls.length = 0;
   await page.run('openCleanup([60,42,42])');
   out.preview = {calls: server.previewCalls.slice(), shown: page.dialog.shown, focused: page.document.getElementById('cleanup-cancel').focused || 0, ...dialogState(page)};
-  // Hủy posts nothing; confirm without a preview posts nothing either.
+  // The confirm waits for the "Tôi hiểu" box: unticked, a click posts nothing.
+  const confirmDisabled = () => !!page.document.getElementById('cleanup-confirm').disabled;
+  await page.run('confirmCleanup()');
+  out.unticked = {posts: server.cleanupPosts.length, confirmDisabled: confirmDisabled()};
+  page.run('setCleanupAck(true)');
+  out.ticked = {ack: page.run('cleanupAck'), confirmDisabled: confirmDisabled()};
+  page.run('setCleanupAck(false)');
+  out.unticked_again = {ack: page.run('cleanupAck'), confirmDisabled: confirmDisabled()};
+  // Hủy posts nothing and forgets the tick; confirm without a preview posts nothing either.
+  page.run('setCleanupAck(true)');
   page.run('closeCleanupDialog()');
   await page.run('confirmCleanup()');
-  out.cancel = {posts: server.cleanupPosts.length, open: page.dialog.open, preview_cleared: page.run('cleanupPreview===null')};
-  // Reopen and confirm twice: one POST, the dialog cannot be closed meanwhile.
+  out.cancel = {posts: server.cleanupPosts.length, open: page.dialog.open, preview_cleared: page.run('cleanupPreview===null'), ack_cleared: page.run('cleanupAck===false')};
+  // Reopened, the box starts unticked; ticked, two clicks on confirm make one POST and the dialog cannot be closed meanwhile.
   await page.run('openCleanup([42,60])');
+  out.reopened = dialogState(page);
+  page.run('setCleanupAck(true)');
   server.postDelay = 80;
   const first = page.run('confirmCleanup()'), second = page.run('confirmCleanup()');
-  out.posting = {...dialogState(page), esc_prevented: page.dialog.dispatch('cancel').defaultPrevented, wait_shown: page.document.getElementById('cleanup-wait').hidden === false};
+  out.posting = {...dialogState(page), esc_prevented: page.dialog.dispatch('cancel').defaultPrevented, wait_shown: page.document.getElementById('cleanup-wait').hidden === false, ack_locked: !!page.document.getElementById('cleanup-ack').disabled};
   page.run('closeCleanupDialog()');
   out.posting.open_after_close_click = page.dialog.open;
   // A second Esc without new user activation is not cancelable in Chromium: the
@@ -662,49 +731,51 @@ async function cleanupScenario() {
   out.posting.preview_kept = page.run('cleanupPreview!==null');
   await Promise.all([first, second]);
   server.postDelay = 0;
+  // Deleted videos leave the list (the job is gone from BiliFlow).
   const after = byId();
   out.ok = {posts: server.cleanupPosts.slice(), notice: page.notice(), error: page.noticeIsError(), open: page.dialog.open, selection: selection(page),
-    lines: [after[42].sourceLine, after[60].sourceLine], picks: [after[42].hasCleanupPick, after[60].hasCleanupPick], esc_prevented_when_idle: page.dialog.dispatch('cancel').defaultPrevented};
-  // A blocked preview (Recycle Bin capacity) cannot be confirmed.
-  const capacity = 'Không thể dọn: Thùng rác của ổ E: đang chứa 11,0 GB, giới hạn 48,6 GB; chuyển thêm 40,0 GB sẽ vượt giới hạn và Windows có thể xóa vĩnh viễn các mục cũ nhất. Hãy dọn sạch Thùng rác hoặc chọn ít video hơn.';
-  server.blocked = capacity;
-  const postsBeforeBlocked = server.cleanupPosts.length;
+    ids: Object.keys(after).map(Number).sort((a, b) => a - b), headings: headings(page), ack: page.run('cleanupAck'), esc_prevented_when_idle: page.dialog.dispatch('cancel').defaultPrevented};
+  // 409 preview_changed shows the new list in the open dialog and clears the tick; the next confirm uses its id.
   await page.run('openCleanup([45])');
-  await page.run('confirmCleanup()');
-  out.blocked = {...dialogState(page), posts: server.cleanupPosts.length - postsBeforeBlocked};
-  server.blocked = null;
-  page.run('closeCleanupDialog()');
-  // 409 preview_changed shows the new list in the open dialog; the next confirm uses its id.
-  await page.run('openCleanup([45])');
+  page.run('setCleanupAck(true)');
   server.cleanupRefuse = {status: 409, error: 'Danh sách đã thay đổi, hãy xem lại.', code: 'preview_changed', preview: {...server.preview('45'), preview_id: 'b'.repeat(64)}};
   await page.run('confirmCleanup()');
   out.changed = {...dialogState(page), preview_id: page.run('cleanupPreview&&cleanupPreview.preview_id')};
-  server.cleanupRefuse = {status: 409, error: 'Đang dọn video gốc; chờ lần dọn trước xong rồi thử lại.', code: 'busy'};
+  // Busy: the same list keeps its tick and can be sent again.
+  page.run('setCleanupAck(true)');
+  server.cleanupRefuse = {status: 409, error: 'Đang xóa video gốc; chờ lần xóa trước xong rồi thử lại.', code: 'busy'};
   await page.run('confirmCleanup()');
   out.busy = {...dialogState(page), body_sent: server.cleanupPosts[server.cleanupPosts.length - 1]};
-  server.cleanupRefuse = {status: 500, error: 'boom'};
+  // Any other refusal (here the answer a page without confirm_permanent gets) is shown in the dialog.
+  server.cleanupRefuse = {status: 400, error: CONFIRM_PERMANENT_MESSAGE};
   await page.run('confirmCleanup()');
   out.other_error = dialogState(page);
   page.run('closeCleanupDialog()');
-  // A partial failure: #45 moved, #60 is still open in another tab.
-  Object.assign(job(60), {source_present: true, source_cleaned: false, source_cleanup: row(9, 'RESTORED', 'input/Tập 30.mp4', 248000000, {kind: 'SKIPPED', restored_at: '2026-10-03T10:00:00+07:00'}), cleanup: skippedHint(248000000)});
+  // #45 is deleted, #61 loses its source but a file stays (PARTIAL), #62 is open elsewhere (FAILED).
+  for (const id of [61, 62]) server.jobs.push({...done, id, job_key: `ep-${id}`, source_path: `input/Tập ${id}.mp4`, source_size_bytes: 200000000 + id, updated_at: `2026-10-02T09:${id - 30}:00`, reports_bytes: 1048576, cleanup: exported(200000000 + id, `ep-${id}-reviewed.mp4`)});
   await page.run('load()');
-  page.run('toggleCleanup(45,true);toggleCleanup(60,true)');
-  await page.run('openCleanup([45,60])');
-  server.cleanupResults = [{job_id: 45, status: 'RECYCLED'}, {job_id: 60, status: 'FAILED', message: 'File đang được mở (ví dụ đang phát trong trang duyệt). Đóng trang duyệt của video này rồi thử lại.'}];
+  page.run('toggleCleanup(45,true);toggleCleanup(61,true);toggleCleanup(62,true)');
+  await page.run('openSelectedCleanup(null)');
+  out.partial_preview = {call: server.previewCalls[server.previewCalls.length - 1], ...dialogState(page)};
+  page.run('setCleanupAck(true)');
+  server.cleanupResults = [{job_id: 45, status: 'DELETED'},
+    {job_id: 61, status: 'PARTIAL', message: 'Đã xóa video gốc nhưng còn dữ liệu chưa xóa được (reports/jobs/ep-61: đang được mở). Video vẫn có trong danh sách và không còn video gốc; bấm “Dọn video mất gốc” để xóa nốt.'},
+    {job_id: 62, status: 'FAILED', message: 'Video gốc đang được mở (ví dụ trong trang duyệt hoặc một trình xem video). Đóng nó rồi thử lại; video gốc vẫn còn.'}];
   await page.run('confirmCleanup()');
   const partial = byId();
-  out.partial = {notice: page.notice(), error: page.noticeIsError(), open: page.dialog.open, selection: selection(page), line60: partial[60].sourceLine, pick60: partial[60].hasCleanupPick, line45: partial[45].sourceLine};
-  // A selection without any cleanable video.
+  out.partial = {post: server.cleanupPosts[server.cleanupPosts.length - 1], notice: page.notice(), error: page.noticeIsError(), open: page.dialog.open, selection: selection(page), gone45: !partial[45],
+    card61: {line: partial[61].sourceLine, tone: partial[61].sourceTone, pick: partial[61].hasCleanupPick, cleanup: partial[61].hasCleanupButton, del: partial[61].deleteButton}, pick62: partial[62].cleanupChecked, lost: lostNoticeState(page)};
+  // A selection without any video that can go.
   await page.run('openCleanup([3])');
   out.nothing = dialogState(page);
   page.run('closeCleanupDialog()');
-  // While a cleanup runs (another tab), the card button and the toolbar are disabled.
+  // While a source-file action runs (another tab), the card buttons, the toolbar and the notice wait.
   server.cleanupRunning = true;
   await page.run('load()');
   const running = byId();
   page.run('updateCleanupToolbar()');
-  out.running = {card: running[60].cleanupButtonDisabled, title: running[60].cleanupButtonTitle, toolbar: toolbar(page), static_run_disabled: !!page.document.getElementById('cleanup-run').disabled};
+  out.running = {card: running[62].cleanupButtonDisabled, title: running[62].cleanupButtonTitle, toolbar: toolbar(page), static_run_disabled: !!page.document.getElementById('cleanup-run').disabled,
+    del61: running[61].deleteButton, lost: lostNoticeState(page)};
   server.cleanupRunning = false;
   // "Chọn tất cả" stops at 50 videos.
   for (let id = 200; id < 255; id++) server.jobs.push({...done, id, job_key: `ep-${id}`, source_path: `input/${id}.mp4`, source_size_bytes: 1048576, updated_at: '2026-10-01T10:00:00', cleanup: exported(1048576, `ep-${id}-reviewed.mp4`)});
@@ -914,7 +985,98 @@ async function archiveScenario() {
   server.cleanupRunning = false;
   console.log(JSON.stringify(out));
 }
+// D4: "Xóa video" (cancelled and lost videos), "Dọn video mất gốc" and the golden-set lock on the classic page.
+async function deleteScenario() {
+  server.jobs.length = 0;
+  const GOLDEN = 'Video thuộc bộ nhãn vàng dùng để chấm detector (annotations/golden); BiliFlow không xóa video này';
+  const card = (id, extra) => ({...BASE, id, job_key: `ep-${id}`, source_path: `input/Tập ${id}.mp4`, source_present: true, source_cleaned: false, source_cleanup: null, source_archived: false, source_archive: null,
+    protected: null, delete: null, hidden_at: null, reports_bytes: 1048576 * id, updated_at: `2026-10-03T12:${String(id % 60).padStart(2, '0')}:00`, ...extra});
+  const lost = {...LOST_HINT}, cancelled = {state: 'CANCELLED', stop_mode: 'CANCELLED'};
+  const exported = size => ({eligible: true, kind: 'EXPORTED', reason: null, size_bytes: size, output_name: 'x-reviewed.mp4', output_bytes: 104857600, exported_at: '2026-10-02T15:00:00+07:00', skipped_at: null});
+  const ready = {status: 'READY_FOR_EDIT_PLAN', main_items: 1, advisory_items: 0, pending: 0, decisions: {KEEP: 1}, export_size_policy: null, skip_eligible: false};
+  // "Đang chờ xử lý": a cancelled video still in input, a cancelled golden one, a lost one that cannot go yet, a hidden lost one.
+  server.jobs.push(card(2, {...cancelled, source_size_bytes: 300000000, delete: {eligible: true, kind: 'CANCELLED', reason: null, size_bytes: 300000000}}));
+  server.jobs.push(card(39, {...cancelled, protected: GOLDEN, delete: {eligible: false, kind: 'CANCELLED', reason: GOLDEN, size_bytes: 0}}));
+  server.jobs.push(card(7, {state: 'FAILED', source_present: false, delete: {eligible: false, kind: 'LOST', reason: 'Còn lệnh xuất video chưa xong', size_bytes: 0}}));
+  server.jobs.push(card(3, {...cancelled, hidden_at: '2026-10-03T12:30:00+07:00', source_present: false, delete: lost}));
+  // Lost videos in "Đang chờ duyệt" and "Hoàn tất", a golden exported video and an ordinary one.
+  server.jobs.push(card(6, {state: 'READY_TO_EXPORT', progress: 1, active_queue_path: 'q', source_present: false, delete: lost, review_summary: ready}));
+  server.jobs.push(card(5, {state: 'COMPLETED', progress: 1, active_queue_path: 'q', source_present: false, delete: lost, cleanup: {...exported(250000000), eligible: false, reason: 'Video gốc không còn trong thư mục input'}}));
+  server.jobs.push(card(37, {state: 'COMPLETED', progress: 1, active_queue_path: 'q', protected: GOLDEN, source_size_bytes: 230000000, cleanup: exported(230000000)}));
+  server.jobs.push(card(8, {state: 'COMPLETED', progress: 1, active_queue_path: 'q', source_size_bytes: 210000000, cleanup: exported(210000000)}));
+  const log = {confirms: [], alerts: [], confirmAnswer: true};
+  const page = boot(new Map(), log);
+  await sleep(30);
+  const out = {};
+  const all = () => Object.fromEntries(allCards(page).map(c => [c.id, c]));
+  const view = c => ({tab: c.tab, del: c.deleteButton, cleanup: c.hasCleanupButton ? {disabled: c.cleanupButtonDisabled, title: c.cleanupButtonTitle} : null, pick: c.hasCleanupPick, note: c.protectedNote});
+  out.cards = Object.fromEntries(Object.entries(all()).map(([id, c]) => [id, view(c)]));
+  // The notice heads every tab: #3 (hidden), #5 and #6; not #7 (refused) nor the golden #39.
+  out.notice = Object.fromEntries(TAB_KEYS.map(key => { page.run(`selectJobTab('${key}')`); return [key, lostNoticeState(page)]; }));
+  // "Hoàn tất": the golden #37 is neither counted nor selected for "Xóa video gốc".
+  page.run("selectJobTab('completed')");
+  out.toolbar = toolbar(page);
+  page.run('selectAllCleanup()');
+  out.selected = selection(page);
+  page.run('clearCleanupSelection()');
+  // "Xóa video" on the cancelled #2: unticked, confirm does nothing; ticked, two clicks make one POST.
+  page.run("selectJobTab('waiting')");
+  await page.run('openDelete([2],null)');
+  out.cancelled_preview = {calls: server.deletePreviewCalls.slice(), shown: page.deleteDialog.shown, focused: page.document.getElementById('delete-cancel').focused || 0, ...deleteDialogState(page)};
+  await page.run('confirmDelete()');
+  out.cancelled_unticked_posts = server.deletePosts.length;
+  page.run('setDeleteAck(true)');
+  out.cancelled_ticked = {ack: page.run('deleteAck'), confirmDisabled: !!page.document.getElementById('delete-confirm').disabled};
+  server.postDelay = 60;
+  const first = page.run('confirmDelete()'), second = page.run('confirmDelete()');
+  out.cancelled_posting = {...deleteDialogState(page), esc_prevented: page.deleteDialog.dispatch('cancel').defaultPrevented, wait_shown: page.document.getElementById('delete-wait').hidden === false};
+  page.run('closeDeleteDialog()');
+  out.cancelled_posting.open_after_close_click = page.deleteDialog.open;
+  await Promise.all([first, second]);
+  server.postDelay = 0;
+  out.cancelled_done = {posts: server.deletePosts.slice(), notice: page.notice(), error: page.noticeIsError(), open: page.deleteDialog.open, ack: page.run('deleteAck'), gone: !all()[2], folds: folds(page).map(f => [f.key, f.ids])};
+  // "Dọn video mất gốc" lists #3, #5 and #6 (lowest ids first).
+  await page.run('openLostCleanup(null)');
+  out.lost_preview = {call: server.deletePreviewCalls[server.deletePreviewCalls.length - 1], ...deleteDialogState(page)};
+  // The list changed meanwhile: the new one is shown and the tick is cleared.
+  page.run('setDeleteAck(true)');
+  server.deleteRefuse = {status: 409, code: 'preview_changed', error: 'Danh sách đã thay đổi, hãy xem lại.', preview: {...server.deletePreview('3,5'), preview_id: 'e'.repeat(64)}};
+  await page.run('confirmDelete()');
+  out.lost_changed = deleteDialogState(page);
+  // Busy keeps the tick of the same list.
+  page.run('setDeleteAck(true)');
+  server.deleteRefuse = {status: 409, code: 'busy', error: 'Đang xóa, lưu trữ hoặc khôi phục video; chờ lượt trước xong rồi thử lại.'};
+  await page.run('confirmDelete()');
+  out.lost_busy = {...deleteDialogState(page), sent: server.deletePosts[server.deletePosts.length - 1]};
+  // #3 goes; a log of #5 is still open (PARTIAL), so #5 stays in the list and in the notice.
+  server.deleteResults = [{job_id: 3, status: 'DELETED'}, {job_id: 5, status: 'PARTIAL', message: 'Còn dữ liệu của video chưa xóa được (logs/control-center/job-5-x.log: đang được mở). Video vẫn có trong danh sách; đóng file đang mở rồi bấm “Xóa video” lại.'}];
+  await page.run('confirmDelete()');
+  out.lost_done = {post: server.deletePosts[server.deletePosts.length - 1], posts: server.deletePosts.length, notice: page.notice(), error: page.noticeIsError(), open: page.deleteDialog.open,
+    lost: lostNoticeState(page), ids: allCards(page).map(c => c.id).sort((a, b) => a - b), hidden: hiddenRows(page).map(r => r.id)};
+  // A refused preview is an error notice; the dialog stays closed.
+  server.deletePreviewError = 'Chọn từ 1 đến 50 video mỗi lần dọn.';
+  await page.run('openDelete([5],null)');
+  out.preview_error = {notice: page.notice(), error: page.noticeIsError(), open: page.deleteDialog.open};
+  // While a source-file action runs (another tab), every delete button and the notice wait; the golden reason stays.
+  server.cleanupRunning = true;
+  await page.run('load()');
+  const running = all();
+  out.running = {lost: lostNoticeState(page), del5: running[5].deleteButton, del39: running[39].deleteButton, cleanup8: {disabled: running[8].cleanupButtonDisabled, title: running[8].cleanupButtonTitle}, cleanup37: running[37].cleanupButtonTitle};
+  server.cleanupRunning = false;
+  // More than 50 lost videos: the notice says so and the dialog lists the first 50 (lowest ids).
+  for (let id = 100; id < 160; id++) server.jobs.push(card(id, {state: 'COMPLETED', progress: 1, updated_at: '2026-10-01T10:00:00', source_present: false, delete: lost}));
+  await page.run('load()');
+  out.many_notice = lostNoticeState(page);
+  await page.run('openLostCleanup(null)');
+  const sent = server.deletePreviewCalls[server.deletePreviewCalls.length - 1].split(',').map(Number);
+  out.many = {count: sent.length, first: sent[0], last: sent[sent.length - 1], ...deleteDialogState(page)};
+  out.many.rows = out.many.rows.length;
+  delete out.many.body;
+  page.run('closeDeleteDialog()');
+  console.log(JSON.stringify(out));
+}
 (async () => {
+  if (process.argv[3] === 'delete') return deleteScenario();
   if (process.argv[3] === 'archive') return archiveScenario();
   if (process.argv[3] === 'scroll') return scrollScenario();
   if (process.argv[3] === 'cancelled') return cancelledScenario();

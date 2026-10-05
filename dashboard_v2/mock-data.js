@@ -16,9 +16,9 @@
     job(108,'Conan · Dấu vết còn lại','FAILED',{progress:.37,error:'Không đủ VRAM cho bước hiện tại. Có thể thử lại sau khi GPU trống.',palette:'violet',duration:'24:00'}),
     job(109,'Shin · Quả bom Katsu ca hát','SKIPPED',{review_summary:{status:'READY_FOR_EDIT_PLAN',total:4,resolved:4,needs_more_context:0,skip_eligible:true},cleanup:{eligible:true},archive:{eligible:true},palette:'amber',duration:'01:43:09'}),
     job(110,'Nhất Âu Xuân · Tập 30','COMPLETED',{source_present:false,source_archived:true,source_archive:{id:510,state:'ARCHIVED',kind:'EXPORTED',export_recycled:true,export_verified:false,archived_at:'2026-10-03T09:20:00Z'},palette:'rose',duration:'45:07'}),
-    job(111,'Shin · Chuyến đi mùa hè','CANCELLED',{palette:'blue',duration:'07:09'}),
-    job(112,'Conan · Hồ sơ cũ','CANCELLED',{hidden_at:'2026-10-03T09:00:00Z',palette:'violet',duration:'24:01'}),
-    job(113,'Nhất Âu Xuân · Tập 29','COMPLETED',{source_present:false,source_cleaned:true,source_cleanup:{id:613,state:'RECYCLED',verified:false},palette:'rose',duration:'44:53'}),
+    job(111,'Shin · Chuyến đi mùa hè','CANCELLED',{delete:{eligible:true,kind:'CANCELLED',reason:null,size_bytes:245000000},palette:'blue',duration:'07:09'}),
+    job(112,'Conan · Hồ sơ cũ','CANCELLED',{hidden_at:'2026-10-03T09:00:00Z',delete:{eligible:true,kind:'CANCELLED',reason:null,size_bytes:245000000},palette:'violet',duration:'24:01'}),
+    job(113,'Nhất Âu Xuân · Tập 29','COMPLETED',{source_present:false,source_cleaned:true,source_cleanup:{id:613,state:'RECYCLED',verified:false},delete:{eligible:true,kind:'LOST',reason:null,size_bytes:0},palette:'rose',duration:'44:53'}),
     job(114,'Shin · Cùng nhau đi cắm trại','QUEUED',{queue_kind:'export',queue_position:2,palette:'sage',duration:'07:16'}),
     job(115,'Conan · Chuyến tàu đêm','PAUSED',{progress:.28,palette:'violet',duration:'24:02'})
   ];

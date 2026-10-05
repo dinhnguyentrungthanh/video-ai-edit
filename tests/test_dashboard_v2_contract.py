@@ -181,6 +181,13 @@ class StateGroupTests(unittest.TestCase):
         out = _node("console.log(require('./dashboard_v2/contracts.js').OUTPUT_MOVED_REASON)").strip()
         self.assertEqual(out, REASON_OUTPUT_MOVED)
 
+    def test_delete_note_is_the_backend_text(self) -> None:
+        # "Xóa video gốc" can end DELETED with a note (the export manifest stayed); V2 shows such results.
+        from biliflow.source_cleanup import MANIFEST_WARNING
+        out = _node("process.stdout.write(require('./dashboard_v2/contracts.js').DELETE_NOTE)")
+        self.assertEqual(out, MANIFEST_WARNING.split("{", 1)[0])
+        self.assertIn("C.DELETE_NOTE", (ROOT / "dashboard_v2" / "app.js").read_text(encoding="utf-8"))
+
     def test_pc_only_reason_and_operations_match_the_phone_listener(self) -> None:
         from biliflow import phone_access
         out = json.loads(_node("const C=require('./dashboard_v2/contracts.js');"

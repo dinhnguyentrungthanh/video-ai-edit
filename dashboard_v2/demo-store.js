@@ -161,21 +161,35 @@
       else if (operation === 'shutdown') { state.offline = true; state.active = null; }
     }
 
+    /* "Xóa video gốc" / "Xóa video" never touch a golden-set video (j.protected) and use no Recycle Bin. */
+    const DEMO_REPORTS_BYTES = 12e6;
+    function allowed(j, kind) {
+      if (kind !== 'archive' && j.protected) return false;
+      return kind === 'delete' ? !!j.delete && j.delete.eligible === true : C.eligible(j, kind);
+    }
+    function refusal(j, kind) {
+      const hint = kind === 'delete' ? j.delete : j[kind];
+      return (kind !== 'archive' && j.protected) || (hint && hint.reason)
+        || (kind === 'delete' ? 'Chỉ xóa được video đã hủy hoặc video không còn video gốc' : 'Video không đủ điều kiện (dữ liệu mẫu).');
+    }
     function previewFor(kind, ids) {
       const chosen = ids.map(getJob).filter(Boolean).slice(0, 50);
-      const eligible = chosen.filter(j => C.eligible(j, kind)), ineligible = chosen.filter(j => !C.eligible(j, kind));
+      const eligible = chosen.filter(j => allowed(j, kind)), ineligible = chosen.filter(j => !allowed(j, kind));
       const used = state.scenario === 'bin_full' ? 49.99e9 : 7.2e9, max = 50e9;
-      const total = eligible.reduce((n, j) => n + (kind === 'archive' && j.state === 'SKIPPED' ? 0 : j.source_size_bytes), 0);
+      const size = j => kind === 'delete' ? (j.delete.kind === 'CANCELLED' ? j.source_size_bytes : 0) : kind === 'archive' && j.state === 'SKIPPED' ? 0 : j.source_size_bytes;
+      const total = eligible.reduce((n, j) => n + size(j), 0), archive = kind === 'archive';
       const busy = state.source_cleanup_running || state.offline;
-      const full = eligible.length && used + total > max - 64 * 1024 * 1024;
+      const full = archive && eligible.length && used + total > max - 64 * 1024 * 1024;
       return {
         preview_id: 'demo-preview-' + previewVersion + '-' + kind,
-        eligible: eligible.map(j => ({job_id: j.id, name: j.name, file_name: j.name + '.mp4', source_path: j.source_path, size_bytes: j.source_size_bytes,
-          kind: j.state === 'SKIPPED' ? 'SKIPPED' : 'EXPORTED', output_name: j.output_path || null,
-          archive_path: kind === 'archive' ? 'archive/sources/' + j.job_key + '/' : undefined})),
-        ineligible: ineligible.map(j => ({job_id: j.id, name: j.name, reason: (j[kind] && j[kind].reason) || 'Video không đủ điều kiện (dữ liệu mẫu).'})),
+        eligible: eligible.map(j => ({job_id: j.id, name: j.name, file_name: j.name + '.mp4', source_path: j.source_path, size_bytes: size(j),
+          kind: kind === 'delete' ? j.delete.kind : j.state === 'SKIPPED' ? 'SKIPPED' : 'EXPORTED', output_name: kind === 'delete' ? undefined : j.output_path || null,
+          reports_bytes: archive ? undefined : DEMO_REPORTS_BYTES,
+          archive_path: archive ? 'archive/sources/' + j.job_key + '/' : undefined})),
+        ineligible: ineligible.map(j => ({job_id: j.id, name: j.name, reason: refusal(j, kind)})),
         count: eligible.length, total_bytes: total,
-        recycle_bin: {volume: 'E:\\', used_bytes: used, items: 12, max_bytes: max, after_bytes: used + total},
+        reports_bytes: archive ? undefined : eligible.length * DEMO_REPORTS_BYTES,
+        recycle_bin: archive ? {volume: 'E:\\', used_bytes: used, items: 12, max_bytes: max, after_bytes: used + total} : undefined,
         blocked: busy ? 'Một thao tác với video gốc đang chạy hoặc mất kết nối.' : full ? 'Thùng rác không đủ chỗ (giới hạn trừ 64 MiB dự phòng).' : null,
       };
     }
@@ -206,7 +220,7 @@
         return {descriptor, status: operation === 'shutdown' ? 202 : 200, body: {}};
       },
       async preview(kind, ids) {
-        const descriptor = C.request(kind === 'cleanup' ? 'cleanupPreview' : 'archivePreview', null, {});
+        const descriptor = C.request({cleanup: 'cleanupPreview', delete: 'deletePreview', archive: 'archivePreview'}[kind], null, {});
         const p = previewFor(kind, ids);
         descriptor.path += '?ids=' + ids.join(',');
         state.requests.push(descriptor);
@@ -219,12 +233,15 @@
         if (fresh.preview_id !== previewId) throw demoError(409, 'Danh sách đã thay đổi. Xem lại danh sách mới rồi xác nhận lần nữa.', {code: 'preview_changed', preview: fresh});
         if (state.scenario === 'conflict' && !conflictUsed) { conflictUsed = true; previewVersion++; throw demoError(409, 'Danh sách đã thay đổi; không tự gửi lại.', {code: 'preview_changed', preview: previewFor(kind, ids)}); }
         if (fresh.blocked) throw demoError(409, fresh.blocked, {code: 'bin_capacity', preview: fresh});
-        state.requests.push(C.request(kind, null, {job_ids: ids, preview_id: previewId}));
+        const permanent = C.permanentOps.includes(kind), body = {job_ids: ids, preview_id: previewId};
+        if (permanent) body.confirm_permanent = true;
+        state.requests.push(C.request(kind, null, body));
         const results = fresh.eligible.map(item => {
           const j = getJob(item.job_id);
-          if (kind === 'cleanup') { j.source_cleaned = true; j.source_present = false; j.source_cleanup = {id: 1000 + j.id, state: 'RECYCLED', verified: true}; }
-          else { j.source_archived = true; j.source_present = false; j.source_archive = {id: 2000 + j.id, state: 'ARCHIVED', kind: j.state === 'SKIPPED' ? 'SKIPPED' : 'EXPORTED', export_recycled: j.state !== 'SKIPPED', export_verified: true}; }
-          return {job_id: j.id, name: j.name, status: kind === 'cleanup' ? 'RECYCLED' : 'ARCHIVED', message: 'Đã mô phỏng', size_bytes: j.source_size_bytes};
+          // A permanent delete removes the video from BiliFlow (the export .mp4 would stay in output).
+          if (permanent) { state.jobs.splice(state.jobs.indexOf(j), 1); return {job_id: j.id, name: j.name, status: 'DELETED', message: 'Đã mô phỏng', size_bytes: item.size_bytes}; }
+          j.source_archived = true; j.source_present = false; j.source_archive = {id: 2000 + j.id, state: 'ARCHIVED', kind: j.state === 'SKIPPED' ? 'SKIPPED' : 'EXPORTED', export_recycled: j.state !== 'SKIPPED', export_verified: true};
+          return {job_id: j.id, name: j.name, status: 'ARCHIVED', message: 'Đã mô phỏng', size_bytes: j.source_size_bytes};
         });
         changed();
         return {results};

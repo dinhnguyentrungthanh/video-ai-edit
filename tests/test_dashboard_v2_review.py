@@ -2,7 +2,8 @@
 
 The new files are whitelisted and served on the PC listener and, with the access cookie, on the phone
 listener; the CSP is unchanged, the new files have no blob:, inline script or fetch; the classic pages
-stay byte-identical (D2); PHONE_ALLOWED_POSTS and the contract endpoints are unchanged; review-core.js
+stay byte-identical (D2); PHONE_ALLOWED_POSTS and the R0 contract endpoints are unchanged (only the two PC-only
+"Xóa video" endpoints were added); review-core.js
 matches the classic page (verify-review.cjs) and, for S1, counts bulk actions like the real server.
 R2: the bodies the dialog sends (review-core.js decisionBody / undoPlan, equal to the classic page's) are
 POSTed to the real /api/jobs/<id>/review/decision|clear route on a temporary root with a synthetic queue,
@@ -61,8 +62,9 @@ PHONE_POSTS_LITERAL = (
     r"/api/jobs/\d+/ai-audit",
     r"/api/jobs/\d+/review/(?:decision|clear|bulk-keep|bulk-accept|finalize)",
 )
-# SHA-256 of JSON.stringify(contracts.js endpoints, keys sorted) at the start of R0 (50 endpoints).
-ENDPOINTS_SHA256 = "06c1dd42737de31d040ae78dd9d31aaf00b8b320f861cb4a0bfff429b35f0c9a"
+# SHA-256 of JSON.stringify(contracts.js endpoints, keys sorted): the 50 endpoints of R0 plus deletePreview and
+# delete of "Xóa video" (2026-10-05; without these two keys the digest is still 06c1dd42…0c9a).
+ENDPOINTS_SHA256 = "071106c5bc042d120dcf292e8a5dd4cfad8e1798428f7e65a1bf776db6be1f9b"
 
 
 def node(script: str) -> str:
@@ -535,7 +537,7 @@ class ReviewR4PhoneListener(_TempJobFixture):
         self.assertTrue(all(x.get("decision") for x in queue["items"]), "Giữ tất cả kept every undecided item")
         # Report previews through /media; nothing reaches a PC-only route; no error answer.
         self.assertTrue(any(urllib.parse.unquote(r["path"]).startswith("/media/reports/") and r["status"] == 200 for r in after))
-        self.assertEqual([r for r in after if re.search(r"source-(cleanup|archive|recycle)|/shutdown|logo-memory", r["path"])], [])
+        self.assertEqual([r for r in after if re.search(r"source-(cleanup|archive|recycle)|job-delete|/shutdown|logo-memory", r["path"])], [])
         self.assertEqual([r for r in after if r["status"] is None or r["status"] >= 400], [])
         source = self.root / "input" / self.SOURCE
         self.assertEqual(hashlib.sha256(source.read_bytes()).hexdigest(), queue["source"]["sha256"], "the source is never touched")

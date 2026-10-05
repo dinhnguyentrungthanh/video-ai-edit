@@ -94,14 +94,16 @@ function scope(j){return '<div class="scope-chips">'+Object.entries(C.detectors)
 /* U3: in "Hoàn tất" every row has a selection box. Only a video the server lets clean or archive (C.eligible) can be
    ticked; any other box is disabled with the server's reason (cleanup.reason, plus archive.reason when it differs).
    Through the phone every box and the clean/archive buttons are disabled with C.PC_ONLY_REASON. */
-const SELECT_NONE='Không có video nào dọn hoặc lưu trữ được',SELECT_PC_ONLY='Dọn và lưu trữ chỉ làm trên PC';
-function selectable(j){return !state.remote&&(C.eligible(j,'cleanup')||C.eligible(j,'archive'));}
+const SELECT_NONE='Không có video nào xóa video gốc hoặc lưu trữ được',SELECT_PC_ONLY='Xóa video gốc và lưu trữ chỉ làm trên PC';
+/* A golden-set video (j.protected) is never deleted: it can only be picked for "Lưu trữ". */
+function cleanable(j){return C.eligible(j,'cleanup')&&!j.protected;}
+function selectable(j){return !state.remote&&(cleanable(j)||C.eligible(j,'archive'));}
 function selectReasons(j){
-  const local=C.archived(j)?'Video gốc đã được lưu trữ':C.cleaned(j)?'Video gốc đã được dọn trước đó':j.source_present===false?'Video gốc không còn trong thư mục input':C.inFlight(j)?'Còn lệnh xuất video chưa xong':'Chưa dọn hay lưu trữ được video này';
-  const c=String(j.cleanup?.reason||''),a=String(j.archive?.reason||''),first=c||a||local;
+  const local=C.archived(j)?'Video gốc đã được lưu trữ':C.cleaned(j)?'Video gốc đã được dọn trước đó':j.source_present===false?'Video gốc không còn trong thư mục input':C.inFlight(j)?'Còn lệnh xuất video chưa xong':'Chưa xóa video gốc hay lưu trữ được video này';
+  const c=String(j.protected||j.cleanup?.reason||''),a=String(j.archive?.reason||''),first=c||a||local;
   return [first,a&&a!==first?a:''];
 }
-function selectReason(j){const [c,a]=selectReasons(j);return a?'Dọn: '+c+' · Lưu trữ: '+a:c;}
+function selectReason(j){const [c,a]=selectReasons(j);return a?'Xóa video gốc: '+c+' · Lưu trữ: '+a:c;}
 function reasonShort(r){return r==='Video gốc đã được dọn trước đó'?'đã dọn':r.startsWith('Không thấy bản xuất')?'thiếu bản xuất':r==='Video gốc không còn trong thư mục input'?'không còn video gốc':r==='Video gốc đã được lưu trữ'?'đã lưu trữ':r;}
 function reasonCounts(jobs){
   const counts=new Map();jobs.forEach(j=>{const k=reasonShort(selectReasons(j)[0]);counts.set(k,(counts.get(k)||0)+1);});
@@ -132,8 +134,8 @@ function bulkToolbar(all,ids){
   let label,pick='',clear='',clean,archive;
   if(state.remote){label=SELECT_PC_ONLY;pick=clear=clean=archive=off(C.PC_ONLY_REASON);}
   else if(!n){const counts=reasonCounts(all);label=SELECT_NONE+(counts?'<small class="bulk-reasons"> · '+esc(counts)+'</small>':'');pick=clear=off(SELECT_NONE);clean=archive=' disabled';}
-  else{label=selected.size+' video đã chọn · '+n+' video chọn được';clean=!ids.some(id=>C.eligible(getJob(id),'cleanup'))||busy?' disabled':'';archive=!ids.some(id=>C.eligible(getJob(id),'archive'))||busy?' disabled':'';}
-  return '<div class="bulk-toolbar"><span class="bulk-label">'+label+'</span><button class="small secondary" data-action="select-all"'+pick+'>Chọn tối đa 50</button><button class="small secondary" data-action="deselect"'+clear+'>Bỏ chọn</button><button class="small" data-action="bulk-cleanup"'+clean+'>Dọn video gốc</button><button class="small" data-action="bulk-archive"'+archive+'>Lưu trữ</button></div>';
+  else{label=selected.size+' video đã chọn · '+n+' video chọn được';clean=!ids.some(id=>cleanable(getJob(id)))||busy?' disabled':'';archive=!ids.some(id=>C.eligible(getJob(id),'archive'))||busy?' disabled':'';}
+  return '<div class="bulk-toolbar"><span class="bulk-label">'+label+'</span><button class="small secondary" data-action="select-all"'+pick+'>Chọn tối đa 50</button><button class="small secondary" data-action="deselect"'+clear+'>Bỏ chọn</button><button class="small" data-action="bulk-cleanup"'+clean+'>Xóa video gốc</button><button class="small" data-action="bulk-archive"'+archive+'>Lưu trữ</button></div>';
 }
 function listBody(){
   const all=allFiltered(),folds=[['Đã hủy',all.filter(j=>j.state==='CANCELLED'&&!C.hidden(j)),'cancelled'],['Đã ẩn',all.filter(C.hidden),'hidden'],['Đã lưu trữ',all.filter(j=>C.archived(j)),'archived']];
@@ -141,9 +143,16 @@ function listBody(){
   const ids=[...selected].filter(id=>selectable(getJob(id)));selected=new Set(ids);
   return bulkToolbar(all,ids)+'<div class="jobs-head"><span>VIDEO</span><span>TRẠNG THÁI</span><span>PHẠM VI QUÉT</span><span>TIẾN ĐỘ</span><span style="text-align:right">THAO TÁC</span></div>'+regular.slice((page-1)*8,page*8).map(row).join('')+(all.length?'':'<div class="empty">'+icon('folder')+'<strong>Không có video phù hợp</strong>Thử đổi bộ lọc hoặc từ khóa tìm kiếm.</div>')+folds.filter(x=>x[1].length).map(([label,items,key])=>'<details class="fold" data-fold="'+key+'"><summary>'+label+' ('+items.length+')</summary>'+items.map(row).join('')+'</details>').join('')+'<div class="list-footer"><span>'+all.length+' video phù hợp · '+visibleJobs().length+' video trong không gian</span><div class="pages"><button data-action="prev" '+(page===1?'disabled':'')+' aria-label="Trang trước">‹</button><span>'+page+' / '+pages+'</span><button data-action="next" '+(page===pages?'disabled':'')+' aria-label="Trang sau">›</button></div></div>';
 }
+/* "Dọn video mất gốc": every video whose source is gone (not archived) leaves BiliFlow in one dialog; output stays. */
+function lostNotice(){
+  const ids=C.lostIds(state.jobs);if(!ids.length)return '';
+  // Live: off until /api/phone-mode has said whether this page is the phone.
+  const off=state.remote?' disabled title="'+esc(C.PC_ONLY_REASON)+'"':state.source_cleanup_running||state.offline||LIVE&&!state.phone?' disabled':'';
+  return '<div class="notice lost-notice">Có '+ids.length+' video không còn video gốc · <button class="small" data-action="purge-lost"'+off+'>Dọn video mất gốc</button>'+(ids.length>50?' <small>Mỗi lần tối đa 50 video.</small>':'')+'</div>';
+}
 function list(){
   const visible=visibleJobs();
-  return '<section class="list-section" id="video-list"><div class="list-title"><h2>Video của bạn</h2><small>'+visible.length+'</small><span class="list-subtitle">Từ input đến bản xuất, trong một không gian</span></div><div class="list-tools">'+(C.overviewLabels[filter]?'<div class="focused-filter"><span>Đang lọc: <strong>'+esc(C.overviewLabels[filter])+'</strong> · cùng nhóm với ô tổng quan bạn vừa chọn</span><button class="small secondary" data-action="filter" data-filter="all">Xem tất cả</button></div>':'')+'<div class="filter-tabs" role="group" aria-label="Lọc theo giai đoạn">'+C.tabs.map(([id,label])=>'<button class="filter-tab '+(filter===id?'active':'')+'" data-action="filter" data-filter="'+id+'" aria-pressed="'+(filter===id)+'">'+label+'<span>'+(id==='all'?visible.length:visible.filter(j=>C.tab(j)===id).length)+'</span></button>').join('')+'</div><div class="search-sort"><label class="search-wrap">'+icon('search')+'<input id="search" placeholder="Tìm tên video hoặc mã job…" aria-label="Tìm video" value="'+esc(query)+'"></label><select id="sort" aria-label="Sắp xếp video">'+[['recent','Mới cập nhật'],['queue','Thứ tự hàng đợi'],['name','Tên video A–Z']].map(([id,label])=>'<option value="'+id+'" '+(sort===id?'selected':'')+'>'+label+'</option>').join('')+'</select></div></div><div id="list-body">'+listBody()+'</div></section>';
+  return '<section class="list-section" id="video-list"><div class="list-title"><h2>Video của bạn</h2><small>'+visible.length+'</small><span class="list-subtitle">Từ input đến bản xuất, trong một không gian</span></div>'+lostNotice()+'<div class="list-tools">'+(C.overviewLabels[filter]?'<div class="focused-filter"><span>Đang lọc: <strong>'+esc(C.overviewLabels[filter])+'</strong> · cùng nhóm với ô tổng quan bạn vừa chọn</span><button class="small secondary" data-action="filter" data-filter="all">Xem tất cả</button></div>':'')+'<div class="filter-tabs" role="group" aria-label="Lọc theo giai đoạn">'+C.tabs.map(([id,label])=>'<button class="filter-tab '+(filter===id?'active':'')+'" data-action="filter" data-filter="'+id+'" aria-pressed="'+(filter===id)+'">'+label+'<span>'+(id==='all'?visible.length:visible.filter(j=>C.tab(j)===id).length)+'</span></button>').join('')+'</div><div class="search-sort"><label class="search-wrap">'+icon('search')+'<input id="search" placeholder="Tìm tên video hoặc mã job…" aria-label="Tìm video" value="'+esc(query)+'"></label><select id="sort" aria-label="Sắp xếp video">'+[['recent','Mới cập nhật'],['queue','Thứ tự hàng đợi'],['name','Tên video A–Z']].map(([id,label])=>'<option value="'+id+'" '+(sort===id?'selected':'')+'>'+label+'</option>').join('')+'</select></div></div><div id="list-body">'+listBody()+'</div></section>';
 }
 function queueView(){
   const jobs=state.jobs.filter(j=>j.state==='QUEUED').sort((a,b)=>a.queue_position-b.queue_position);
@@ -203,7 +212,7 @@ function phonePanel(){
   const warn='<p class="muted">Chỉ dùng trong Wi-Fi nhà: kết nối là HTTP, không mã hóa; không dùng Wi-Fi công cộng. Lần đầu Windows hỏi cho Python qua tường lửa, chọn <strong>Private networks</strong>.</p>';
   if(!LIVE)return '<section class="panel phone-panel" style="margin-bottom:18px"><h2>Mở trên điện thoại</h2><p class="muted">Chỉ có ở bản live (/dashboard-v2/) trên PC.</p></section>';
   const p=state.phone;
-  if(state.remote)return '<section class="panel phone-panel" style="margin-bottom:18px"><h2>Đang mở qua điện thoại / laptop</h2><p class="pc-only-note">Các thao tác sau chỉ làm trên PC: dọn, lưu trữ, khôi phục video gốc, kiểm tra lại Thùng rác; tắt Control Center; cấu hình và đăng nhập AI; Visual AI Audit (gửi ảnh ra ngoài máy); sửa hoặc xóa bộ nhớ logo; bật/tắt chế độ điện thoại. Duyệt cảnh ở đây vẫn có thể thêm hoặc bỏ logo đã nhớ.</p>'+warn+'</section>';
+  if(state.remote)return '<section class="panel phone-panel" style="margin-bottom:18px"><h2>Đang mở qua điện thoại / laptop</h2><p class="pc-only-note">Các thao tác sau chỉ làm trên PC: xóa video và video gốc, lưu trữ, khôi phục, kiểm tra lại Thùng rác; tắt Control Center; cấu hình và đăng nhập AI; Visual AI Audit (gửi ảnh ra ngoài máy); sửa hoặc xóa bộ nhớ logo; bật/tắt chế độ điện thoại. Duyệt cảnh ở đây vẫn có thể thêm hoặc bỏ logo đã nhớ.</p>'+warn+'</section>';
   if(!p)return '<section class="panel phone-panel" style="margin-bottom:18px"><h2>Mở trên điện thoại</h2><p class="muted">Đang tải trạng thái…</p></section>';
   if(p.unavailable)return '<section class="panel phone-panel" style="margin-bottom:18px"><h2>Mở trên điện thoại</h2><p class="notice">Control Center đang chạy chưa có chế độ điện thoại. Tắt bằng Stop-BiliFlow.cmd rồi mở lại bằng Start-BiliFlow-Phone.cmd.</p></section>';
   const body=p.enabled?
@@ -227,7 +236,7 @@ function foldState(root){const out={};if(root)root.querySelectorAll('details[dat
 function restoreFolds(root,saved){if(root)root.querySelectorAll('details[data-fold]').forEach(d=>{if(d.dataset.fold in saved)d.open=saved[d.dataset.fold];});}
 let lastMainHtml=null;
 function mainHtml(){
-  const notice=state.offline?'<div class="notice" role="alert">Mất kết nối hệ thống · đang hiển thị dữ liệu đã tải. Thao tác thay đổi được khóa đến khi kết nối lại.</div>':state.source_cleanup_running?'<div class="notice">Một thao tác với video gốc đang chạy. Đợi hoàn tất trước khi dọn, lưu trữ hoặc khôi phục.</div>':'';
+  const notice=state.offline?'<div class="notice" role="alert">Mất kết nối hệ thống · đang hiển thị dữ liệu đã tải. Thao tác thay đổi được khóa đến khi kết nối lại.</div>':state.source_cleanup_running?'<div class="notice">Một thao tác với video gốc đang chạy. Đợi hoàn tất trước khi xóa, lưu trữ hoặc khôi phục.</div>':'';
   return notice+(view==='downloads'?downloadsView():view==='queue'?queueView():view==='logos'?logosView():view==='settings'?settingsView():heading(view==='overview'?'Trung tâm xử lý':'Video của bạn',view==='overview'?'Theo dõi tiến trình, duyệt cảnh và hoàn tất video của bạn.':'Tìm nhanh video và tiếp tục công việc ở đúng bước.')+(view==='overview'?kpis()+hero():'')+list());
 }
 function render(){
@@ -294,7 +303,7 @@ function drawerHtml(j){
         '</section>'+
         '<details class="detail-section audit-details"><summary>Kết quả kiểm tra & xuất video</summary><div class="detail-grid">'+checkTiles.map(([title,value,note])=>'<div class="detail-tile"><small>'+title+'</small><strong>'+esc(value)+'</strong><p>'+esc(note)+'</p></div>').join('')+'</div></details>'+
         '<details class="detail-section technical"><summary>Video gốc & thông tin kỹ thuật</summary>'+
-          '<p class="muted">'+(C.archived(j)?'Đang lưu trữ. Khôi phục sẽ trả video gốc về input để xuất lại.':C.cleaned(j)?'Đã vào Thùng rác. Khôi phục đúng tên, đường dẫn và SHA-256 trước khi xử lý lại.':j.source_present===false?'Không còn video gốc trong input':'Có trong input · report và quyết định duyệt được giữ.')+'</p>'+
+          '<p class="muted">'+(C.archived(j)?'Đang lưu trữ. Khôi phục sẽ trả video gốc về input để xuất lại.':C.cleaned(j)?'Đã vào Thùng rác. Khôi phục đúng tên, đường dẫn và SHA-256 trước khi xử lý lại.':j.source_present===false?'Không còn video gốc trong input'+(j.delete?.eligible&&!j.protected?' · bấm “Xóa video” để xóa video này khỏi BiliFlow (output giữ nguyên).':''):'Có trong input · report và quyết định duyệt được giữ.')+'</p>'+(j.protected?'<p class="muted">'+esc(j.protected)+'</p>':'')+
           '<div class="key-value"><span>Job key</span><span class="mono">'+esc(j.job_key)+'</span></div>'+
           '<div class="key-value"><span>Nguồn</span><span class="mono">'+esc(j.source_path)+'</span></div>'+
           '<div class="key-value"><span>SHA-256 mẫu</span><span class="mono">'+esc(j.source_sha256)+'</span></div>'+
@@ -399,13 +408,32 @@ function exportConfirmLine(){
   try{el.textContent=C.exportConfirmText(C.exportSelection($('#export-mode').value,$('#export-gb').value));el.classList.remove('error');}
   catch(e){el.textContent=e.message;el.classList.add('error');}
 }
+/* "Xóa video gốc" and "Xóa video" delete for good (2026-10-05): the dialog says what goes and what stays, and the
+   confirm button stays off until "Tôi hiểu" is ticked. "Lưu trữ" keeps its Recycle Bin line for the export. */
+const FILE_TITLES={cleanup:'Xóa video gốc',delete:'Xóa video',archive:'Lưu trữ video'};
+const FILE_TEXTS={
+  cleanup:'Video gốc trong input bị xóa vĩnh viễn (không qua Thùng rác) sau khi kiểm SHA-256, cùng manifest của bản xuất và dữ liệu của video trong BiliFlow (báo cáo, quyết định duyệt, log, lịch sử). Sau đó không duyệt hay xuất lại video này được nữa. Giữ lại: file .mp4 đã xuất trong output và bộ nhớ logo/studio.',
+  delete:'Video bị xóa khỏi BiliFlow cùng báo cáo, quyết định duyệt, log và lịch sử của nó. Video đã hủy còn video gốc trong input thì video gốc bị xóa vĩnh viễn (không qua Thùng rác) sau khi kiểm SHA-256. Không đụng tới thư mục output và bộ nhớ logo/studio.',
+  archive:'Video gốc được chuyển vào archive trên cùng ổ và kiểm SHA-256. Bản xuất và manifest của video đã xuất vào Thùng rác; video bỏ qua chỉ lưu trữ nguồn. Khôi phục trả nguồn về input để xuất lại.'};
+const FILE_ACKS={
+  cleanup:'Tôi hiểu: video gốc bị xóa vĩnh viễn, không lấy lại được từ Thùng rác; video này và quyết định duyệt của nó bị xóa khỏi BiliFlow, không duyệt hay xuất lại được nữa.',
+  delete:'Tôi hiểu: video bị xóa khỏi BiliFlow cùng quyết định duyệt; video gốc của video đã hủy bị xóa vĩnh viễn, không lấy lại được từ Thùng rác.'};
+/* The confirm button of a permanent delete stays off while "Tôi hiểu" is not ticked, also after a failed attempt. */
+function ackMissing(){const box=$('#ack-permanent');return !!box&&!box.checked;}
+function fileEntry(kind,x){
+  const name='<strong>#'+x.job_id+' · '+esc(x.name||x.file_name)+'</strong>',size=bytes(Number(x.size_bytes)||0),reports=bytes(Number(x.reports_bytes)||0);
+  if(kind==='archive')return '<li>'+name+'<small>'+esc(x.source_path||x.file_name||'')+' · '+size+'</small><small>Nơi lưu: '+esc(x.archive_path||'archive/sources/')+'</small></li>';
+  if(kind==='delete')return '<li>'+name+'<small>'+(x.kind==='CANCELLED'?'Đã hủy · xóa vĩnh viễn video gốc '+esc(x.file_name||'')+' ('+size+')':'Mất video gốc · chỉ xóa dữ liệu của video trong BiliFlow')+'</small><small>Báo cáo và log: '+reports+'</small></li>';
+  return '<li>'+name+'<small>'+esc(x.source_path||x.file_name||'')+' · '+size+'</small><small>Bản xuất: '+(x.output_name?esc(x.output_name)+' (giữ .mp4, xóa manifest)':esc(x.kind==='SKIPPED'?'Đã bỏ qua · không xuất':'—'))+' · Báo cáo và log: '+reports+'</small></li>';
+}
 function previewMarkup(kind,p,message){
-  const eligible=p.eligible||[],ineligible=p.ineligible||[],rb=p.recycle_bin;
-  const text=kind==='cleanup'?'Video gốc sẽ vào Thùng rác Windows. Report, quyết định duyệt, bộ nhớ logo và bản xuất được giữ. Chỉ giải phóng dung lượng khi bạn dọn sạch Thùng rác.':'Video gốc được chuyển vào archive trên cùng ổ và kiểm SHA-256. Bản xuất và manifest của video đã xuất vào Thùng rác; video bỏ qua chỉ lưu trữ nguồn. Khôi phục trả nguồn về input để xuất lại.';
-  return (message?'<div class="notice" role="alert">'+esc(message)+'</div>':'')+'<p>'+text+'</p><ul class="confirm-list">'+eligible.map(x=>'<li><strong>#'+x.job_id+' · '+esc(x.name||x.file_name)+'</strong><small>'+esc(x.source_path||x.file_name||'')+' · '+bytes(Number(x.size_bytes)||0)+'</small><small>'+(kind==='archive'?'Nơi lưu: '+esc(x.archive_path||'archive/sources/'):'Bản xuất: '+esc(x.output_name||(x.kind==='SKIPPED'?'Đã bỏ qua · không xuất':'—')))+'</small></li>').join('')+'</ul>'+
+  const eligible=p.eligible||[],ineligible=p.ineligible||[],rb=p.recycle_bin,permanent=C.permanentOps.includes(kind);
+  return (message?'<div class="notice" role="alert">'+esc(message)+'</div>':'')+'<p>'+FILE_TEXTS[kind]+'</p><ul class="confirm-list">'+eligible.map(x=>fileEntry(kind,x)).join('')+'</ul>'+
+    (permanent&&eligible.length?'<p class="confirm-total">Tổng: '+eligible.length+' video · video gốc '+bytes(Number(p.total_bytes)||0)+' · báo cáo và log '+bytes(Number(p.reports_bytes)||0)+' được giải phóng.</p>':'')+
     (ineligible.length?'<h3>Không thực hiện ('+ineligible.length+')</h3><ul class="confirm-list">'+ineligible.map(x=>'<li><strong>#'+x.job_id+(x.name?' · '+esc(x.name):'')+'</strong><small>'+esc(x.reason)+'</small></li>').join('')+'</ul>':'')+
-    '<div class="bin-preview">'+(rb?'Thùng rác '+esc(rb.volume||'')+' · '+bytes(Number(rb.used_bytes)||0)+(rb.max_bytes?' / '+bytes(Number(rb.max_bytes)):' · không rõ giới hạn')+'<br>Sau thao tác: '+bytes(Number(rb.after_bytes)||0)+' · dự phòng 64 MiB':'Không đọc được Thùng rác: thao tác cần Thùng rác sẽ bị từ chối.')+'</div>'+
-    (p.blocked?'<div class="notice">Thao tác bị khóa: '+esc(p.blocked)+'</div>':!eligible.length?'<div class="notice">Không có video đủ điều kiện.</div>':'');
+    (kind==='archive'?'<div class="bin-preview">'+(rb?'Thùng rác '+esc(rb.volume||'')+' · '+bytes(Number(rb.used_bytes)||0)+(rb.max_bytes?' / '+bytes(Number(rb.max_bytes)):' · không rõ giới hạn')+'<br>Sau thao tác: '+bytes(Number(rb.after_bytes)||0)+' · dự phòng 64 MiB':'Không đọc được Thùng rác: thao tác cần Thùng rác sẽ bị từ chối.')+'</div>':'')+
+    (p.blocked?'<div class="notice">Thao tác bị khóa: '+esc(p.blocked)+'</div>':!eligible.length?'<div class="notice">Không có video đủ điều kiện.</div>':'')+
+    (permanent&&eligible.length&&!p.blocked?'<label class="check-line ack-line"><input type="checkbox" id="ack-permanent"><span>'+esc(FILE_ACKS[kind])+'</span></label>':'');
 }
 async function filePreview(kind,ids){
   let p;
@@ -414,9 +442,10 @@ async function filePreview(kind,ids){
 }
 function showPreview(kind,ids,p,message){
   const eligible=p.eligible||[],blocked=!!p.blocked||!eligible.length||state.source_cleanup_running||state.offline;
-  const chosen=eligible.map(x=>x.job_id);
-  showModal(kind==='cleanup'?'Dọn video gốc':'Lưu trữ video',previewMarkup(kind,p,message),blocked?null:async()=>{
+  const chosen=eligible.map(x=>x.job_id),permanent=C.permanentOps.includes(kind),done=permanent?'DELETED':'ARCHIVED';
+  showModal(FILE_TITLES[kind],previewMarkup(kind,p,message),blocked?null:async()=>{
     if(state.offline||state.source_cleanup_running)throw new Error('Hệ thống không sẵn sàng. Không thực hiện thao tác.');
+    if(permanent&&!$('#ack-permanent')?.checked)throw new Error('Đánh dấu “Tôi hiểu” trước khi xóa.');
     let result;
     try{result=await store.fileAction(kind,chosen,p.preview_id);}
     catch(e){
@@ -424,12 +453,17 @@ function showPreview(kind,ids,p,message){
       if(e.status===409&&e.preview){showPreview(kind,ids,e.preview,e.message);return false;}
       throw e;
     }
-    const results=(result&&result.results)||[],ok=results.filter(r=>['RECYCLED','ARCHIVED'].includes(r.status));
-    ok.forEach(r=>selected.delete(r.job_id));
-    if(ok.length===results.length){toast((LIVE?'Đã ':'Đã mô phỏng ')+(kind==='cleanup'?'dọn':'lưu trữ')+' '+ok.length+' video.');return true;}
-    showModal('Kết quả từng video','<ul class="confirm-list">'+results.map(r=>'<li><strong>#'+r.job_id+' · '+esc(r.name||'')+' · '+esc(r.status)+'</strong><small>'+esc(r.message||'')+'</small></li>').join('')+'</ul><p>Mục chưa thành công vẫn được giữ trong lựa chọn.</p>',null);
+    // A PARTIAL video lost its source too: it can no longer be picked for these actions.
+    const results=(result&&result.results)||[],gone=r=>r.status===done||permanent&&r.status==='PARTIAL';
+    // DELETED with a note (the export manifest stayed in output) is not a clean result: the list below shows it.
+    const ok=results.filter(r=>r.status===done&&!String(r.message||'').includes(C.DELETE_NOTE));
+    results.filter(gone).forEach(r=>selected.delete(r.job_id));
+    if(ok.length===results.length){toast((LIVE?'Đã ':'Đã mô phỏng ')+(permanent?'xóa':'lưu trữ')+' '+ok.length+' video.');return true;}
+    showModal('Kết quả từng video','<ul class="confirm-list">'+results.map(r=>'<li><strong>#'+r.job_id+' · '+esc(r.name||'')+' · '+esc(r.status)+'</strong><small>'+esc(r.message||'')+'</small></li>').join('')+'</ul>'+(results.some(r=>!gone(r))?'<p>Mục chưa thành công vẫn được giữ trong lựa chọn.</p>':''),null);
     return false;
-  },kind==='cleanup'?'Chuyển '+chosen.length+' video vào Thùng rác':'Lưu trữ '+chosen.length+' video');
+  },kind==='cleanup'?'Xóa vĩnh viễn '+chosen.length+' video gốc':kind==='delete'?'Xóa '+chosen.length+' video':'Lưu trữ '+chosen.length+' video');
+  const box=$('#ack-permanent'),go=$('#confirm-action');
+  if(permanent&&box&&go){go.disabled=true;box.addEventListener('change',()=>{go.disabled=!box.checked;});}
 }
 function auditModal(j){
   showModal('Kiểm tra bằng AI Supervisor','<p><strong>#'+j.id+' · '+esc(j.name)+'</strong></p><label class="field"><span>Dữ liệu gửi kiểm tra</span><select id="audit-kind"><option value="json">JSON / báo cáo, không gửi ảnh</option><option value="visual"'+(state.remote?' disabled':'')+'>Visual AI Audit · có ảnh thumbnail'+(state.remote?' (chỉ làm trên PC)':'')+'</option></select></label>'+(state.remote?'<p class="pc-only-note">Chỉ làm trên PC: Visual AI Audit gửi ảnh ra ngoài máy.</p>':'')+'<p>Chọn Visual AI Audit nghĩa là bạn đồng ý gửi tối đa 36 thumbnail của video này qua tài khoản ChatGPT. Video và âm thanh gốc không được gửi. AI chỉ đề xuất; bạn duyệt mọi quyết định.</p>',async()=>{await mutate('audit',j,{visual:$('#audit-kind').value==='visual'});toast(sent('AI audit #'+j.id));return true;},'Xác nhận kiểm tra');
@@ -452,7 +486,7 @@ function jobAction(id,operation){
   else if(operation==='finalize')exportModal(j);
   else if(operation==='reexport')reexportModal(j);
   else if(operation==='audit')auditModal(j);
-  else if(operation==='cleanup'||operation==='archive')filePreview(operation,[j.id]);
+  else if(operation==='cleanup'||operation==='archive'||operation==='delete')filePreview(operation,[j.id]);
   else simpleConfirm(j,a);
 }
 function scenario(name){if(LIVE)return;store.scenario(name);}
@@ -480,6 +514,7 @@ document.addEventListener('click',async event=>{
   else if(action==='select-all'){if(state.remote)return;selected=new Set(allFiltered().filter(selectable).slice(0,50).map(j=>j.id));refreshList();}
   else if(action==='deselect'){selected.clear();refreshList();}
   else if((action==='bulk-cleanup'||action==='bulk-archive')&&!state.remote)filePreview(action==='bulk-cleanup'?'cleanup':'archive',[...selected]);
+  else if(action==='purge-lost'&&!state.remote&&!state.source_cleanup_running&&!state.offline&&!(LIVE&&!state.phone))filePreview('delete',C.lostIds(state.jobs).slice(0,50));
   else if(action==='logo-class'||action==='logo-delete')logoAction(el.dataset.key,action==='logo-delete');
   else if(action==='shutdown')showModal('Tắt BiliFlow','<p>'+ (el.dataset.mode==='immediate'?'Dừng bước hiện tại và tắt Control Center?':'Tắt Control Center sau khi bước hiện tại hoàn tất?')+'</p><p>Đóng tab không dừng backend. '+(LIVE?'Control Center nhận lệnh rồi mới tắt; trang sẽ mất kết nối.':'Ở demo, thao tác này mô phỏng mất kết nối.')+'</p>',async()=>{await mutate('shutdown',null,{mode:el.dataset.mode});toast(LIVE?'Control Center nhận lệnh tắt (202). Chưa chứng minh đã tắt; kiểm tra lại sau.':'Đã mô phỏng lệnh tắt; backend thật vẫn hoạt động.');return true;},'Xác nhận tắt');
   else if(action==='ai-save'){const data={enabled:$('#ai-enabled').checked,model:$('#ai-model').value,reasoning_effort:$('#ai-effort').value};if(el.dataset.busy)return;el.dataset.busy='1';try{await mutate('aiConfig',null,data);aiDirty=false;toast(LIVE?'Đã lưu cấu hình AI.':'Đã lưu cấu hình AI mẫu.');render();}catch(e){toast(e.message,true);}finally{delete el.dataset.busy;}}
@@ -495,13 +530,13 @@ document.addEventListener('click',async event=>{
   }
   else if(action==='ai-check'){if(el.dataset.busy)return;el.dataset.busy='1';try{await mutate('aiCheck',null,{});state=store.snapshot();toast(state.ai.message);render();}catch(e){toast(e.message,true);}finally{delete el.dataset.busy;}}
   else if(action==='ai-login')showModal('Đăng nhập ChatGPT',(LIVE?'<p>Mở luồng đăng nhập ChatGPT hiện có của Codex trên máy này. Không dùng API trả phí.</p>':'<p>Trong bản tích hợp, thao tác này mở luồng đăng nhập hiện có. Demo chỉ mô phỏng trạng thái.</p>'),async()=>{await mutate('aiLogin',null,{});toast(LIVE?'Đã mở luồng đăng nhập ChatGPT hiện có.':'Đã mô phỏng đăng nhập.');return true;});
-  else if(action==='help')showModal('Làm việc với BiliFlow V2','<ol class="help-steps"><li><strong>Thiết lập video:</strong> chọn nhóm kiểm tra, loại nội dung và chế độ quét.</li><li><strong>Duyệt cảnh:</strong> quyết định Giữ, Làm mờ, Cắt hoặc Cần xem thêm. Cần xem thêm vẫn chặn xuất.</li><li><strong>Xuất hoặc bỏ qua:</strong> xuất khi mọi cảnh đã quyết định cuối; bỏ qua khi không cần chỉnh sửa.</li><li><strong>Quản lý video gốc:</strong> dọn vào Thùng rác hoặc lưu trữ sau khi kiểm tra bản xuất.</li></ol>'+(LIVE?'<p>Dữ liệu lấy từ Control Center trên máy này. Trang Tải video vẫn là mô phỏng.</p>':'<p>Mọi dữ liệu là mẫu. Tải lại trang đặt lại trạng thái. Bản demo không kết nối API thật.</p>')+'',null);
+  else if(action==='help')showModal('Làm việc với BiliFlow V2','<ol class="help-steps"><li><strong>Thiết lập video:</strong> chọn nhóm kiểm tra, loại nội dung và chế độ quét.</li><li><strong>Duyệt cảnh:</strong> quyết định Giữ, Làm mờ, Cắt hoặc Cần xem thêm. Cần xem thêm vẫn chặn xuất.</li><li><strong>Xuất hoặc bỏ qua:</strong> xuất khi mọi cảnh đã quyết định cuối; bỏ qua khi không cần chỉnh sửa.</li><li><strong>Quản lý video gốc:</strong> xóa vĩnh viễn video gốc hoặc lưu trữ sau khi kiểm tra bản xuất; xóa video đã hủy hoặc không còn video gốc khỏi BiliFlow.</li></ol>'+(LIVE?'<p>Dữ liệu lấy từ Control Center trên máy này. Trang Tải video vẫn là mô phỏng.</p>':'<p>Mọi dữ liệu là mẫu. Tải lại trang đặt lại trạng thái. Bản demo không kết nối API thật.</p>')+'',null);
   else if(action==='reset'&&!LIVE){clearInterval(downloadTimer);downloadTimer=null;downloadDraft={domain:D.domains[0].id,url:'',error:''};downloadQueue=D.createQueue();downloadFilter='all';scanDrafts.clear();exportDrafts.clear();selected.clear();filter='all';query='';page=1;closeDrawer();if(!LIVE)store.reset();render();toast('Đã đặt lại dữ liệu mẫu.');}
   else if(action==='confirm'&&modalCommit&&!modalBusy){
     const callback=modalCommit;modalBusy=true;el.disabled=true;
     try{const done=await callback();modalBusy=false;if(done!==false)closeModal();}
-    catch(e){modalBusy=false;if($('#modal-error')){$('#modal-error').hidden=false;$('#modal-error').textContent=e.message;}el.disabled=false;}
-    finally{modalBusy=false;if(el.isConnected)el.disabled=false;}
+    catch(e){modalBusy=false;if($('#modal-error')){$('#modal-error').hidden=false;$('#modal-error').textContent=e.message;}el.disabled=ackMissing();}
+    finally{modalBusy=false;if(el.isConnected)el.disabled=ackMissing();}
   }
 });
 document.addEventListener('change',event=>{
