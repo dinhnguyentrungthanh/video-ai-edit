@@ -107,7 +107,7 @@ Các ô tổng quan **đếm video**, riêng ghi chú “cảnh cần quyết đ
 | Thiết lập nội dung, profile, detector, OCR, tăng tốc | Thiết lập & bắt đầu trong Chi tiết / dòng video | POST start |
 | Tiếp tục, dừng sau bước, dừng ngay, retry, hủy | Chi tiết → Thao tác chính / Thao tác khác | Các endpoint job tương ứng; giữ nguyên điều kiện khóa và xác nhận |
 | Chạy lại theo phạm vi trong revision mới | Chi tiết → Thao tác khác → Chạy lại kiểm tra | POST rerun |
-| Duyệt cảnh | Nút Duyệt cảnh | Mở **trang review hiện có** `/review/{id}` |
+| Duyệt cảnh | Nút Duyệt cảnh | Từ R4: mở **hộp duyệt V2** `#review/{id}/{màn}` (`docs/DASHBOARD_V2_REVIEW_PLAN.md`); trang review hiện có `/review/{id}` giữ nguyên, mở bằng link "Mở trang duyệt cũ" trong hộp |
 | Cấu trúc cục bộ và Visual AI Audit | Chi tiết → Kết quả kiểm tra & xuất video | `structure_audit`, `ai_audit`; mục gấp không thay đổi kết quả |
 | Audit JSON / Visual AI | Chi tiết → Thao tác khác → Visual AI Audit → chọn dữ liệu | POST ai-audit; Visual cần opt-in |
 | Xuất từ dashboard và từ review | Dòng video / Chi tiết → Xuất video | Cùng POST review/finalize và chính sách dung lượng |
@@ -123,10 +123,9 @@ Các ô tổng quan **đếm video**, riêng ghi chú “cảnh cần quyết đ
 
 ### Trang review
 
-Prototype chỉ mô phỏng KEEP, BLUR, CUT, NEEDS_MORE_CONTEXT, xóa quyết định và hai thao tác hàng loạt.
-**Không thay thế** trình phát, timeline, chỉnh vùng / thời gian, note, nhớ logo, nguồn evidence và khóa queue trong trang review hiện tại.
-Khi tích hợp, Duyệt cảnh phải điều hướng đến `/review/{id}` của đúng job. Giữ đầy đủ chức năng trang đó.
-Đừng chuyển quyết định từ scene mẫu sang queue thật.
+Cập nhật 2026-10-05 (R4): hộp mẫu cũ đã được thay bằng hộp duyệt V2 (`review*.js`), làm theo `docs/DASHBOARD_V2_REVIEW_PLAN.md` (tương đương trang cũ P1–P17, chỗ khác có chủ ý S1–S9).
+Hộp dùng đúng các route review hiện có (queue, session, evidence, frame, video, decision, clear, bulk-keep, bulk-accept, finalize) với payload như trang cũ; không thêm route.
+Trang review hiện có `/review/{id}` giữ nguyên (trùng byte) và mở bằng link trong hộp.
 
 ## 3. Hợp đồng dữ liệu
 
@@ -261,7 +260,7 @@ Platform key hiện tại: iqiyi, youku, tencent_video, mango_tv, sohu, pptv.
 4. Phục vụ V2 tại route opt-in riêng, ví dụ /dashboard-v2; giữ / và /review/{id} như hiện tại.
 5. Whitelist asset route; không mở thư mục project hoặc thư mục state/report qua static directory listing.
 6. CSP bản live cần connect-src 'self' thay cho 'none' chỉ ở route live, đồng thời giữ frame-ancestors, token và same-origin.
-7. Duyệt cảnh mở trang review hiện có. Không nhúng modal scene mẫu vào thao tác thật.
+7. Duyệt cảnh mở hộp duyệt V2 (từ R4); trang review hiện có vẫn mở được bằng link trong hộp. Hộp mẫu cũ đã bị bỏ.
 8. Tái sử dụng export_dialog.py cho chính sách, validation, xác nhận và exportPolicyChoice; không tạo gate preview mới ngoài workflow hiện tại.
 9. Tải poster / media qua URL backend hợp lệ, lazy load ảnh cần nhìn. Không dựng full preview chỉ để trang overview.
 10. Xóa scenario selector, mock login/shutdown/memory/file operations khỏi build live.
@@ -324,7 +323,7 @@ Tự động kiểm tra bằng `tests/test_dashboard_v2_contract.py` (route và 
 | 8 | `active` là `{job_id, stage, pid}` hoặc `null` (không phải mảng). `queue` là `{length, paused}`; thứ tự theo từng job nằm ở `jobs[].queue_position/queue_kind`. `queue_kind` chỉ `scan` hoặc `export`, và chỉ có khi job đang chờ chạy được. | Không dựng danh sách queue từ nơi khác. Kiểu lạ → nhóm “Chờ xử lý”. |
 | 9 | `resources`: `cpu_percent`, `memory{percent,used_bytes,total_bytes}`, `disk{percent,free_bytes,total_bytes}`, `gpu` = `null` hoặc `{memory_used_bytes,memory_total_bytes,utilization_percent,temperature_c}`. **Không có tên GPU.** | Hiển thị N/A khi `gpu` null; không bịa `gpu.name` (fixture demo có, live không). |
 | 10 | `GET /api/logo-memory` trả `{memory_sha256, records[], backups}`; mỗi record có `key, memory_class, decision, platform, labels, episode, frames, frame_urls, convertible, refusal_text…` (không có `name`/`color` như fixture). `frame_urls` đã mã hóa sẵn. | Adapter dựng tên hiển thị từ record; dùng `memory_sha256` của **lần tải gần nhất** làm `expected_sha256`; 409 `memory_changed` → tải lại. |
-| 11 | Review media: `evidence` cần `item`; `frame` cần `item`, `t`, `k`; `video` cần `k`. `k` lấy từ `GET /api/jobs/{id}/review/session` (cùng `token`). | V2 không dựng media URL tự do; chỉ mở `/review/{id}`. |
+| 11 | Review media: `evidence` cần `item`; `frame` cần `item`, `t`, `k`; `video` cần `k`. `k` lấy từ `GET /api/jobs/{id}/review/session` (cùng `token`). | Hộp duyệt V2 dựng URL qua `adapter.js` (`item`, `t`, `k` mã hóa, `k` từ `review/session`; 403 → lấy phiên mới một lần cho cả hộp). |
 | 12 | `POST /api/shutdown` trả **202** `{status:"STOPPING", mode}` rồi mới tắt; `/api/scheduler` trả `{paused}`; `/api/jobs/{id}/ai-audit` trả `{status:"QUEUED", visual_opt_in}`. | Không coi 202 là đã tắt; kiểm tra `/healthz` (guide mục 4). |
 | 13 | Job state thực tế (20 giá trị): DISCOVERED, NEEDS_METADATA, QUEUED, PREFLIGHT, SCANNING_SAFETY, SCANNING_TEXT, SCANNING_LOGO, LOCALIZING_REGIONS, BUILDING_REVIEW, AI_AUDITING, WAITING_REVIEW, READY_TO_EXPORT, RENDERING, VERIFYING, PAUSED, FAILED, INTERRUPTED_RECOVERABLE, CANCELLED, COMPLETED, SKIPPED. `review_summary` chỉ có ở WAITING_REVIEW/READY_TO_EXPORT/SKIPPED có `active_queue_path`. | Test kiểm tra mỗi state vào đúng một nhóm và trùng `jobTab` của dashboard cũ. |
 
@@ -341,8 +340,8 @@ Tình trạng: **khớp** (endpoint, body và khóa đã khớp code), **một p
 | Ẩn / hiện lại job đã hủy | Nhóm gấp “Đã ẩn” | POST `…/hide`, `…/unhide` `{}` | chỉ CANCELLED | khớp |
 | Bỏ qua / mở lại | Thao tác khác | POST `…/skip`, `…/unskip` `{}` | `review_summary.skip_eligible` do backend | khớp |
 | Visual AI Audit | Thao tác khác | POST `…/ai-audit` `{visual: bool}` → `{status:"QUEUED", visual_opt_in}` | Visual cần đồng ý riêng từng video | khớp |
-| Duyệt cảnh | Nút Duyệt cảnh | điều hướng GET `/review/{id}` (trang cũ, giữ nguyên) | — | khớp (điều hướng); scene trong demo là **mô phỏng** |
-| Quyết định / xóa / bulk | Trang review cũ | POST `…/review/decision|clear|bulk-keep|bulk-accept` (do trang review gửi) | `ensure_review_editable` | không làm trong V2 |
+| Duyệt cảnh | Nút Duyệt cảnh | mở hộp duyệt V2 `#review/{id}/{màn}` (R4); trang cũ GET `/review/{id}` giữ nguyên, có link trong hộp | — | khớp; bản demo dùng queue giả trong bộ nhớ |
+| Quyết định / xóa / bulk | Hộp duyệt V2 (và trang review cũ) | POST `…/review/decision|clear|bulk-keep|bulk-accept`, body như trang cũ | `ensure_review_editable` | khớp (từ R2/R3) |
 | Xuất video | Dòng video / Chi tiết | POST `…/review/finalize` `{size_mode, max_output_gb?}` → 200 `{status, output, export_size_policy}` hoặc 400/409 (mục 8.1 #3–#4) | READY_TO_EXPORT, queue READY_FOR_EDIT_PLAN, không còn cảnh chờ, nguồn không khóa, không có lệnh xuất | khớp |
 | Dọn video gốc | Hoàn tất → Dọn | GET `/api/source-cleanup/preview?ids=` → `{preview_id, eligible[], ineligible[], recycle_bin, blocked}`; POST `/api/source-cleanup` `{job_ids[], preview_id}` | tối đa 50, preview mới; 409 `preview_changed/bin_unavailable/bin_capacity/busy` | khớp; **thao tác thật chỉ người dùng bấm** (AGENTS.md) |
 | Lưu trữ / Khôi phục | Hoàn tất → Lưu trữ; Đã lưu trữ | GET `/api/source-archive/preview?ids=`; POST `/api/source-archive` `{job_ids, preview_id}`; POST `/api/source-archive/restore` `{job_id}` | như trên; restore khi đường dẫn input trống và hash khớp | khớp; chỉ người dùng bấm |

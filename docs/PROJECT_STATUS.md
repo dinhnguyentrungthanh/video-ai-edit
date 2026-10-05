@@ -1,3 +1,21 @@
+## Dashboard V2 review dialog R0–R4 and the stronger logo cover (2026-10-04/05) — branch `feat/dashboard-v2`, not merged
+
+- The V2 review dialog replaces the prototype's review box (plan: `docs/DASHBOARD_V2_REVIEW_PLAN.md`).
+  - Since R4, "Duyệt cảnh" in the detail drawer opens it over the current screen at `#review/<id>/<view>`, on the live page and the demo.
+  - It covers the classic review page (P1–P17): cards, frames and the video of each card, timeline, zoom, technical details, decisions with the classic confirms, region buttons, logo memory, keys, undo, auto-next, "Giữ tất cả" / "Dùng đề xuất", and "Xuất video" through the V2 export dialog. The deliberate differences S1–S9 are listed in section 5 of the plan.
+  - The classic page `/review/<id>` is byte-identical (D2) and one link away ("Mở trang duyệt cũ").
+- Batches and checks:
+  - R0 view-only dialog `b853963` (M4), `0e43fa1`; R1 media `1191690` (R1-B1 `b8b458f`); R2 decisions `539e6a6`; R2-B1 and R2-B2 `108f27b`; R3 bulk actions and export `bb763ad`. The local machine checked each batch (section 8.2); the last check, on `03666a6`, passed.
+  - The user tried R2 (section 8.3, steps 1–4) on a real job: pass (U-R2).
+  - R4 (2026-10-05): phone and laptop layout (44 px touch targets, 12 px text, fading chip row, the tools row wraps, a full-screen dialog when held sideways), a check through the real phone listener, the "Duyệt cảnh" switch, and R3-N1 (one Esc closes only the dialog on top). It waits for the local check (section 8.2), then the user's acceptance test U-R4 (section 8.3, all 8 steps).
+- Stronger logo cover in exports (`0334f8c`, made on the local machine at the user's request):
+  - A new export covers a reviewed regional logo BLUR with FFmpeg `delogo` first, then a blur that grows with the region (`delogo_blur_v1`). Full-frame blurs and edit plans without a method render as before.
+  - The export identity is unchanged, so an export made before still proves the current decisions. "Dọn video gốc", "Lưu trữ" and "Xuất video" treat it as before.
+  - To give an already exported video the new cover, the user moves its old export (`output\…-reviewed.mp4` and its `.manifest.json`) to the Recycle Bin, then exports again. BiliFlow never does this itself.
+  - The Control Center uses the new cover once the main folder runs a commit that contains `0334f8c` and the Control Center restarts (ask the user first).
+- Verified on the cloud for R4: see the R4 table and the log in section 11 of the plan. The pre-existing PowerShell-only errors in `test_control_center` and `test_skip_export` are unchanged.
+- Next: local check of R4, then U-R4. Merge into `main` only when the user asks.
+
 ## Dashboard V2 prototype (2026-10-03): independent demo, not integrated
 
 - Latest feedback: **Tải video** now supports multiline batches, adding during active downloads, separate task rows/progress, filters/counters, 1–3 download slots, pause/cancel/retry and folded sample logs. Queue is independent of the GPU processing queue. `download-demo.js` owns the pure sample state machine. Real command/PowerShell integration is documented only, not implemented; no downloader/API transport is connected.

@@ -94,15 +94,23 @@ Remove-NetFirewallRule -DisplayName "BiliFlow phone mode (Python, TCP 8767)"
 - tạm dừng hoặc tiếp tục hàng đợi;
 - thiết lập và bắt đầu quét, dừng, tiếp tục, thử lại, hủy, chạy lại;
 - AI Audit dạng JSON (không gửi ảnh);
-- mở trang duyệt cảnh, duyệt cảnh, xuất video.
+- duyệt cảnh và xuất video.
   - **Duyệt cảnh qua điện thoại có thể thêm hoặc bỏ bản ghi logo đã nhớ**, giống trên PC: khi chọn quyết định có tick "nhớ logo hãng phim/nền tảng", hoặc khi đổi lại quyết định đã nhớ (câu 7). Chỉ **trang Bộ nhớ logo** (sửa/xóa trực tiếp) là chỉ-PC.
-  - Trang duyệt khi mở trên điện thoại có thêm vài chỉnh nhỏ:
-  - mũi tên **›** ở mép phải hàng bộ lọc (bấm để xem thêm);
-  - không hiện chữ “phím 1–4”;
-  - 4 nút **Giữ nguyên / Làm mờ / Cắt cảnh / Cần xem thêm** luôn nằm ở đáy màn hình;
-  - chữ nhỏ được làm to hơn.
+  - Nút **Duyệt cảnh** trong bảng chi tiết của video mở **hộp duyệt** (từ đợt R4), giống trên PC. Trên điện thoại:
+    - hộp chiếm toàn màn hình, thẻ xếp 1 cột;
+    - mọi nút, link và ô chọn cao ít nhất 44 px; chữ ít nhất 12 px; không hiện gợi ý phím;
+    - hàng bộ lọc cuộn ngang, mép nào còn bộ lọc thì mờ dần;
+    - hàng "Giữ tất cả / Dùng đề xuất / ↶ Hoàn tác" xuống dòng, không cuộn ngang;
+    - bấm ▶ để phát đoạn của thẻ, ⤢ để phóng to thẻ; "Xuất video" mở hộp xuất chồng lên hộp duyệt;
+    - xoay ngang: hộp toàn màn hình, phần đầu hộp cuộn riêng trong một dải nhỏ để thẻ còn khoảng nửa màn hình.
+  - Mỗi lệnh ghi của hộp (quyết định, xóa quyết định, hàng loạt, xuất) đều nằm trong danh sách cho phép của điện thoại. Hộp không có thao tác chỉ-PC.
+  - Link **"Mở trang duyệt cũ"** trong hộp mở trang duyệt cũ. Khi mở trên điện thoại, trang cũ có thêm vài chỉnh nhỏ:
+    - mũi tên **›** ở mép phải hàng bộ lọc (bấm để xem thêm);
+    - không hiện chữ “phím 1–4”;
+    - 4 nút **Giữ nguyên / Làm mờ / Cắt cảnh / Cần xem thêm** luôn nằm ở đáy màn hình;
+    - chữ nhỏ được làm to hơn.
 
-  Trang duyệt trên PC không đổi.
+  Trang duyệt cũ trên PC không đổi.
 
 **Chỉ làm trên PC.** Trên điện thoại các nút này bị khóa, và nếu vẫn gửi lệnh thì server trả 403 kèm lý do:
 - dọn, lưu trữ, khôi phục video gốc và kiểm tra lại Thùng rác;

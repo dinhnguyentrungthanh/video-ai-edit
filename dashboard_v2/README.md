@@ -3,7 +3,7 @@
 Có hai trang dùng chung giao diện (`app.js`):
 
 - **Demo** (`index.html`): dữ liệu mẫu trong bộ nhớ (`mock-data.js` + `demo-store.js`), CSP `connect-src 'none'`, không kết nối Control Center.
-- **Xem thử live** (`live.html`): `adapter.js` đọc/ghi Control Center cùng origin, CSP `connect-src 'self'`. Control Center phục vụ trang này ở `/dashboard-v2/` (Pha 3). Dashboard cũ ở `/` giữ nguyên. **Chưa được kiểm tra trên máy thật**; xem `docs/DASHBOARD_V2_CLOUD_PLAN.md`.
+- **Bản live** (`live.html`): `adapter.js` đọc/ghi Control Center cùng origin, CSP `connect-src 'self'`. Control Center phục vụ trang này ở `/dashboard-v2/` (Pha 3). Dashboard cũ ở `/` giữ nguyên. Máy thật kiểm từng đợt theo `docs/DASHBOARD_V2_CLOUD_PLAN.md` và `docs/DASHBOARD_V2_REVIEW_PLAN.md`.
 
 Trang **Tải video** ở cả hai bản đều là mô phỏng: không downloader, không gọi mạng.
 
@@ -26,7 +26,7 @@ không có API, proxy, thao tác xử lý video hay phụ thuộc cần cài th�
 - Tổng quan, danh sách video với tìm kiếm / bộ lọc / phân trang.
 - Hàng đợi FIFO chung cho quét và xuất, tiến độ worker và tài nguyên máy.
 - Bảng chi tiết, thiết lập nhóm quét / OCR / chế độ, tiếp tục / dừng / hủy / thử lại / chạy lại.
-- Duyệt cảnh minh họa, quyết định cá nhân / hàng loạt; NEEDS_MORE_CONTEXT chặn xuất.
+- **Duyệt cảnh** (hộp duyệt, `review*.js`, kế hoạch `docs/DASHBOARD_V2_REVIEW_PLAN.md`): nút "Duyệt cảnh" mở hộp trên màn đang xem (`#review/<id>/<màn>`); ảnh, video, dải khung, timeline, phóng to, quyết định, nút vùng, nhớ logo, phím tắt, hoàn tác, hàng loạt, xuất video. Bản demo dùng queue giả trong bộ nhớ; bản live dùng route review hiện có. NEEDS_MORE_CONTEXT chặn xuất. Trang duyệt cũ mở bằng link trong hộp.
 - Xuất với ba lựa chọn dung lượng, bỏ qua / mở lại.
 - Dọn nguồn / lưu trữ / khôi phục / kiểm tra lại Thùng rác **chỉ bằng dữ liệu mẫu**.
 - Quản lý bộ nhớ logo, AI Supervisor, lệnh tắt mô phỏng.
@@ -47,20 +47,30 @@ Mọi trạng thái thử nghiệm được giữ trong bộ nhớ của tab; t�
 | `live.html` | Trang live cho `/dashboard-v2/`; cùng phần body với `index.html` |
 | `download-demo.js` | Hai nguồn mẫu, kiểm tra batch và state machine hàng đợi tải; không có transport hoặc downloader |
 | `app.js` | Giao diện; chỉ đọc snapshot của store và gọi `store.dispatch` |
+| `review-core.js`, `review-detail.js` | Hộp duyệt: logic thuần (lọc, khóa, payload, so với trang cũ) và chữ chi tiết; chạy được trong node |
+| `review-media.js`, `review-cards.js`, `review.js`, `review.css` | Hộp duyệt: bộ nạp ảnh (tối đa 2) và video dùng chung, thẻ, điều khiển hộp, bố cục PC / laptop / điện thoại |
 | `serve.py` | Server static hạn chế phạm vi, cổng riêng |
 | `verify.cjs` | Kiểm tra hợp đồng, điều kiện khóa, demo không có transport |
 | `verify-adapter.cjs` | Test adapter bằng transport giả (endpoint/body, 403/408/409/400/500, double click, response cũ) |
+| `verify-review.cjs` | Hộp duyệt so với hàm của trang duyệt cũ (lọc, dải khung, quyết định, hoàn tác, hàng loạt; chỗ khác có chủ ý S1–S9) |
 | `browser-check.cjs` | Tùy chọn: Chromium headless qua Playwright, với API giả lập trong tiến trình (draft, khóa, Tab/Escape, 1280/375) |
+| `review-fake-server.cjs` | Control Center giả cho các browser-check của hộp duyệt (queue giả, khung, clip VP8 tạo bằng ffmpeg trong `temp/`) |
+| `browser-check-review*.cjs` | Hộp duyệt trên Chromium: xem (`-review`), quyết định (`-write`), hàng loạt và xuất (`-bulk`), bố cục điện thoại / laptop (`-layout`, đo bằng `review-layout-audit.cjs`); `-phone` chỉ chạy qua `tests.test_dashboard_v2_review.ReviewR4PhoneListener` (listener điện thoại thật trên root tạm) |
 
 Chạy kiểm tra từ thư mục project:
 
 ```
 node dashboard_v2/verify.cjs
 node dashboard_v2/verify-adapter.cjs
+node dashboard_v2/verify-review.cjs
 node dashboard_v2/browser-check.cjs   # cần Playwright; không có thì in SKIP
+node dashboard_v2/browser-check-review.cjs
+node dashboard_v2/browser-check-review-write.cjs
+node dashboard_v2/browser-check-review-bulk.cjs
+node dashboard_v2/browser-check-review-layout.cjs
 ```
 
-`tests/test_dashboard_v2_frontend.py` gọi hai gate đầu trong bộ unittest.
+`tests/test_dashboard_v2_frontend.py` gọi hai gate đầu trong bộ unittest; `tests/test_dashboard_v2_review.py` gọi `verify-review.cjs` và chạy `browser-check-review-phone.cjs` qua listener điện thoại thật (bỏ qua khi thiếu node, ffmpeg hoặc Playwright).
 Không chạy scan, export, cleanup hay archive trên dữ liệu thật để kiểm tra demo.
 
 Hướng dẫn mapping, tích hợp, kiểm thử và rollback:

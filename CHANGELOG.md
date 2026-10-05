@@ -1,3 +1,21 @@
+# Unreleased — Dashboard V2 review dialog R4: "Duyệt cảnh" opens the dialog, phone and laptop layout, phone listener check — 2026-10-05
+
+Status: on branch `feat/dashboard-v2`, made in a Claude cloud session (batch R4 of `docs/DASHBOARD_V2_REVIEW_PLAN.md`, section 7.5). It waits for the local check (section 8.2), then the user's acceptance test (U-R4, section 8.3, all 8 steps). Not merged into `main`. The review dialog itself came in batches R0–R3 (view, media, decisions, bulk actions and export); see the plan.
+
+- "Duyệt cảnh" in the V2 detail drawer, on the live page and the demo, now opens the review dialog over the current screen (`#review/<id>/<view>`). The temporary "Duyệt (bản mới, thử)" button and the old prototype review box are gone. The classic page `/review/<id>` is unchanged (byte-identical) and stays one link away ("Mở trang duyệt cũ").
+- Phone and laptop layout (P17):
+  - On a phone (≤ 820 px) and on any touch screen, every button, link, select, summary, checkbox and the timeline are at least 44 × 44 px; text is at least 12 px.
+  - The tools row wraps instead of scrolling sideways. Only the filter chips scroll sideways; the side with more chips fades out, and the row keeps its place when it is redrawn.
+  - The save state ("Đang lưu…" / "Đã lưu") has its own line, so it never moves the cards.
+  - On a short screen (a phone held sideways), the dialog is full screen and its header scrolls in its own band. At 844 × 390 the cards area grows from 36 px to 177 px.
+  - The export dialog opened over it also has 44 px targets on the phone. Laptop and PC layouts are unchanged.
+- One Esc closes only the dialog on top (R3-N1). Chrome can group the export dialog with the review dialog when the export dialog opens after the click's activation expired; one Esc then closed both. The review dialog now ignores a "cancel" that follows the upper dialog's, and reopens if the browser closed it anyway. When the browser closes it with nothing above, the address and the dashboard polling follow.
+- Tests (cloud, Chromium through Playwright):
+  - new `browser-check-review-layout.cjs`: 5 screen sizes, light and dark;
+  - new `ReviewR4PhoneListener` in `tests/test_dashboard_v2_review.py`: the real handlers and the phone listener on 127.0.0.1 with a temporary root, a synthetic clip and a synthetic queue, driven by `browser-check-review-phone.cjs`. It checks the cookie, at most 2 frames at once, the clip with Range (206), and that every POST is in `PHONE_ALLOWED_POSTS` (decision, clear, bulk-keep; never finalize);
+  - an R3-N1 check in `browser-check-review-bulk.cjs`; the R4.3 checks in `browser-check.cjs` and `browser-check-review.cjs`.
+- Not changed: `control_center.py`, `DASHBOARD_V2_FILES`, the contract endpoints, `PHONE_ALLOWED_POSTS`, the CSP, the export code (`blur_filter.py`, `final_renderer.py`, `review_workflow.py`, `export_identity.py`); no new route or library.
+
 # Unreleased — stronger logo cover in exports (delogo, then blur) — 2026-10-04
 
 Status: on branch `feat/dashboard-v2`, made on the local machine at the user's request. The user found a blurred platform logo still readable in an export. They compared six ways to hide it on real frames and chose "F. Xóa logo rồi mờ" (remove the logo, then blur). The Control Center uses it after the main folder moves to this commit and the Control Center restarts. Not merged into `main`.

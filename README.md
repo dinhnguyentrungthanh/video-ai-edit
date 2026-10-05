@@ -47,6 +47,15 @@ AI Supervisor là kiểm tra tư vấn theo yêu cầu. Dashboard có khu vực 
 - Nhánh logo/brand dùng quét hai tầng, crop vùng nhỏ, OCR và Qwen2-VL. Sau Florence-2, GroundingDINO Tiny có thể thêm tối đa một vùng logo bổ sung trên cảnh đã được xác nhận; nó không được dùng để tự phân loại toàn cảnh hoặc tự sửa video. Cache routing nén theo SHA-256 video và cấu hình giúp stage chạy lại không giải mã lại phần tìm ứng viên. Các quyết định logo đã duyệt tạo chữ ký perceptual nhỏ trong `state/brand-memory.json`; chữ ký chỉ tăng khả năng đưa ứng viên ra review, không mang quyết định CUT/BLUR sang video khác. Các phát hiện lặp lại cùng vị trí được gom thành từng logo xuyên phim; nhiều logo ở các vùng khác nhau vẫn là các track riêng. Florence-2 khoanh vùng pixel và ưu tiên visual grounding trước tiêu đề OCR khi chưa biết tên thương hiệu. Mọi kết quả vẫn chờ người dùng xác nhận.
 - Nhiều session có thể chuẩn bị video cùng lúc. Lượt dùng GPU xếp hàng qua một mutex chung để không tràn RTX 2060 6 GB; render cuối cũng có khóa riêng. Review web và các công việc CPU vẫn hoạt động đồng thời.
 
+### Dashboard V2 (nhánh `feat/dashboard-v2`, chưa merge)
+
+Control Center chạy nhánh này có thêm Dashboard V2 ở `127.0.0.1:8765/dashboard-v2/`; dashboard cũ ở `/` giữ nguyên. Nút **Duyệt cảnh** trong bảng chi tiết của video mở hộp duyệt ngay trên màn đang xem (địa chỉ `#review/<id>/<màn>`). Đóng hộp bằng ×, "Đóng", Esc hoặc nút Back thì về đúng màn đó.
+
+- Trong hộp: ảnh và video của từng cảnh, dải khung, timeline, phóng to thẻ, các nút Giữ / Làm mờ / Cắt / Cần xem thêm / Xóa quyết định, nút vùng logo, nhớ logo, phím 1–4, hoàn tác, "Giữ tất cả", "Dùng đề xuất" và "Xuất video". Hộp chỉ gửi quyết định khi bạn bấm, không bao giờ tự xuất.
+- Trang duyệt cũ `/review/<id>` không đổi, mở bằng link "Mở trang duyệt cũ" trong hộp.
+- PC: thẻ 2 cột. Laptop hẹp: 1 cột. Điện thoại: hộp toàn màn hình, nút cao ít nhất 44 px, chữ ít nhất 12 px, hàng bộ lọc cuộn ngang và mờ dần ở mép còn bộ lọc.
+- Mở trên điện thoại hoặc laptop trong Wi-Fi nhà: [`docs/DASHBOARD_V2_PHONE.md`](docs/DASHBOARD_V2_PHONE.md). Kế hoạch và kết quả kiểm từng đợt: [`docs/DASHBOARD_V2_REVIEW_PLAN.md`](docs/DASHBOARD_V2_REVIEW_PLAN.md).
+
 ## Kiểm tra chi phí và giấy phép
 
 ```powershell
@@ -118,6 +127,8 @@ Với phim người thật, dùng `scan-content` trước rồi chạy `confirm-
 Trong giao diện mới, các mục tin cậy có nhãn `Đề xuất: BLUR/CUT` và có thể được nhận cùng lúc bằng `Duyệt tất cả đề xuất đang lọc`. Bạn xử lý các mục còn lại rồi nhấn `Hoàn tất duyệt và xuất video`; không cần quay lại chat để duyệt thêm một lần. Trạng thái render được cập nhật ngay trên trang.
 
 Trang `review-ui` chạy riêng không xuất video nào đã có job trong Control Center, và cũng không xuất khi không đọc được `state/control-center.sqlite3`. Với video thuộc Control Center, trang này cũng không cho đổi quyết định khi video đang chờ xuất, đang xuất hoặc còn lệnh xuất tạm dừng/lỗi chưa hủy, đã dọn video gốc, hoặc đã được đánh dấu bỏ qua. Hãy xuất và duyệt các video đó trên Dashboard để giữ đúng hàng đợi, trạng thái bỏ qua và việc dọn video gốc.
+
+Vùng logo được duyệt **Làm mờ** trong bản xuất mới được xóa bằng FFmpeg `delogo` rồi làm mờ (độ mờ tăng theo cỡ vùng), nên logo sáng trên nền tối không còn đọc được. Bản xuất làm trước đó vẫn hợp lệ. Muốn video đã xuất có cách che mới, bạn tự chuyển file xuất cũ (`.mp4` và `.manifest.json` trong `output\`) vào Thùng rác rồi xuất lại.
 
 Edit plan chỉ được tạo khi toàn bộ candidate đã được giải quyết. Mặc định bản xuất đặt mục tiêu khoảng 3,3 GB và bị từ chối nếu vượt 3,5 GB. Mỗi video có thể chọn trần GB khác hoặc chế độ không giới hạn; mọi chế độ đều phải giải mã toàn bộ thành công trước khi đổi tên từ file tạm thành output chính thức. Video nguồn không bị sửa. Các lệnh preview thủ công bên trên vẫn được giữ cho trường hợp cần kiểm tra kỹ một operation. Chi tiết nằm tại [`docs/REVIEW_WORKFLOW.md`](docs/REVIEW_WORKFLOW.md).
 

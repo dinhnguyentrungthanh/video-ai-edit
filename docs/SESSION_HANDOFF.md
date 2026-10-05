@@ -1,6 +1,6 @@
 # BiliFlow session handoff
 
-Updated: 2026-10-03 (Asia/Bangkok)
+Updated: 2026-10-05 (Asia/Bangkok)
 
 This is the short, authoritative starting point for a new Codex account or chat. It complements the detailed history in `PROJECT_STATUS.md` and `CHANGELOG.md`.
 
@@ -8,8 +8,10 @@ This is the short, authoritative starting point for a new Codex account or chat.
 
 - Project root: `E:\DungChung\BiliFlow`
 - Branch `feat/dashboard-v2` (from `main` f6996bb, pushed 2026-10-03) holds the Dashboard V2 prototype and its integration plan.
-  - A session working on this branch, including a Claude cloud session, starts with `docs/DASHBOARD_V2_CLOUD_PLAN.md`.
-  - `main` and the running Control Center do not have V2.
+  - 2026-10-05: it also holds the V2 review dialog (batches R0–R4 of `docs/DASHBOARD_V2_REVIEW_PLAN.md`) and the local commit `0334f8c` (stronger logo cover in exports). See "Current work — 2026-10-05" below.
+  - Per the plan's log, the main folder ran `536025d` of this branch on 2026-10-05, with the Control Center on that code. Check with `git status` and `git log` before any claim.
+  - A session working on this branch, including a Claude cloud session, starts with `docs/DASHBOARD_V2_REVIEW_PLAN.md` (the review dialog) and `docs/DASHBOARD_V2_CLOUD_PLAN.md` (the V2 integration and phone mode).
+  - `main` does not have V2. The Control Center runs V2 only while the main folder is on this branch.
 - Active branch: `main`. On 2026-10-03 the user asked to merge `improve/scan-performance-metrics` (everything since `7f5a9fb`: the scan-performance work, detector/review fixes and dashboard batches 1-4) into `main` and run it there. `main` was fast-forwarded to the branch tip (the commit that carries this note) and the working tree, which the Control Center runs from, was switched to `main` with no file change. The branch is kept.
 - Pushed at the user's request on 2026-10-03: `origin/main` (GitHub `dinhnguyentrungthanh/video-ai-edit`) moved `9155cd7..23aa1e4`. Local `main` has moved on since (the merge below); push again only when the user asks.
 - Merged at the user's request on 2026-10-03 at about 21:40, with no job running: branch `fix/export-identity-http` (worktree `temp/wt-export-fix`) was fast-forwarded into `main`. It brings export identity from the render, reuse of only a proven export, HTTP request limits and the short-export rate cap (see Current work). `origin/main` was pushed later and is at f6996bb (checked 2026-10-04). The running Control Center keeps the code it started with until it is restarted (ask the user first).
@@ -29,7 +31,26 @@ Since 2026-10-03 local `main` also holds everything from `improve/scan-performan
 
 Always confirm this section with `git status` and `git log` because it becomes stale after new work.
 
-## Current work — 2026-10-03 Dashboard V2 prototype (branch `feat/dashboard-v2`, pushed; integration planned for a cloud session)
+## Current work — 2026-10-05 Dashboard V2 review dialog R4 and the stronger logo cover (branch `feat/dashboard-v2`, pushed; not merged)
+
+- Plan and checklist: `docs/DASHBOARD_V2_REVIEW_PLAN.md`. Section 7 has the batches and their tables, section 11 the log (newest first).
+- Done on the cloud and checked on the local machine: R0 (view-only dialog), R1 (media), R2 (decisions), R3 (bulk actions and export, R2-B1, R2-B2). The user tried R2 on a real job (U-R2): pass.
+- R4, done on the cloud on 2026-10-05:
+  - "Duyệt cảnh" in the V2 drawer opens the review dialog (live and demo). The temporary "Duyệt (bản mới, thử)" button and the prototype review box are gone. The classic page stays byte-identical, one link away.
+  - Phone and laptop layout (P17): 44 px touch targets on a phone and on any touch screen; text ≥ 12 px; a fading chip row; the tools row wraps; a full-screen dialog when the phone is held sideways.
+  - A check through the real phone listener on a temporary root (`tests.test_dashboard_v2_review.ReviewR4PhoneListener`, Playwright).
+  - R3-N1 blocked: one Esc closes only the dialog on top. The reason is under the R4 table of the plan.
+- Stronger logo cover in exports (`0334f8c`, made on the local machine, see CHANGELOG):
+  - A new export hides a reviewed regional logo with FFmpeg `delogo`, then a blur that grows with the region.
+  - The export identity is unchanged: an older export still counts as proven, and "Dọn video gốc" / "Lưu trữ" / "Xuất video" treat it as before.
+  - For an already exported video to get the new cover, the user moves the old export (`output\…-reviewed.mp4` and its `.manifest.json`) to the Recycle Bin themselves, then exports again. Agents never move or recycle exports.
+  - The running Control Center uses the new cover only after the main folder moves to a commit that contains `0334f8c` and the Control Center restarts (ask the user first).
+- Next:
+  1. The local machine checks R4 (plan section 8.2).
+  2. The user's acceptance test U-R4 (plan section 8.3, all 8 steps), on real data.
+  3. Merge into `main` only when the user asks.
+
+## Previous work — 2026-10-03 Dashboard V2 prototype (branch `feat/dashboard-v2`, pushed; integration planned for a cloud session)
 
 - Latest requested revision: multi-download UI at `#downloads`. Each task has independent ID/state/progress/sample log; multiline input validates an entire batch before adding (max 20/batch, 100/tab, duplicate URL rejection). FIFO with default 2 download slots, adjustable 1–3; lowering slots lets current tasks finish. Global pause, per-task pause/cancel/retry/failure simulation and filters. Resume needs a free slot. Keep downloads separate from production scan/export queues; no shell/downloader has been run or integrated.
 - Verified: 25 contract checks and 16 Browser checks, 375px light/dark and desktop; 64 production hashes unchanged. Evidence `multi-download-ui-checks.json` and `multi-download-*.png`. Command/PowerShell integration sequence and event/cancel/resume contracts are now documented in the V2 guide; they are future design, not existing API claims. Current demo open light with three paused sample tasks; click Tiếp tục tất cả to watch it. No demo or production restart.
