@@ -66,8 +66,9 @@ PHONE_POSTS_LITERAL = (
     r"/api/downloads/settings",
     r"/api/downloads/cleanup-temp",
 )
-# SHA-256 of JSON.stringify(contracts.js endpoints, keys sorted) at the start of R0 (50 endpoints).
-ENDPOINTS_SHA256 = "06c1dd42737de31d040ae78dd9d31aaf00b8b320f861cb4a0bfff429b35f0c9a"
+# SHA-256 of JSON.stringify(contracts.js endpoints, keys sorted): 50 endpoints at the start of R0
+# (06c1dd42…), then 63 after the 13 "Tải video" endpoints of the video download plan (D3).
+ENDPOINTS_SHA256 = "a28b19df860134b5d7264b8e9cd3c62442c82c68588f3235e6e335aadc70d8d5"
 
 
 def node(script: str) -> str:

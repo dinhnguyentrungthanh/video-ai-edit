@@ -15,6 +15,8 @@ const sent=label=>(LIVE?'Đã gửi: ':'Đã mô phỏng: ')+label;
 const D=window.BFDownload;
 let downloadDraft={domain:D.domains[0].id,url:'',error:''},downloadQueue=D.createQueue(),downloadFilter='all',downloadTimer=null;
 const $=s=>document.querySelector(s), esc=value=>String(value??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+/* Live "Tải video" (download-live.js) keeps its own page state; the demo keeps the simulation below. */
+const DL=LIVE&&window.BFDownloadLive?window.BFDownloadLive.create({store,view:window.BFDownloadView,core:window.BFDownloadCore,$,icon:id=>icon(id),toast:(message,error)=>toast(message,error),showModal:(...args)=>showModal(...args),openCleanable:()=>changeFilter('completed')}):null;
 const icons={
 overview:'<rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/>',
 videos:'<rect x="3" y="5" width="18" height="14" rx="3"/><path d="m10 9 5 3-5 3z"/>',
@@ -171,6 +173,7 @@ function downloadRow(t){
   return '<article class="download-item" data-download-id="'+t.id+'"><div class="download-item-top"><div class="download-item-name"><span class="download-item-number">'+t.id+'</span><h3>'+esc(t.name)+'</h3></div><span class="badge '+(failed?'red':done?'':active?'blue':'grey')+'">'+label+'</span></div><p class="download-source">'+esc(t.url)+'</p><div class="download-item-progress"><span>'+(place?'Lượt chờ #'+place:done?'Mô phỏng hoàn tất':t.state==='VERIFYING'?'Kiểm tra trước khi vào input':Math.round(t.progress*3.2)+' / 320 MB mẫu')+'</span><strong>'+t.progress+'%</strong></div><div class="meter download-meter" role="progressbar" aria-label="Tiến độ lượt '+t.id+'" aria-valuemin="0" aria-valuemax="100" aria-valuenow="'+t.progress+'"><i style="width:'+t.progress+'%"></i></div>'+(failed?'<p class="download-item-error">'+esc(t.error)+'</p>':'')+'<div class="download-item-actions">'+(active?control('pause','Tạm dừng',q.paused):paused?control('resume','Tiếp tục',q.paused||q.items.filter(D.active).length>=q.parallel):'')+(['QUEUED','DOWNLOADING','VERIFYING','PAUSED'].includes(t.state)?control('cancel','Hủy'):['FAILED','CANCELLED'].includes(t.state)?control('retry','Thử lại'):'')+'</div><details class="download-log" data-log-id="'+t.id+'"><summary>Nhật ký lượt tải</summary><ol>'+t.logs.map(line=>'<li>'+esc(line)+'</li>').join('')+'</ol>'+(active?control('fail','Giả lập lỗi'):'')+'</details></article>';
 }
 function downloadsView(){
+  if(DL)return heading('Tải video','Dán link, theo dõi từng lượt. File tải xong vào thư mục input để bạn quét như mọi video.','<span class="badge blue" id="dl-mode">'+(state.remote?'Qua điện thoại':'Control Center')+'</span>')+DL.html();
   const site=D.domains.find(d=>d.id===downloadDraft.domain),sample=downloadDraft.domain==='phimmoi.example'?'https://phimmoi.example/phim/video-demo':'https://www.youtube.com/watch?v=video-demo';
   return heading('Tải video','Thêm nhiều liên kết, theo dõi riêng từng video.','<span class="badge blue">'+(LIVE?'MÔ PHỎNG':'Demo giao diện')+'</span>')+(LIVE?'<div class="notice" role="note" id="download-simulation"><strong>Trang này là mô phỏng.</strong> Chưa có downloader hay API tải thật: không tải video, không gọi mạng, không ghi vào input. Tiến độ bên dưới chỉ là dữ liệu giả trong tab.</div>':'')+'<div class="download-layout"><section class="panel download-form"><div class="download-panel-title">'+icon('downloads')+'<h2>Thêm video</h2></div><p class="muted">Mỗi dòng một link cùng nguồn. Có thể thêm lượt mới trong khi các video khác đang tải.</p><label class="field"><span>Tên miền / nguồn tải</span><select id="download-domain">'+D.domains.map(d=>'<option value="'+esc(d.id)+'" '+(downloadDraft.domain===d.id?'selected':'')+'>'+esc(d.label)+'</option>').join('')+'</select></label><label class="field"><span>Liên kết video</span><textarea id="download-url" rows="5" aria-label="Liên kết video" autocomplete="off" spellcheck="false" placeholder="Mỗi dòng một link https://…" maxlength="41000" aria-describedby="download-hint download-error">'+esc(downloadDraft.url)+'</textarea><small id="download-hint">Link mẫu '+esc(site?.label||'')+': <span class="mono">'+esc(sample)+'</span></small></label><p id="download-error" class="modal-error" role="alert" '+(downloadDraft.error?'':'hidden')+'>'+esc(downloadDraft.error)+'</p><button class="primary download-start" data-action="download-start" '+(state.offline?'disabled':'')+'>'+icon('downloads')+' Thêm vào danh sách tải</button><button class="secondary download-sample" data-action="download-sample" '+(state.offline?'disabled':'')+'>Thử với 3 video mẫu</button><div class="download-destination"><span>Thư mục lưu dự kiến</span><strong class="mono">E:\\DungChung\\BiliFlow\\input\\</strong></div><div class="download-demo-note"><strong>Bản mẫu để bạn thử giao diện</strong><p>Tiến độ và nhật ký được mô phỏng. Chưa chạy command/PowerShell, tải tệp thật hoặc tự quét cảnh.</p></div></section><section class="panel download-progress-panel" aria-labelledby="download-progress-title"><div class="section-top"><h2 id="download-progress-title">Danh sách & tiến độ tải</h2><span class="badge grey">Mô phỏng</span></div><div id="download-progress">'+downloadProgress()+'</div></section></div>';
 }
@@ -224,15 +227,17 @@ function settingsView(){
 /* U1: open <details data-fold> keep their state across re-renders (keyed, never by position). */
 function foldState(root){const out={};if(root)root.querySelectorAll('details[data-fold]').forEach(d=>{out[d.dataset.fold]=d.open;});return out;}
 function restoreFolds(root,saved){if(root)root.querySelectorAll('details[data-fold]').forEach(d=>{if(d.dataset.fold in saved)d.open=saved[d.dataset.fold];});}
-let lastMainHtml=null;
+let lastMainHtml=null,shownNotice=null; // shownNotice: the banner on the page ("Tải video" refreshes in place)
+function topNotice(){
+  return state.offline?'<div class="notice" role="alert">Mất kết nối hệ thống · đang hiển thị dữ liệu đã tải. Thao tác thay đổi được khóa đến khi kết nối lại.</div>':state.source_cleanup_running?'<div class="notice">Một thao tác với video gốc đang chạy. Đợi hoàn tất trước khi dọn, lưu trữ hoặc khôi phục.</div>':'';
+}
 function mainHtml(){
-  const notice=state.offline?'<div class="notice" role="alert">Mất kết nối hệ thống · đang hiển thị dữ liệu đã tải. Thao tác thay đổi được khóa đến khi kết nối lại.</div>':state.source_cleanup_running?'<div class="notice">Một thao tác với video gốc đang chạy. Đợi hoàn tất trước khi dọn, lưu trữ hoặc khôi phục.</div>':'';
-  return notice+(view==='downloads'?downloadsView():view==='queue'?queueView():view==='logos'?logosView():view==='settings'?settingsView():heading(view==='overview'?'Trung tâm xử lý':'Video của bạn',view==='overview'?'Theo dõi tiến trình, duyệt cảnh và hoàn tất video của bạn.':'Tìm nhanh video và tiếp tục công việc ở đúng bước.')+(view==='overview'?kpis()+hero():'')+list());
+  return topNotice()+(view==='downloads'?downloadsView():view==='queue'?queueView():view==='logos'?logosView():view==='settings'?settingsView():heading(view==='overview'?'Trung tâm xử lý':'Video của bạn',view==='overview'?'Theo dõi tiến trình, duyệt cảnh và hoàn tất video của bạn.':'Tìm nhanh video và tiếp tục công việc ở đúng bước.')+(view==='overview'?kpis()+hero():'')+list());
 }
 function render(){
   nav();
   const main=$('#main'),saved=foldState(main),html=mainHtml();
-  main.innerHTML=html;lastMainHtml=html;restoreFolds(main,saved);
+  main.innerHTML=html;lastMainHtml=html;shownNotice=topNotice();restoreFolds(main,saved);
 }
 function refreshList(){const body=$('#list-body');if(!body)return;const saved=foldState(body);body.innerHTML=listBody();restoreFolds(body,saved);lastMainHtml=null;}
 function changeFilter(f,fromSummary){filter=f;page=1;if(fromSummary)query='';if(!['overview','videos'].includes(view)){view='videos';location.hash='videos';}render();$('#video-list')?.scrollIntoView({block:'start',behavior:'instant'});}
@@ -434,6 +439,7 @@ function scenario(name){if(LIVE)return;store.scenario(name);}
 document.addEventListener('click',async event=>{
   const el=event.target.closest('[data-action]');if(!el||el.disabled)return;
   const action=el.dataset.action;
+  if(DL&&DL.click(el,action,event))return;
   if(action==='detail')openDrawer(el.dataset.id);
   else if(action==='download-start')startDownload();
   else if(action==='download-item'){D.action(downloadQueue,el.dataset.id,el.dataset.op);refreshDownload();ensureDownloadTimer();}
@@ -481,6 +487,7 @@ document.addEventListener('click',async event=>{
 });
 document.addEventListener('change',event=>{
   const el=event.target;
+  if(DL&&DL.change(el))return;
   if(scanFormJob && (el.name==='detector'||['scan-ocr','scan-fast','scan-style','scan-profile'].includes(el.id))){
     const j=getJob(scanFormJob);if(!j)return;const old=scanDrafts.get(draftKey(j))||{};
     scanDrafts.set(draftKey(j),{...old,detectors:[...document.querySelectorAll('input[name="detector"]:checked')].map(x=>x.value),ocr_recognition_batch_size:Number($('#scan-ocr').value),fast_scan:$('#scan-fast').checked,content_style:$('#scan-style')?.value||j.content_style,profile:$('#scan-profile')?.value||j.profile});
@@ -494,10 +501,11 @@ document.addEventListener('change',event=>{
   else if(el.id==='export-mode')$('#custom-size').hidden=el.value!=='custom';
   else if(el.matches('[data-select]')){const id=Number(el.dataset.select);if(el.checked&&selected.size>=50){el.checked=false;toast('Mỗi lần chọn tối đa 50 video.',true);return;}el.checked?selected.add(id):selected.delete(id);refreshList();}
 });
-document.addEventListener('input',event=>{if(event.target.id==='export-gb')exportConfirmLine();else if(event.target.id==='search'){query=event.target.value;page=1;refreshList();}else if(event.target.id==='download-url'){downloadDraft.url=event.target.value;downloadDraft.error='';$('#download-error').hidden=true;event.target.removeAttribute('aria-invalid');}});
+document.addEventListener('input',event=>{if(DL&&DL.input(event.target))return;if(event.target.id==='export-gb')exportConfirmLine();else if(event.target.id==='search'){query=event.target.value;page=1;refreshList();}else if(event.target.id==='download-url'){downloadDraft.url=event.target.value;downloadDraft.error='';$('#download-error').hidden=true;event.target.removeAttribute('aria-invalid');}});
 $('#modal').addEventListener('cancel',event=>{if(modalBusy)event.preventDefault();});
 document.addEventListener('keydown',event=>{
   if($('#modal').open)return;
+  if(DL&&DL.key(event))return;
   if(currentJob&&event.key==='Escape')closeDrawer();
   if(currentJob&&event.key==='Tab'){
     const items=[...document.querySelectorAll('.drawer button:not(:disabled),.drawer summary,.drawer a,.drawer input,.drawer select')].filter(drawerFocusable);
@@ -518,6 +526,7 @@ function route(){
   // Opening or closing the dialog over the same view keeps the page as it was (scroll, open sections).
   if(!((target||wasOpen)&&next===view&&$('#main').innerHTML)){view=next;render();window.scrollTo(0,0);}
   if(target)review.open(target.id,target.view);
+  if(DL)DL.watch(view==='downloads'); // its list is polled only while the page is open
 }
 /* Closing (×, Đóng, Esc) returns to <view>: back in history when the dialog was opened from V2, else replace the hash. */
 function requestReviewClose(back){
@@ -538,6 +547,7 @@ function liveChrome(){
 }
 function onSnapshot(){
   state=store.snapshot();liveChrome();review.updateJob();
+  if(view==='downloads'&&DL){if(topNotice()!==shownNotice||!DL.refresh())render();else{nav();const mode=$('#dl-mode');if(mode)mode.textContent=state.remote?'Qua điện thoại':'Control Center';}return;}
   if(view==='downloads'||view==='settings'&&(aiDirty||$('#main').contains(document.activeElement))){nav();return;}
   const focus=document.activeElement,id=focus&&focus.id,range=id==='search'?[focus.selectionStart,focus.selectionEnd]:null,y=window.scrollY;
   const inMain=focus&&$('#main').contains(focus)?[focus.dataset.action,focus.dataset.id,focus.dataset.op,focus.dataset.filter]:null;

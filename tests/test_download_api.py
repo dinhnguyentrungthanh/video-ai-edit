@@ -64,6 +64,11 @@ class ServiceTests(WorkerCase):
         self.assertIn("quyền", body["error"])
         self.assertEqual(self.post("/api/downloads/settings", {"slots": 9})[0], 400)
         self.assertEqual(self.post("/api/downloads/cleanup-temp", {})[0], 400)
+        for ids in ("1", [True], [0], ["1"], [10 ** 12], list(range(1, 1002))):
+            with self.subTest(ids=str(ids)[:20]):
+                self.assertEqual(self.post("/api/downloads/cleanup-temp", {"confirm": True, "ids": ids})[0], 400)
+        self.assertEqual(self.post("/api/downloads/cleanup-temp", {"confirm": True, "ids": []}),
+                         (200, {"tasks": 0, "freed_bytes": 0}))
 
     def test_actions_are_routed_and_unknown_paths_are_left_to_the_caller(self):
         _, created = self.post("/api/downloads", {"source_id": "clips", "urls": [CLIP],

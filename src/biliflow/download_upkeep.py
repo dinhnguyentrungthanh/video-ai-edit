@@ -10,7 +10,7 @@ import time
 from collections import Counter
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterable
 
 import psutil
 
@@ -35,14 +35,17 @@ class DownloadUpkeep:
         running = self._controls.copy()
         tasks = [task for task in self.store.tasks_in(TEMP_CLEANABLE) if task["id"] not in running]
         sizes = {task["id"]: tree_size(self.downloads_dir / str(task["id"])) for task in tasks}
-        return {"tasks": len(tasks), "bytes": sum(sizes.values()),
+        return {"tasks": len(tasks), "bytes": sum(sizes.values()), "ids": sorted(sizes),
                 "total_temp_bytes": tree_size(self.downloads_dir)}
 
-    def cleanup_temp(self) -> dict[str, int]:
+    def cleanup_temp(self, ids: Iterable[int] | None = None) -> dict[str, int]:
+        """With ``ids`` (the tasks the confirmation listed), only those: a task stopped or failed
+        while the dialog was open keeps its part."""
+        wanted = None if ids is None else set(ids)
         freed = count = 0
         with self._lock:
             for task in self.store.tasks_in(TEMP_CLEANABLE):
-                if task["id"] in self._controls:
+                if task["id"] in self._controls or (wanted is not None and task["id"] not in wanted):
                     continue
                 freed += self._remove_temp(task)
                 if not self._temp_gone(task["id"]):

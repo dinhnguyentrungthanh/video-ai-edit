@@ -524,6 +524,16 @@ class SweepTests(WorkerCase):
         self.assertFalse(stopped_dir.exists())
         self.assertEqual(self.state(completed), "COMPLETED")
 
+    def test_cleanup_temp_with_ids_spares_a_task_stopped_after_the_confirmation(self):
+        shown, shown_dir = self.make("STOPPED", hours=1)
+        preview = self.worker.temp_summary()
+        self.assertEqual(preview["ids"], [shown])
+        later, later_dir = self.make("FAILED", hours=1)  # failed while the dialog was open
+        self.assertEqual(self.worker.cleanup_temp(preview["ids"]), {"tasks": 1, "freed_bytes": 10})
+        self.assertEqual((self.state(shown), self.state(later)), ("EXPIRED", "FAILED"))
+        self.assertFalse(shown_dir.exists())
+        self.assertTrue(later_dir.exists())
+
 
 if __name__ == "__main__":
     unittest.main()

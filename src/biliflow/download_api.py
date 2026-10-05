@@ -8,7 +8,7 @@ POST /api/downloads/<id>/rename           {name}
 POST /api/downloads/<id>/choose           {entry_index}
 POST /api/downloads/<id>/<action>         stop | resume | cancel | retry | remove
 POST /api/downloads/settings              {slots: 1..3}
-POST /api/downloads/cleanup-temp          {confirm: true}
+POST /api/downloads/cleanup-temp          {confirm: true, ids?: [task ids the confirmation listed]}
 
 Token, Host and (phone) Origin checks stay in the Control Center handler.
 """
@@ -43,6 +43,7 @@ Response = tuple[int, Any]
 
 
 MAX_ID_DIGITS = 12  # a longer id is not a task (and would overflow SQLite): 404
+MAX_CLEANUP_IDS = 1000
 
 
 def owns(path: str) -> bool:
@@ -185,7 +186,11 @@ class DownloadService:
         if path == "/api/downloads/cleanup-temp":
             if body.get("confirm") is not True:
                 return 400, {"error": "Cần xác nhận trước khi dọn file tạm."}
-            return 200, worker.cleanup_temp()
+            ids = body.get("ids")
+            if ids is not None and not (isinstance(ids, list) and len(ids) <= MAX_CLEANUP_IDS and all(
+                    type(item) is int and 0 < item < 10 ** MAX_ID_DIGITS for item in ids)):
+                return 400, {"error": "ids phải là danh sách id lượt tải."}
+            return 200, worker.cleanup_temp(ids)
         match = TASK_ACTION.fullmatch(path)
         if match is None:
             return None
