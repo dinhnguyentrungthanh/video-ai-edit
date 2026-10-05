@@ -220,9 +220,26 @@ async function check(name, fn) { await fn(); passed++; results.push(name); proce
       await page.keyboard.press('Escape');
     });
 
-    await check('Duyệt cảnh opens the existing review page of the same job', async () => {
+    await check('R4.3: "Duyệt cảnh" opens the review dialog of the same job over the view (live and demo); no "thử" button; Esc returns', async () => {
       await openJob(101);
-      await Promise.all([page.waitForURL(/\/review\/101\?from=v2&view=videos$/), page.locator('.drawer [data-op="review"]').first().click()]);
+      assert.equal(await page.locator('.drawer [data-action="review-v2"], .drawer .review-v2-try').count(), 0, 'the temporary button is gone');
+      await page.locator('.drawer [data-op="review"]').first().click();
+      await page.waitForFunction(() => document.getElementById('review-dialog').open && location.hash === '#review/101/videos');
+      assert.equal(new URL(page.url()).pathname, '/dashboard-v2/', 'no navigation to the classic page');
+      assert.match(await page.locator('#review-title').textContent(), /^Duyệt cảnh · #101/);
+      await page.keyboard.press('Escape');
+      await page.waitForFunction(() => !document.getElementById('review-dialog').open && location.hash === '#videos');
+      const demo = await browser.newPage({viewport: {width: 1440, height: 900}});
+      demo.on('pageerror', e => errors.push('demo: ' + e.message));
+      await demo.goto(base + '/demo/#videos'); await demo.waitForSelector('#search');
+      await demo.fill('#search', '101');
+      await demo.locator('[data-action="detail"][data-id="101"]').first().click();
+      await demo.waitForSelector('.drawer');
+      await demo.locator('.drawer [data-op="review"]').first().click();
+      await demo.waitForSelector('#review-dialog[open] article.rv-card');
+      assert.equal(await demo.locator('#modal[open]').count(), 0, 'the prototype review modal is gone');
+      assert.equal(await demo.locator('.rv-progress-text').textContent(), '5 / 30 cảnh cần quyết định cuối');
+      await demo.close();
       await page.goto(base + '/dashboard-v2/#overview');
       await page.waitForSelector('.kpi');
     });

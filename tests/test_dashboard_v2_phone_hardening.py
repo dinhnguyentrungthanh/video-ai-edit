@@ -802,7 +802,8 @@ class Batch5(HardeningBase):
         self.assertIn(b"location.href='/dashboard-v2/#queue'", page)
         self.assertIn(b'id="phone-review"', page)
         app = (ROOT / "dashboard_v2" / "app.js").read_text(encoding="utf-8")
-        self.assertIn("'?from=v2&view='+encodeURIComponent(view)", app)
+        # R4.3: "Duyệt cảnh" opens the V2 review dialog; the classic page is its "Mở trang duyệt cũ" link.
+        self.assertIn("oldUrl:(id,back)=>LIVE?'/review/'+encodeURIComponent(id)+'?from=v2&view='+encodeURIComponent(back)", app)
 
 
 if __name__ == "__main__":

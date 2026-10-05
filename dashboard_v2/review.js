@@ -14,12 +14,14 @@
  * dialog locked while it runs, no undo); "Xuất video" waits for the writes, checks the gate, then opens the V2
  * export dialog over this one (finalize only from its "Xác nhận xuất video", never retried) and closes this
  * dialog once the export is queued. The export state and the resources reload 1.5 s after a write (S3, 6.8).
+ * R3-N1: one Esc closes only the dialog on top (Chrome may group the export dialog with this one).
+ * R4.1: on a phone the chip row scrolls sideways with a fading edge and keeps its place when redrawn.
  */
 (function (root) {
   'use strict';
   const R = root.BFReviewCore, Cards = root.BFReviewCards, Media = root.BFReviewMedia, D = root.BFReviewDetail, C = root.BFContracts;
   const HASH = /^review\/(\d{1,9})(?:\/(overview|downloads|videos|queue|logos|settings))?$/;
-  const POLL_MS = 3000, PREFETCH_MS = 600;
+  const POLL_MS = 3000, PREFETCH_MS = 600, UPPER_MS = 400; // UPPER_MS: R3-N1, an Esc that reached the dialog above
 
   function parseHash(hash) {
     const m = HASH.exec(String(hash || ''));
@@ -36,7 +38,8 @@
   }
   function spaceActivates(target) { return !!(target && target !== document.body && target.closest && target.closest('button,summary,a[href],input,select,textarea,label,[role="button"],[contenteditable="true"]')); }
 
-  /* deps: {dialog, store, getJob(id), oldUrl(id, view), requestClose(view), toast(text, error), exportDialog(id, {resources, onQueued})} */
+  /* deps: {dialog, overlay (the export dialog, #modal), store, getJob(id), oldUrl(id, view), requestClose(view), toast(text, error),
+   *   exportDialog(id, {resources, onQueued})} */
   function create(deps) {
     const dialog = deps.dialog, rootEl = dialog.querySelector('#review-root');
     const stats = root.BFReviewStats = {opens: 0, fullRenders: 0, cardRenders: 0, patches: 0, polls: 0, cardsRendered: 0, maxImages: 0, evidenceFetches: 0, sessionRefreshes: 0};
@@ -136,15 +139,36 @@
       renderCards();
       if (more) more.observe(rootEl.querySelector('.rv-sentinel'));
       stats.fullRenders++;
-      tools();
+      tools(); chipHint();
+    }
+    /* R4.1: on a phone the chip row scrolls sideways. Redrawn, it keeps its place and shows the chosen chip;
+     * the side with more chips fades out (more-left / more-right). */
+    function swapChips() {
+      const old = rootEl.querySelector('.rv-chips');
+      if (!old) return;
+      const left = old.scrollLeft;
+      old.outerHTML = Cards.chips(ctx());
+      const el = rootEl.querySelector('.rv-chips'), on = el.querySelector('.filter-tab.active') || el.querySelector('.rv-more.active');
+      el.scrollLeft = left;
+      if (on) {
+        const x = on.getBoundingClientRect().left - el.getBoundingClientRect().left;
+        if (x < 0 || x + on.offsetWidth > el.clientWidth) el.scrollLeft = Math.max(0, el.scrollLeft + x - 8);
+      }
+      chipHint();
+    }
+    function chipHint() {
+      const el = rootEl.querySelector('.rv-chips');
+      if (!el) return;
+      const max = el.scrollWidth - el.clientWidth;
+      el.classList.toggle('more-left', max > 1 && el.scrollLeft > 1);
+      el.classList.toggle('more-right', max > 1 && el.scrollLeft < max - 1);
     }
     /* Version change: patch statuses and the header; rebuild the cards only if the visible list changed. */
     function patch() {
       const ids = R.listItems(s.queue, s.filter, s.sticky).map(x => x.id), shown = s.list.map(x => x.id);
       const progress = rootEl.querySelector('.rv-progress-box');
       if (progress) progress.innerHTML = Cards.progressHtml(ctx());
-      const chips = rootEl.querySelector('.rv-chips');
-      if (chips) chips.outerHTML = Cards.chips(ctx());
+      swapChips();
       if (ids.length !== shown.length || ids.some((id, i) => id !== shown[i])) { renderCards(); return; }
       s.list = R.listItems(s.queue, s.filter, s.sticky);
       stats.patches += Cards.patchCards(rootEl.querySelector('.rv-cards'), ctx()) ? 1 : 0;
@@ -363,6 +387,16 @@
     confirmBox.addEventListener('click', event => { const b = event.target.closest('[data-confirm]'); if (b) answerConfirm(b.dataset.confirm === 'yes'); });
     confirmBox.addEventListener('cancel', event => { event.preventDefault(); answerConfirm(false); });
     confirmBox.addEventListener('close', () => { if (!confirmBox.open && answer) answerConfirm(false); }); // closed by the browser itself
+    /* R3-N1. Chrome groups a dialog opened without a fresh user gesture (the export dialog opens after an await)
+     * with the one under it, so one Esc sends "cancel" to both. Esc only closes the dialog on top: the review
+     * dialog ignores a cancel that follows the upper one's, and reopens if the browser closed it all the same. */
+    const overlay = deps.overlay || null;
+    let upperCancel = -Infinity, upperClose = -Infinity;
+    for (const box of overlay ? [confirmBox, overlay] : [confirmBox]) {
+      box.addEventListener('cancel', () => { upperCancel = performance.now(); });
+      box.addEventListener('close', () => { upperClose = performance.now(); });
+    }
+    const upperOpen = () => confirmBox.open || !!(overlay && overlay.open);
     confirmBox.addEventListener('keydown', event => {
       if (!confirmBox.open) return;
       event.stopPropagation(); // never a review shortcut or a dashboard key while it is open
@@ -613,7 +647,7 @@
       s = {id, view, job: job || {id, name: ''}, api: null, queue: null, map: new Map(), identity: '', version: '', list: [], rendered: 0, mediaKey: null,
         filter: 'pending', sticky: new Set(), focusId: null, zoomId: null, exp: null, lock: R.lockState(job, null), timer: null, loading: false,
         evidence: new Map(), evidenceLoading: new Map(), techOpen: new Set(), undo: [], confirming: false, offline: false, wrote: false, saveTimer: null, unsynced: false,
-        busy: false, exporting: false, resources: null, refreshTimer: null};
+        busy: false, exporting: false, resources: null, refreshTimer: null, leaving: false};
       stats.opens++;
       player.reset();
       if (!dialog.open) dialog.showModal();
@@ -650,7 +684,7 @@
       if (!el || !s) return;
       const action = el.dataset.review, card = el.closest('article.rv-card'), x = card && s.map.get(card.dataset.item);
       if (['decide', 'clear', 'region', 'studio', 'platform', 'undo', 'bulk'].includes(action) && event.detail) el.blur(); // Space must not click it again
-      if (action === 'close') deps.requestClose(s.view);
+      if (action === 'close') leave();
       else if (action === 'filter' && s.queue && el.dataset.filter !== s.filter) setFilter(el.dataset.filter);
       else if (action === 'undo') undo();
       else if (action === 'bulk') bulk(el.dataset.kind === 'bulkAccept' ? 'bulkAccept' : 'bulkKeep');
@@ -693,18 +727,32 @@
     }, true);
     dialog.addEventListener('cancel', event => {
       event.preventDefault();
-      if (!s) return;
+      if (!s || upperOpen() || performance.now() - upperCancel < UPPER_MS) return; // R3-N1: that Esc closed the dialog above
       if (s.zoomId) { zoom(s.zoomId); return; } // Esc: unzoom the card first, close on the next Esc
-      deps.requestClose(s.view);
+      leave();
     });
+    /* Closed by the browser, not by close(): back on top after the dialog above, else the hash and the poll follow. */
+    dialog.addEventListener('close', () => {
+      if (!s || dialog.open || s.leaving) return; // closed by close(), already reopened, or the route will close it
+      if (overlay && overlay.open) { overlay.addEventListener('close', reshow, {once: true}); return; }
+      if (performance.now() - Math.max(upperCancel, upperClose) < 4 * UPPER_MS) reshow(); else leave();
+    });
+    function leave() { s.leaving = true; deps.requestClose(s.view); }
+    function reshow() {
+      if (!s || dialog.open) return;
+      dialog.showModal();
+      const back = rootEl.querySelector('[data-review="export"]:not([disabled])');
+      if (back) back.focus({preventScroll: true});
+    }
+    rootEl.addEventListener('scroll', event => { if (event.target.classList && event.target.classList.contains('rv-chips')) chipHint(); }, true);
+    window.addEventListener('resize', () => { if (s) chipHint(); });
     document.addEventListener('keydown', onKey);
     document.addEventListener('visibilitychange', () => { if (document.hidden) player.pause(); });
     window.addEventListener('pagehide', () => player.release());
     function setFilter(filter) {
       if (!R.FILTER_IDS.includes(filter)) return;
       s.filter = filter; s.sticky.clear();
-      const chips = rootEl.querySelector('.rv-chips');
-      if (chips) chips.outerHTML = Cards.chips(ctx());
+      swapChips();
       renderCards();
     }
     function select(id) {

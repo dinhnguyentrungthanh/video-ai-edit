@@ -240,15 +240,6 @@
         emit();
         return {};
       },
-      /* Demo-only: the illustrative review modal records decisions here. */
-      recordReview(operation, job, body, patch) {
-        if (state.offline) return false;
-        const j = getJob(job.id);
-        state.requests.push(C.request(operation, j, body));
-        Object.assign(j, patch);
-        changed();
-        return true;
-      },
       scenario(name) {
         state.scenario = name; state.offline = name === 'offline'; state.source_cleanup_running = name === 'busy'; conflictUsed = false;
         const j = getJob(102);

@@ -6,8 +6,8 @@ const C=window.BFContracts, Mock=window.BFMock;
 const LIVE=document.documentElement.dataset.mode==='live';
 const store=LIVE?window.BFAdapter.createLiveStore(window.BFAdapter.create({contracts:C})):window.BFDemoStore.create(C,Mock);
 let state=store.snapshot(), view='overview', filter='all', query='', sort='recent', page=1, selected=new Set(), currentJob=null;
-let drawerFocus=null, modalFocus=null, modalCommit=null, modalBusy=false, toastTimer, reviewJob=null, scanFormJob=null;
-const sceneCache=new Map(), scanDrafts=new Map(), exportDrafts=new Map();
+let drawerFocus=null, modalFocus=null, modalCommit=null, modalBusy=false, toastTimer, scanFormJob=null;
+const scanDrafts=new Map(), exportDrafts=new Map();
 let aiDirty=false; /* unsaved AI settings: polling does not rebuild that form */
 /* A draft belongs to one revision of one source; a new revision or source drops it. */
 const draftKey=j=>j.job_key+'|'+(j.source_sha256||'')+'|'+j.active_revision;
@@ -43,7 +43,6 @@ function getJob(id){return state.jobs.find(j=>j.id===Number(id));}
 function percent(v){return Math.min(100,Math.max(0,Math.round(100*(Number(v)||0))));}
 function renderPercent(j){return Math.min(100,Math.max(0,Number(j.render_progress?.percent)||0));}
 function bytes(n){return (n/1e9).toLocaleString('vi-VN',{maximumFractionDigits:2})+' GB';}
-function fmtTime(n){return Math.floor(n/60).toString().padStart(2,'0')+':'+Math.floor(n%60).toString().padStart(2,'0');}
 function reviewRemaining(j){return C.reviewStats(j).remaining;}
 function ctx(){return {aiReady:state.ai.ready,fileBusy:state.source_cleanup_running,remote:!!state.remote};}
 /* Phone listener: PC-only buttons stay visible but disabled with the backend's reason. */
@@ -54,9 +53,7 @@ function drawerActions(j){
   const actions=ops(j),primary=C.primary(j);
   const featured=primary==='detail'?['stopAfter']:primary==='finalize'?['finalize','review']:[primary];
   const main=featured.map(id=>actions.find(a=>a.id===id)).filter(Boolean),other=actions.filter(a=>!featured.includes(a.id));
-  const review=actions.find(a=>a.id==='review'&&a.enabled);
-  const tryReview=review?'<button class="small secondary review-v2-try" data-action="review-v2" data-id="'+j.id+'">Duyệt (bản mới, thử)</button>':'';
-  return '<h3>Thao tác chính</h3>'+tryReview+(main.length?'<div class="drawer-primary-actions">'+main.map(a=>btn(j,a,'')).join('')+'</div>':'<p class="muted">Xem trạng thái và kết quả kiểm tra bên dưới.</p>')+(other.length?'<details class="more-actions"><summary>Thao tác khác</summary><div class="action-grid">'+other.map(a=>btn(j,a)).join('')+'</div></details>':'');
+  return '<h3>Thao tác chính</h3>'+(main.length?'<div class="drawer-primary-actions">'+main.map(a=>btn(j,a,'')).join('')+'</div>':'<p class="muted">Xem trạng thái và kết quả kiểm tra bên dưới.</p>')+(other.length?'<details class="more-actions"><summary>Thao tác khác</summary><div class="action-grid">'+other.map(a=>btn(j,a)).join('')+'</div></details>':'');
 }
 function drawerFocusable(el){
   for(let parent=el.parentElement;parent&&!parent.classList.contains('drawer');parent=parent.parentElement){
@@ -323,7 +320,6 @@ async function mutate(operation,j,body){
   if(operation==='start'||operation==='rerun')C.validateScan(body,operation==='start');
   if(operation==='finalize')C.exportSelection(body.size_mode,body.max_output_gb);
   const result=await store.dispatch(operation,j,body);
-  if(j&&operation==='rerun')sceneCache.delete(j.id);
   return result;
 }
 function simpleConfirm(j,a){
@@ -414,27 +410,6 @@ function showPreview(kind,ids,p,message){
 function auditModal(j){
   showModal('Kiểm tra bằng AI Supervisor','<p><strong>#'+j.id+' · '+esc(j.name)+'</strong></p><label class="field"><span>Dữ liệu gửi kiểm tra</span><select id="audit-kind"><option value="json">JSON / báo cáo, không gửi ảnh</option><option value="visual"'+(state.remote?' disabled':'')+'>Visual AI Audit · có ảnh thumbnail'+(state.remote?' (chỉ làm trên PC)':'')+'</option></select></label>'+(state.remote?'<p class="pc-only-note">Chỉ làm trên PC: Visual AI Audit gửi ảnh ra ngoài máy.</p>':'')+'<p>Chọn Visual AI Audit nghĩa là bạn đồng ý gửi tối đa 36 thumbnail của video này qua tài khoản ChatGPT. Video và âm thanh gốc không được gửi. AI chỉ đề xuất; bạn duyệt mọi quyết định.</p>',async()=>{await mutate('audit',j,{visual:$('#audit-kind').value==='visual'});toast(sent('AI audit #'+j.id));return true;},'Xác nhận kiểm tra');
 }
-function sceneList(j){if(!sceneCache.has(j.id)){const scenes=Mock.scenes(j);if(!j.review_summary?.skip_eligible&&C.reviewStats(j).resolved>0&&scenes.length)scenes[0].decision='BLUR';sceneCache.set(j.id,scenes);}return sceneCache.get(j.id);}
-function readonlyReview(j){return C.locked(j)||C.inFlight(j)||j.state==='SKIPPED';}
-function reviewMarkup(j){
-  const scenes=sceneList(j),readonly=readonlyReview(j);
-  return '<p>Ảnh và cảnh minh họa của prototype. Khi tích hợp, nút Duyệt cảnh mở trang review hiện có của video.</p>'+(readonly?'<div class="notice">Chỉ xem · video gốc bị khóa, đã bỏ qua hoặc có lệnh xuất đang chờ/chạy.</div>':'')+'<div class="review-heading"><span>'+scenes.filter(s=>!['KEEP','BLUR','CUT'].includes(s.decision)).length+' / '+scenes.length+' cảnh cần quyết định cuối</span><button class="small secondary" data-action="bulk-review" data-op="bulkKeep" '+(readonly||state.offline?'disabled':'')+'>Giữ tất cả</button><button class="small secondary" data-action="bulk-review" data-op="bulkAccept" '+(readonly||state.offline?'disabled':'')+'>Dùng đề xuất</button></div><div class="review-scenes">'+scenes.map(s=>'<article class="scene"><div class="scene-art">'+(s.region?'<span class="watermark '+(s.decision==='BLUR'?'blurred':'')+'">LOGO MẪU</span>':'')+'<span class="retained">TÊN PHIM</span><span>'+ (s.decision==='CUT'?'Cảnh mẫu đã chọn cắt':'Khung hình minh họa')+'</span></div><div class="scene-content"><h3>'+esc(s.title)+'</h3><small>'+fmtTime(s.start)+'–'+fmtTime(s.end)+' · '+esc(s.group)+(s.region?' · vùng logo góc trái':'')+'</small><div class="scene-actions">'+[['KEEP','Giữ'],['BLUR','Làm mờ'],['CUT','Cắt'],['NEEDS_MORE_CONTEXT','Cần xem thêm']].map(([d,l])=>'<button '+(s.decision===d?'class="selected"':'')+' data-action="scene-decision" data-scene="'+s.id+'" data-decision="'+d+'" '+(readonly||state.offline?'disabled':'')+'>'+l+'</button>').join('')+'<button data-action="scene-clear" data-scene="'+s.id+'" '+(readonly||state.offline?'disabled':'')+'>Xóa quyết định</button></div></div></article>').join('')+'</div>';
-}
-function reviewModal(j){reviewJob=j.id;showModal('Duyệt cảnh · #'+j.id,reviewMarkup(j),null);}
-function reviewPatch(j){
-  const scenes=sceneList(j),resolved=scenes.filter(s=>['KEEP','BLUR','CUT'].includes(s.decision)).length,more=scenes.filter(s=>s.decision==='NEEDS_MORE_CONTEXT').length;
-  const decisions={};scenes.filter(s=>s.decision).forEach(s=>decisions[s.decision]=(decisions[s.decision]||0)+1);
-  return {review_summary:{...j.review_summary,main_items:scenes.length,pending:scenes.filter(s=>!s.decision).length,decisions,status:resolved===scenes.length?'READY_FOR_EDIT_PLAN':'WAITING_REVIEW',skip_eligible:scenes.every(s=>s.decision==='KEEP')},
-    state:resolved===scenes.length?'READY_TO_EXPORT':'WAITING_REVIEW'};
-}
-function updateReviewBody(j){$('.modal-body').innerHTML=reviewMarkup(j)+'<div class="modal-error" id="modal-error" role="alert" hidden></div>';}
-function decideScene(id,decision,clear){
-  const j=getJob(reviewJob);if(!j||readonlyReview(j)||state.offline)return;
-  const scene=sceneList(j).find(s=>s.id===id);if(!scene)return;
-  const before=scene.decision;scene.decision=clear?null:decision;
-  if(!store.recordReview(clear?'clear':'decision',j,clear?{id}:{id,decision},reviewPatch(j))){scene.decision=before;return;}
-  updateReviewBody(getJob(j.id));
-}
 function logoAction(key,remove){
   const l=state.logos.find(x=>x.key===key);if(!l)return;const sha=state.memory_sha256;
   const target=l.memory_class==='studio_logo'?'platform_logo':'studio_logo';
@@ -447,7 +422,8 @@ function logoAction(key,remove){
 }
 function jobAction(id,operation){
   const j=getJob(id),a=j&&ops(j).find(x=>x.id===operation);if(!a||!a.enabled)return;
-  if(operation==='review'){if(LIVE)location.assign('/review/'+encodeURIComponent(j.id)+'?from=v2&view='+encodeURIComponent(view));else reviewModal(j);}
+  // R4.3: "Duyệt cảnh" opens the review dialog over the current view (live and demo); the classic page stays one link away in it.
+  if(operation==='review'){reviewPushed=true;location.hash='review/'+j.id+'/'+view;}
   else if(operation==='start'||operation==='rerun')scanForm(j,operation==='rerun');
   else if(operation==='finalize')exportModal(j);
   else if(operation==='audit')auditModal(j);
@@ -459,7 +435,6 @@ document.addEventListener('click',async event=>{
   const el=event.target.closest('[data-action]');if(!el||el.disabled)return;
   const action=el.dataset.action;
   if(action==='detail')openDrawer(el.dataset.id);
-  else if(action==='review-v2'){const j=getJob(el.dataset.id);if(j){reviewPushed=true;location.hash='review/'+j.id+'/'+view;}}
   else if(action==='download-start')startDownload();
   else if(action==='download-item'){D.action(downloadQueue,el.dataset.id,el.dataset.op);refreshDownload();ensureDownloadTimer();}
   else if(action==='download-filter'){downloadFilter=el.dataset.filter;refreshDownload();}
@@ -481,13 +456,6 @@ document.addEventListener('click',async event=>{
   else if(action==='deselect'){selected.clear();refreshList();}
   else if((action==='bulk-cleanup'||action==='bulk-archive')&&!state.remote)filePreview(action==='bulk-cleanup'?'cleanup':'archive',[...selected]);
   else if(action==='logo-class'||action==='logo-delete')logoAction(el.dataset.key,action==='logo-delete');
-  else if(action==='scene-decision'||action==='scene-clear')decideScene(el.dataset.scene,el.dataset.decision,action==='scene-clear');
-  else if(action==='bulk-review'){
-    const j=getJob(reviewJob);if(!j||readonlyReview(j)||state.offline)return;const op=el.dataset.op;
-    const pending=sceneList(j).filter(s=>!s.decision);
-    if(!pending.length){toast('Không có cảnh chưa duyệt. Các quyết định Cần xem thêm phải được duyệt riêng.',true);return;}
-    showModal(op==='bulkKeep'?'Giữ các cảnh chưa duyệt':'Dùng đề xuất chưa duyệt','<p>Xác nhận áp dụng cho '+pending.length+' cảnh chưa duyệt trong bộ lọc? Các quyết định đã có, kể cả Cần xem thêm, được giữ.</p>',()=>{pending.forEach(s=>s.decision=op==='bulkKeep'?'KEEP':s.region?'BLUR':'KEEP');store.recordReview(op,j,{filter:'all'},reviewPatch(j));toast('Đã mô phỏng quyết định cho các cảnh chưa duyệt.');return true;});
-  }
   else if(action==='shutdown')showModal('Tắt BiliFlow','<p>'+ (el.dataset.mode==='immediate'?'Dừng bước hiện tại và tắt Control Center?':'Tắt Control Center sau khi bước hiện tại hoàn tất?')+'</p><p>Đóng tab không dừng backend. '+(LIVE?'Control Center nhận lệnh rồi mới tắt; trang sẽ mất kết nối.':'Ở demo, thao tác này mô phỏng mất kết nối.')+'</p>',async()=>{await mutate('shutdown',null,{mode:el.dataset.mode});toast(LIVE?'Control Center nhận lệnh tắt (202). Chưa chứng minh đã tắt; kiểm tra lại sau.':'Đã mô phỏng lệnh tắt; backend thật vẫn hoạt động.');return true;},'Xác nhận tắt');
   else if(action==='ai-save'){const data={enabled:$('#ai-enabled').checked,model:$('#ai-model').value,reasoning_effort:$('#ai-effort').value};if(el.dataset.busy)return;el.dataset.busy='1';try{await mutate('aiConfig',null,data);aiDirty=false;toast(LIVE?'Đã lưu cấu hình AI.':'Đã lưu cấu hình AI mẫu.');render();}catch(e){toast(e.message,true);}finally{delete el.dataset.busy;}}
   else if(action==='phone-toggle'){
@@ -503,7 +471,7 @@ document.addEventListener('click',async event=>{
   else if(action==='ai-check'){if(el.dataset.busy)return;el.dataset.busy='1';try{await mutate('aiCheck',null,{});state=store.snapshot();toast(state.ai.message);render();}catch(e){toast(e.message,true);}finally{delete el.dataset.busy;}}
   else if(action==='ai-login')showModal('Đăng nhập ChatGPT',(LIVE?'<p>Mở luồng đăng nhập ChatGPT hiện có của Codex trên máy này. Không dùng API trả phí.</p>':'<p>Trong bản tích hợp, thao tác này mở luồng đăng nhập hiện có. Demo chỉ mô phỏng trạng thái.</p>'),async()=>{await mutate('aiLogin',null,{});toast(LIVE?'Đã mở luồng đăng nhập ChatGPT hiện có.':'Đã mô phỏng đăng nhập.');return true;});
   else if(action==='help')showModal('Làm việc với BiliFlow V2','<ol class="help-steps"><li><strong>Thiết lập video:</strong> chọn nhóm kiểm tra, loại nội dung và chế độ quét.</li><li><strong>Duyệt cảnh:</strong> quyết định Giữ, Làm mờ, Cắt hoặc Cần xem thêm. Cần xem thêm vẫn chặn xuất.</li><li><strong>Xuất hoặc bỏ qua:</strong> xuất khi mọi cảnh đã quyết định cuối; bỏ qua khi không cần chỉnh sửa.</li><li><strong>Quản lý video gốc:</strong> dọn vào Thùng rác hoặc lưu trữ sau khi kiểm tra bản xuất.</li></ol>'+(LIVE?'<p>Dữ liệu lấy từ Control Center trên máy này. Trang Tải video vẫn là mô phỏng.</p>':'<p>Mọi dữ liệu là mẫu. Tải lại trang đặt lại trạng thái. Bản demo không kết nối API thật.</p>')+'',null);
-  else if(action==='reset'&&!LIVE){clearInterval(downloadTimer);downloadTimer=null;downloadDraft={domain:D.domains[0].id,url:'',error:''};downloadQueue=D.createQueue();downloadFilter='all';sceneCache.clear();scanDrafts.clear();exportDrafts.clear();selected.clear();filter='all';query='';page=1;closeDrawer();if(!LIVE)store.reset();render();toast('Đã đặt lại dữ liệu mẫu.');}
+  else if(action==='reset'&&!LIVE){clearInterval(downloadTimer);downloadTimer=null;downloadDraft={domain:D.domains[0].id,url:'',error:''};downloadQueue=D.createQueue();downloadFilter='all';scanDrafts.clear();exportDrafts.clear();selected.clear();filter='all';query='';page=1;closeDrawer();if(!LIVE)store.reset();render();toast('Đã đặt lại dữ liệu mẫu.');}
   else if(action==='confirm'&&modalCommit&&!modalBusy){
     const callback=modalCommit;modalBusy=true;el.disabled=true;
     try{const done=await callback();modalBusy=false;if(done!==false)closeModal();}
@@ -559,7 +527,7 @@ function requestReviewClose(back){
 /* R3: "Xuất video" in the review dialog opens the same export dialog over it, with the job's latest status (the
    dashboard poll is paused while the dialog is open) and the resources line; closing it on success is up to the dialog. */
 async function reviewExport(id,options){await store.refresh();state=store.snapshot();const j=getJob(id);if(!j)throw new Error('Không tìm thấy video.');exportModal(j,options);}
-const review=window.BFReview.create({dialog:$('#review-dialog'),store,getJob,requestClose:requestReviewClose,toast,exportDialog:reviewExport,
+const review=window.BFReview.create({dialog:$('#review-dialog'),overlay:$('#modal'),store,getJob,requestClose:requestReviewClose,toast,exportDialog:reviewExport,
   oldUrl:(id,back)=>LIVE?'/review/'+encodeURIComponent(id)+'?from=v2&view='+encodeURIComponent(back):''});
 window.addEventListener('hashchange',route);
 /* A new snapshot (polling or after an action) re-renders without losing the user's place. */

@@ -42,11 +42,11 @@ async function check(name, fn) { await fn(); passed++; process.stdout.write('OK 
     page.on('request', r => { const u = r.url(); if (u.startsWith('blob:') || !(u.startsWith(base) || u.startsWith('data:'))) problems.push('request ' + u); });
     return page;
   };
-  const openFromDrawer = async (page, id) => {
+  const openFromDrawer = async (page, id) => { // the job's "Duyệt cảnh" button in the detail drawer
     await page.fill('#search', String(id));
     await page.locator('[data-action="detail"][data-id="' + id + '"]').first().click();
     await page.waitForSelector('.drawer');
-    await page.locator('.drawer [data-action="review-v2"]').click();
+    await page.locator('.drawer [data-op="review"]').first().click(); // R4.3: "Duyệt cảnh" opens the dialog
     await page.waitForSelector('#review-dialog[open] article.rv-card');
   };
   const dialogState = page => page.evaluate(() => {
@@ -144,14 +144,14 @@ async function check(name, fn) { await fn(); passed++; process.stdout.write('OK 
       await page.waitForFunction(() => location.hash === '#overview');
       assert.equal(await page.evaluate(() => document.getElementById('review-dialog').open), false);
     });
-    await check('The temporary button only shows for a job that can be reviewed; the old "Duyệt" stays', async () => {
+    await check('R4.3: "Duyệt cảnh" only for a job that can be reviewed; the temporary "Duyệt (bản mới, thử)" button is gone', async () => {
       await page.goto(base + '/dashboard-v2/#videos'); await page.waitForSelector('#search');
       for (const [id, shown] of [[101, true], [102, false], [106, false]]) {
         await page.fill('#search', String(id));
         await page.locator('[data-action="detail"][data-id="' + id + '"]').first().click();
         await page.waitForSelector('.drawer');
-        assert.equal(await page.locator('.drawer [data-action="review-v2"]').count(), shown ? 1 : 0, 'job ' + id);
-        if (shown) assert.equal(await page.locator('.drawer [data-op="review"]').count(), 1, 'old Duyệt button kept');
+        assert.equal(await page.locator('.drawer [data-action="review-v2"]').count(), 0, 'job ' + id + ': no temporary button');
+        assert.equal(await page.locator('.drawer [data-op="review"]').count(), shown ? 1 : 0, 'job ' + id);
         await page.keyboard.press('Escape');
       }
     });

@@ -108,10 +108,6 @@
         return j;
       });
       return {version:'0.7.24',jobs,logos:structuredClone(memories),memory_sha256:'a'.repeat(64),scheduler_paused:false,source_cleanup_running:false,active:{job_id:102,stage:'visual_logo',pid:12345},queue:{length:2,paused:false},resources:{cpu_percent:38,memory:{percent:54},gpu:{utilization_percent:82,name:'NVIDIA RTX 2060',memory_used_bytes:4487905280,memory_total_bytes:6442450944}},ai:{ready:true,config:{enabled:true,model:'gpt-5.6-luna',reasoning_effort:'medium'},message:'Đã kết nối ChatGPT'},requests:[],scenario:'normal',offline:false};
-    },
-    scenes(job) {
-      const stats=root.BFContracts.reviewStats(job),n=Math.min(stats.total,8);
-      return Array.from({length:n},(_,i)=>({id:'scene-'+job.id+'-'+i,start:i*48,end:i*48+12,title:i%3===0?'Logo góc trái · kiểm tra vùng che':i%3===1?'Kiểm tra nội dung cảnh':'Kiểm tra đoạn chuyển cảnh',group:i%3===0?'Quảng cáo / logo':'Ứng viên cần duyệt',decision:i<stats.resolved?'KEEP':i===stats.resolved&&stats.needsMore?'NEEDS_MORE_CONTEXT':null,region:i%3===0?{x:4,y:5,w:19,h:18}:null}));
     }
   };
 })(window);

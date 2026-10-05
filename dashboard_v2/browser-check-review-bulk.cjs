@@ -7,6 +7,7 @@
  *   (Esc only closes it, a bad limit is refused), finalize only after "Xác nhận xuất video", then the dialog closes;
  * - bulk after the pending writes, Quảng cáo = 2 commands, unsupported filters, a refused bulk, the export gate after
  *   a failed write, S3 (export state and resources 1.5 s after the last write), the export state line, the demo page;
+ * - R3-N1: Chrome's grouped close request replayed (one Esc never closes the review dialog under the export dialog);
  * - no finalize the user did not confirm, no blob:, no console or CSP error.
  * Run: node dashboard_v2/browser-check-review-bulk.cjs
  */
@@ -281,6 +282,74 @@ const job101 = jobs.find(j => j.id === 101), saved101 = JSON.stringify({state: j
       await until(async () => (await page.locator('#review-dialog .rv-export-line').count()) && /^Hoàn tất: output\/demo-101-reviewed\.mp4$/.test(await page.locator('#review-dialog .rv-export-line').textContent()), 'completed line', 8000);
       fresh();
       await page.keyboard.press('Escape'); await page.waitForFunction(() => !document.getElementById('review-dialog').open);
+    });
+
+    await check('R3-N1: one Esc closes only the dialog on top: a "cancel" grouped after the export dialog\'s is ignored, a review dialog the browser closes with it reopens, one closed alone returns to #videos', async () => {
+      fresh();
+      const q = queueFor(101);
+      for (const x of q.items) if (!x.decision) x.decision = 'KEEP';
+      const c = {total: q.items.length, pending: 0, decisions: {KEEP: 0, BLUR: 0, CUT: 0, NEEDS_MORE_CONTEXT: 0}};
+      for (const x of q.items) c.decisions[x.decision]++;
+      q.counts = c; q.status = 'READY_FOR_EDIT_PLAN'; F.syncJob(101, q);
+      await openJob(page, 101, 'pending');
+      const openExport = async () => {
+        await page.locator('#review-dialog .rv-export').click();
+        await page.waitForSelector('#modal[open] #export-mode');
+      };
+      // Chrome's grouped close request, replayed: "cancel" then close on #modal, then "cancel" on the review dialog.
+      await openExport();
+      const prevented = await page.evaluate(() => {
+        const m = document.getElementById('modal'), d = document.getElementById('review-dialog');
+        m.dispatchEvent(new Event('cancel', {cancelable: true})); m.close();
+        const e = new Event('cancel', {cancelable: true}); d.dispatchEvent(e); return e.defaultPrevented;
+      });
+      await sleep(300);
+      let st = await state(page);
+      assert.deepEqual([prevented, st.open, st.modal, st.hash], [true, true, false, '#review/101/videos'], 'the grouped cancel is ignored');
+      // The same, when the browser also closes the review dialog: it reopens at once with its cards and focus on "Xuất video".
+      await sleep(500); await openExport();
+      await page.evaluate(() => {
+        const m = document.getElementById('modal'), d = document.getElementById('review-dialog');
+        m.dispatchEvent(new Event('cancel', {cancelable: true})); m.close();
+        d.dispatchEvent(new Event('cancel')); d.close();
+      });
+      await page.waitForFunction(() => document.getElementById('review-dialog').open);
+      st = await state(page);
+      assert.deepEqual([st.open, st.modal, st.hash], [true, false, '#review/101/videos'], 'reopened over the same job');
+      assert.ok(await page.locator('#review-dialog article.rv-card').count() > 0, 'cards kept');
+      assert.equal(await page.evaluate(() => document.activeElement && document.activeElement.classList.contains('rv-export')), true, 'focus back on "Xuất video"');
+      // Closed by the browser while the export dialog stays open: it comes back once that dialog closes (Hủy).
+      await sleep(500); await openExport();
+      await page.evaluate(() => document.getElementById('review-dialog').close());
+      await sleep(200);
+      assert.equal((await state(page)).open, false, 'not reopened over the export dialog');
+      await page.locator('#modal [data-action="close-modal"]').last().click();
+      await page.waitForFunction(() => document.getElementById('review-dialog').open);
+      assert.equal((await state(page)).hash, '#review/101/videos');
+      // A real Esc on the export dialog closes only it; the next Esc closes the review dialog.
+      await openExport();
+      await page.keyboard.press('Escape');
+      await page.waitForFunction(() => !document.getElementById('modal').open);
+      await sleep(300);
+      assert.equal((await state(page)).open, true, 'Esc closes only the export dialog');
+      await sleep(300);
+      await page.keyboard.press('Escape');
+      await page.waitForFunction(() => !document.getElementById('review-dialog').open && location.hash === '#videos');
+      // Closed by the browser with nothing above it: the hash returns to #videos and the dashboard poll resumes.
+      await page.evaluate(() => { location.hash = '#review/101/videos'; });
+      await page.waitForSelector('#review-dialog[open] article.rv-card');
+      await sleep(1800);
+      const polls = counters.status;
+      await page.evaluate(() => document.getElementById('review-dialog').close());
+      await page.waitForFunction(() => location.hash === '#videos');
+      await until(() => counters.status > polls, 'dashboard poll resumed', 9000);
+      // "Duyệt" for the same job opens it again (the hash had followed the close).
+      await page.evaluate(() => { location.hash = '#review/101/videos'; });
+      await page.waitForSelector('#review-dialog[open] article.rv-card');
+      await page.keyboard.press('Escape');
+      await page.waitForFunction(() => !document.getElementById('review-dialog').open);
+      assert.equal(finalizes().length, confirmed, 'no finalize');
+      fresh();
     });
 
     await check('Demo page: bulk and export in memory, recorded in "Lịch sử thao tác mẫu", no request; the dialog closes after the export is queued', async () => {

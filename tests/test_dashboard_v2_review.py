@@ -1,4 +1,4 @@
-"""V2 review dialog, batches R0–R3 (docs/DASHBOARD_V2_REVIEW_PLAN.md sections 7.1–7.4).
+"""V2 review dialog, batches R0–R4 (docs/DASHBOARD_V2_REVIEW_PLAN.md sections 7.1–7.5).
 
 The new files are whitelisted and served on the PC listener and, with the access cookie, on the phone
 listener; the CSP is unchanged, the new files have no blob:, inline script or fetch; the classic pages
@@ -9,6 +9,8 @@ POSTed to the real /api/jobs/<id>/review/decision|clear route on a temporary roo
 and the queue it returns matches what the dialog shows after its optimistic change.
 R3: bulk-keep / bulk-accept POSTed to the real route change exactly the number of items the dialog's confirm shows
 (S1), and the export dialog's options, limits, gate and confirm sentence are those of export_dialog.py.
+R4.2: the dialog through the real phone listener (cookie, at most 2 frames at once, the clip with Range, every POST in
+PHONE_ALLOWED_POSTS, never finalize), driven by dashboard_v2/browser-check-review-phone.cjs.
 Temporary roots and synthetic queues only; the phone listener runs on a fake LAN address (127.0.0.1).
 """
 from __future__ import annotations
@@ -23,6 +25,7 @@ import subprocess
 import sys
 import threading
 import unittest
+import urllib.parse
 from http.server import ThreadingHTTPServer
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -275,6 +278,11 @@ process.stdout.write(JSON.stringify({queue,steps}));
 class _TempJobFixture(unittest.TestCase):
     """A temporary root with a real JobStore, the real handler on port 0 and one job with a synthetic queue."""
 
+    SOURCE, DURATION = "r2-demo.mp4", 60.0
+
+    def write_source(self, source: Path) -> None:
+        source.write_bytes(b"synthetic" * 64)
+
     def setUp(self):
         temp = TemporaryDirectory()
         self.addCleanup(temp.cleanup)
@@ -296,11 +304,11 @@ class _TempJobFixture(unittest.TestCase):
         self.addCleanup(self.server.server_close)
         self.addCleanup(self.server.shutdown)
         self.data = json.loads(node(R2_PAYLOADS_JS))
-        source = self.root / "input" / "r2-demo.mp4"
-        source.write_bytes(b"synthetic" * 64)
+        source = self.root / "input" / self.SOURCE
+        self.write_source(source)
         digest = hashlib.sha256(source.read_bytes()).hexdigest()
         queue = self.data["queue"]
-        queue["source"] = {"path": str(source), "sha256": digest, "duration_seconds": 60.0}
+        queue["source"] = {"path": str(source), "sha256": digest, "duration_seconds": self.DURATION}
         queue["reports"] = []
         self.queue_file = self.root / "reports" / "jobs" / "r2-demo" / "review-queue.json"
         self.queue_file.write_text(json.dumps(queue), encoding="utf-8")
@@ -407,6 +415,143 @@ class ReviewR3Bulk(_TempJobFixture):
             self.assertEqual(status, 400, value)
             self.assertEqual(payload["error"], "Bộ lọc hàng loạt không hợp lệ")
         self.assertEqual(self.root.joinpath("input", "r2-demo.mp4").read_bytes(), b"synthetic" * 64, "the source is never touched")
+
+
+FFMPEG = shutil.which("ffmpeg") or next((str(p) for p in [ROOT / "tools" / "ffmpeg" / "bin" / "ffmpeg.exe"] if p.is_file()), None)
+
+
+@unittest.skipUnless(NODE and FFMPEG, "node and ffmpeg are required for the phone listener check")
+class ReviewR4PhoneListener(_TempJobFixture):
+    """R4.2: the review dialog through the real phone listener (127.0.0.1, never the Wi-Fi address) on a temporary
+    root: a synthetic VP8 clip made by ffmpeg, real frames, the cookie, at most 2 frames at once on the server, the
+    clip with Range (206), every POST in PHONE_ALLOWED_POSTS (decision, clear, bulk-keep; never finalize), no request
+    without the cookie after the code. The browser part is dashboard_v2/browser-check-review-phone.cjs (Playwright)."""
+
+    SOURCE, DURATION = "r4-phone.webm", 70.0
+
+    def write_source(self, source: Path) -> None:
+        subprocess.run([FFMPEG, "-y", "-loglevel", "error", "-f", "lavfi", "-i", "testsrc=duration=70:size=320x180:rate=10",
+                        "-c:v", "libvpx", "-b:v", "150k", "-g", "10", str(source)], check=True, timeout=180)
+
+    def setUp(self):
+        super().setUp()
+        self.center.frame_cache = ReviewFrameCache(self.root, Path(FFMPEG))
+        self.center.start_ai_audit = mock.Mock(side_effect=AssertionError("no AI audit"))
+        self.center._audit_jobs, self.center._audit_lock = {}, threading.Lock()  # read by /api/status
+        self.center.ai_status = mock.Mock(return_value={"ready": False, "message": "AI tắt trong test", "login_running": False,
+                                                        "config": {"enabled": False, "model": "", "reasoning_effort": ""}})
+        # Report previews served by /media from the temporary reports folder (synthetic posters of the demo).
+        previews = self.root / "reports" / "jobs" / "r2-demo" / "previews"
+        previews.mkdir(parents=True)
+        queue = json.loads(self.queue_file.read_text(encoding="utf-8"))
+        for item in queue["items"] + queue.get("advisory_items", []):
+            moved = []
+            for name in item.get("preview_images") or []:
+                target = previews / Path(name).name
+                if not target.exists():
+                    shutil.copyfile(DASHBOARD_V2_DIR / "assets" / Path(name).name, target)
+                moved.append(target.relative_to(self.root).as_posix())
+            item["preview_images"] = moved
+        self.queue_file.write_text(json.dumps(queue), encoding="utf-8")
+        self.log: list[dict] = []
+        self.lock = threading.Lock()
+        self.frames_now = self.frames_max = 0
+        test = self
+
+        def factory(access):
+            base = _phone_handler_class(self.center, access)
+
+            class Logged(base):
+                def send_response(self, code, message=None):
+                    self._logged = code
+                    super().send_response(code, message)
+
+                def record(self, method, run):
+                    path = urllib.parse.urlsplit(self.path).path
+                    frame = path.endswith("/review/frame")
+                    if frame:
+                        with test.lock:
+                            test.frames_now += 1
+                            test.frames_max = max(test.frames_max, test.frames_now)
+                    try:
+                        run()
+                    finally:
+                        if frame:
+                            with test.lock:
+                                test.frames_now -= 1
+                        with test.lock:
+                            test.log.append({"method": method, "path": path, "range": self.headers.get("Range"),
+                                             "cookie": phone_access.COOKIE_NAME + "=" in (self.headers.get("Cookie") or ""),
+                                             "status": getattr(self, "_logged", None)})
+
+                def do_GET(self):
+                    self.record("GET", super().do_GET)
+
+                def do_POST(self):
+                    self.record("POST", super().do_POST)
+
+            return Logged
+
+        self.phone = _phone_access(self.center)
+        self.phone._lan = lambda: FAKE_LAN  # never the real Wi-Fi
+        self.addCleanup(self.phone.disable)
+        self.status = self.phone.enable(factory, address=FAKE_LAN, check_address=lambda _a: None, check_port=lambda _p: None, port=0)
+
+    def test_the_dialog_works_through_the_phone_listener(self):
+        port = self.status["port"]
+        env = {**os.environ, "BILIFLOW_PHONE_BASE": f"http://127.0.0.1:{port}", "BILIFLOW_PHONE_CODE": self.status["code"],
+               "BILIFLOW_PHONE_JOB": str(self.job_id), "BILIFLOW_PHONE_POSTS": json.dumps([p.pattern for p in phone_access.PHONE_ALLOWED_POSTS])}
+        completed = subprocess.run([NODE, str(DASHBOARD_V2_DIR / "browser-check-review-phone.cjs")], cwd=ROOT, env=env,
+                                   capture_output=True, text=True, encoding="utf-8", timeout=600)
+        if completed.stdout.startswith("SKIP"):
+            self.skipTest(completed.stdout.strip())
+        self.assertEqual(completed.returncode, 0, completed.stdout + completed.stderr)
+        result = json.loads(completed.stdout.strip().splitlines()[-1])
+        self.assertEqual(result["passed"], 6, completed.stderr)
+        with self.lock:
+            log = list(self.log)
+        # The cookie: before the code only the form; after it every request carries the cookie.
+        login = next(i for i, r in enumerate(log) if r["method"] == "POST" and r["path"] == "/phone-login")
+        self.assertTrue(all(r["status"] == 401 for r in log[:login]), log[:login])
+        after = [r for r in log[login + 1:]]
+        self.assertEqual([r for r in after if not r["cookie"] or r["status"] in (401, 403)], [], "every request after the code has the cookie")
+        # Frames: real JPEGs from the synthetic clip, never more than 2 at once on the server.
+        frames = [r for r in after if r["path"].endswith("/review/frame")]
+        self.assertGreaterEqual(len(frames), 3)
+        self.assertTrue(all(r["status"] == 200 for r in frames), frames)
+        self.assertLessEqual(self.frames_max, 2)
+        # The clip: Range requests answered 206.
+        videos = [r for r in after if r["path"].endswith("/review/video")]
+        self.assertTrue(any(r["range"] and r["status"] == 206 for r in videos), videos)
+        # Writes: decision, clear (its undo), bulk-keep; each in PHONE_ALLOWED_POSTS, never finalize, all accepted.
+        posts = [r for r in after if r["method"] == "POST"]
+        kinds = [r["path"].rsplit("/", 1)[-1] for r in posts]
+        self.assertEqual(kinds, ["decision", "clear", "bulk-keep"])
+        for r in posts:
+            self.assertEqual(r["status"], 200, r)
+            self.assertTrue(any(p.fullmatch(r["path"]) for p in phone_access.PHONE_ALLOWED_POSTS), r["path"])
+            self.assertIsNone(phone_access.pc_only_reason(r["path"]))
+        queue = json.loads(self.queue_file.read_text(encoding="utf-8"))
+        self.assertTrue(all(x.get("decision") for x in queue["items"]), "Giữ tất cả kept every undecided item")
+        # Report previews through /media; nothing reaches a PC-only route; no error answer.
+        self.assertTrue(any(urllib.parse.unquote(r["path"]).startswith("/media/reports/") and r["status"] == 200 for r in after))
+        self.assertEqual([r for r in after if re.search(r"source-(cleanup|archive|recycle)|/shutdown|logo-memory", r["path"])], [])
+        self.assertEqual([r for r in after if r["status"] is None or r["status"] >= 400], [])
+        source = self.root / "input" / self.SOURCE
+        self.assertEqual(hashlib.sha256(source.read_bytes()).hexdigest(), queue["source"]["sha256"], "the source is never touched")
+
+    def test_review_operations_are_phone_operations(self):
+        data = json.loads(node("const C=require('./dashboard_v2/contracts.js');process.stdout.write(JSON.stringify({e:C.endpoints,pc:C.pcOnlyOps}))"))
+        for name in ("decision", "clear", "bulkKeep", "bulkAccept", "finalize"):
+            with self.subTest(op=name):
+                method, path = data["e"][name]
+                self.assertEqual(method, "POST")
+                concrete = path.replace("{id}", str(self.job_id))
+                self.assertTrue(any(p.fullmatch(concrete) for p in phone_access.PHONE_ALLOWED_POSTS), concrete)
+                self.assertIsNone(phone_access.pc_only_reason(concrete))
+                self.assertNotIn(name, data["pc"])
+        for name in ("queue", "reviewSession", "evidence", "frame", "video", "resources", "reviewExport"):
+            self.assertEqual(data["e"][name][0], "GET", name)
 
 
 @unittest.skipUnless(NODE, "node is required to read contracts.js")
