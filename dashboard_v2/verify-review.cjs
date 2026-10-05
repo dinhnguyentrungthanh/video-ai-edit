@@ -661,6 +661,11 @@ check('R4-B3: no backdrop-filter in V2 (dialog backdrops, the top bar and the "L
   assert.ok(!/container-type\s*:\s*(inline-size|size)/.test(css) && !/\d+cqw/.test(css.replace(/\/\*[\s\S]*?\*\//g, '')), 'no container query in review.css');
   assert.match(css, /\.rv-region\.blurred \{ background: #ffffffb3; \}/, 'the "Làm mờ" region is a white veil');
 });
+check('R4-B4: while a dialog is open the page behind does not scroll (in a narrow window its scrollbar lay over the review dialog\'s)', () => {
+  const theme = fs.readFileSync(path.join(__dirname, 'theme.css'), 'utf8').replace(/\/\*[\s\S]*?\*\//g, '');
+  assert.match(theme, /html:has\(dialog\[open\]\)\s*\{\s*overflow:\s*hidden;\s*\}/);
+  for (const page of ['live.html', 'index.html']) assert.ok(fs.readFileSync(path.join(__dirname, page), 'utf8').includes('theme.css'), page + ' loads theme.css');
+});
 
 /* R3: bulk and export against the classic bulkKeep / bulkAccept (runBlocking, postJson recorded) and EXPORT_DIALOG_JS. */
 const BULK_FUNCS = ['isSafety', 'isLogoItem', 'isAdItem', 'visible', 'bulkFilters', 'decisionsLocked', 'refuseWhileExporting', 'bulkKeep', 'bulkAccept', 'formatStamp'];

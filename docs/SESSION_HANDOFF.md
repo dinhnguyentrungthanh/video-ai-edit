@@ -9,7 +9,7 @@ This is the short, authoritative starting point for a new Codex account or chat.
 - Project root: `E:\DungChung\BiliFlow`
 - Branch `feat/dashboard-v2` (from `main` f6996bb, pushed 2026-10-03) holds the Dashboard V2 prototype and its integration plan.
   - 2026-10-05: it also holds the V2 review dialog (batches R0–R4 of `docs/DASHBOARD_V2_REVIEW_PLAN.md`) and the local commit `0334f8c` (stronger logo cover in exports). See "Current work — 2026-10-05" below.
-  - Per the plan's log, the main folder ran `536025d` of this branch on 2026-10-05, with the Control Center on that code. Check with `git status` and `git log` before any claim.
+  - Per the plan's log, the main folder ran `a7d8f18` of this branch (detached) on 2026-10-05, with the Control Center on that code. Check with `git status` and `git log` before any claim.
   - A session working on this branch, including a Claude cloud session, starts with `docs/DASHBOARD_V2_REVIEW_PLAN.md` (the review dialog) and `docs/DASHBOARD_V2_CLOUD_PLAN.md` (the V2 integration and phone mode).
   - `main` does not have V2. The Control Center runs V2 only while the main folder is on this branch.
 - Branch `feat/video-download` (from `feat/dashboard-v2` a7d8f18, worktree `temp\wt-video-download`, 2026-10-05) holds the real video download feature, D0–D5 done (see "Current work — 2026-10-05 real video download" below). A session on this branch starts at `docs/VIDEO_DOWNLOAD_PLAN.md` and asks the user before downloading any tool or package. Dashboard V2 merges into `main` on its own.
@@ -59,16 +59,18 @@ Always confirm this section with `git status` and `git log` because it becomes s
   - Phone and laptop layout (P17): 44 px touch targets on a phone and on any touch screen; text ≥ 12 px; a fading chip row; the tools row wraps; a full-screen dialog when the phone is held sideways.
   - A check through the real phone listener on a temporary root (`tests.test_dashboard_v2_review.ReviewR4PhoneListener`, Playwright).
   - R3-N1 blocked: one Esc closes only the dialog on top. The reason is under the R4 table of the plan.
-  - The local check of R4 (`4c7ac3c`) passed R4.3, R4.4 and R3-N1, skipped R4.2 (no Playwright there) and found R4-B1 (a box label cut by the card image). The cloud fixed R4-B1 in `fcfe616`. The local recheck (`ce9f865`) found R4-B2 (two labels over each other on a zoomed card); the local machine fixed it in `4046090` at the user's request and measured again: pass. The two browser-checks it touched need Playwright and were not run there; the cloud runs them next time. The main folder moved to `0200c23` and the Control Center started for the user's acceptance test U-R4 (section 8.3). During it the user found R4-B3 (V2 dialogs blinking on hover and scroll on their PC); the local machine fixed it in `cbe215e` and `35127e6` (no `backdrop-filter` anywhere in V2; the main folder followed, static files only) and the user confirmed. Next: the rest of U-R4, then the merge to main when the user asks.
+  - The local check of R4 (`4c7ac3c`) passed R4.3, R4.4 and R3-N1, skipped R4.2 (no Playwright there) and found R4-B1 (a box label cut by the card image). The cloud fixed R4-B1 in `fcfe616`. The local recheck (`ce9f865`) found R4-B2 (two labels over each other on a zoomed card); the local machine fixed it in `4046090` at the user's request and measured again: pass. The two browser-checks it touched need Playwright and were not run there; the cloud runs them next time. The main folder moved to `0200c23` and the Control Center started for the user's acceptance test U-R4 (section 8.3). During it the user found R4-B3 (V2 dialogs blinking on hover and scroll on their PC); the local machine fixed it in `cbe215e` and `35127e6` (no `backdrop-filter` anywhere in V2; the main folder followed, static files only) and the user confirmed. Then the user passed step 7 (phone) and step 8 (narrow window) except R4-B4 (in a narrow window the scrollbar dragged the page behind the review dialog), fixed in `e3b894f`, and asked for R4-U1 (rows waiting for or in their export show only ⋯) and R4-U2 ("Xuất lại" in "Hoàn tất" with a warning and a guide), made in `73ccc51`. Next: the user tries these three, then the merge to main when the user asks (the user said they will then run the main folder on `main`).
+  - The main folder runs a detached commit of this branch (`a7d8f18` on 2026-10-05). Once, when a new session opened, it was switched to `main` (most likely by the desktop app's branch picker) and V2 answered "Không tìm thấy"; with the user's consent it went back. Check `git -C E:\DungChung\BiliFlow status` before any claim.
+  - Branch `feat/video-download` (worktree `temp/wt-video-download`, from `a7d8f18`) holds the real video download feature (plan `docs/VIDEO_DOWNLOAD_PLAN.md` there); another session builds it.
 - Stronger logo cover in exports (`0334f8c`, made on the local machine, see CHANGELOG):
   - A new export hides a reviewed regional logo with FFmpeg `delogo`, then a blur that grows with the region.
   - The export identity is unchanged: an older export still counts as proven, and "Dọn video gốc" / "Lưu trữ" / "Xuất video" treat it as before.
   - For an already exported video to get the new cover, the user moves the old export (`output\…-reviewed.mp4` and its `.manifest.json`) to the Recycle Bin themselves, then exports again. Agents never move or recycle exports.
   - The running Control Center uses the new cover only after the main folder moves to a commit that contains `0334f8c` and the Control Center restarts (ask the user first).
 - Next:
-  1. The local machine checks R4 (plan section 8.2).
-  2. The user's acceptance test U-R4 (plan section 8.3, all 8 steps), on real data.
-  3. Merge into `main` only when the user asks.
+  1. The user tries R4-B4, R4-U1 and R4-U2 on the PC (the main folder moves to the new commit, static files only, when the user agrees and no job runs), which ends U-R4 (plan section 8.3).
+  2. The cloud runs the browser-checks that need Playwright (R4-B2, R4-B3, R4-B4, R4-U1, R4-U2).
+  3. Merge into `main` only when the user asks; the user then runs the main folder on `main`.
 
 ## Previous work — 2026-10-03 Dashboard V2 prototype (branch `feat/dashboard-v2`, pushed; integration planned for a cloud session)
 

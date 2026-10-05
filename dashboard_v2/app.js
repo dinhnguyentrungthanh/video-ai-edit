@@ -53,7 +53,7 @@ function ops(j){return C.operations(j,ctx()).map(a=>state.offline&&a.id!=='revie
 function stageLabel(stage){return ({visual_logo:'Nhận diện logo & watermark',advertising:'Kiểm tra logo & quảng cáo',adult:'Kiểm tra nội dung 18+',gore:'Kiểm tra máu me',violence:'Kiểm tra bạo lực',ocr:'Đọc chữ trong khung hình',VERIFYING:'Kiểm tra bản xuất'})[stage]||C.labels[stage]||'Đang phân tích cảnh';}
 function drawerActions(j){
   const actions=ops(j),primary=C.primary(j);
-  const featured=primary==='detail'?['stopAfter']:primary==='finalize'?['finalize','review']:[primary];
+  const featured=primary==='detail'?['stopAfter']:primary==='finalize'?['finalize','review']:primary==='reexport'?['reexport','review']:[primary];
   const main=featured.map(id=>actions.find(a=>a.id===id)).filter(Boolean),other=actions.filter(a=>!featured.includes(a.id));
   return '<h3>Thao tác chính</h3>'+(main.length?'<div class="drawer-primary-actions">'+main.map(a=>btn(j,a,'')).join('')+'</div>':'<p class="muted">Xem trạng thái và kết quả kiểm tra bên dưới.</p>')+(other.length?'<details class="more-actions"><summary>Thao tác khác</summary><div class="action-grid">'+other.map(a=>btn(j,a)).join('')+'</div></details>':'');
 }
@@ -115,13 +115,14 @@ function selectBox(j){
   return '<input class="select-job" type="checkbox" aria-label="Chọn video '+j.id+'" data-select="'+j.id+'" '+(selected.has(j.id)?'checked':'')+(state.source_cleanup_running||state.offline?' disabled':'')+'>';
 }
 function row(j){
-  const main=ops(j).find(a=>a.id===C.primary(j)),remaining=reviewRemaining(j),p=j.state==='RENDERING'?renderPercent(j):percent(j.progress);
-  const isExport=C.tab(j)==='export',progText=j.state==='VERIFYING'||j.render_progress?.state==='VERIFYING'?'Kiểm tra':isExport&&j.state==='QUEUED'?'Chờ xuất':p+'%';
+  // R4-U1: a video waiting for or in its export shows only ⋯ (its actions stay in the drawer).
+  const isExport=C.tab(j)==='export',main=isExport?null:ops(j).find(a=>a.id===C.primary(j)),remaining=reviewRemaining(j),p=j.state==='RENDERING'?renderPercent(j):percent(j.progress);
+  const progText=j.state==='VERIFYING'||j.render_progress?.state==='VERIFYING'?'Kiểm tra':isExport&&j.state==='QUEUED'?'Chờ xuất':p+'%';
   const src=C.sourceLine(j);
   const note=src&&src[1]==='error'?src[0]:C.archived(j)?'Đã lưu trữ video gốc':C.cleaned(j)?'Video gốc trong Thùng rác':j.state==='WAITING_REVIEW'?remaining+' cảnh cần duyệt':j.queue_position?'Lượt #'+j.queue_position:'Revision '+j.active_revision;
   const why=filter==='completed'&&!state.remote&&!selectable(j)?selectReason(j):'';
   const whyLine=why&&!note.includes(why)?'<span class="cell-sub select-reason">Không chọn được: '+esc(why)+'</span>':'';
-  return '<article class="job-row" data-job="'+j.id+'"><div class="video-cell">'+(filter==='completed'?selectBox(j):'')+'<img class="poster" src="assets/poster-'+j.palette+'.svg" alt="" loading="lazy"><div class="video-text"><button class="video-title" data-action="detail" data-id="'+j.id+'" title="'+esc(j.name)+'">'+esc(j.name)+'</button><div class="video-meta"><span>#'+j.id+'</span><span>·</span><span>'+j.duration+'</span><span>·</span><span>'+bytes(j.source_size_bytes)+'</span></div></div></div><div class="status-cell">'+badge(j)+'<span class="cell-sub'+(src&&src[1]==='error'?' tone-error':'')+'">'+esc(note)+'</span>'+whyLine+'</div><div class="scope-cell">'+scope(j)+'</div><div class="progress-cell"><div class="row-progress"><span>'+progText+'</span><div class="meter"><i style="width:'+p+'%"></i></div></div></div><div class="row-actions">'+(main?btn(j,{...main,label:main.id==='start'?'Thiết lập':main.id==='restore'?'Khôi phục':main.label},''): '<button class="secondary small" data-action="detail" data-id="'+j.id+'">Chi tiết</button>')+'<button class="icon-button" data-action="detail" data-id="'+j.id+'" aria-label="Thao tác video '+j.id+'" title="Thao tác video">⋯</button></div></article>';
+  return '<article class="job-row" data-job="'+j.id+'"><div class="video-cell">'+(filter==='completed'?selectBox(j):'')+'<img class="poster" src="assets/poster-'+j.palette+'.svg" alt="" loading="lazy"><div class="video-text"><button class="video-title" data-action="detail" data-id="'+j.id+'" title="'+esc(j.name)+'">'+esc(j.name)+'</button><div class="video-meta"><span>#'+j.id+'</span><span>·</span><span>'+j.duration+'</span><span>·</span><span>'+bytes(j.source_size_bytes)+'</span></div></div></div><div class="status-cell">'+badge(j)+'<span class="cell-sub'+(src&&src[1]==='error'?' tone-error':'')+'">'+esc(note)+'</span>'+whyLine+'</div><div class="scope-cell">'+scope(j)+'</div><div class="progress-cell"><div class="row-progress"><span>'+progText+'</span><div class="meter"><i style="width:'+p+'%"></i></div></div></div><div class="row-actions">'+(isExport?'':main?btn(j,{...main,label:main.id==='start'?'Thiết lập':main.id==='restore'?'Khôi phục':main.label},''): '<button class="secondary small" data-action="detail" data-id="'+j.id+'">Chi tiết</button>')+'<button class="icon-button" data-action="detail" data-id="'+j.id+'" aria-label="Thao tác video '+j.id+'" title="Thao tác video">⋯</button></div></article>';
 }
 function allFiltered(){
   const needle=query.normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase();
@@ -319,7 +320,9 @@ function closeModal(){if(modalBusy)return;$('#modal').close();modalCommit=null;i
 function toast(message,error){clearTimeout(toastTimer);$('#toast').textContent=message;$('#toast').className=error?'error':'';$('#toast').hidden=false;toastTimer=setTimeout(()=>$('#toast').hidden=true,5500);}
 async function mutate(operation,j,body){
   if(state.offline)throw new Error('Mất kết nối. Chưa gửi thao tác.');
-  const gated=j&&ops(j).find(a=>a.id===operation);
+  // R4-U2: finalize of a COMPLETED video is "Xuất lại" (also from the review dialog when nothing was changed).
+  const gate=operation==='finalize'&&j&&j.state==='COMPLETED'?'reexport':operation;
+  const gated=j&&ops(j).find(a=>a.id===gate);
   if(j&&gated&&!gated.enabled)throw new Error(gated.reason);
   if(j&&!gated&&!['decision','clear','bulkKeep','bulkAccept'].includes(operation))throw new Error('Trạng thái video không còn cho phép thao tác này.');
   if(operation==='start'||operation==='rerun')C.validateScan(body,operation==='start');
@@ -356,23 +359,44 @@ function scanForm(j,rerun){
 }
 let exportFormJob=null;
 /* "Xuất video đã duyệt": the size choices, limits and confirm sentence of export_dialog.py; finalize is sent once,
-   only from "Xác nhận xuất video", never retried. options (review dialog, R3): {resources, onQueued(result)}. */
+   only from "Xác nhận xuất video", never retried. options (review dialog, R3): {resources, onQueued(result)};
+   options.reexport (R4-U2 "Xuất lại"): {intro, guide} replace the decisions line and follow the queue note. */
 function exportModal(j,options){
   options=options||{};
-  const resources=C.resourceItems(options.resources);
-  showModal('Xuất video đã duyệt','<p><strong>#'+j.id+' · '+esc(j.name)+'</strong></p><p>'+ (C.reviewStats(j).total)+' cảnh đã có quyết định cuối cùng. Xuất khóa các lựa chọn hiện tại.</p>'+(resources.length?'<div class="export-resources">'+resources.map(([label,value])=>'<span>'+esc(label)+' <strong>'+esc(value)+'</strong></span>').join('')+'</div>':'')+'<label class="field"><span>Giới hạn dung lượng bản xuất</span><select id="export-mode">'+C.EXPORT_SIZE_OPTIONS.map(([value,label])=>'<option value="'+value+'">'+esc(label)+'</option>').join('')+'</select></label><label class="field" id="custom-size" hidden><span>Dung lượng tối đa (GB)</span><input id="export-gb" '+C.EXPORT_CUSTOM_GB.attributes+' value="'+C.EXPORT_CUSTOM_GB.value+'"></label><p id="export-confirm-text" class="export-confirm"></p><p>Video được xếp vào hàng đợi xuất. Trạng thái hoàn tất chỉ xuất hiện sau khi xuất và kiểm tra xong.</p>',async()=>{
+  const resources=C.resourceItems(options.resources),again=options.reexport;
+  showModal(again?'Xuất lại video':'Xuất video đã duyệt','<p><strong>#'+j.id+' · '+esc(j.name)+'</strong></p>'+(again?again.intro:'<p>'+ (C.reviewStats(j).total)+' cảnh đã có quyết định cuối cùng. Xuất khóa các lựa chọn hiện tại.</p>')+(resources.length?'<div class="export-resources">'+resources.map(([label,value])=>'<span>'+esc(label)+' <strong>'+esc(value)+'</strong></span>').join('')+'</div>':'')+'<label class="field"><span>Giới hạn dung lượng bản xuất</span><select id="export-mode">'+C.EXPORT_SIZE_OPTIONS.map(([value,label])=>'<option value="'+value+'">'+esc(label)+'</option>').join('')+'</select></label><label class="field" id="custom-size" hidden><span>Dung lượng tối đa (GB)</span><input id="export-gb" '+C.EXPORT_CUSTOM_GB.attributes+' value="'+C.EXPORT_CUSTOM_GB.value+'"></label><p id="export-confirm-text" class="export-confirm"></p><p>Video được xếp vào hàng đợi xuất. Trạng thái hoàn tất chỉ xuất hiện sau khi xuất và kiểm tra xong.</p>'+(again?again.guide:''),async()=>{
     const selection=C.exportSelection($('#export-mode').value,$('#export-gb').value);
     const result=await mutate('finalize',j,selection);exportDrafts.delete(draftKey(j));
     const status=result&&result.body&&result.body.status;
     toast(LIVE?(status==='COMPLETED'?'Bản xuất của lần duyệt này đã có (manifest khớp); không xuất lại.':'Đã xếp lệnh xuất #'+j.id+'. Hoàn tất chỉ hiện sau khi xuất và kiểm tra xong.'):'Đã xếp video mẫu #'+j.id+' vào hàng đợi xuất.');
     if(options.onQueued)options.onQueued(result);
     return true;
-  },'Xác nhận xuất video');
+  },again?'Xuất lại':'Xác nhận xuất video');
   exportFormJob=j;
   const choice=C.exportPolicyChoice(j.review_summary?.export_size_policy),saved=exportDrafts.get(draftKey(j));
   const mode=saved?saved.mode:choice.mode;
   $('#export-mode').value=mode;$('#export-gb').value=saved?saved.gb:choice.gb;$('#custom-size').hidden=mode!=='custom';
   exportConfirmLine();
+}
+/* R4-U2 "Xuất lại" (Hoàn tất): finalize with the decisions of the last review. While the export of that review is in
+   output (C.reexportState, from the cleanup hint) the backend only reuses it: the dialog then has no confirm and says
+   how to export again (move the export and its manifest out of output). Every case says how to choose again. */
+function reexportGuide(fromReview){
+  const decide='Đổi quyết định của những cảnh cần sửa'+(fromReview?' ngay trong hộp duyệt cảnh này':'')+'. Video chuyển về <strong>Sẵn sàng xuất</strong> (hoặc <strong>Chờ duyệt</strong> nếu còn cảnh chưa quyết định).';
+  const steps=fromReview?[decide,'Bấm <strong>Xuất video</strong> lần nữa rồi xác nhận xuất.']:['Bấm <strong>⋯</strong> ở video này rồi bấm <strong>Duyệt cảnh</strong>.',decide,'Bấm <strong>Xuất video</strong> trong hộp duyệt cảnh rồi xác nhận xuất.'];
+  return '<h3>Muốn duyệt lại và xuất với lựa chọn mới</h3><ol class="help-steps">'+steps.map(s=>'<li>'+s+'</li>').join('')+'</ol><p class="muted">Bản xuất cũ vẫn giữ nguyên trong thư mục output; BiliFlow không ghi đè.</p>';
+}
+function reexportModal(j,options){
+  options=options||{};
+  const x=C.reexportState(j),guide=reexportGuide(options.fromReview);
+  const warn='<p class="notice" role="note"><strong>Xuất lại dùng các lựa chọn cũ:</strong> đúng các quyết định đã duyệt ở lần xuất trước. Không cảnh nào được duyệt lại.</p>';
+  if(x.present){
+    const stamp=C.formatStamp(x.exportedAt),facts=[C.formatBytes(x.bytes),stamp?'xuất lúc '+stamp:''].filter(Boolean).join(', ');
+    showModal('Xuất lại video','<p><strong>#'+j.id+' · '+esc(j.name)+'</strong></p>'+warn+'<p>Bản xuất hiện có: <span class="mono">output\\'+esc(x.name)+'</span>'+(facts?' ('+esc(facts)+')':'')+'. Khi file này còn trong thư mục output, BiliFlow dùng lại nó (manifest khớp lần duyệt này) và không xuất lại.</p><h3>Muốn xuất lại với lựa chọn cũ</h3><p>Ví dụ để áp dụng cách che logo mới: trên PC, dời file <span class="mono">'+esc(x.name)+'</span> và file <span class="mono">'+esc(x.manifest)+'</span> ra khỏi thư mục output (ví dụ vào Thùng rác), rồi bấm <strong>Xuất lại</strong> lần nữa.</p>'+guide,null);
+    return;
+  }
+  const status='<p>'+(x.moved?esc(x.reason)+'. Xuất lại tạo bản xuất mới từ các lựa chọn cũ.':(x.reason?'Tình trạng bản xuất: '+esc(x.reason)+'. ':'')+'Nếu bản xuất của lần duyệt này vẫn còn trong output, BiliFlow dùng lại nó và không xuất lại.')+'</p>';
+  exportModal(j,{...options,reexport:{intro:warn+status,guide}});
 }
 /* The confirm sentence of export_dialog.py for the current choice (or the limit error of a bad custom value). */
 function exportConfirmLine(){
@@ -431,6 +455,7 @@ function jobAction(id,operation){
   if(operation==='review'){reviewPushed=true;location.hash='review/'+j.id+'/'+view;}
   else if(operation==='start'||operation==='rerun')scanForm(j,operation==='rerun');
   else if(operation==='finalize')exportModal(j);
+  else if(operation==='reexport')reexportModal(j);
   else if(operation==='audit')auditModal(j);
   else if(operation==='cleanup'||operation==='archive')filePreview(operation,[j.id]);
   else simpleConfirm(j,a);
@@ -534,7 +559,7 @@ function requestReviewClose(back){
 }
 /* R3: "Xuất video" in the review dialog opens the same export dialog over it, with the job's latest status (the
    dashboard poll is paused while the dialog is open) and the resources line; closing it on success is up to the dialog. */
-async function reviewExport(id,options){await store.refresh();state=store.snapshot();const j=getJob(id);if(!j)throw new Error('Không tìm thấy video.');exportModal(j,options);}
+async function reviewExport(id,options){await store.refresh();state=store.snapshot();const j=getJob(id);if(!j)throw new Error('Không tìm thấy video.');if(j.state==='COMPLETED')reexportModal(j,{...options,fromReview:true});else exportModal(j,options);}
 const review=window.BFReview.create({dialog:$('#review-dialog'),overlay:$('#modal'),store,getJob,requestClose:requestReviewClose,toast,exportDialog:reviewExport,
   oldUrl:(id,back)=>LIVE?'/review/'+encodeURIComponent(id)+'?from=v2&view='+encodeURIComponent(back):''});
 window.addEventListener('hashchange',route);

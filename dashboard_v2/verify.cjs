@@ -88,6 +88,31 @@ check('Unfinished render request blocks resubmission and rerun',()=>{
   assert.equal(has(j,'finalize').enabled,false);assert.equal(has(j,'rerun').enabled,false);
 });
 check('Ready resolved queue accepts export',()=>assert.equal(has(job('READY_TO_EXPORT'),'finalize').enabled,true));
+check('R4-U2: "Xuất lại" is the main action of an exported video; it needs the source and no export in flight',()=>{
+  const done=job('COMPLETED',{active_queue_path:'demo'});
+  assert.equal(C.primary(done),'reexport');
+  assert.deepEqual([has(done,'reexport').label,has(done,'reexport').enabled],['Xuất lại',true]);
+  assert.equal(has(done,'reexport',{remote:true}).enabled,true,'the phone may re-export (finalize is a phone POST)');
+  assert.equal(has(job('COMPLETED',{render_request:true}),'reexport').enabled,false);
+  const cleanedJob=job('COMPLETED',{source_present:false,source_cleaned:true,source_cleanup:{state:'RECYCLED'}});
+  assert.equal(C.primary(cleanedJob),'reexport');
+  assert.deepEqual([has(cleanedJob,'reexport').enabled,has(cleanedJob,'reexport').reason],[false,'Khôi phục đúng video từ Thùng rác về input trước.']);
+  assert.equal(C.primary(job('COMPLETED',{source_present:false,source_archived:true,source_archive:{state:'ARCHIVED'}})),'restore');
+  for(const state of ['READY_TO_EXPORT','SKIPPED','WAITING_REVIEW','RENDERING'])assert.equal(has(job(state,{active_queue_path:'demo'}),'reexport'),undefined,state);
+  assert.equal(C.primary(job('SKIPPED',{active_queue_path:'demo'})),'review','a skipped video keeps "Duyệt cảnh"');
+  assert.equal(C.primary(job('READY_TO_EXPORT',{source_present:false,active_queue_path:'demo'})),'review');
+});
+check('R4-U2: the cleanup hint says whether the export of the review is still in output',()=>{
+  const present=C.reexportState(job('COMPLETED',{cleanup:{eligible:true,kind:'EXPORTED',output_name:'demo-reviewed.mp4',output_bytes:1048576,exported_at:'2026-10-03T09:20:00Z'}}));
+  assert.deepEqual([present.present,present.moved,present.name,present.manifest,present.bytes],[true,false,'demo-reviewed.mp4','demo-reviewed.mp4.manifest.json',1048576]);
+  const moved=C.reexportState(job('COMPLETED',{cleanup:{eligible:false,kind:'EXPORTED',reason:C.OUTPUT_MOVED_REASON,output_name:null}}));
+  assert.deepEqual([moved.present,moved.moved,moved.reason],[false,true,C.OUTPUT_MOVED_REASON]);
+  const other=C.reexportState(job('COMPLETED',{cleanup:{eligible:false,kind:'EXPORTED',reason:'Video gốc đã thay đổi so với lúc quét'}}));
+  assert.deepEqual([other.present,other.moved,other.reason],[false,false,'Video gốc đã thay đổi so với lúc quét']);
+  // Without the backend's kind and file name an eligible flag proves nothing: finalize decides (it reuses a proven export).
+  assert.equal(C.reexportState(job('COMPLETED',{cleanup:{eligible:true}})).present,false);
+  assert.equal(C.reexportState(job('COMPLETED')).present,false);
+});
 check('Skip is only offered when backend certifies skip eligibility',()=>{
   assert.equal(has(job('READY_TO_EXPORT'),'skip'),undefined);
   assert.equal(has(job('READY_TO_EXPORT',{review_summary:{status:'READY_FOR_EDIT_PLAN',main_items:0,pending:0,decisions:{},skip_eligible:true}}),'skip').enabled,true);

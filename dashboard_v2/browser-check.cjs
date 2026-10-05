@@ -599,6 +599,58 @@ async function check(name, fn) { await fn(); passed++; results.push(name); proce
       }
     });
 
+    await check('R4-U1/R4-U2/R4-B4: "Chờ / đang xuất" rows show only ⋯; "Hoàn tất" offers "Xuất lại" with the old choices (info only while the export is in output, size choices once it left); the page behind a dialog does not scroll', async () => {
+      const MOVED = 'Không thấy bản xuất trong thư mục output (đã bị dời hoặc đổi tên?)';
+      const j105 = jobs.find(j => j.id === 105), saved = j105.cleanup;
+      jobs.push({...jobs.find(j => j.id === 114), id: 118, job_key: 'demo-video-118', source_path: 'E:\\DungChung\\BiliFlow\\input\\Đang xuất.mp4',
+        state: 'RENDERING', queue_kind: null, queue_position: null, render_progress: {state: 'RENDERING', percent: 42}});
+      const rowButtons = () => page.evaluate(() => [...document.querySelectorAll('#list-body .job-row')].map(r => ({
+        id: Number(r.dataset.job), buttons: [...r.querySelectorAll('.row-actions button')].map(b => b.textContent.trim())})));
+      const rootOverflow = () => page.evaluate(() => getComputedStyle(document.documentElement).overflowY);
+      const openTab = async (tag, tab) => {
+        await page.goto(base + '/dashboard-v2/?r4u-' + tag + '#videos'); await page.waitForSelector('#search');
+        await page.locator('[data-action="filter"][data-filter="' + tab + '"]').first().click();
+      };
+      try {
+        await openTab('export', 'export');
+        const rows = await rowButtons();
+        assert.deepEqual(rows.map(r => r.id).sort(), [114, 118], JSON.stringify(rows));
+        for (const r of rows) assert.deepEqual(r.buttons, ['⋯'], 'row ' + r.id);
+        j105.cleanup = {eligible: true, kind: 'EXPORTED', reason: null, size_bytes: 1, output_name: 'demo-105-reviewed.mp4',
+          output_bytes: 734003200, exported_at: '2026-10-03T10:40:00Z', skipped_at: null};
+        await openTab('present', 'completed');
+        const done = await rowButtons();
+        assert.deepEqual(done.find(r => r.id === 105).buttons, ['Xuất lại', '⋯']);
+        assert.deepEqual(done.find(r => r.id === 109).buttons, ['Duyệt cảnh', '⋯'], 'a skipped video keeps "Duyệt cảnh"');
+        const before = posts.length;
+        await jobButton(105, 'reexport').click();
+        await page.waitForSelector('#modal[open]');
+        const text = await page.locator('#modal .modal-body').innerText();
+        for (const part of ['Xuất lại dùng các lựa chọn cũ:', 'output\\demo-105-reviewed.mp4', 'demo-105-reviewed.mp4.manifest.json',
+          'Muốn duyệt lại và xuất với lựa chọn mới', 'Bấm ⋯ ở video này rồi bấm Duyệt cảnh']) assert.ok(text.includes(part), part);
+        assert.equal(await page.locator('#modal #confirm-action').count(), 0, 'no confirm while the export is in output');
+        assert.equal(await rootOverflow(), 'hidden', 'R4-B4: the page behind the dialog does not scroll');
+        await page.locator('#modal .modal-foot [data-action="close-modal"]').click();
+        await page.waitForFunction(() => !document.getElementById('modal').open);
+        assert.notEqual(await rootOverflow(), 'hidden');
+        assert.equal(posts.length, before, 'no POST');
+        j105.cleanup = {eligible: false, kind: 'EXPORTED', reason: MOVED, size_bytes: 1, output_name: null, output_bytes: null, exported_at: null, skipped_at: null};
+        await openTab('moved', 'completed');
+        await jobButton(105, 'reexport').click();
+        await page.waitForSelector('#modal[open] #export-mode');
+        assert.ok((await page.locator('#modal .modal-body').innerText()).includes(MOVED + '. Xuất lại tạo bản xuất mới từ các lựa chọn cũ.'));
+        assert.equal(await page.locator('#confirm-action').textContent(), 'Xuất lại');
+        const sent = posts.length;
+        await page.locator('#confirm-action').click();
+        await page.waitForFunction(() => !document.getElementById('modal').open);
+        assert.deepEqual(posts.slice(sent).filter(p => p.path.endsWith('/finalize')).map(p => [p.path, p.body]),
+          [['/api/jobs/105/review/finalize', {size_mode: 'default'}]]);
+      } finally {
+        j105.cleanup = saved;
+        jobs.splice(jobs.findIndex(j => j.id === 118), 1);
+      }
+    });
+
     await check('No page error and no request outside the origin', async () => {
       assert.deepEqual(errors, []);
       assert.deepEqual(external, []);

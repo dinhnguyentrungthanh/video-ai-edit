@@ -172,6 +172,9 @@ dialog { background: #fff; border-color: var(--line); box-shadow: 0 24px 85px #2
 /* R4-B3: no backdrop-filter anywhere in V2 (here, the top bar, the review cards). On the user's Windows PC Chrome
  * made an open dialog and its backdrop blink on hover and scroll; a tint is enough. verify-review checks it. */
 dialog::backdrop { background: #20345540; }
+/* R4-B4: while a dialog is open only the dialog scrolls. Otherwise, in a narrow window the full-width review dialog
+ * lies under the page's own scrollbar: dragging it scrolled the hidden page, not the cards (the wheel still worked). */
+html:has(dialog[open]) { overflow: hidden; }
 .modal-head h2 { font-size: 21px; }
 .modal-body { font-size: 14px; }
 .modal-body p { color: var(--muted); }
