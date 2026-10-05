@@ -8,7 +8,7 @@
   - R0 view-only dialog `b853963` (M4), `0e43fa1`; R1 media `1191690` (R1-B1 `b8b458f`); R2 decisions `539e6a6`; R2-B1 and R2-B2 `108f27b`; R3 bulk actions and export `bb763ad`. The local machine checked each batch (section 8.2); the last check, on `03666a6`, passed.
   - The user tried R2 (section 8.3, steps 1–4) on a real job: pass (U-R2).
   - R4 (2026-10-05): phone and laptop layout (44 px touch targets, 12 px text, fading chip row, the tools row wraps, a full-screen dialog when held sideways), a check through the real phone listener, the "Duyệt cảnh" switch, and R3-N1 (one Esc closes only the dialog on top).
-  - The local check of R4 (`4c7ac3c`) passed except R4-B1 (a box label cut by the card image), fixed in `fcfe616`. Next: the local recheck of R4-B1, then the user's acceptance test U-R4 (section 8.3, all 8 steps).
+  - The local check of R4 (`4c7ac3c`) passed except R4-B1 (a box label cut by the card image), fixed in `fcfe616`. Its recheck (`ce9f865`) found R4-B2 (two labels over each other on a zoomed card), fixed on the local machine in `4046090` and measured again: pass. Next: the user's acceptance test U-R4 (section 8.3, all 8 steps).
 - Stronger logo cover in exports (`0334f8c`, made on the local machine at the user's request):
   - A new export covers a reviewed regional logo BLUR with FFmpeg `delogo` first, then a blur that grows with the region (`delogo_blur_v1`). Full-frame blurs and edit plans without a method render as before.
   - The export identity is unchanged, so an export made before still proves the current decisions. "Dọn video gốc", "Lưu trữ" and "Xuất video" treat it as before.

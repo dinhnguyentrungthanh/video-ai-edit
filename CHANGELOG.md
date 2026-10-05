@@ -16,6 +16,7 @@ Status: on branch `feat/dashboard-v2`, made in a Claude cloud session (batch R4 
   - an R3-N1 check in `browser-check-review-bulk.cjs`; the R4.3 checks in `browser-check.cjs` and `browser-check-review.cjs`.
 - Not changed: `control_center.py`, `DASHBOARD_V2_FILES`, the contract endpoints, `PHONE_ALLOWED_POSTS`, the CSP, the export code (`blur_filter.py`, `final_renderer.py`, `review_workflow.py`, `export_identity.py`); no new route or library.
 - R4-B1, found by the local check (`4c7ac3c`), fixed in `fcfe616`: the "áp dụng …" label of a borrowed red box was cut by the image when the box sat in the right half (on a phone only "áp dụng 00:1…" showed). Box labels, the yellow AI ones too, now hang from the side of the box with more room and wrap within the image. The layout check also reports text cut by an `overflow: hidden` box.
+- R4-B2, found by the local recheck of R4-B1 (`ce9f865`), fixed on the local machine at the user's request in `4046090`: a zoomed card that borrows a logo card's red box showed two labels on that box, "đã duyệt làm mờ ở thẻ riêng" over "áp dụng …". The approved red box of the same logo card now keeps its frame without a label (the zoom legend still says it). The layout check also reports box labels that cover each other (`overlap`).
 
 # Unreleased — stronger logo cover in exports (delogo, then blur) — 2026-10-04
 
