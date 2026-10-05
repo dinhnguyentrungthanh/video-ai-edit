@@ -175,6 +175,12 @@ class StateGroupTests(unittest.TestCase):
         self.assertIn("value:'Thiếu video gốc',detail:SOURCE_MISSING_MESSAGE", html)
         self.assertIn("'Thiếu video gốc',C.SOURCE_MISSING_MESSAGE", (ROOT / "dashboard_v2" / "app.js").read_text(encoding="utf-8"))
 
+    def test_output_moved_reason_is_the_backend_text(self) -> None:
+        # R4-U2: "Xuất lại" lets the export run when the cleanup hint says the export left output/.
+        from biliflow.source_cleanup import REASON_OUTPUT_MOVED
+        out = _node("console.log(require('./dashboard_v2/contracts.js').OUTPUT_MOVED_REASON)").strip()
+        self.assertEqual(out, REASON_OUTPUT_MOVED)
+
     def test_pc_only_reason_and_operations_match_the_phone_listener(self) -> None:
         from biliflow import phone_access
         out = json.loads(_node("const C=require('./dashboard_v2/contracts.js');"

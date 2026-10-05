@@ -99,6 +99,8 @@
       add('finalize','Xuất video',sourceOK && !inFlight(j) && j.review_summary?.status === 'READY_FOR_EDIT_PLAN' && reviewStats(j).remaining===0,'Cần quyết định cuối cùng cho mọi cảnh, có video gốc và không có lệnh xuất đang chờ/chạy.');
       if (j.review_summary?.skip_eligible) add('skip','Bỏ qua (không xuất)',sourceOK && !inFlight(j),sourceReason);
     }
+    /* R4-U2: "Xuất lại" sends finalize with the decisions of the last review (the backend reuses an export its manifest proves). */
+    if (j.state === 'COMPLETED') add('reexport','Xuất lại',sourceOK && !inFlight(j),sourceOK?'Lệnh xuất đang chờ/chạy.':sourceReason);
     if (j.state === 'SKIPPED') add('unskip','Mở lại để xuất',sourceOK,sourceReason);
     if (!['COMPLETED','SKIPPED','CANCELLED'].includes(j.state)) add('cancel','Hủy xử lý',true);
     if (j.state === 'CANCELLED') add(hidden(j)?'unhide':'hide',hidden(j)?'Hiện lại':'Ẩn khỏi danh sách',true);
@@ -112,7 +114,9 @@
     return actions;
   }
   function primary(j) {
-    if (locked(j)) return archived(j)?'restore':'review';
+    if (archived(j)) return 'restore';
+    if (j.state === 'COMPLETED') return 'reexport';
+    if (locked(j)) return 'review';
     if (['DISCOVERED','NEEDS_METADATA'].includes(j.state)) return 'start';
     if (['PAUSED','FAILED','INTERRUPTED_RECOVERABLE'].includes(j.state)) return 'resume';
     if (j.state === 'READY_TO_EXPORT') return 'finalize';
@@ -136,6 +140,20 @@
     return `tối đa ${Number(selection.max_output_gb).toLocaleString('vi-VN')} GB`;
   }
   function exportConfirmText(selection) { return `Khóa các lựa chọn hiện tại và bắt đầu xuất video hoàn chỉnh (${exportDescription(selection)})?`; }
+  /* Same text as source_cleanup.REASON_OUTPUT_MOVED (checked by tests/test_dashboard_v2_contract.py). */
+  const OUTPUT_MOVED_REASON = 'Không thấy bản xuất trong thư mục output (đã bị dời hoặc đổi tên?)';
+  /* R4-U2: what the cleanup hint of a COMPLETED video says about its export. present: the export of this review is in
+   * output and its manifest proves it, so finalize reuses it (no render); otherwise finalize renders unless the
+   * backend still finds a proven export. */
+  function reexportState(j) {
+    const c = j && j.cleanup;
+    if (c && c.kind === 'EXPORTED' && c.eligible === true && c.output_name) {
+      const name = String(c.output_name);
+      return {present:true,moved:false,name,manifest:name+'.manifest.json',bytes:c.output_bytes,exportedAt:c.exported_at||'',reason:''};
+    }
+    const reason = String(c && c.reason || '');
+    return {present:false,moved:reason===OUTPUT_MOVED_REASON,name:'',manifest:'',bytes:null,exportedAt:'',reason};
+  }
   function exportPolicyChoice(policy) {
     const value=policy||{}, mode=EXPORT_SIZE_OPTIONS.some(o => o[0]===value.mode)?value.mode:'default', gb=Number(value.maximum_output_gb);
     return {mode,gb:mode==='custom'&&gb>0?gb:Number(EXPORT_CUSTOM_GB.value)};
@@ -162,5 +180,5 @@
     if (pairs.length) path += '?'+pairs.join('&');
     return {operation:id,method:ep[0],path,body:body||{}};
   }
-  return {pcOnlyOps,PC_ONLY_REASON,SOURCE_MISSING_MESSAGE,sourceLine,formatStamp,formatBytes,detectors,tabs,labels,scanning,pausable,rerunnable,endpoints,cleaned,archived,hidden,locked,inFlight,eligible,reviewStats,tab,phase,overviewLabels,overviewMatch,operations,primary,validateScan,exportSelection,EXPORT_GATE_MESSAGE,EXPORT_SIZE_OPTIONS,EXPORT_CUSTOM_GB,exportDescription,exportConfirmText,exportPolicyChoice,resourceItems,request};
+  return {pcOnlyOps,PC_ONLY_REASON,SOURCE_MISSING_MESSAGE,sourceLine,formatStamp,formatBytes,detectors,tabs,labels,scanning,pausable,rerunnable,endpoints,cleaned,archived,hidden,locked,inFlight,eligible,reviewStats,tab,phase,overviewLabels,overviewMatch,operations,primary,validateScan,exportSelection,EXPORT_GATE_MESSAGE,EXPORT_SIZE_OPTIONS,EXPORT_CUSTOM_GB,exportDescription,exportConfirmText,exportPolicyChoice,OUTPUT_MOVED_REASON,reexportState,resourceItems,request};
 });
