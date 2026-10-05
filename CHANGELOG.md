@@ -1,3 +1,28 @@
+# Unreleased — real video download ("Tải video") — 2026-10-05
+
+Status: on branch `feat/video-download` (from `feat/dashboard-v2` a7d8f18, worktree `temp\wt-video-download`), made on the local machine at the user's request, steps D0–D5 of `docs/VIDEO_DOWNLOAD_PLAN.md`. Not pushed, not merged. The real Control Center runs it only after the main folder moves to this branch and the Control Center restarts, which waits for the user's consent and a moment with no job running. The user's test on their own machine is still to come.
+
+- The Dashboard V2 page `#downloads` downloads for real, on the PC and from the phone:
+  - Paste up to 20 links from any public site and tick "Tôi có quyền tải và chỉnh sửa các video này". No source to pick (the combobox and its allowlist were dropped after D4 at the user's request, D4b).
+  - yt-dlp first probes each page without downloading anything. A page with no video it can read shows "Chưa hỗ trợ" with the reason. DRM, a login, a live stream, a playlist or a channel are refused with their own message. No cookies, accounts, browser impersonation or site-specific code.
+  - A site with its own yt-dlp reader (YouTube, Bilibili, …) gives only the video in the link, at any length. A page read by the generic reader drops videos under 10 minutes (ads); the film wins when it is at least twice as long as the next video, otherwise the user chooses.
+  - Best quality up to 1080p, H.264 + AAC first. 1–3 downloads at once; stop, resume, cancel, retry, remove, rename until the file moves.
+  - A finished file is checked with ffprobe/ffmpeg and moved into `input\` under a unique name (never overwriting). The watcher picks it up like a copied file; nothing scans or exports by itself.
+- Disk and cleanup:
+  - A download waits while the drive would fall under the existing reserve (20 % or 100 GB). It stops (TOO_LARGE) when it writes more than its share of the free space, whatever size the page claimed.
+  - Its own temp folder goes when it completes or is cancelled. Stopped or failed ones expire after 7 days; finished rows go after 30 days; yt-dlp and Deno caches are capped at 1 GB / 30 days in `cache\`.
+  - The "Dung lượng" panel shows the folders, what "Dọn video gốc" could free and the Recycle Bin of drive E, read-only. Source cleanup and archive stay PC-only user actions.
+- Tools (D0, each download approved by the user): yt-dlp 2026.08.19, yt-dlp-ejs 0.8.0 and six network packages in the main `.venv`. Deno 2.9.7 was copied from the existing WinGet install into `tools\deno`. Versions, licenses and the forbidden `mutagen` / `curl_cffi` are in `config/download_tools.json` and `requirements.lock.txt`; check with `python -m biliflow.download_tools audit`. Everything stays on drive E.
+- New modules: `download_links`, `download_store` (`state\downloads.sqlite3`), `download_probe`, `download_runner`, `download_files`, `download_worker`, `download_upkeep`, `download_api`, `storage_summary`. Routes `/api/downloads…` and `/api/storage-summary` in the Control Center; the download POSTs are added to `PHONE_ALLOWED_POSTS`.
+  - Local paths are shown as `<BiliFlow>`. Links and addresses are removed from yt-dlp's error lines.
+  - Names that only exist inside a network and internal addresses are refused.
+- Not changed: scan, review and export code, detector thresholds, and the files behind the scan cache key (the user chose "Giữ cache quét"): `pyproject.toml`, `config/license_policy.json`, `scripts/env.ps1`, `cli.py`. Source cleanup, archive and the Recycle Bin rules of `AGENTS.md` are unchanged; `AGENTS.md` now says agents never start a download on the user's real Control Center.
+- Accepted trade-off (the user's choice "Mọi trang, thăm dò"): without an allowlist, a strange page can send yt-dlp to an address inside the local network through a redirect or an embedded link. These are read requests only, and the error text no longer shows those addresses.
+- Verified:
+  - Unit and route tests with a fake yt-dlp, no network. The Node gates `verify-download.cjs` (21) and `verify.cjs` (30). Full suite on D4b (`6f4fbee`): 1488 tests, only the 28 known errors of `test_job_pipeline` / `test_job_ocr_option`, which need `input/*.mp4` that the worktree does not have.
+  - D4, on a test Control Center (temporary root under `temp\`, port 8797): one public YouTube video the user gave → COMPLETED, 1080p H.264 + AAC, 1.28 GB, moved into the temporary `input\`, picked up as NEEDS_METADATA. The user's reference movie page, probed only → "Trang này chưa được hỗ trợ". Deno solves the YouTube JS challenge, also after its cache was deleted. Nothing new on drive C. The temporary root was deleted afterwards at the user's request.
+  - Browser (the app's browser pane, fake server, never the real Control Center): 375 / 390 / 1440 px, light and dark, PC and phone mode.
+
 # Unreleased — Dashboard V2 review dialog R4: "Duyệt cảnh" opens the dialog, phone and laptop layout, phone listener check — 2026-10-05
 
 Status: on branch `feat/dashboard-v2`, made in a Claude cloud session (batch R4 of `docs/DASHBOARD_V2_REVIEW_PLAN.md`, section 7.5). It waits for the local check (section 8.2), then the user's acceptance test (U-R4, section 8.3, all 8 steps). Not merged into `main`. The review dialog itself came in batches R0–R3 (view, media, decisions, bulk actions and export); see the plan.
