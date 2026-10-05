@@ -169,7 +169,9 @@ h3 { font-size: 16px; }
 .memory-card p,.log-list { font-size: 13px; }
 .settings-grid .muted { font-size: 13px !important; }
 dialog { background: #fff; border-color: var(--line); box-shadow: 0 24px 85px #20375733; }
-dialog::backdrop { background: #20345540; backdrop-filter: blur(2px); }
+/* R4-B3: no backdrop-filter anywhere in V2 (here, the top bar, the review cards). On the user's Windows PC Chrome
+ * made an open dialog and its backdrop blink on hover and scroll; a tint is enough. verify-review checks it. */
+dialog::backdrop { background: #20345540; }
 .modal-head h2 { font-size: 21px; }
 .modal-body { font-size: 14px; }
 .modal-body p { color: var(--muted); }

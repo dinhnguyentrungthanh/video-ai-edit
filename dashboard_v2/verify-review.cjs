@@ -653,6 +653,14 @@ check('R4-B2: a zoomed card borrowing a logo card\'s red box has one label on th
   assert.equal((html.match(/class="rv-aibox(?: (?!approved)[^"]*)?"/g) || []).length, 2, 'both yellow boxes are drawn');
   assert.ok(view.legend.includes('Khung đỏ: vùng') && view.legend.includes('đã được duyệt làm mờ ở thẻ riêng'), 'the legend still says the red box is approved on its own card');
 });
+check('R4-B3: no backdrop-filter in V2 (dialog backdrops, the top bar and the "Làm mờ" region made Chrome blink on the user\'s PC); no size container on card images', () => {
+  const files = fs.readdirSync(__dirname).filter(f => /\.(css|js|html)$/.test(f));
+  const found = files.flatMap(f => (fs.readFileSync(path.join(__dirname, f), 'utf8').match(/backdrop-?filter\s*[:=]\s*['"]?(?!none\b)[^;'"}\s]+/gi) || []).map(m => f + ': ' + m));
+  assert.deepEqual(found, [], 'backdrop-filter found');
+  const css = fs.readFileSync(path.join(__dirname, 'review.css'), 'utf8');
+  assert.ok(!/container-type\s*:\s*(inline-size|size)/.test(css) && !/\d+cqw/.test(css.replace(/\/\*[\s\S]*?\*\//g, '')), 'no container query in review.css');
+  assert.match(css, /\.rv-region\.blurred \{ background: #ffffffb3; \}/, 'the "Làm mờ" region is a white veil');
+});
 
 /* R3: bulk and export against the classic bulkKeep / bulkAccept (runBlocking, postJson recorded) and EXPORT_DIALOG_JS. */
 const BULK_FUNCS = ['isSafety', 'isLogoItem', 'isAdItem', 'visible', 'bulkFilters', 'decisionsLocked', 'refuseWhileExporting', 'bulkKeep', 'bulkAccept', 'formatStamp'];

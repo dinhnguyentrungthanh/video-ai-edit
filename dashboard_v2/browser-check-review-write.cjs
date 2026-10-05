@@ -203,7 +203,8 @@ async function until(fn, label, timeout = 8000) {
         await p.keyboard.press('2');
         await until(() => posts.length === start + 3, 'key 2');
         assert.deepEqual(posts[start + 2].body, {id: 'text-101-0016', decision: 'BLUR', full_frame: false, note: null});
-        assert.equal(await card(p, 'text-101-0016').locator('.rv-region').evaluate(r => r.classList.contains('blurred') && /blur/.test(getComputedStyle(r).backdropFilter)), true, 'region blurred');
+        // R4-B3: a white veil, no backdrop-filter (it made Chrome blink on the user's PC).
+        assert.equal(await card(p, 'text-101-0016').locator('.rv-region').evaluate(r => { const cs = getComputedStyle(r); return r.classList.contains('blurred') && cs.backdropFilter === 'none' && /^rgba\(255, 255, 255, 0\.[67]/.test(cs.backgroundColor); }), true, 'region veiled');
         // → then ← move the selection (stop at the ends); Z undoes the last choice (BLUR → back to undecided = clear).
         assert.equal((await state(p)).focus, 'text-101-0023');
         await p.keyboard.press('ArrowLeft'); assert.equal((await state(p)).focus, 'text-101-0016');

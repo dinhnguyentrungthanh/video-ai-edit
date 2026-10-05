@@ -4,9 +4,6 @@
  * R4.1 (P17): touch targets of 44 px on a phone and on any touch screen, text ≥ 12 px, a fading edge on the chip row. */
 #review-dialog { width: min(1280px, 96vw); max-width: none; height: calc(100dvh - 32px); max-height: none; padding: 0; overflow: hidden; border-radius: var(--radius); }
 #review-dialog[open] { display: flex; flex-direction: column; }
-/* R4-B3: no backdrop blur behind this large dialog (theme.css blurs every dialog's backdrop): with Chrome on some
- * Windows GPUs the whole dialog flickered on hover and scroll. The tint stays. */
-#review-dialog::backdrop { -webkit-backdrop-filter: none; backdrop-filter: none; }
 #review-root { display: flex; flex-direction: column; flex: 1; min-height: 0; }
 .rv-head { flex: none; padding: 18px 22px 12px; border-bottom: 1px solid var(--line); display: grid; gap: 10px; }
 .rv-title-row { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; }
@@ -124,15 +121,16 @@
 .rv-region-block small, .rv-memory small { color: var(--muted); line-height: 1.45; }
 .rv-region-block .scene-actions button, .rv-memory > button { justify-self: start; text-align: left; }
 .tech-body .rv-region-block { margin: 4px 0; }
-.rv-region.blurred { background: #ff304f12; -webkit-backdrop-filter: blur(9px); backdrop-filter: blur(9px); }
+/* "Làm mờ" on the region: a white veil over it (R4-B3: was a backdrop blur, which made the dialog blink on the user's
+ * PC). Illustration only: the export hides the logo with delogo, then a blur. */
+.rv-region.blurred { background: #ffffffb3; }
 /* S9: a red box borrowed from another logo card: dashed, with the time it applies. */
 .rv-region.borrowed { border-style: dashed; }
 .rv-region em { position: absolute; left: -3px; top: calc(100% + 2px); padding: 1px 5px; border-radius: 4px; font: 600 11px system-ui, sans-serif; font-style: normal; color: #fff; background: #c4243d; }
 /* R4-B1: a box label never leaves the image (review-cards.js labelPlace): right-aligned for a box in the right half,
  * above when there is more room above, inside the box when neither side has room; it wraps within the image width
  * left on that side: --room box widths (100% + 6px: the box's border box, the label's containing block being its
- * padding box). R4-B3: no size container on every card image (it was 100cqw), one candidate for the flicker seen on
- * hover and scroll. */
+ * padding box). R4-B3: no size container on every card image (it was 100cqw). */
 .rv-region em, .rv-aibox em { box-sizing: border-box; width: max-content; max-width: calc(var(--room, 1) * (100% + 6px) - 4px); overflow-wrap: anywhere; }
 .rv-region.lr em { left: auto; right: -3px; }
 .rv-aibox.lr em { left: auto; right: 0; }
