@@ -27,15 +27,8 @@ from biliflow.download_files import (
     verify_video,
 )
 from biliflow.download_probe import ProbeEntry, choose
-from biliflow.download_runner import ProcessControl, YtDlpRunner
-from biliflow.download_sources import (
-    DownloadBatchError,
-    DownloadSource,
-    Resolver,
-    default_resolver,
-    load_sources,
-    validate_batch,
-)
+from biliflow.download_runner import ProcessControl, SizeGuard, YtDlpRunner
+from biliflow.download_links import DownloadBatchError, Resolver, default_resolver, validate_batch
 from biliflow.download_store import FINAL_STATES, SLOT_STATES, STATES, DownloadStore
 from biliflow.download_upkeep import DownloadUpkeep
 from biliflow.storage import GIB, storage_status
@@ -327,25 +320,20 @@ class DownloadWorker(DownloadUpkeep):
                 self._event(moved, "INTERRUPTED", "Control Center tắt giữa chừng; bấm Tiếp tục để tải tiếp.")
         return None
 
-    def _still_allowed(self, task: dict[str, Any], state: str) -> DownloadSource | None:
-        """Check the link again right before yt-dlp opens it: the source may have been removed
-        from the list, or its host may now resolve to an internal address."""
-        source = load_sources(self.root).get(task["source_id"])
-        if source is None:
-            self._fail(task["id"], {state}, "SOURCE_REMOVED", "Nguồn của lượt này không còn trong danh sách cho phép.")
-            return None
+    def _still_allowed(self, task: dict[str, Any], state: str) -> bool:
+        """Check the link again right before yt-dlp opens it: its host may now resolve to an
+        internal address."""
         try:
-            validate_batch(source, [task["url"]], resolver=self.resolver)
+            validate_batch([task["url"]], resolver=self.resolver)
         except DownloadBatchError as error:
             item = error.errors[0] if error.errors else {}
             self._fail(task["id"], {state}, item.get("code") or "LINK_REJECTED", item.get("message") or str(error))
-            return None
-        return source
+            return False
+        return True
 
     def _probe(self, task: dict[str, Any], control: ProcessControl) -> dict[str, Any] | None:
         task_id = task["id"]
-        source = self._still_allowed(task, "PROBING")
-        if source is None:
+        if not self._still_allowed(task, "PROBING"):
             return None
         task_dir = self._task_dir(task_id)
         self.store.update_fields(task_id, temp_dir=str(task_dir))
@@ -356,8 +344,7 @@ class DownloadWorker(DownloadUpkeep):
         if not outcome.ok:
             return self._fail(task_id, {"PROBING"}, outcome.code, outcome.message)
         info = outcome.info or {}
-        choice = choose(info, min_duration_seconds=source.min_duration_seconds,
-                        allow_multi_entry=source.allow_multi_entry)
+        choice = choose(info)
         entries = [entry.as_dict() for entry in choice.entries]
         page = {"extractor": info.get("extractor_key") or info.get("extractor"),
                 "page_title": str(info.get("title") or "")[:300], "entry_count": max(1, len(entries))}
@@ -404,6 +391,8 @@ class DownloadWorker(DownloadUpkeep):
                 usable = free - others
                 held = f" ({_gb(others)} GB dành cho lượt đang tải)" if others else ""
                 estimate = task["estimated_bytes"]
+                # What this task may write; the page's estimate is never trusted as a limit (SizeGuard).
+                budget = int((usable - reserve) / SPACE_FACTOR)
                 limit: int | None = None
                 if estimate:
                     needed = int(estimate * SPACE_FACTOR) + reserve
@@ -411,7 +400,7 @@ class DownloadWorker(DownloadUpkeep):
                     message = (f"Chờ chỗ trống: cần {_gb(needed)} GB (gồm {_gb(reserve)} GB giữ lại), "
                                f"đang còn {_gb(free)} GB{held}.")
                 else:
-                    limit = int((usable - reserve) / SPACE_FACTOR)
+                    limit = budget
                     ready = limit >= MIN_UNKNOWN_BUDGET_BYTES
                     message = (f"Chờ chỗ trống: chưa biết dung lượng video, còn {_gb(free)} GB{held}, "
                                f"giữ lại {_gb(reserve)} GB.")
@@ -420,6 +409,7 @@ class DownloadWorker(DownloadUpkeep):
                                                   error_message=None, speed=None, eta=None)
                     if moved is not None:
                         moved["max_filesize"] = limit
+                        moved["max_bytes"] = budget
                     return moved
             if not announced:
                 self.store.update_fields(task["id"], error_message=message)
@@ -430,7 +420,7 @@ class DownloadWorker(DownloadUpkeep):
     def _download(self, task: dict[str, Any], control: ProcessControl) -> dict[str, Any] | None:
         task_id, attempt = task["id"], task["attempt"]
         probe = task["probe"] or {}
-        if self._still_allowed(task, "DOWNLOADING") is None:
+        if not self._still_allowed(task, "DOWNLOADING"):
             return None
         self._event(task, "DOWNLOADING", "Bắt đầu tải.")
         outcome = self.runner.download(
@@ -442,6 +432,7 @@ class DownloadWorker(DownloadUpkeep):
             on_start=self._pid_recorder(task_id),
             playlist_item=probe.get("playlist_item"), max_filesize=task.get("max_filesize"),
             expected_files=int(probe.get("expected_files") or 1), estimated_bytes=task["estimated_bytes"],
+            guard=self._size_guard(task),
         )
         self.store.update_fields(task_id, pid=None, pid_created=None)
         if control.requested:
@@ -450,6 +441,12 @@ class DownloadWorker(DownloadUpkeep):
             return self._fail(task_id, {"DOWNLOADING"}, outcome.code, outcome.message)
         return self.store.transition(task_id, {"DOWNLOADING"}, "VERIFYING",
                                      temp_file=str(outcome.final_path), speed=None, eta=None)
+
+    def _size_guard(self, task: dict[str, Any]) -> SizeGuard | None:
+        budget = task.get("max_bytes")
+        if not budget or budget <= 0:
+            return None
+        return SizeGuard(self._task_dir(task["id"]), budget, int(budget * SPACE_FACTOR))
 
     def _verify(self, task: dict[str, Any], control: ProcessControl) -> dict[str, Any] | None:
         path = Path(task["temp_file"])
@@ -561,13 +558,10 @@ class DownloadWorker(DownloadUpkeep):
             raise DownloadActionError("Không thấy lượt tải.", 404)
         return task
 
-    def add(self, source_id: str, urls: list[str], *, rights_confirmed: bool) -> list[dict[str, Any]]:
+    def add(self, urls: list[str], *, rights_confirmed: bool) -> list[dict[str, Any]]:
         if rights_confirmed is not True:
             raise DownloadActionError("Cần tick xác nhận có quyền tải và chỉnh sửa video.", 400)
-        source = load_sources(self.root).get(str(source_id))
-        if source is None:
-            raise DownloadActionError("Nguồn không có trong danh sách cho phép.", 400)
-        tasks = self.store.add_tasks(source.id, validate_batch(source, urls, resolver=self.resolver))
+        tasks = self.store.add_tasks(validate_batch(urls, resolver=self.resolver))
         for task in tasks:
             self._event(task, "QUEUED", "Đã thêm vào hàng đợi.")
         self._wake.set()

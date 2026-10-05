@@ -1,38 +1,30 @@
-"""Allowlisted download sources and the backend check of a batch of links.
+"""The backend check of a batch of links.
 
-The repository file lists YouTube and Bilibili only. Sites the user adds live in
-``config/download_sources.local.json``, which git ignores so real domains never
-reach the public repository. The allowlist is the main guard: yt-dlp follows
-redirects on its own, so the DNS check below only covers the first host.
+Any public http(s) page is accepted; the yt-dlp probe then decides whether the
+page holds a video it can read (``download_probe``). A link is refused before
+that when it is malformed, carries an account, a port or an IP address, or its
+host resolves to an internal address. yt-dlp follows redirects on its own, so
+the DNS check only covers the first host.
 """
 from __future__ import annotations
 
 import ipaddress
-import json
 import re
 import socket
-from dataclasses import dataclass
-from pathlib import Path
 from typing import Any, Callable, Iterable
 from urllib.parse import urlsplit
 
-REPO_SOURCES = Path("config") / "download_sources.json"
-LOCAL_SOURCES = Path("config") / "download_sources.local.json"
 MAX_BATCH_LINKS = 20
 MAX_URL_LENGTH = 2048
-MAX_MIN_DURATION_SECONDS = 6 * 3600
-_ID_PATTERN = re.compile(r"[a-z0-9][a-z0-9_-]{0,31}")
 _BAD_URL_CHARACTERS = re.compile(r"[\x00-\x20\x7f]")
 _DEFAULT_PORTS = {"http": 80, "https": 443}
 # One DNS label after IDNA. Nothing such as a backslash or "%" that another URL
 # parser (urllib3, requests) would read as the end of the host.
 _HOST_LABEL = re.compile(r"[a-z0-9_](?:[a-z0-9_-]{0,61}[a-z0-9_])?")
+# Names that only exist inside a network; refused before DNS (a proxy would resolve them itself).
+LOCAL_SUFFIXES = ("localhost", "local", "internal", "lan", "home.arpa", "localdomain")
 
 Resolver = Callable[[str, int], Iterable[str]]
-
-
-class DownloadSourceError(ValueError):
-    """The source configuration is invalid."""
 
 
 class _LinkError(Exception):
@@ -52,33 +44,6 @@ class DownloadBatchError(ValueError):
         self.errors = errors
 
 
-@dataclass(frozen=True)
-class DownloadSource:
-    id: str
-    label: str
-    domains: tuple[str, ...]
-    min_duration_seconds: float
-    allow_multi_entry: bool
-    notes: str
-    local: bool
-
-    def as_dict(self) -> dict[str, Any]:
-        return {
-            "id": self.id, "label": self.label, "domains": list(self.domains),
-            "min_duration_seconds": self.min_duration_seconds,
-            "allow_multi_entry": self.allow_multi_entry, "notes": self.notes, "local": self.local,
-        }
-
-
-@dataclass(frozen=True)
-class SourceCatalog:
-    sources: tuple[DownloadSource, ...]
-    warnings: tuple[str, ...]
-
-    def get(self, source_id: str) -> DownloadSource | None:
-        return next((item for item in self.sources if item.id == source_id), None)
-
-
 def normalize_host(host: str) -> str:
     """Lower-case IDNA form without a trailing dot; raises ValueError when invalid."""
     cleaned = host.strip().rstrip(".").lower()
@@ -90,87 +55,12 @@ def normalize_host(host: str) -> str:
         raise ValueError(f"invalid host {host!r}") from error
 
 
-def host_matches(host: str, domains: Iterable[str]) -> bool:
-    return any(host == domain or host.endswith("." + domain) for domain in domains)
-
-
 def _is_ip_literal(host: str) -> bool:
     try:
         ipaddress.ip_address(host.split("%", 1)[0])
     except ValueError:
         return False
     return True
-
-
-def _normalize_domain(value: Any) -> str:
-    if not isinstance(value, str) or not value.strip():
-        raise DownloadSourceError("Tên miền phải là chuỗi không rỗng.")
-    if any(mark in value for mark in ("/", ":", "@", "*", " ")):
-        raise DownloadSourceError(f"Tên miền không hợp lệ: {value!r} (chỉ ghi tên miền, không ghi link).")
-    try:
-        domain = normalize_host(value)
-    except ValueError as error:
-        raise DownloadSourceError(f"Tên miền không hợp lệ: {value!r}.") from error
-    if "." not in domain or _is_ip_literal(domain):
-        raise DownloadSourceError(f"Tên miền không hợp lệ: {value!r}.")
-    return domain
-
-
-def _parse_source(raw: Any, *, local: bool) -> DownloadSource:
-    if not isinstance(raw, dict):
-        raise DownloadSourceError("Mỗi nguồn phải là một object.")
-    source_id = raw.get("id")
-    if not isinstance(source_id, str) or not _ID_PATTERN.fullmatch(source_id):
-        raise DownloadSourceError(f"id nguồn không hợp lệ: {source_id!r}.")
-    label = raw.get("label")
-    if not isinstance(label, str) or not label.strip() or len(label) > 60:
-        raise DownloadSourceError(f"Nguồn {source_id}: label phải có 1–60 ký tự.")
-    domains = raw.get("domains")
-    if not isinstance(domains, list) or not domains:
-        raise DownloadSourceError(f"Nguồn {source_id}: cần ít nhất một tên miền.")
-    minimum = raw.get("min_duration_seconds", 0)
-    if (isinstance(minimum, bool) or not isinstance(minimum, (int, float))
-            or not 0 <= minimum <= MAX_MIN_DURATION_SECONDS):
-        raise DownloadSourceError(f"Nguồn {source_id}: min_duration_seconds không hợp lệ.")
-    multi = raw.get("allow_multi_entry", False)
-    notes = raw.get("notes", "")
-    if not isinstance(multi, bool) or not isinstance(notes, str) or len(notes) > 500:
-        raise DownloadSourceError(f"Nguồn {source_id}: allow_multi_entry hoặc notes không hợp lệ.")
-    normalized = tuple(dict.fromkeys(_normalize_domain(item) for item in domains))
-    return DownloadSource(source_id, label.strip(), normalized, float(minimum), multi, notes, local)
-
-
-def _parse_file(path: Path, *, local: bool) -> list[DownloadSource]:
-    try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, ValueError) as error:
-        raise DownloadSourceError(f"Không đọc được {path.name}: {error}") from error
-    items = payload.get("sources") if isinstance(payload, dict) else None
-    if not isinstance(items, list):
-        raise DownloadSourceError(f"{path.name} thiếu danh sách sources.")
-    sources = [_parse_source(item, local=local) for item in items]
-    ids = [item.id for item in sources]
-    if len(set(ids)) != len(ids):
-        raise DownloadSourceError(f"{path.name} có id nguồn bị trùng.")
-    return sources
-
-
-def load_sources(project_root: Path) -> SourceCatalog:
-    """Read the repository sources (must be valid) and the optional local ones."""
-    sources = _parse_file(project_root / REPO_SOURCES, local=False)
-    warnings: list[str] = []
-    local_path = project_root / LOCAL_SOURCES
-    if local_path.is_file():
-        try:
-            local = _parse_file(local_path, local=True)
-            known = {item.id for item in sources}
-            clash = sorted(known & {item.id for item in local})
-            if clash:
-                raise DownloadSourceError(f"{local_path.name} trùng id với nguồn có sẵn: {', '.join(clash)}.")
-            sources.extend(local)
-        except DownloadSourceError as error:
-            warnings.append(f"Bỏ qua nguồn tự thêm: {error}")
-    return SourceCatalog(tuple(sources), tuple(warnings))
 
 
 def default_resolver(host: str, port: int) -> list[str]:
@@ -185,7 +75,7 @@ def _is_internal(address: str) -> bool:
     return not ip.is_global or ip.is_multicast
 
 
-def _check_url(raw: str, source: DownloadSource) -> tuple[str, str, int]:
+def _check_url(raw: str) -> tuple[str, str, int]:
     """Return (normalized url, host, port) or raise _LinkError."""
     if len(raw) > MAX_URL_LENGTH:
         raise _LinkError("URL_TOO_LONG", f"Link dài quá {MAX_URL_LENGTH} ký tự.")
@@ -218,8 +108,12 @@ def _check_url(raw: str, source: DownloadSource) -> tuple[str, str, int]:
         raise _LinkError("NO_HOST", "Tên miền trong link không hợp lệ.") from None
     if not all(_HOST_LABEL.fullmatch(label) for label in host.split(".")):
         raise _LinkError("NO_HOST", "Tên miền trong link có ký tự không hợp lệ.")
-    if not host_matches(host, source.domains):
-        raise _LinkError("HOST_NOT_ALLOWED", f"Tên miền {host} không thuộc nguồn {source.label}.")
+    if _is_ip_literal(host):  # "１.１.１.１" or "1.2.3.4." only become an address after IDNA
+        raise _LinkError("IP_LITERAL", "Link phải dùng tên miền, không dùng địa chỉ IP.")
+    if "." not in host:
+        raise _LinkError("NO_HOST", "Link phải có tên miền đầy đủ, ví dụ video.example.")
+    if any(host == suffix or host.endswith("." + suffix) for suffix in LOCAL_SUFFIXES):
+        raise _LinkError("LOCAL_HOST", f"Tên miền {host} chỉ có trong mạng nội bộ.")
     path = parts.path or "/"
     url = f"{scheme}://{host}{path}" + (f"?{parts.query}" if parts.query else "")
     return url, host, _DEFAULT_PORTS[scheme]
@@ -241,8 +135,7 @@ def _check_dns(host: str, port: int, resolver: Resolver) -> tuple[str, str] | No
     return None
 
 
-def validate_batch(source: DownloadSource, lines: Iterable[str], *,
-                   resolver: Resolver = default_resolver) -> list[str]:
+def validate_batch(lines: Iterable[str], *, resolver: Resolver = default_resolver) -> list[str]:
     """Normalized links of a batch; any bad or duplicate link rejects the batch."""
     entries = [(number, str(line).strip()) for number, line in enumerate(lines, start=1)]
     entries = [(number, line) for number, line in entries if line]
@@ -258,7 +151,7 @@ def validate_batch(source: DownloadSource, lines: Iterable[str], *,
     hosts: dict[str, tuple[str, str] | None] = {}
     for number, line in entries:
         try:
-            url, host, port = _check_url(line, source)
+            url, host, port = _check_url(line)
         except _LinkError as error:
             errors.append({"line": number, "url": line[:200], "code": error.code, "message": error.message})
             continue

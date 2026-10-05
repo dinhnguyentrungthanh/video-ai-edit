@@ -20,7 +20,7 @@ from typing import Any, Callable
 
 import psutil
 
-from biliflow.download_files import VIDEO_EXTENSIONS
+from biliflow.download_files import VIDEO_EXTENSIONS, tree_size
 from biliflow.download_probe import classify_error
 from biliflow.download_tools import DownloadToolsError, binary_path
 
@@ -34,10 +34,14 @@ PROGRESS_TEMPLATE = (
     "%(progress.eta)s %(progress.filename)s"
 )
 DEFAULT_PROBE_TIMEOUT_SECONDS = 300
+# A probe reads at most this many entries: a page with ads and a film has a few; a playlist or a
+# channel pasted by mistake would otherwise be read video by video until the timeout.
+MAX_PROBE_ENTRIES = 10
 KILL_WAIT_SECONDS = 10
 LOG_FLUSH_SECONDS = 1.0
 PROGRESS_EMIT_SECONDS = 0.5
 ERROR_TAIL_LINES = 50
+SIZE_CHECK_SECONDS = 2.0
 MAX_LOG_LINE = 500
 _CREATE_NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 _MASKS = (
@@ -150,6 +154,45 @@ class ProgressTracker:
         return Progress(done, total_bytes, speed, eta)
 
 
+class SizeGuard:
+    """Ends a download that writes more than the free space allows, whatever size the page claimed.
+
+    ``max_bytes`` bounds the bytes yt-dlp reports; ``max_disk_bytes`` bounds the task folder (parts,
+    fragments and the merged file), read every ``SIZE_CHECK_SECONDS`` for downloaders that report nothing.
+    """
+
+    def __init__(self, task_dir: Path, max_bytes: int | None, max_disk_bytes: int | None, *,
+                 interval: float = SIZE_CHECK_SECONDS):
+        self.task_dir = task_dir
+        self.max_bytes = max_bytes
+        self.max_disk_bytes = max_disk_bytes
+        self.interval = interval
+        self.tripped = False
+        self._done = threading.Event()
+
+    def over(self, latest: Progress | None) -> bool:
+        if self.max_bytes and latest is not None and latest.downloaded_bytes > self.max_bytes:
+            self.tripped = True
+        return self.tripped
+
+    def watch(self, pid: int) -> None:
+        """Read the task folder every ``interval`` seconds until ``stop``; kill the tree when it is too big."""
+        def run() -> None:
+            while not self._done.wait(self.interval):
+                if self.max_disk_bytes and tree_size(self.task_dir) > self.max_disk_bytes:
+                    self.tripped = True
+                    kill_process_tree(pid)
+                    return
+        threading.Thread(target=run, name="download-size-guard", daemon=True).start()
+
+    def stop(self) -> None:
+        self._done.set()
+
+    def message(self) -> str:
+        limit = self.max_bytes or self.max_disk_bytes or 0
+        return f"File lớn hơn chỗ trống cho phép (quá {limit / 1024**3:.1f} GB); đã dừng tải."
+
+
 @dataclass(frozen=True)
 class ProbeOutcome:
     ok: bool
@@ -226,7 +269,7 @@ class YtDlpRunner:
 
     def probe_command(self, url: str) -> list[str]:
         return [*self.command_prefix, *self._common(), "--dump-single-json", "--skip-download",
-                "--no-warnings", "--", url]
+                "--playlist-end", str(MAX_PROBE_ENTRIES), "--no-warnings", "--", url]
 
     def download_command(self, url: str, task_dir: Path, *, playlist_item: int | None = None,
                          max_filesize: int | None = None) -> list[str]:
@@ -319,7 +362,8 @@ class YtDlpRunner:
                  on_progress: Callable[[Progress], None], on_log: Callable[[list[str]], None],
                  on_start: Callable[[int, float], None] | None = None,
                  playlist_item: int | None = None, max_filesize: int | None = None,
-                 expected_files: int = 1, estimated_bytes: int | None = None) -> DownloadOutcome:
+                 expected_files: int = 1, estimated_bytes: int | None = None,
+                 guard: SizeGuard | None = None) -> DownloadOutcome:
         command = self.download_command(url, task_dir, playlist_item=playlist_item,
                                         max_filesize=max_filesize)
         process = self._spawn(command, task_dir, merge_stderr=True)
@@ -330,6 +374,8 @@ class YtDlpRunner:
         latest: Progress | None = None
         try:
             self._started(process, control, on_start)
+            if guard is not None:
+                guard.watch(process.pid)
             for raw in iter(process.stdout.readline, b""):
                 line = raw.decode("utf-8", "replace").rstrip("\r\n")
                 now = time.monotonic()
@@ -338,17 +384,20 @@ class YtDlpRunner:
                     if latest is not None and now - last_emit >= PROGRESS_EMIT_SECONDS:
                         on_progress(latest)
                         last_emit = now
-                    continue
-                if not line.strip():
-                    continue
-                masked = mask_line(line)
-                pending.append(masked)
-                tail = (tail + [masked])[-ERROR_TAIL_LINES:]
-                if now - last_flush >= LOG_FLUSH_SECONDS:
-                    on_log(pending)
-                    pending, last_flush = [], now
+                elif line.strip():
+                    masked = mask_line(line)
+                    pending.append(masked)
+                    tail = (tail + [masked])[-ERROR_TAIL_LINES:]
+                    if now - last_flush >= LOG_FLUSH_SECONDS:
+                        on_log(pending)
+                        pending, last_flush = [], now
+                if guard is not None and guard.over(latest):
+                    kill_process_tree(process.pid)
+                    break
             process.wait()
         finally:
+            if guard is not None:
+                guard.stop()
             control.detach()
             self._reap(process)
         if pending:
@@ -357,6 +406,8 @@ class YtDlpRunner:
             on_progress(latest)
         if control.requested:
             return DownloadOutcome(False, *_stopped(control), returncode=process.returncode)
+        if guard is not None and guard.tripped:
+            return DownloadOutcome(False, "TOO_LARGE", guard.message(), returncode=process.returncode)
         if process.returncode != 0:
             code, message = classify_error("\n".join(tail), stage="download")
             return DownloadOutcome(False, code, message, returncode=process.returncode)

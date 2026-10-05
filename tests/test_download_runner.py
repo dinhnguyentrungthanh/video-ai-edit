@@ -10,9 +10,11 @@ from tempfile import TemporaryDirectory
 import psutil
 
 from biliflow.download_runner import (
+    MAX_PROBE_ENTRIES,
     PROGRESS_PREFIX,
     ProcessControl,
     ProgressTracker,
+    SizeGuard,
     YtDlpRunner,
     kill_process_tree,
     mask_line,
@@ -73,6 +75,9 @@ class CommandTests(RunnerCase):
         self.assertEqual(command[command.index("--cache-dir") + 1], str(self.root / "cache" / "yt-dlp"))
         self.assertEqual(command[command.index("-S") + 1], "res:1080,vcodec:h264,acodec:aac")
         self.assertNotIn("--cookies", command)
+        # A playlist or a channel pasted by mistake is not read video by video until the timeout.
+        self.assertEqual(command[command.index("--playlist-end") + 1], str(MAX_PROBE_ENTRIES))
+        self.assertEqual(MAX_PROBE_ENTRIES, 10)
 
     def test_download_command(self):
         command = self.runner.download_command(URL, self.task_dir, playlist_item=4, max_filesize=123)
@@ -187,6 +192,29 @@ class DownloadTests(RunnerCase):
         self.scenario(download={"id": "zz", "skip_print": True})
         outcome, _, _ = self.run_download()
         self.assertEqual(outcome.final_path, self.task_dir / "zz.mp4")
+
+    def test_a_download_that_writes_more_than_it_may_is_ended(self):
+        # The page said 100 bytes; yt-dlp reports more than the free space allows, then would go on.
+        self.scenario(download={"id": "big", "hang": True,
+                                "progress": [[100, 100, None, 10.0, 1], [5000, None, None, 10.0, None]]})
+        guard = SizeGuard(self.task_dir, 1000, 2200)
+        started = time.monotonic()
+        outcome, _, _ = self.run_download(estimated_bytes=100, guard=guard)
+        self.assertLess(time.monotonic() - started, 15)
+        self.assertEqual((outcome.ok, outcome.code), (False, "TOO_LARGE"))
+        self.assertIn("chỗ trống", outcome.message)
+
+    def test_a_silent_download_is_ended_by_its_folder_size(self):
+        # No progress line after the first part: only the folder watcher sees it grow.
+        self.scenario(download={"id": "quiet", "hang": True, "progress": [[None, None, None, None, None]]})
+        guard = SizeGuard(self.task_dir, None, 8, interval=0.1)
+        outcome, _, _ = self.run_download(guard=guard)
+        self.assertEqual(outcome.code, "TOO_LARGE")
+
+    def test_a_download_within_its_limits_is_not_ended(self):
+        self.scenario(download={"id": "ok", "progress": [[500, 1000, None, 10.0, 1], [1000, 1000, None, 10.0, 0]]})
+        outcome, _, _ = self.run_download(guard=SizeGuard(self.task_dir, 1000, 10_000_000, interval=0.05))
+        self.assertTrue(outcome.ok, outcome)
 
     def test_download_errors_are_classified(self):
         self.scenario(download={"exit": 1, "stderr": "ERROR: [Errno 28] No space left on device"})

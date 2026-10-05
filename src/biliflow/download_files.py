@@ -184,8 +184,8 @@ def _run(command: list[str], timeout: float) -> subprocess.CompletedProcess:
 
 def _probe(ffprobe: Path, path: Path) -> dict[str, Any] | None:
     try:
-        completed = _run([str(ffprobe), "-v", "error", "-show_format", "-show_streams",
-                          "-of", "json", str(path)], PROBE_TIMEOUT_SECONDS)
+        completed = _run([str(ffprobe), "-v", "error", "-protocol_whitelist", "file", "-show_format",
+                          "-show_streams", "-of", "json", str(path)], PROBE_TIMEOUT_SECONDS)
         if completed.returncode != 0:
             return None
         return json.loads(completed.stdout)
@@ -195,7 +195,8 @@ def _probe(ffprobe: Path, path: Path) -> dict[str, Any] | None:
 
 def _decode_errors(ffmpeg: Path, path: Path, window: list[str]) -> str:
     """ffmpeg exits 0 on many corrupt frames, so any error line counts."""
-    command = [str(ffmpeg), "-hide_banner", "-nostdin", "-v", "error", *window, "-i", str(path),
+    command = [str(ffmpeg), "-hide_banner", "-nostdin", "-v", "error", "-protocol_whitelist", "file", *window,
+               "-i", str(path),
                "-map", "0:v:0", "-map", "0:a:0", "-f", "null", "-"]
     try:
         completed = _run(command, DECODE_TIMEOUT_SECONDS)

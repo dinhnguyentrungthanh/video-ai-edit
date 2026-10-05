@@ -237,14 +237,14 @@ class RepositoryPolicyTests(unittest.TestCase):
 
         modules = {path.name for path in (REPO_ROOT / "src" / "biliflow").glob("download_*.py")}
         modules.add("storage_summary.py")
-        self.assertIn("download_tools.py", modules)
+        self.assertTrue({"download_tools.py", "download_links.py", "download_probe.py"} <= modules)
         for stage in sorted(CACHEABLE_STAGES):
             with self.subTest(stage=stage):
                 scoped = {path.name for path in stage_source_paths(REPO_ROOT, stage)}
                 self.assertFalse(scoped & modules)
         fingerprint_source = (REPO_ROOT / "src" / "biliflow" / "stage_cache.py").read_text(encoding="utf-8")
         self.assertNotIn("download_tools.json", fingerprint_source)
-        self.assertNotIn("download_sources", fingerprint_source)
+        self.assertNotIn("download_", fingerprint_source)
 
     def test_deno_lives_under_tools(self):
         self.assertEqual(

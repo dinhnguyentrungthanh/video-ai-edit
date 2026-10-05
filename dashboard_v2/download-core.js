@@ -33,6 +33,14 @@
   const MAX_LINKS = 20;
   /* download_upkeep.TEMP_CLEANABLE: the states whose downloaded part a retry or a remove drops. */
   const KEEPS_PART = ['FAILED', 'STOPPED', 'INTERRUPTED'];
+  /* download_probe: the codes of a page with no video yt-dlp can read ("Trang này chưa được hỗ trợ"). */
+  const UNSUPPORTED = ['UNSUPPORTED', 'NO_ENTRIES'];
+
+  /* The badge text: a page yt-dlp cannot read says so instead of a bare "Lỗi". */
+  function label(task) {
+    if (task.state === 'FAILED' && UNSUPPORTED.includes(task.error_code)) return 'Chưa hỗ trợ';
+    return LABELS[task.state] || task.state;
+  }
 
   function group(task) {
     const s = task && task.state;
@@ -118,6 +126,6 @@
     return parts.join(' · ');
   }
   return {STATES, LABELS, TONES, STOPPABLE, RESUMABLE, CANCELLABLE, RETRYABLE, RENAMABLE, FINAL, RUNNING, KEEPS_PART, FILTERS,
-    MAX_LINKS, group, matches, counts, actions, canRename, formatBytes, clock, progress, links, checkBatch, batchErrors,
+    MAX_LINKS, UNSUPPORTED, label, group, matches, counts, actions, canRename, formatBytes, clock, progress, links, checkBatch, batchErrors,
     entryLine};
 });

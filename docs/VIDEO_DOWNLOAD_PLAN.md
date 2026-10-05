@@ -2,7 +2,7 @@
 
 Cập nhật: 2026-10-05. Nhánh `feat/video-download` (tách từ `feat/dashboard-v2` a7d8f18), worktree `E:\DungChung\BiliFlow\temp\wt-video-download`.
 
-Trạng thái: **D0, D1, D2, D3, D4 xong** (2026-10-05): công cụ đã cài và khóa phiên bản, kiểm tra giấy phép đạt; backend tải (hàng đợi, yt-dlp, kiểm tra, chuyển vào input, phục hồi, dọn) có test với yt-dlp giả; API `/api/downloads…` và `/api/storage-summary` nối vào Control Center (PC và điện thoại) có test route; trang `#downloads` thật trong Dashboard V2 (PC và điện thoại); tải thật một video YouTube công khai trên Control Center thử (root tạm), xem "Kết quả D4" ở mục 8. Tiếp theo D5 (tài liệu; người dùng test trên máy thật). Phiên làm tính năng báo người dùng bằng tiếng Việt sau mỗi bước.
+Trạng thái: **D0, D1, D2, D3, D4 xong** (2026-10-05): công cụ đã cài và khóa phiên bản, kiểm tra giấy phép đạt; backend tải (hàng đợi, yt-dlp, kiểm tra, chuyển vào input, phục hồi, dọn) có test với yt-dlp giả; API `/api/downloads…` và `/api/storage-summary` nối vào Control Center (PC và điện thoại) có test route; trang `#downloads` thật trong Dashboard V2 (PC và điện thoại); tải thật một video YouTube công khai trên Control Center thử (root tạm), xem "Kết quả D4" ở mục 8. Sau D4 người dùng bỏ danh sách nguồn: nhận link từ trang nào cũng được, bước thăm dò quyết định (mục 4.1, "D4b"). Tiếp theo D5 (tài liệu; người dùng test trên máy thật). Phiên làm tính năng báo người dùng bằng tiếng Việt sau mỗi bước.
 
 Trang `#downloads` của Dashboard V2 hiện chỉ là mô phỏng (`dashboard_v2/download-demo.js`, timer trong `app.js`). Các yêu cầu tích hợp ở `docs/DASHBOARD_V2_UPDATE_GUIDE.md` (mục "Trang Tải video" và "Adapter command / PowerShell") vẫn áp dụng; kế hoạch này chốt các điểm còn để ngỏ ở đó.
 
@@ -16,7 +16,7 @@ Trang `#downloads` của Dashboard V2 hiện chỉ là mô phỏng (`dashboard_v
 | Phụ đề | không tải |
 | Tải xong | kiểm tra đạt thì tự chuyển vào `input\`; có ô đổi tên, sửa được tới lúc chuyển |
 | Điện thoại | dán link và thao tác tải được (điện thoại là remote, file về máy tính) |
-| Nguồn | chỉ trang trong danh sách cho phép, chọn bằng combobox |
+| Nguồn | ~~chỉ trang trong danh sách cho phép, chọn bằng combobox~~. Đổi sau D4 (D4b): không chọn nguồn, nhận link từ trang nào cũng được; yt-dlp thăm dò trang trước khi tải, trang không có video đọc được báo "Chưa hỗ trợ" (mục 4.1) |
 | Dọn dữ liệu | 3 lớp (mục 7) |
 | Nơi làm | máy thật, nhánh riêng; Dashboard V2 merge main độc lập |
 
@@ -26,7 +26,7 @@ Trang `#downloads` của Dashboard V2 hiện chỉ là mô phỏng (`dashboard_v
 - Không vượt DRM, không dùng cookie, tài khoản hay `--cookies-from-browser`, không giả trình duyệt (curl_cffi) để lách chặn.
 - Không tự quét, tự xuất hay tự đăng sau khi tải. Watcher nhận file như khi người dùng tự chép vào.
 - Không tự cập nhật yt-dlp. Cập nhật là lệnh người dùng bấm, khóa phiên bản, chạy lại `license-audit`.
-- Repo công khai: chỉ YouTube, Bilibili và mục ví dụ (`*.example`) nằm trong repo. Tên miền thật của trang người dùng tự thêm, link và tên video thật không vào repo, log commit hay tài liệu.
+- Repo công khai: tên miền trong code, test và tài liệu chỉ là mục ví dụ (`*.example`). Tên miền thật của trang người dùng dùng, link và tên video thật không vào repo, log commit hay tài liệu.
 
 ## 3. Công cụ và giấy phép (D0)
 
@@ -61,7 +61,8 @@ Module mới, giữ dưới 800 dòng mỗi file. `control_center.py` (2385 dòn
 
 | File | Việc |
 |---|---|
-| `src/biliflow/download_sources.py` | đọc `config/download_sources.json` (trong repo) + `config/download_sources.local.json` (gitignore, người dùng tự thêm); kiểm tra link |
+| `src/biliflow/download_links.py` | kiểm tra lô link (mục 4.2). Trước D4b là `download_sources.py` kèm danh sách nguồn `config/download_sources*.json` (đã bỏ) |
+| `src/biliflow/download_probe.py` | đọc kết quả thăm dò, chọn mục cần tải theo cách yt-dlp đọc trang (mục 4.1, 4.4) |
 | `src/biliflow/download_store.py` | SQLite `state/downloads.sqlite3`: bảng `download_tasks`, `download_events`, `download_settings` |
 | `src/biliflow/download_runner.py` | gọi yt-dlp (thăm dò, tải), đọc tiến độ, dừng cả cây tiến trình (psutil) |
 | `src/biliflow/download_worker.py` | hàng đợi FIFO 1–3 slot, máy trạng thái, chờ chỗ trống, kiểm tra file, chuyển vào `input`, phục hồi, dọn |
@@ -70,22 +71,30 @@ Module mới, giữ dưới 800 dòng mỗi file. `control_center.py` (2385 dòn
 
 Worker chạy trong tiến trình Control Center, tách khỏi scheduler GPU (quét/xuất).
 
-### 4.1 Cấu hình nguồn
+### 4.1 Trang nào tải được (D4b, thay cho danh sách nguồn)
 
-Mỗi mục có:
-- `id`, `label`;
-- `domains`: host chính xác hoặc host con của tên miền liệt kê, ví dụ `youtube.com`, `youtu.be`, `bilibili.com`, `b23.tv`;
-- `min_duration_seconds`: YouTube và Bilibili 0, trang phim ví dụ 600;
-- `allow_multi_entry`;
-- `notes`.
-
-Trang mới chỉ được thêm sau bước "thăm dò" ở D4.
+~~Danh sách nguồn (`config/download_sources.json`, `.local.json`, combobox): mỗi nguồn có `domains`, `min_duration_seconds`, `allow_multi_entry`.~~ Người dùng bỏ ngày 2026-10-05 sau D4, chọn "Mọi trang, thăm dò":
+- Nhận link `http`/`https` công khai từ trang nào cũng được; vẫn chặn như mục 4.2.
+- Bước thăm dò (`yt-dlp --dump-single-json --skip-download`, không tải gì) là cách nhận biết trang tải được hay không. Trang yt-dlp không đọc được video (`Unsupported URL`, hoặc không có mục nào) thành FAILED `UNSUPPORTED` / `NO_ENTRIES`, lời nhắn "Trang này chưa được hỗ trợ: …", nhãn "Chưa hỗ trợ" trên trang. DRM, cần đăng nhập, đang phát trực tiếp: báo lý do như trước.
+- Luật chọn mục theo bộ đọc yt-dlp dùng (`extractor_key` của kết quả thăm dò):
+  - trang có bộ đọc riêng (YouTube, Bilibili, …): chỉ video trong link, độ dài nào cũng được; link ra nhiều video (danh sách phát, kênh) thì FAILED `MULTIPLE_ENTRIES`;
+  - trang đọc bằng bộ đọc chung (`Generic`): bỏ mục ngắn hơn 10 phút (`GENERIC_MIN_DURATION_SECONDS`, để bỏ quảng cáo), chọn như mục 4.4; chỉ có video ngắn thì FAILED `ONLY_SHORT_ENTRIES`. Video không rõ thời lượng (link file trực tiếp) vẫn được tải.
+- Thăm dò đọc tối đa 10 mục (`--playlist-end 10`, `MAX_PROBE_ENTRIES`): link danh sách phát hay kênh dán nhầm không bị đọc từng video tới hết 300 giây. Trang đọc chung có phim ở mục thứ 11 trở đi thì không thấy phim đó (chấp nhận).
+- Link danh sách phát hay kênh trống trên trang có bộ đọc riêng: FAILED `NO_VIDEOS` ("Link không có video nào"), không gọi là "chưa hỗ trợ".
+- Đổi lại: không còn danh sách cho phép nên yt-dlp có thể theo chuyển hướng của một trang lạ, hay đọc link nhúng trong trang (iframe, `<video src>`). Kiểm tra DNS chỉ chặn được ở link đầu (mục 10).
+- Thêm sau review D4b (security-reviewer, code-reviewer, 2026-10-05):
+  - Lời báo lỗi của yt-dlp bỏ link và địa chỉ IP (`<link>`, `<địa chỉ>`) trước khi lưu và trước khi xét mã lỗi: trang lạ không dò được cổng hay máy trong mạng qua lời báo, và chữ trong link (`login`, `premium`…) không làm "Unsupported URL" thành "cần đăng nhập". Luật `UNSUPPORTED` xét đầu tiên.
+  - Chốt dung lượng khi đang tải (`SizeGuard`): lượt tải dừng với `TOO_LARGE` khi số byte yt-dlp báo vượt phần chỗ trống dành cho nó ((còn trống − phần lượt khác cần − phần giữ lại) / 2,2), hoặc thư mục của lượt vượt gấp 2,2 lần số đó (đọc mỗi 2 giây, cho cả trình tải không báo tiến độ). Dung lượng trang báo không bao giờ là giới hạn.
+  - Tên mục từ trang tối đa 300 ký tự; ffprobe/ffmpeg kiểm tra file với `-protocol_whitelist file`.
+  - Cơ sở dữ liệu tải tạo trước D4b (còn cột `source_id`) được bỏ cột đó khi mở (chỉ có ở root thử); `.gitignore` vẫn bỏ qua `config/download_sources.local.json` để bản cũ có tên miền thật không bị commit.
+- Thử thật (2026-10-05): link trang phim tham khảo của người dùng → "Trang này chưa được hỗ trợ"; link YouTube thử → READY, 1080p H.264.
 
 ### 4.2 Kiểm tra link (backend, không tin frontend)
 
-- Chỉ `https`/`http`; không userinfo; cổng mặc định; host chuẩn hóa IDNA, chữ thường, khớp `domains` của nguồn đã chọn.
-- Không nhận IP literal.
-- Phân giải DNS: từ chối loopback, private, link-local, multicast. Giới hạn đã biết: yt-dlp tự theo redirect nên không chặn hết được; danh sách cho phép là lớp chặn chính.
+- Chỉ `https`/`http`; không userinfo; cổng mặc định; host chuẩn hóa IDNA, chữ thường, phải có dấu chấm (từ chối `localhost`, tên máy trong mạng nội bộ trước cả khi hỏi DNS).
+- Không nhận IP literal, kể cả dạng chỉ thành địa chỉ sau IDNA (`１.１.１.１`, `1.2.3.4.`).
+- Tên chỉ có trong mạng nội bộ (`*.localhost`, `*.local`, `*.internal`, `*.lan`, `*.home.arpa`, `*.localdomain`) bị từ chối trước khi hỏi DNS (`LOCAL_HOST`).
+- Phân giải DNS: từ chối loopback, private, link-local, multicast. Giới hạn đã biết: yt-dlp tự theo redirect nên không chặn hết được (từ D4b không còn danh sách cho phép làm lớp chặn chính, mục 10).
 - Mỗi lô tối đa 20 link, tổng tối đa 100 lượt chưa xong. Một link sai hoặc trùng thì từ chối cả lô.
 - Link không bao giờ ghép vào chuỗi lệnh: danh sách đối số, `--` trước URL, không `shell=True`, `CREATE_NO_WINDOW`.
 
@@ -104,7 +113,7 @@ Nhánh phụ:
 
 ### 4.4 Thăm dò (PROBING)
 
-Lệnh: `python -m yt_dlp --ignore-config --no-playlist --dump-single-json --skip-download --no-warnings [--js-runtimes deno:<path>] -- <url>`
+Lệnh: `python -m yt_dlp --ignore-config --no-playlist --dump-single-json --skip-download --playlist-end 10 --no-warnings [--js-runtimes deno:<path>] -- <url>`
 
 Từ chối với mã lỗi rõ:
 - `live_status` là `is_live`, `is_upcoming` hoặc `post_live`;
@@ -113,7 +122,7 @@ Từ chối với mã lỗi rõ:
 - trang yt-dlp không hỗ trợ.
 
 Nhiều mục (trang có quảng cáo hoặc trailer):
-1. Bỏ mục ngắn hơn `min_duration_seconds`.
+1. Bỏ mục ngắn hơn ngưỡng (D4b: 10 phút với trang đọc chung, 0 với trang có bộ đọc riêng; mục 4.1).
 2. Còn một mục thì chọn mục đó.
 3. Còn nhiều mục thì chọn mục dài nhất nếu dài ít nhất 2 lần mục kế tiếp. Không thì vào `NEEDS_CHOICE`: hiện danh sách tên và thời lượng cho người dùng chọn.
 4. Không còn mục nào thì vào `FAILED`, mã `ONLY_SHORT_ENTRIES`: "Không tìm thấy phim, chỉ thấy N video ngắn (…), có thể là quảng cáo".
@@ -179,8 +188,8 @@ Sau khi chuyển:
 ### 4.10 Thiết kế chi tiết D1 (chốt 2026-10-05, trước khi viết code)
 
 File (mỗi file dưới 800 dòng):
-- `config/download_sources.json`: chỉ YouTube và Bilibili. Mẫu cho trang người dùng tự thêm: `config/download_sources.local.example.json` (tên miền `*.example`). Bản thật `config/download_sources.local.json` nằm trong `.gitignore`. Trùng `id` giữa hai file thì bỏ file local và báo cảnh báo.
-- `download_sources.py`: đọc, kiểm tra cấu hình, kiểm tra lô link (mục 4.2). DNS nhận hàm phân giải giả trong test.
+- ~~`config/download_sources.json`: chỉ YouTube và Bilibili; `config/download_sources.local.json` cho trang người dùng tự thêm.~~ Bỏ ở D4b (mục 4.1).
+- `download_links.py` (trước D4b: `download_sources.py`): kiểm tra lô link (mục 4.2). DNS nhận hàm phân giải giả trong test.
 - `download_store.py`: SQLite `state/downloads.sqlite3` (WAL, khóa luồng như `JobStore`). Bảng `download_tasks`, `download_events` (có `attempt`), `download_log` (tối đa 200 dòng mỗi lượt), `download_settings`. Chuyển trạng thái kiểu so-rồi-đổi: chỉ đổi khi trạng thái hiện tại nằm trong tập cho phép. Cập nhật tiến độ kèm `attempt`, nên tiến trình của attempt cũ không ghi đè được.
 - `download_runner.py`: dựng lệnh (danh sách đối số, `--` trước URL), thăm dò, tải, đọc dòng `BFPROG`, che token trong log, phân loại lỗi, dừng cả cây tiến trình bằng psutil. Lệnh yt-dlp nhận tiền tố từ ngoài: thật là `python -P -m yt_dlp` (`-P`: thư mục lượt, nơi yt-dlp ghi file, không vào `sys.path`), test là `python tests/fake_yt_dlp.py`.
 - `download_files.py`: chuẩn hóa tên, chọn tên không trùng, xóa an toàn chỉ trong `temp\downloads\`, kiểm tra file bằng ffprobe/ffmpeg, SHA-256.
@@ -203,10 +212,10 @@ Trạng thái giữ slot: PROBING, WAITING_SPACE, DOWNLOADING, VERIFYING, PUBLIS
 | choose | NEEDS_CHOICE | QUEUED với mục đã chọn |
 | cleanup-temp | STOPPED, FAILED, INTERRUPTED | xóa file tạm → EXPIRED |
 
-Gọi lại cùng thao tác khi đã ở trạng thái đích thì không lỗi (idempotent). Nguồn có `allow_multi_entry: false` (YouTube, Bilibili) mà thăm dò ra nhiều mục thì FAILED `MULTIPLE_ENTRIES`. Một video duy nhất ngắn hơn `min_duration_seconds` thì FAILED `ONLY_SHORT_ENTRIES`.
+Gọi lại cùng thao tác khi đã ở trạng thái đích thì không lỗi (idempotent). Trang có bộ đọc riêng (YouTube, Bilibili…) mà thăm dò ra nhiều mục thì FAILED `MULTIPLE_ENTRIES`. Trang đọc chung chỉ có video ngắn hơn 10 phút thì FAILED `ONLY_SHORT_ENTRIES` (D4b, mục 4.1; trước đó theo `allow_multi_entry` và `min_duration_seconds` của nguồn).
 
 Bổ sung sau review D1 (python-reviewer và security-reviewer, 2026-10-05):
-- Kiểm tra lại link (nguồn còn trong danh sách, DNS không trỏ vào mạng nội bộ) ngay trước thăm dò và trước khi tải, kể cả lượt tiếp tục hay thử lại.
+- Kiểm tra lại link (DNS không trỏ vào mạng nội bộ; trước D4b thêm: nguồn còn trong danh sách) ngay trước thăm dò và trước khi tải, kể cả lượt tiếp tục hay thử lại.
 - Tên miền: sau IDNA, mỗi nhãn chỉ gồm `a-z 0-9 - _`. Link có `\` hay `%` trong tên miền bị từ chối (`NO_HOST`), vì urllib3/requests đọc tên miền khác `urlsplit`. Link hỏng dạng (`https://[::1/`) báo lỗi riêng dòng đó (`BAD_URL`), không làm hỏng cả lô.
 - Lỗi ghi cơ sở dữ liệu giữa chừng: runner luôn dừng cả cây yt-dlp; luồng của lượt luôn nhả slot. Lượt còn ở trạng thái chạy mà không có luồng thì `dispatch` xử lý ở vòng sau (`_reconcile`): WAITING_SPACE về QUEUED, CANCELLING thử xóa lại, PUBLISHING kiểm tra như lúc khởi động, còn lại INTERRUPTED.
 - Ghi trạng thái cuối và nhả slot trong cùng một lần giữ khóa; lượt có luồng cũ chưa thoát thì `dispatch` chưa chạy lại (không chạy đôi).
@@ -223,9 +232,9 @@ Mọi POST dùng `X-BiliFlow-Token` và kiểm tra Host như các route hiện c
 
 | Lệnh | Việc |
 |---|---|
-| `GET /api/downloads` | snapshot: lượt, bộ đếm, cài đặt (`slots`, `max_slots`), nguồn (id, label, domains, local), cảnh báo cấu hình, chỗ trống, file tạm, lượt đang chạy, lỗi gần nhất của worker và thời điểm |
+| `GET /api/downloads` | snapshot: lượt, bộ đếm, cài đặt (`slots`, `max_slots`), chỗ trống, file tạm, lượt đang chạy, lỗi gần nhất của worker và thời điểm |
 | `GET /api/downloads/<id>` | một lượt cùng sự kiện của attempt hiện tại và log đã che |
-| `POST /api/downloads` | `{source_id, urls[], rights_confirmed: true}`; trả về các lượt mới hoặc lỗi cho cả lô |
+| `POST /api/downloads` | `{urls[], rights_confirmed: true}` (trước D4b có `source_id`); trả về các lượt mới hoặc lỗi cho cả lô |
 | `POST /api/downloads/<id>/rename` | `{name}`; chỉ trước PUBLISHING |
 | `POST /api/downloads/<id>/choose` | `{entry_index}`; chỉ ở NEEDS_CHOICE |
 | `POST /api/downloads/<id>/(stop\|resume\|cancel\|retry\|remove)` | `remove` chỉ cho lượt đã kết thúc; xóa dòng và file tạm của lượt, không đụng file trong `input` |
@@ -255,10 +264,10 @@ Mọi POST dùng `X-BiliFlow-Token` và kiểm tra Host như các route hiện c
 ## 6. Giao diện (`#downloads`)
 
 - Thay timer mô phỏng bằng adapter gọi API; chế độ demo giữ bản mô phỏng.
-- Combobox nguồn lấy từ API. Bỏ mục `phimmoi.example` ở chế độ thật.
+- ~~Combobox nguồn lấy từ API.~~ D4b: không còn ô chọn nguồn (cả bản demo); dòng lỗi của trang yt-dlp không đọc được có nhãn "Chưa hỗ trợ".
 - Bắt buộc tick "Tôi có quyền tải và chỉnh sửa video này" (cùng ý với `publishing.confirmation_text` của license policy).
 - Mỗi dòng:
-  - tên (ô đổi tên tới lúc chuyển vào input), nguồn, trạng thái;
+  - tên (ô đổi tên tới lúc chuyển vào input), link, trạng thái;
   - tiến độ, tốc độ, còn lại;
   - lỗi, log gập;
   - nút theo trạng thái;
@@ -370,7 +379,7 @@ Control Center thử: `python -m biliflow --project-root <temp>\vd-d4-root contr
 ## 10. Rủi ro đã biết
 
 - Trang nguồn đổi cách chạy (nhất là YouTube): cần cập nhật yt-dlp theo lệnh người dùng.
-- yt-dlp theo redirect nội bộ: kiểm tra IP chỉ chặn được ở link đầu; danh sách cho phép là lớp chặn chính.
+- yt-dlp theo redirect nội bộ: kiểm tra IP chỉ chặn được ở link đầu. Từ D4b không còn danh sách cho phép, nên một trang lạ có thể chuyển yt-dlp tới địa chỉ trong mạng nội bộ, hay chỉ cho nó một link nhúng ở đó (chỉ yêu cầu đọc; lời báo lỗi đã bỏ link và địa chỉ). Muốn chặn hẳn thì cần một proxy cục bộ kiểm tra từng bước chuyển (`--proxy`), chưa làm. Người dùng chấp nhận khi chọn "Mọi trang, thăm dò"; link chỉ do người dùng dán (PC hoặc điện thoại có mã truy cập).
 - Ước tính dung lượng có thể sai: `--max-filesize` và lần kiểm tra chỗ trống trước khi chuyển vào input là lớp chặn sau.
 - Tải nối tiếp sau khi dừng không phải trang nào cũng hỗ trợ: UI không hứa nối tiếp.
 

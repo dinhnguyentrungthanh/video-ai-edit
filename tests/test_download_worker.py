@@ -13,7 +13,7 @@ import psutil
 
 from biliflow.download_files import VerifyResult
 from biliflow.download_runner import YtDlpRunner
-from biliflow.download_sources import DownloadBatchError
+from biliflow.download_links import DownloadBatchError
 from biliflow.download_store import DownloadStore
 from biliflow.download_worker import DownloadActionError, DownloadWorker
 
@@ -27,12 +27,14 @@ GB = 1024**3
 
 
 def video(title="Clip", duration=12.0, video_id="abc", size=1_000_000, **extra):
+    """One video read by a site's own yt-dlp reader (any length is downloaded)."""
     formats = [{"vcodec": "avc1", "acodec": "none", "filesize": size}] if size else [{}]
     return {"id": video_id, "title": title, "duration": duration, "live_status": "not_live",
-            "requested_formats": formats, "extractor_key": "Generic", **extra}
+            "requested_formats": formats, "extractor_key": "FakeSite", **extra}
 
 
 def page(*entries):
+    """A page read by yt-dlp's generic reader: ads, trailers and a film."""
     return {"_type": "playlist", "title": "Page", "extractor_key": "Generic",
             "entries": [dict(entry, playlist_index=index) for index, entry in enumerate(entries, start=1)]}
 
@@ -66,14 +68,6 @@ class WorkerCase(unittest.TestCase):
         self.root = Path(self.directory.name)
         (self.root / "config").mkdir()
         (self.root / "input").mkdir()
-        sources = [
-            {"id": "clips", "label": "Clips", "domains": ["clips.example"], "min_duration_seconds": 0,
-             "allow_multi_entry": False},
-            {"id": "movies", "label": "Movies", "domains": ["movies.example"], "min_duration_seconds": 600,
-             "allow_multi_entry": True},
-        ]
-        (self.root / "config" / "download_sources.json").write_text(
-            json.dumps({"version": 1, "sources": sources}), encoding="utf-8")
         self.scenario_path = self.root / "scenario.json"
         self.log_path = self.root / "calls.jsonl"
         self.space = [10_000 * GB, 100 * GB]
@@ -114,8 +108,8 @@ class WorkerCase(unittest.TestCase):
             return [call for call in calls if "--dump-single-json" not in call["argv"]]
         return calls
 
-    def add(self, *urls, source="clips"):
-        return self.worker.add(source, list(urls or [CLIP]), rights_confirmed=True)
+    def add(self, *urls):
+        return self.worker.add(list(urls or [CLIP]), rights_confirmed=True)
 
     def run_all(self, timeout=20.0):
         deadline = time.monotonic() + timeout
@@ -150,14 +144,12 @@ class HappyPathTests(WorkerCase):
         self.assertEqual(kinds[0], "QUEUED")
         self.assertEqual(kinds[-1], "COMPLETED")
 
-    def test_rights_source_and_batch_are_checked(self):
+    def test_rights_and_batch_are_checked(self):
         with self.assertRaises(DownloadActionError) as caught:
-            self.worker.add("clips", [CLIP], rights_confirmed=False)
+            self.worker.add([CLIP], rights_confirmed=False)
         self.assertEqual(caught.exception.status, 400)
-        with self.assertRaises(DownloadActionError):
-            self.worker.add("other", [CLIP], rights_confirmed=True)
         with self.assertRaises(DownloadBatchError):
-            self.add("https://movies.example/a")
+            self.add("https://user@movies.example/a")
         self.add()
         with self.assertRaises(DownloadBatchError):
             self.add("https://clips.example/v/2", CLIP)
@@ -204,7 +196,7 @@ class ProbeChoiceTests(WorkerCase):
         url = "https://movies.example/phim/1"
         self.scenario(probe={"json": page(video("Ad 1", 30, "a1"), video("Ad 2", 15, "a2"),
                                           video("Ad 3", 65, "a3"), video("Film", 5400, "f"))})
-        task, = self.add(url, source="movies")
+        task, = self.add(url)
         self.run_all()
         done = self.store.get(task["id"])
         self.assertEqual(done["state"], "COMPLETED")
@@ -215,7 +207,7 @@ class ProbeChoiceTests(WorkerCase):
 
     def test_close_lengths_wait_for_a_choice_and_free_the_slot(self):
         self.scenario(probe={"json": page(video("Part 1", 2700, "p1"), video("Part 2", 3000, "p2"))})
-        task, = self.add("https://movies.example/phim/2", source="movies")
+        task, = self.add("https://movies.example/phim/2")
         self.run_all()
         waiting = self.store.get(task["id"])
         self.assertEqual(waiting["state"], "NEEDS_CHOICE")
@@ -232,7 +224,7 @@ class ProbeChoiceTests(WorkerCase):
 
     def test_only_ads_fail_with_the_reason(self):
         self.scenario(probe={"json": page(video("Ad 1", 30), video("Ad 2", 15), video("Ad 3", 65))})
-        task, = self.add("https://movies.example/phim/3", source="movies")
+        task, = self.add("https://movies.example/phim/3")
         self.run_all()
         failed = self.store.get(task["id"])
         self.assertEqual((failed["state"], failed["error_code"]), ("FAILED", "ONLY_SHORT_ENTRIES"))
@@ -251,6 +243,27 @@ class ProbeChoiceTests(WorkerCase):
             with self.subTest(code=code):
                 self.assertEqual(self.store.get(task["id"])["error_code"], code)
 
+    def test_a_page_without_a_readable_video_is_reported_as_not_supported(self):
+        url = "https://phim.example/phim/tap-1"
+        self.scenario(probe={"exit": 1, "stderr": f"ERROR: Unsupported URL: {url}"})
+        task, = self.add(url)
+        self.run_all()
+        failed = self.store.get(task["id"])
+        self.assertEqual((failed["state"], failed["error_code"]), ("FAILED", "UNSUPPORTED"))
+        self.assertTrue(failed["error_message"].startswith("Trang này chưa được hỗ trợ"), failed["error_message"])
+        self.assertEqual(self.calls("download"), [])
+        argv = self.calls("probe")[0]["argv"]
+        self.assertEqual(argv[argv.index("--playlist-end") + 1], "10")
+
+    def test_a_playlist_link_on_a_site_reader_is_refused(self):
+        self.scenario(probe={"json": dict(page(video("A", 600, "a"), video("B", 700, "b")),
+                                          extractor_key="FakeSiteTab")})
+        task, = self.add("https://clips.example/playlist?list=1")
+        self.run_all()
+        failed = self.store.get(task["id"])
+        self.assertEqual((failed["state"], failed["error_code"]), ("FAILED", "MULTIPLE_ENTRIES"))
+        self.assertEqual(self.calls("download"), [])
+
 
 class SpaceTests(WorkerCase):
     def test_waits_for_space_then_downloads(self):
@@ -264,6 +277,16 @@ class SpaceTests(WorkerCase):
         self.space = [300 * GB, 100 * GB]
         self.assertTrue(self.worker.wait_idle(20))
         self.assertEqual(self.state(task["id"]), "COMPLETED")
+
+    def test_a_page_that_understates_its_size_is_stopped_at_the_free_space(self):
+        self.space = [122 * GB, 100 * GB]  # 22 GB above the reserve: at most 10 GB of download
+        self.scenario(probe={"json": video(size=1_000_000)},
+                      download={"id": "abc", "hang": True, "progress": [[11 * GB, None, None, 1.0, None]]})
+        task, = self.add()
+        self.run_all()
+        failed = self.store.get(task["id"])
+        self.assertEqual((failed["state"], failed["error_code"]), ("FAILED", "TOO_LARGE"))
+        self.assertNotIn("--max-filesize", self.calls("download")[0]["argv"])
 
     def test_unknown_size_caps_the_file_by_the_free_space(self):
         self.space = [122 * GB, 100 * GB]
@@ -396,7 +419,7 @@ class RealVerifyTests(WorkerCase):
 
 class RecoveryTests(WorkerCase):
     def make(self, state, **fields):
-        task, = self.store.add_tasks("clips", [f"https://clips.example/{state.lower()}/{len(self.store.list_tasks())}"])
+        task, = self.store.add_tasks([f"https://clips.example/{state.lower()}/{len(self.store.list_tasks())}"])
         folder = self.root / "temp" / "downloads" / str(task["id"])
         folder.mkdir(parents=True, exist_ok=True)
         self.store.transition(task["id"], {"QUEUED"}, state, temp_dir=str(folder), **fields)
@@ -473,7 +496,7 @@ class SweepTests(WorkerCase):
                                            (stamp, task_id))
 
     def make(self, state, **delta):
-        task, = self.store.add_tasks("clips", [f"https://clips.example/sweep/{len(self.store.list_tasks())}"])
+        task, = self.store.add_tasks([f"https://clips.example/sweep/{len(self.store.list_tasks())}"])
         folder = self.root / "temp" / "downloads" / str(task["id"])
         folder.mkdir(parents=True)
         (folder / "part.bin").write_bytes(b"x" * 10)

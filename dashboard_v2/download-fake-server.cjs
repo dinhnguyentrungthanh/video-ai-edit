@@ -2,7 +2,8 @@
 /* "Tải video" layout fake: live.html with every download state, in memory (no yt-dlp, no network, no
  * Control Center). Run: node dashboard_v2/download-fake-server.cjs [port] [--phone]
  * then open http://127.0.0.1:<port>/dashboard-v2/#downloads (light and dark, 375 / 390 / 1440 px).
- * --phone answers /api/phone-mode like the phone listener ({remote: true}). Domains are .example only. */
+ * --phone answers /api/phone-mode like the phone listener ({remote: true}). Domains are .example only.
+ * A link on a host starting with "chua-ho-tro." is added as a page yt-dlp cannot read (FAILED, UNSUPPORTED). */
 const fs = require('fs');
 const http = require('http');
 const path = require('path');
@@ -13,25 +14,24 @@ const TYPES = {'.css': 'text/css', '.js': 'text/javascript', '.svg': 'image/svg+
 const ASSETS = new Set(['styles.css', 'theme.css', 'review.css', 'contracts.js', 'adapter.js', 'download-demo.js', 'download-core.js',
   'download-view.js', 'download-live.js', 'review-core.js', 'review-detail.js', 'review-media.js', 'review-cards.js', 'review.js',
   'app.js', ...fs.readdirSync(path.join(ROOT, 'assets')).map(f => 'assets/' + f)]);
-const SOURCES = [{id: 'clips', label: 'Clip mẫu', domains: ['clips.example', 'www.clips.example'], local: false},
-  {id: 'movies', label: 'Phim mẫu', domains: ['movies.example'], local: false},
-  {id: 'mine', label: 'Nguồn bạn thêm', domains: ['mine.example'], local: true}];
+const UNSUPPORTED = url => 'Trang này chưa được hỗ trợ: yt-dlp không tìm thấy video nào đọc được trong trang. ' +
+  '(ERROR: Unsupported URL: ' + url + ')';
 const GB = 1073741824, MB = 1048576;
 const LONG = 'Video mẫu có tên rất dài để thử xuống dòng trên điện thoại – tập 12 phần cuối (bản đầy đủ, phụ đề tiếng Việt)';
 
 function seed() {
   const now = new Date().toISOString();
-  const t = (id, state, extra = {}) => ({id, source_id: 'clips', url: 'https://clips.example/watch/v' + id, state, attempt: 1,
+  const t = (id, state, extra = {}) => ({id, url: 'https://clips.example/watch/v' + id, state, attempt: 1,
     desired_name: null, original_title: 'Video mẫu ' + id, title: 'Video mẫu ' + id, duration_seconds: 1440, estimated_bytes: 900 * MB,
     downloaded_bytes: 0, total_bytes: null, speed: null, eta: null, error_code: null, error_message: null, chosen_entry: null,
     name_locked: false, created_at: now, state_since: now, finished_at: null, queued_at: now, output_name: null, entries: null,
     entry_count: 0, media: {extractor: 'generic', height: null, video_codec: null, audio_codec: null}, ...extra});
   return [
     t(1, 'DOWNLOADING', {downloaded_bytes: 700 * MB, total_bytes: 1.2 * GB, speed: 5.2 * MB, eta: 105}),
-    t(2, 'DOWNLOADING', {source_id: 'movies', url: 'https://movies.example/phim/mau-2', downloaded_bytes: 230 * MB, speed: 3.1 * MB}),
+    t(2, 'DOWNLOADING', {url: 'https://movies.example/phim/mau-2', downloaded_bytes: 230 * MB, speed: 3.1 * MB}),
     t(3, 'PROBING'),
     t(4, 'QUEUED', {title: LONG, original_title: LONG}),
-    t(5, 'NEEDS_CHOICE', {source_id: 'movies', url: 'https://movies.example/phim/tuyen-tap', entry_count: 3, entries: [
+    t(5, 'NEEDS_CHOICE', {url: 'https://movies.example/phim/tuyen-tap', entry_count: 3, entries: [
       {index: 1, title: 'Tập 1', duration_seconds: 1500, estimated_bytes: 700 * MB},
       {index: 2, title: LONG, duration_seconds: 1490, estimated_bytes: 690 * MB},
       {index: 3, title: 'Đoạn giới thiệu', duration_seconds: 95}]}),
@@ -48,16 +48,18 @@ function seed() {
       media: {extractor: 'generic', height: 720, video_codec: 'vp9', audio_codec: 'opus'}}),
     t(15, 'PUBLISHING', {downloaded_bytes: 600 * MB, total_bytes: 600 * MB, name_locked: true}),
     t(16, 'CANCELLING'),
+    t(17, 'FAILED', {url: 'https://phim.example/phim/tap-1', title: null, original_title: null, error_code: 'UNSUPPORTED',
+      error_message: UNSUPPORTED('https://phim.example/phim/tap-1')}),
   ];
 }
 
 function create(options = {}) {
-  let tasks = seed(), slots = 2, nextId = 17;
+  let tasks = seed(), slots = 2, nextId = 18;
   const posts = [];
   const RUN = ['PROBING', 'WAITING_SPACE', 'DOWNLOADING', 'VERIFYING', 'PUBLISHING', 'CANCELLING'];
   const cleanable = () => tasks.filter(x => ['FAILED', 'STOPPED', 'INTERRUPTED'].includes(x.state));
   const snapshot = () => ({tasks, counts: tasks.reduce((c, x) => ({...c, [x.state]: (c[x.state] || 0) + 1}), {}),
-    settings: {slots, max_slots: 3}, sources: SOURCES, warnings: [], space: {free_bytes: 412 * GB, reserve_bytes: 100 * GB},
+    settings: {slots, max_slots: 3}, space: {free_bytes: 412 * GB, reserve_bytes: 100 * GB},
     temp: {tasks: cleanable().length, bytes: 520 * MB, ids: cleanable().map(x => x.id), total_temp_bytes: 1.4 * GB},
     running: tasks.filter(x => RUN.includes(x.state)).map(x => x.id), worker_error: null, worker_error_at: null});
   const storage = {computing: false, error: null, summary: {computed_at: new Date().toISOString(),
@@ -82,15 +84,21 @@ function create(options = {}) {
   function handlePost(p, body, res) {
     if (p === '/api/downloads') {
       const urls = Array.isArray(body.urls) ? body.urls : [];
-      const source = SOURCES.find(s => s.id === body.source_id);
       if (body.rights_confirmed !== true) return send(res, 400, {error: 'Cần xác nhận bạn có quyền tải và chỉnh sửa các video này.'});
-      const errors = urls.map((u, i) => {
-        let host = '';
-        try { host = new URL(u).hostname; } catch (_) { return {line: i + 1, code: 'BAD_URL', message: 'Link không hợp lệ.'}; }
-        return source && source.domains.includes(host) ? null : {line: i + 1, code: 'HOST_NOT_ALLOWED', message: 'Tên miền không thuộc nguồn đã chọn.'};
+      const errors = urls.map((u, i) => { // a few of the backend checks (download_links.py); any site is accepted
+        let url;
+        try { url = new URL(u); } catch (_) { return {line: i + 1, code: 'BAD_URL', message: 'Link không đúng dạng.'}; }
+        if (!['http:', 'https:'].includes(url.protocol)) return {line: i + 1, code: 'BAD_SCHEME', message: 'Chỉ nhận link http:// hoặc https://.'};
+        if (url.username || url.password) return {line: i + 1, code: 'USERINFO', message: 'Link không được chứa tên đăng nhập hay mật khẩu.'};
+        if (url.port) return {line: i + 1, code: 'BAD_PORT', message: 'Link không được dùng cổng riêng.'};
+        return null;
       }).filter(Boolean);
       if (!urls.length || errors.length) return send(res, 400, {error: 'Lô bị từ chối.', code: 'BATCH_REJECTED', errors});
-      const added = urls.map(u => ({...seed()[3], id: nextId++, url: u, source_id: source.id, title: null, original_title: null}));
+      const added = urls.map(u => {
+        const row = {...seed()[3], id: nextId++, url: u, title: null, original_title: null};
+        return new URL(u).hostname.startsWith('chua-ho-tro.')
+          ? {...row, state: 'FAILED', error_code: 'UNSUPPORTED', error_message: UNSUPPORTED(u)} : row;
+      });
       tasks = [...tasks, ...added]; // the backend lists oldest first
       return send(res, 200, {tasks: added});
     }

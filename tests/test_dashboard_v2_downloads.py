@@ -13,7 +13,7 @@ import subprocess
 import unittest
 from pathlib import Path
 
-from biliflow import control_center, download_store, download_upkeep, download_worker
+from biliflow import control_center, download_probe, download_store, download_upkeep, download_worker
 
 ROOT = Path(__file__).resolve().parents[1]
 NODE = shutil.which("node")
@@ -54,6 +54,13 @@ class DownloadPageTests(unittest.TestCase):
         for name in CORE_SETS:
             with self.subTest(set=name):
                 self.assertEqual(core[name], set(expected[name]))
+
+    def test_the_not_supported_badge_uses_the_codes_the_probe_gives(self) -> None:
+        completed = _node("-e", "console.log(JSON.stringify(require('./dashboard_v2/download-core.js').UNSUPPORTED))")
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        unsupported, _ = download_probe.classify_error("ERROR: Unsupported URL: https://x.example/", stage="probe")
+        empty = download_probe.choose({"_type": "playlist", "extractor_key": "Generic", "entries": []}).code
+        self.assertEqual(set(json.loads(completed.stdout)), {unsupported, empty})
 
     def test_live_page_serves_the_download_modules_and_the_demo_does_not_load_them(self) -> None:
         live = (ROOT / "dashboard_v2" / "live.html").read_text(encoding="utf-8")

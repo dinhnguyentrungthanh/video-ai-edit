@@ -13,7 +13,7 @@
   const attr = (on, name) => on ? ' ' + name : '';
 
   function createUi() {
-    return {source: '', text: '', rights: false, error: '', lineErrors: [], filter: 'all', open: new Set(),
+    return {text: '', rights: false, error: '', lineErrors: [], filter: 'all', open: new Set(),
       details: new Map(), renames: new Map(), choices: new Map(), busy: new Set()};
   }
 
@@ -22,25 +22,18 @@
     if (ctx.error) out.push('<div class="notice" role="alert">Không tải được danh sách tải video: ' + esc(ctx.error) + '</div>');
     if (data && data.worker_error) out.push('<div class="notice" role="alert">Hàng tải video báo lỗi' +
       (data.worker_error_at ? ' lúc ' + esc(new Date(data.worker_error_at).toLocaleString('vi-VN')) : '') + ': ' + esc(data.worker_error) + '</div>');
-    (data && data.warnings || []).forEach(w => out.push('<div class="notice">' + esc(w) + '</div>'));
     return out.join('');
   }
 
   function form(data, ui, ctx) {
-    const sources = data && Array.isArray(data.sources) ? data.sources : [];
-    const chosen = sources.find(s => s.id === ui.source) || sources[0];
-    const hosts = chosen ? chosen.domains.join(', ') : '';
-    const locked = ctx.offline || !sources.length;
+    const locked = ctx.offline;
     const lines = ui.lineErrors.length ? '<ul class="dl-line-errors">' + ui.lineErrors.map(l => '<li>' + esc(l) + '</li>').join('') + '</ul>' : '';
     return '<section class="panel download-form" aria-labelledby="dl-form-title"><div class="download-panel-title">' + ctx.icon('downloads') +
-      '<h2 id="dl-form-title">Thêm video</h2></div><p class="muted">Mỗi dòng một link cùng nguồn, tối đa ' + K.MAX_LINKS +
-      ' link mỗi lần. Có thể thêm lượt mới trong khi các video khác đang tải.</p>' +
-      '<label class="field"><span>Nguồn tải</span><select id="dl-source"' + attr(locked, 'disabled') + '>' +
-      (sources.length ? sources.map(s => '<option value="' + esc(s.id) + '"' + attr(chosen && s.id === chosen.id, 'selected') + '>' +
-        esc(s.label) + (s.local ? ' (bạn tự thêm)' : '') + '</option>').join('') : '<option>Chưa có nguồn</option>') + '</select>' +
-      (hosts ? '<small>Tên miền: <span class="mono">' + esc(hosts) + '</span></small>' : '') + '</label>' +
+      '<h2 id="dl-form-title">Thêm video</h2></div><p class="muted" id="dl-hint">Mỗi dòng một link, tối đa ' + K.MAX_LINKS +
+      ' link mỗi lần, từ trang nào cũng được. BiliFlow thăm dò từng trang trước khi tải; trang không có video đọc được sẽ báo ' +
+      '"Chưa hỗ trợ" ngay trong danh sách. Có thể thêm lượt mới trong khi các video khác đang tải.</p>' +
       '<label class="field"><span>Link video</span><textarea id="dl-urls" rows="5" autocomplete="off" spellcheck="false" ' +
-      'placeholder="Mỗi dòng một link https://…" maxlength="41000" aria-describedby="dl-error"' +
+      'placeholder="Mỗi dòng một link https://…" maxlength="41000" aria-describedby="dl-hint dl-error"' +
       attr(ui.error, 'aria-invalid="true"') + attr(ui.busy.has('add'), 'readonly') + '>' + esc(ui.text) + '</textarea></label>' +
       '<label class="dl-rights"><input type="checkbox" id="dl-rights"' + attr(ui.rights, 'checked') + '> ' +
       '<span>Tôi có quyền tải và chỉnh sửa các video này.</span></label>' +
@@ -50,7 +43,8 @@
       '<div class="download-destination"><span>File tải xong được chuyển vào</span><strong>Thư mục input của BiliFlow</strong>' +
       '<p class="muted dl-note">BiliFlow nhận video như file bạn tự chép vào; chỉ quét khi bạn bấm Thiết lập &amp; bắt đầu.</p></div>' +
       '<div class="download-demo-note"><strong>Giới hạn</strong><p>Không dùng cookie hay đăng nhập. Trang cần đăng nhập, có DRM ' +
-      'hoặc đang phát trực tiếp sẽ báo lỗi. Trang có nhiều video: BiliFlow chọn video dài nhất, còn lại hỏi bạn.</p></div></section>';
+      'hoặc đang phát trực tiếp sẽ báo lý do. Link danh sách phát hay kênh sẽ bị từ chối; hãy dán link của từng video. Trang yt-dlp không có ' +
+      'bộ đọc riêng: chỉ lấy video từ 10 phút để bỏ quảng cáo; có nhiều video dài thì hỏi bạn.</p></div></section>';
   }
 
   function tools(data, ui, ctx) {
@@ -121,9 +115,9 @@
     return '<details class="download-log" data-log-id="' + id + '"' + attr(open, 'open') + '><summary>Nhật ký lượt tải</summary>' + body + '</details>';
   }
 
-  function row(task, sources, ui, ctx) {
+  function row(task, ui, ctx) {
     const id = Number(task.id);
-    const p = K.progress(task), source = sources.find(s => s.id === task.source_id);
+    const p = K.progress(task);
     const percent = p.percent === null ? '' : p.percent + '%';
     // Sizes, speed and time left only: the badge already names the state.
     const meta = [p.sizeText, p.speed, p.eta].filter(Boolean).join(' · ');
@@ -140,20 +134,20 @@
     const line = meta || percent ? '<div class="download-item-progress"><span>' + esc(meta) + '</span><strong>' + percent + '</strong></div>' : '';
     return '<article class="download-item" data-download-id="' + id + '"><div class="download-item-top"><div class="download-item-name">' +
       '<span class="download-item-number">' + id + '</span><h3>' + esc(task.title || 'Lượt tải ' + id) + '</h3></div><span class="badge ' +
-      (K.TONES[task.state] || 'grey') + '">' + esc(K.LABELS[task.state] || task.state) + '</span></div><p class="download-source">' +
-      esc((source ? source.label + ' · ' : '') + task.url) + '</p>' + rename(task, ui, ctx) + line + meter + message(task) + choice(task, ui, ctx) + media +
+      (K.TONES[task.state] || 'grey') + '">' + esc(K.label(task)) + '</span></div><p class="download-source">' +
+      esc(task.url) + '</p>' + rename(task, ui, ctx) + line + meter + message(task) + choice(task, ui, ctx) + media +
       (buttons ? '<div class="download-item-actions">' + buttons + '</div>' : '') + log(task, ui) + '</article>';
   }
 
   /* Filters, rows and the foot line: the part redrawn on every refresh. */
   function items(data, ui, ctx) {
-    const tasks = data && Array.isArray(data.tasks) ? data.tasks : [], sources = data && data.sources || [];
+    const tasks = data && Array.isArray(data.tasks) ? data.tasks : [];
     const shown = tasks.filter(t => K.matches(t, ui.filter));
     const empty = '<div class="download-empty">' + ctx.icon('downloads') + '<h3>' + (tasks.length ? 'Không có lượt tải trong nhóm này' :
       'Chưa có lượt tải') + '</h3><p>Dán link ở khung Thêm video.<br>Mỗi video có tiến độ riêng.</p></div>';
     const running = data && Array.isArray(data.running) ? data.running.length : 0;
     return filters(tasks, ui) + '<div class="download-list">' +
-      (shown.length ? shown.map(t => row(t, sources, ui, ctx)).join('') : empty) + '</div><p class="download-list-foot">' + tasks.length +
+      (shown.length ? shown.map(t => row(t, ui, ctx)).join('') : empty) + '</div><p class="download-list-foot">' + tasks.length +
       ' lượt · ' + running + ' đang chạy' + (data && data.settings ? ' / ' + data.settings.slots + ' luồng' : '') + '</p>';
   }
   /* Three parts: download-live.js redraws the tools bar (its select) only when it changed and has no focus. */

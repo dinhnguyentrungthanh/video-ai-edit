@@ -1,10 +1,11 @@
+import sqlite3
 import threading
 import unittest
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
-from biliflow.download_sources import DownloadBatchError
+from biliflow.download_links import DownloadBatchError
 from biliflow.download_store import (
     FINAL_STATES,
     LOG_LINES_PER_TASK,
@@ -35,8 +36,27 @@ class StoreTests(unittest.TestCase):
         self.store.close()
         self.directory.cleanup()
 
-    def add(self, *urls, source="clips"):
-        return self.store.add_tasks(source, list(urls))
+    def add(self, *urls):
+        return self.store.add_tasks(list(urls))
+
+    def test_a_database_made_with_the_list_of_sources_still_takes_new_links(self):
+        schema = self.store._connection.execute(
+            "SELECT sql FROM sqlite_master WHERE name = 'download_tasks'").fetchone()[0]
+        self.store.close()
+        path = Path(self.directory.name) / "state" / "old.sqlite3"
+        old = sqlite3.connect(path)
+        # The table as it was with the list of sources: source_id NOT NULL right after id.
+        old.execute(schema.replace("AUTOINCREMENT,", "AUTOINCREMENT, source_id TEXT NOT NULL,", 1))
+        old.execute("INSERT INTO download_tasks (source_id, url, state, created_at, updated_at, queued_at, "
+                    "state_since) VALUES ('clips', 'https://clips.example/old', 'COMPLETED', 'a', 'a', 'a', 'a')")
+        old.commit()
+        old.close()
+        self.store = DownloadStore(path, clock=self.clock)
+        with self.assertRaises(sqlite3.OperationalError):
+            self.store._connection.execute("SELECT source_id FROM download_tasks")
+        self.assertEqual([task["url"] for task in self.store.list_tasks()], ["https://clips.example/old"])
+        added, = self.add("https://clips.example/new")
+        self.assertEqual(added["state"], "QUEUED")
 
     def test_new_tasks_are_queued_in_order(self):
         tasks = self.add("https://clips.example/a", "https://clips.example/b")
@@ -64,7 +84,7 @@ class StoreTests(unittest.TestCase):
     def test_unfinished_tasks_are_capped(self):
         urls = [f"https://clips.example/{index}" for index in range(MAX_UNFINISHED_TASKS)]
         for start in range(0, len(urls), 20):
-            self.store.add_tasks("clips", urls[start:start + 20])
+            self.store.add_tasks(urls[start:start + 20])
         with self.assertRaises(DownloadBatchError) as caught:
             self.add("https://clips.example/one-more")
         self.assertEqual(caught.exception.errors[0]["code"], "TOO_MANY_TASKS")
@@ -141,7 +161,7 @@ class StoreTests(unittest.TestCase):
 
         def worker(offset):
             try:
-                self.store.add_tasks("clips", [f"https://clips.example/{offset}-{n}" for n in range(20)])
+                self.store.add_tasks([f"https://clips.example/{offset}-{n}" for n in range(20)])
             except DownloadBatchError as error:
                 errors.append(error)
         threads = [threading.Thread(target=worker, args=(index,)) for index in range(8)]

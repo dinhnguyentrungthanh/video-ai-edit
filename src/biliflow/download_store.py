@@ -13,7 +13,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Iterable
 
-from biliflow.download_sources import DownloadBatchError
+from biliflow.download_links import DownloadBatchError
 
 STATES = (
     "QUEUED", "PROBING", "NEEDS_CHOICE", "WAITING_SPACE", "DOWNLOADING", "VERIFYING",
@@ -69,7 +69,6 @@ class DownloadStore:
             """
             CREATE TABLE IF NOT EXISTS download_tasks (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
-                source_id TEXT NOT NULL,
                 url TEXT NOT NULL,
                 state TEXT NOT NULL,
                 attempt INTEGER NOT NULL DEFAULT 1,
@@ -127,6 +126,9 @@ class DownloadStore:
             );
             """
         )
+        columns = {row[1] for row in self._connection.execute("PRAGMA table_info(download_tasks)")}
+        if "source_id" in columns:  # the list of sources, dropped after D4 (test roots only)
+            self._connection.execute("ALTER TABLE download_tasks DROP COLUMN source_id")
         self._connection.commit()
 
     def _now(self) -> str:
@@ -155,7 +157,7 @@ class DownloadStore:
                 raise ValueError(f"Unknown download task field: {key!r}")
         return columns
 
-    def add_tasks(self, source_id: str, urls: list[str]) -> list[dict[str, Any]]:
+    def add_tasks(self, urls: list[str]) -> list[dict[str, Any]]:
         """Insert a validated batch; a listed link or the 100-task cap rejects it all."""
         with self._lock:
             open_rows = {
@@ -184,9 +186,9 @@ class DownloadStore:
             with self._connection:
                 for url in urls:
                     cursor = self._connection.execute(
-                        "INSERT INTO download_tasks (source_id, url, state, created_at, updated_at, "
-                        "queued_at, state_since) VALUES (?, ?, 'QUEUED', ?, ?, ?, ?)",
-                        (source_id, url, now, now, now, now),
+                        "INSERT INTO download_tasks (url, state, created_at, updated_at, "
+                        "queued_at, state_since) VALUES (?, 'QUEUED', ?, ?, ?, ?)",
+                        (url, now, now, now, now),
                     )
                     ids.append(int(cursor.lastrowid))
             return [self.get(task_id) for task_id in ids]

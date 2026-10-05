@@ -1,7 +1,18 @@
 """Read a yt-dlp probe (``--dump-single-json``) and pick what to download.
 
-Generic for every allowed site: no site-specific extraction. A page that only
-exposes ads or trailers to yt-dlp is reported, never worked around.
+The probe is how BiliFlow learns whether a page can be downloaded at all: any
+public page may be added, and a page without a video yt-dlp can read ends as
+UNSUPPORTED ("Trang này chưa được hỗ trợ"). There is no site-specific code.
+
+Two reading rules, chosen by the extractor yt-dlp used:
+- a site with its own yt-dlp reader (YouTube, Bilibili, ...): only the video in
+  the link, any length; a link that yields several videos (a playlist, a
+  channel) is refused;
+- a page read by yt-dlp's generic reader: several videos may come back (ads,
+  trailers, the film); entries shorter than ``GENERIC_MIN_DURATION_SECONDS``
+  are dropped, the longest wins when it is at least twice the next one, or the
+  user chooses. A page that only exposes short videos is reported, never worked
+  around.
 """
 from __future__ import annotations
 
@@ -16,8 +27,19 @@ LIVE_MESSAGES = {
     "POST_LIVE": "Buổi phát vừa kết thúc, trang chưa xử lý xong bản lưu; thử lại sau.",
 }
 DRM_MESSAGE = "Video có DRM; không hỗ trợ."
+UNSUPPORTED_MESSAGE = "Trang này chưa được hỗ trợ: yt-dlp không tìm thấy video nào đọc được trong trang."
+NO_VIDEOS_MESSAGE = "Link không có video nào (danh sách phát hoặc kênh trống)."
 LONGEST_RATIO = 2.0
+MAX_TITLE_LENGTH = 300
+# yt-dlp's error lines echo links, redirect targets and socket addresses; a page could use them to map
+# the local network through redirects, so they never reach the message (nor decide the code).
+_LINK = re.compile(r"\b[a-z][a-z0-9+.-]*://\S+", re.IGNORECASE)
+_ADDRESS = re.compile(r"\[[0-9a-f:.%]*:[0-9a-f:.%]*\](?::\d+)?|\b\d{1,3}(?:\.\d{1,3}){3}(?::\d+)?\b", re.IGNORECASE)
+GENERIC_EXTRACTOR = "generic"
+GENERIC_MIN_DURATION_SECONDS = 600.0  # ads and trailers on pages without a reader of their own
 _ERROR_RULES: tuple[tuple[str, str, str], ...] = (
+    # First: "Unsupported URL" is unambiguous, and the other rules must not read words of the link.
+    ("UNSUPPORTED", r"unsupported url", UNSUPPORTED_MESSAGE),
     ("DRM", r"\bDRM\b", DRM_MESSAGE),
     ("AGE_RESTRICTED", r"confirm your age|age[- ]restrict|inappropriate for some users",
      "Video giới hạn tuổi, cần đăng nhập; không dùng tài khoản hay cookie nên không tải."),
@@ -27,7 +49,6 @@ _ERROR_RULES: tuple[tuple[str, str, str], ...] = (
      r"private video|video is private|members[- ]only|join this channel|log ?in|sign ?in|"
      r"account|cookies|premium|subscri",
      "Video cần đăng nhập hoặc tài khoản trả phí; không hỗ trợ."),
-    ("UNSUPPORTED", r"unsupported url", "yt-dlp không hỗ trợ trang hoặc link này."),
     ("UPCOMING", r"live event will begin|premieres in", LIVE_MESSAGES["UPCOMING"]),
     ("GEO_BLOCKED", r"in your country|geo[- ]?restrict|not available in your (region|location)",
      "Video bị chặn theo khu vực."),
@@ -112,7 +133,7 @@ def _entry(info: dict[str, Any], index: int) -> ProbeEntry:
     height = _number(video.get("height"))
     return ProbeEntry(
         index=index,
-        title=str(info.get("title") or info.get("id") or "video"),
+        title=str(info.get("title") or info.get("id") or "video")[:MAX_TITLE_LENGTH],
         duration_seconds=duration,
         estimated_bytes=estimated,
         video_id=str(info["id"]) if info.get("id") is not None else None,
@@ -145,14 +166,24 @@ def _refusal(entry: ProbeEntry) -> tuple[str, str] | None:
     return None
 
 
-def choose(info: dict[str, Any], *, min_duration_seconds: float, allow_multi_entry: bool) -> ProbeChoice:
+def is_generic(info: dict[str, Any]) -> bool:
+    """True when yt-dlp read the page with its generic reader (no reader for this site)."""
+    name = info.get("extractor_key") or info.get("extractor") or ""
+    return str(name).strip().lower() == GENERIC_EXTRACTOR
+
+
+def choose(info: dict[str, Any]) -> ProbeChoice:
     """READY with the entry to download, NEEDS_CHOICE with candidates, or FAILED."""
+    generic = is_generic(info)
+    min_duration_seconds = GENERIC_MIN_DURATION_SECONDS if generic else 0.0
     entries = entries_from_info(info)
     if not entries:
-        return ProbeChoice("FAILED", code="NO_ENTRIES", message="Trang không có video nào yt-dlp đọc được.")
-    if len(entries) > 1 and not allow_multi_entry:
+        if not generic:
+            return ProbeChoice("FAILED", code="NO_VIDEOS", message=NO_VIDEOS_MESSAGE)
+        return ProbeChoice("FAILED", code="NO_ENTRIES", message=UNSUPPORTED_MESSAGE)
+    if len(entries) > 1 and not generic:
         return ProbeChoice("FAILED", entries=tuple(entries), code="MULTIPLE_ENTRIES",
-                           message=f"Link trả về {len(entries)} video; nguồn này chỉ tải link một video.")
+                           message="Link có nhiều video (danh sách phát hoặc kênh); chỉ tải link của một video.")
     candidates = [entry for entry in entries if _refusal(entry) is None]
     if not candidates:
         code, message = _refusal(entries[0])
@@ -164,7 +195,8 @@ def choose(info: dict[str, Any], *, min_duration_seconds: float, allow_multi_ent
         return ProbeChoice(
             "FAILED", entries=tuple(entries), code="ONLY_SHORT_ENTRIES",
             message=(f"Không tìm thấy phim, chỉ thấy {len(candidates)} video ngắn ({lengths}), "
-                     "có thể là quảng cáo."),
+                     "có thể là quảng cáo. Trang không có bộ đọc riêng nên chỉ tải video từ "
+                     f"{int(min_duration_seconds // 60)} phút trở lên."),
         )
     if len(long_enough) == 1:
         return ProbeChoice("READY", entry=long_enough[0], entries=tuple(entries))
@@ -180,7 +212,7 @@ def classify_error(text: str, *, stage: str) -> tuple[str, str]:
     """Map yt-dlp's error output to a code and a Vietnamese message with the last ERROR line."""
     lines = [line.strip() for line in (text or "").splitlines() if line.strip()]
     errors = [line for line in lines if line.startswith("ERROR")] or lines[-1:]
-    detail = errors[-1][:300] if errors else ""
+    detail = _ADDRESS.sub("<địa chỉ>", _LINK.sub("<link>", errors[-1]))[:300] if errors else ""
     for code, pattern, message in _ERROR_RULES:
         if detail and re.search(pattern, detail, re.IGNORECASE):
             return code, f"{message} ({detail})"

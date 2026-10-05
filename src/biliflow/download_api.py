@@ -1,9 +1,9 @@
 """HTTP layer of the video downloader, called by the Control Center handler.
 
-GET  /api/downloads                       snapshot (tasks, slots, sources, space, temp)
+GET  /api/downloads                       snapshot (tasks, slots, space, temp)
 GET  /api/downloads/<id>                  one task with its events and masked log
 GET  /api/storage-summary[?refresh=1]     the read-only "Dung lượng" panel (5-minute cache)
-POST /api/downloads                       {source_id, urls[], rights_confirmed: true}
+POST /api/downloads                       {urls[], rights_confirmed: true}
 POST /api/downloads/<id>/rename           {name}
 POST /api/downloads/<id>/choose           {entry_index}
 POST /api/downloads/<id>/<action>         stop | resume | cancel | retry | remove
@@ -20,7 +20,7 @@ from collections import Counter
 from pathlib import Path
 from typing import Any, Callable
 
-from biliflow.download_sources import DownloadBatchError, DownloadSourceError, load_sources
+from biliflow.download_links import DownloadBatchError
 from biliflow.download_store import DownloadStore
 from biliflow.download_worker import MAX_SLOTS, DownloadActionError, DownloadWorker
 from biliflow.storage_summary import BinReader, Cleanable, StorageSummaryCache
@@ -34,7 +34,7 @@ POST_ROUTES = (r"/api/downloads", r"/api/downloads/settings", r"/api/downloads/c
                TASK_ACTION.pattern)
 UNAVAILABLE_MESSAGE = "Tính năng tải video chưa sẵn sàng: {error}"
 _PUBLIC_FIELDS = (
-    "id", "source_id", "url", "state", "attempt", "desired_name", "original_title", "duration_seconds",
+    "id", "url", "state", "attempt", "desired_name", "original_title", "duration_seconds",
     "estimated_bytes", "downloaded_bytes", "total_bytes", "speed", "eta", "error_code", "error_message",
     "chosen_entry", "name_locked", "created_at", "state_since", "finished_at", "queued_at",
 )
@@ -115,15 +115,6 @@ class DownloadService:
             self.store.close()
 
     def snapshot(self) -> dict[str, Any]:
-        warnings: list[str] = []
-        try:
-            catalog = load_sources(self.root)
-            sources = [{"id": item.id, "label": item.label, "domains": list(item.domains),
-                        "local": item.local} for item in catalog.sources]
-            warnings.extend(catalog.warnings)
-        except DownloadSourceError as error:
-            sources = []
-            warnings.append(f"Danh sách nguồn lỗi: {error}")
         tasks = [self._public(task) for task in self.store.list_tasks()]
         try:
             free, reserve = self.worker.space_probe(self.root)
@@ -134,8 +125,6 @@ class DownloadService:
             "tasks": tasks,
             "counts": dict(Counter(task["state"] for task in tasks)),
             "settings": {"slots": self.worker.slots(), "max_slots": MAX_SLOTS},
-            "sources": sources,
-            "warnings": [self.scrub(item) for item in warnings],
             "space": self._scrub_tree(space),
             "temp": self.worker.temp_summary(),
             "running": sorted(self.worker.running_ids()),
@@ -169,8 +158,6 @@ class DownloadService:
             return 400, {"error": str(error), "code": "BATCH_REJECTED", "errors": error.errors}
         except DownloadActionError as error:
             return error.status, {"error": self.scrub(str(error))}
-        except DownloadSourceError as error:
-            return 500, {"error": self.scrub(f"Danh sách nguồn lỗi: {error}")}
 
     def _post(self, path: str, body: dict[str, Any]) -> Response | None:
         worker = self.worker
@@ -178,8 +165,7 @@ class DownloadService:
             urls = body.get("urls")
             if not isinstance(urls, list) or not all(isinstance(url, str) for url in urls):
                 return 400, {"error": "urls phải là danh sách link."}
-            tasks = worker.add(str(body.get("source_id", "")), urls,
-                               rights_confirmed=body.get("rights_confirmed") is True)
+            tasks = worker.add(urls, rights_confirmed=body.get("rights_confirmed") is True)
             return 200, {"tasks": [self._public(task) for task in tasks]}
         if path == "/api/downloads/settings":
             return 200, {"slots": worker.set_slots(body.get("slots"))}

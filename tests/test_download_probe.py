@@ -1,10 +1,12 @@
 import unittest
 
 from biliflow.download_probe import (
+    GENERIC_MIN_DURATION_SECONDS,
     choose,
     classify_error,
     entries_from_info,
     format_duration,
+    is_generic,
 )
 
 
@@ -54,68 +56,94 @@ class EntryTests(unittest.TestCase):
         self.assertEqual(len(entries_from_info(info)), 1)
 
 
-class ChooseTests(unittest.TestCase):
-    def choose(self, info, *, minimum=0, multi=False):
-        return choose(info, min_duration_seconds=minimum, allow_multi_entry=multi)
+def site(info):
+    """A page read by a site's own yt-dlp reader."""
+    return dict(info, extractor_key="Youtube")
 
-    def test_a_single_video_is_ready(self):
-        result = self.choose(video())
-        self.assertEqual(result.kind, "READY")
-        self.assertEqual(result.entry.index, 0)
+
+def generic(info):
+    """A page read by yt-dlp's generic reader (no reader for this site)."""
+    return dict(info, extractor_key="Generic")
+
+
+class ChooseTests(unittest.TestCase):
+    def test_a_single_video_is_ready_at_any_length(self):
+        for duration in (600.0, 12.0, None):
+            with self.subTest(duration=duration):
+                result = choose(site(video(duration=duration)))
+                self.assertEqual((result.kind, result.entry.index), ("READY", 0))
+
+    def test_the_reader_rule_follows_the_extractor_name(self):
+        self.assertTrue(is_generic({"extractor_key": "Generic"}))
+        self.assertTrue(is_generic({"extractor": "generic"}))
+        self.assertFalse(is_generic({"extractor_key": "Youtube", "extractor": "youtube"}))
+        self.assertFalse(is_generic({}))
 
     def test_live_upcoming_and_post_live_are_refused(self):
         for status, code in (("is_live", "LIVE"), ("is_upcoming", "UPCOMING"), ("post_live", "POST_LIVE")):
             with self.subTest(status=status):
-                result = self.choose(video(live_status=status))
+                result = choose(site(video(live_status=status)))
                 self.assertEqual((result.kind, result.code), ("FAILED", code))
-        self.assertEqual(self.choose(video(live_status=None, is_live=True)).code, "LIVE")
+        self.assertEqual(choose(site(video(live_status=None, is_live=True))).code, "LIVE")
 
     def test_drm_formats_are_refused(self):
-        result = self.choose(video(drm=True))
+        result = choose(site(video(drm=True)))
         self.assertEqual((result.kind, result.code), ("FAILED", "DRM"))
 
-    def test_a_source_without_multi_entries_refuses_a_page(self):
-        result = self.choose(page(video("A", 600), video("B", 700)))
+    def test_a_site_reader_refuses_a_link_with_several_videos(self):
+        result = choose(site(page(video("A", 600), video("B", 700))))
         self.assertEqual((result.kind, result.code), ("FAILED", "MULTIPLE_ENTRIES"))
+        self.assertIn("danh sách phát", result.message)
 
     def test_ads_are_dropped_and_the_film_is_chosen(self):
         info = page(video("Ad 1", 30, video_id="a1"), video("Ad 2", 15, video_id="a2"),
                     video("Ad 3", 65, video_id="a3"), video("Film", 5400, video_id="f"))
-        result = self.choose(info, minimum=600, multi=True)
+        result = choose(generic(info))
         self.assertEqual(result.kind, "READY")
         self.assertEqual((result.entry.index, result.entry.title), (4, "Film"))
 
     def test_the_longest_wins_only_when_twice_the_next(self):
-        clear = self.choose(page(video("Trailer", 700), video("Film", 5400)), minimum=600, multi=True)
+        clear = choose(generic(page(video("Trailer", 700), video("Film", 5400))))
         self.assertEqual((clear.kind, clear.entry.title), ("READY", "Film"))
-        close = self.choose(page(video("Part 1", 2700), video("Part 2", 3000)), minimum=600, multi=True)
+        close = choose(generic(page(video("Part 1", 2700), video("Part 2", 3000))))
         self.assertEqual(close.kind, "NEEDS_CHOICE")
         self.assertEqual([entry.title for entry in close.entries], ["Part 1", "Part 2"])
 
     def test_unknown_durations_need_a_choice(self):
-        result = self.choose(page(video("A", None), video("B", 5400)), minimum=600, multi=True)
+        result = choose(generic(page(video("A", None), video("B", 5400))))
         self.assertEqual(result.kind, "NEEDS_CHOICE")
 
-    def test_only_short_entries_fail_with_their_lengths(self):
-        info = page(video("Ad 1", 30), video("Ad 2", 15), video("Ad 3", 65))
-        result = self.choose(info, minimum=600, multi=True)
+    def test_a_generic_page_with_short_videos_only_fails_with_their_lengths(self):
+        result = choose(generic(page(video("Ad 1", 30), video("Ad 2", 15), video("Ad 3", 65))))
         self.assertEqual((result.kind, result.code), ("FAILED", "ONLY_SHORT_ENTRIES"))
         self.assertIn("3 video ngắn", result.message)
         self.assertIn("0:30", result.message)
         self.assertIn("1:05", result.message)
-        single = self.choose(video("Ad", 45), minimum=600)
+        self.assertIn("10 phút", result.message)
+        single = choose(generic(video("Ad", 45)))
         self.assertEqual(single.code, "ONLY_SHORT_ENTRIES")
         self.assertIn("1 video ngắn (0:45)", single.message)
+        self.assertEqual(choose(generic(video("Direct file", None))).kind, "READY")
+        self.assertEqual(GENERIC_MIN_DURATION_SECONDS, 600)
 
     def test_drm_or_live_entries_are_not_candidates(self):
-        info = page(video("Ad", 30), video("Film", 5400, drm=True))
-        result = self.choose(info, minimum=600, multi=True)
+        result = choose(generic(page(video("Ad", 30), video("Film", 5400, drm=True))))
         self.assertEqual((result.kind, result.code), ("FAILED", "ONLY_SHORT_ENTRIES"))
-        info = page(video("Film", 5400, drm=True))
-        self.assertEqual(self.choose(info, minimum=600, multi=True).code, "DRM")
+        self.assertEqual(choose(generic(page(video("Film", 5400, drm=True)))).code, "DRM")
 
-    def test_an_empty_page_fails(self):
-        self.assertEqual(self.choose({"_type": "playlist", "entries": []}, multi=True).code, "NO_ENTRIES")
+    def test_a_page_without_videos_is_not_supported_yet(self):
+        result = choose(generic({"_type": "playlist", "entries": []}))
+        self.assertEqual(result.code, "NO_ENTRIES")
+        self.assertIn("Trang này chưa được hỗ trợ", result.message)
+
+    def test_an_empty_playlist_on_a_site_reader_is_not_called_unsupported(self):
+        result = choose(site({"_type": "playlist", "entries": []}))
+        self.assertEqual(result.code, "NO_VIDEOS")
+        self.assertNotIn("chưa được hỗ trợ", result.message)
+
+    def test_titles_from_the_page_are_bounded(self):
+        entry, = entries_from_info(video("x" * 5000))
+        self.assertEqual(len(entry.title), 300)
 
 
 class ErrorTests(unittest.TestCase):
@@ -138,6 +166,30 @@ class ErrorTests(unittest.TestCase):
         for text, code in cases.items():
             with self.subTest(code=code):
                 self.assertEqual(classify_error(text, stage="probe")[0], code)
+
+    def test_an_unsupported_page_reads_as_not_supported_yet(self):
+        code, message = classify_error("ERROR: Unsupported URL: https://phim.example/phim/1", stage="probe")
+        self.assertEqual(code, "UNSUPPORTED")
+        self.assertTrue(message.startswith("Trang này chưa được hỗ trợ"), message)
+
+    def test_words_of_the_link_never_decide_the_code(self):
+        for path in ("login/phim-1", "account/1", "premium/tap-2", "subscribe/x", "cookies/a", "drm/b", "private"):
+            with self.subTest(path=path):
+                code, _ = classify_error(f"ERROR: [generic] Unsupported URL: https://site.example/{path}",
+                                         stage="probe")
+                self.assertEqual(code, "UNSUPPORTED")
+
+    def test_links_and_addresses_never_reach_the_message(self):
+        cases = ("ERROR: Unsupported URL: http://127.0.0.1:8765/api/x",
+                 "ERROR: [generic] Unable to download webpage: <urlopen error [WinError 10061] refused> "
+                 "(caused by http://192.168.1.1/admin)",
+                 "ERROR: [generic] connect to [fe80::1%12]:8080 refused",
+                 "ERROR: [generic] connection to 10.0.0.5:22 timed out")
+        for text in cases:
+            with self.subTest(text=text[:40]):
+                _, message = classify_error(text, stage="probe")
+                for leaked in ("127.0.0.1", "8765", "192.168.1.1", "fe80", "10.0.0.5", "http://"):
+                    self.assertNotIn(leaked, message)
 
     def test_unknown_errors_keep_the_last_error_line(self):
         code, message = classify_error("noise\nERROR: something odd happened\n", stage="download")

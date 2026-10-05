@@ -5,7 +5,7 @@ Có hai trang dùng chung giao diện (`app.js`):
 - **Demo** (`index.html`): dữ liệu mẫu trong bộ nhớ (`mock-data.js` + `demo-store.js`), CSP `connect-src 'none'`, không kết nối Control Center.
 - **Bản live** (`live.html`): `adapter.js` đọc/ghi Control Center cùng origin, CSP `connect-src 'self'`. Control Center phục vụ trang này ở `/dashboard-v2/` (Pha 3). Dashboard cũ ở `/` giữ nguyên. Máy thật kiểm từng đợt theo `docs/DASHBOARD_V2_CLOUD_PLAN.md` và `docs/DASHBOARD_V2_REVIEW_PLAN.md`.
 
-Trang **Tải video**: bản demo vẫn là mô phỏng (không downloader, không gọi mạng). Bản live dùng API tải của Control Center (`/api/downloads…`, `/api/storage-summary`); file tải xong vào `input`, không tự quét. Thiết kế và giới hạn: [`docs/VIDEO_DOWNLOAD_PLAN.md`](../docs/VIDEO_DOWNLOAD_PLAN.md).
+Trang **Tải video**: bản demo vẫn là mô phỏng (không downloader, không gọi mạng). Bản live dùng API tải của Control Center (`/api/downloads…`, `/api/storage-summary`): nhận link từ trang nào cũng được, yt-dlp thăm dò trang trước khi tải và trang không có video đọc được hiện "Chưa hỗ trợ"; file tải xong vào `input`, không tự quét. Thiết kế và giới hạn: [`docs/VIDEO_DOWNLOAD_PLAN.md`](../docs/VIDEO_DOWNLOAD_PLAN.md).
 
 **Mở trên điện thoại / laptop trong Wi-Fi nhà** (đợt 2): chạy `Start-BiliFlow-Phone.cmd` ở gốc repo; xem `docs/DASHBOARD_V2_PHONE.md`. Khung "Mở trên điện thoại" nằm ở Cài đặt của bản live trên PC.
 
@@ -20,7 +20,7 @@ không có API, proxy, thao tác xử lý video hay phụ thuộc cần cài th�
 ## Nội dung
 
 - Hai chế độ sáng/tối, chuyển bằng nút ở góc trên bên phải. Lựa chọn được nhớ riêng trong trình duyệt; đặt lại dữ liệu mẫu không đổi giao diện.
-- Trang **Tải video**: YouTube / Phimmoi (mẫu), nhiều link mỗi lần, danh sách tiến độ riêng, chờ/đang tải/kiểm tra/hoàn tất/lỗi, lọc, tải đồng thời 1–3, tạm dừng/hủy/thử lại và nhật ký mẫu. Phimmoi dùng `phimmoi.example`; không phải tên miền tải thật. Không chạy downloader, command, PowerShell hoặc API tải thật. Hướng dẫn adapter command/PowerShell ở tài liệu tích hợp.
+- Trang **Tải video**: không chọn nguồn, link mẫu dùng tên miền `*.example` (host bắt đầu bằng `chua-ho-tro.` mô phỏng trang chưa hỗ trợ), nhiều link mỗi lần, danh sách tiến độ riêng, chờ/đang tải/kiểm tra/hoàn tất/lỗi, lọc, tải đồng thời 1–3, tạm dừng/hủy/thử lại và nhật ký mẫu. Không chạy downloader, command, PowerShell hoặc API tải thật. Hướng dẫn adapter command/PowerShell ở tài liệu tích hợp.
 - Tổng quan tách Đang quét cảnh, Chờ bạn duyệt, Sẵn sàng xuất, Đang xuất video và Hoàn tất; số đếm là video. Video chờ quét/chờ xuất hiển thị riêng, không cộng vào số đang chạy. Bấm mỗi ô lọc đúng nhóm và xóa từ khóa tìm kiếm cũ.
 - Chi tiết video ưu tiên tiến độ và 1–2 thao tác chính; mục **Thao tác khác** giữ các chức năng còn lại cùng điều kiện khóa và xác nhận.
 - Tổng quan, danh sách video với tìm kiếm / bộ lọc / phân trang.
@@ -45,7 +45,7 @@ Mọi trạng thái thử nghiệm được giữ trong bộ nhớ của tab; t�
 | `demo-store.js` | DemoStore: trạng thái mẫu trong bộ nhớ, cùng giao diện với live store (chỉ bản demo) |
 | `adapter.js` | ControlCenterAdapter: nơi **duy nhất** gọi HTTP; token, 403 làm mới một lần, không lặp lệnh ghi, chống response cũ; live store và chuẩn hóa snapshot (chỉ bản live) |
 | `live.html` | Trang live cho `/dashboard-v2/`; cùng phần body với `index.html` |
-| `download-demo.js` | Hai nguồn mẫu, kiểm tra batch và state machine hàng đợi tải; không có transport hoặc downloader (chỉ bản demo) |
+| `download-demo.js` | Kiểm tra link mẫu (trang nào cũng được), kiểm tra batch và state machine hàng đợi tải; không có transport hoặc downloader (chỉ bản demo) |
 | `download-core.js`, `download-view.js`, `download-live.js` | Tải video bản live: nút theo trạng thái và tiến độ (cùng tập trạng thái với backend), dựng HTML (chữ từ trang web luôn qua `esc()`), trạng thái trang và làm mới từng phần |
 | `app.js` | Giao diện; chỉ đọc snapshot của store và gọi `store.dispatch` |
 | `review-core.js`, `review-detail.js` | Hộp duyệt: logic thuần (lọc, khóa, payload, so với trang cũ) và chữ chi tiết; chạy được trong node |

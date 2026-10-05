@@ -9,11 +9,10 @@ const K = require('./download-core.js');
 const V = require('./download-view.js');
 
 const TOKEN = 'tok-dl';
-const task = (id, state, extra = {}) => ({id, state, source_id: 'clips', url: 'https://clips.example/v/' + id, title: 'Video ' + id,
+const task = (id, state, extra = {}) => ({id, state, url: 'https://clips.example/v/' + id, title: 'Video ' + id,
   attempt: 1, downloaded_bytes: 0, total_bytes: null, speed: null, eta: null, error_message: null, error_code: null,
   output_name: null, entries: null, name_locked: false, media: {}, ...extra});
-const SOURCES = [{id: 'clips', label: 'Clip', domains: ['clips.example'], local: false}];
-const snapshot = (tasks, extra = {}) => ({tasks, counts: {}, settings: {slots: 2, max_slots: 3}, sources: SOURCES, warnings: [],
+const snapshot = (tasks, extra = {}) => ({tasks, counts: {}, settings: {slots: 2, max_slots: 3},
   space: {free_bytes: 500e9, reserve_bytes: 100e9}, temp: {tasks: 0, bytes: 0}, running: [], worker_error: null, worker_error_at: null, ...extra});
 const ctx = (extra = {}) => ({icon: () => '', offline: false, remote: false, error: '', storageError: '', ...extra});
 
@@ -100,9 +99,23 @@ test('a batch needs links, at most 20, and the rights box; blank lines are dropp
   assert.throws(() => K.checkBatch('https://clips.example/1', false), /quyền/);
   assert.deepEqual(K.checkBatch(' https://clips.example/1 \r\n\r\nhttps://clips.example/2\n', true),
     ['https://clips.example/1', 'https://clips.example/2']);
-  assert.deepEqual(K.batchErrors({errors: [{line: 2, code: 'HOST_NOT_ALLOWED', message: 'Tên miền không thuộc nguồn'}, {code: 'X'}]}),
-    ['Dòng 2: Tên miền không thuộc nguồn', 'X']);
+  assert.deepEqual(K.batchErrors({errors: [{line: 2, code: 'USERINFO', message: 'Link không được chứa tên đăng nhập'}, {code: 'X'}]}),
+    ['Dòng 2: Link không được chứa tên đăng nhập', 'X']);
   assert.deepEqual(K.batchErrors(new Error('x')), []);
+});
+
+test('a page yt-dlp cannot read says "Chưa hỗ trợ" with the reason; other failures stay "Lỗi"', () => {
+  const reason = 'Trang này chưa được hỗ trợ: yt-dlp không tìm thấy video nào đọc được trong trang.';
+  for (const code of K.UNSUPPORTED) {
+    const html = V.row(task(8, 'FAILED', {error_code: code, error_message: reason}), V.createUi(), ctx());
+    assert.match(html, /<span class="badge red">Chưa hỗ trợ<\/span>/, code);
+    assert.ok(html.includes(reason), code);
+  }
+  assert.deepEqual(K.UNSUPPORTED, ['UNSUPPORTED', 'NO_ENTRIES']);
+  assert.equal(K.label(task(8, 'FAILED', {error_code: 'DRM'})), 'Lỗi');
+  assert.equal(K.label(task(8, 'STOPPED', {error_code: 'UNSUPPORTED'})), 'Đã dừng');
+  assert.match(V.row(task(9, 'QUEUED', {url: 'https://phim.example/phim/1'}), V.createUi(), ctx()),
+    /<p class="download-source">https:\/\/phim\.example\/phim\/1<\/p>/);
 });
 
 test('sizes and clocks', () => {
@@ -124,7 +137,7 @@ test('text from the sites is written as text everywhere (title, link, entries, e
   ui.open.add(1);
   ui.details.set(1, {events: [{kind: 'NOTE', message: evil}], log: ['[download] ' + evil]});
   ui.renames.set(2, evil);
-  const html = V.page(snapshot(rows, {warnings: [evil], worker_error: evil, worker_error_at: '2026-10-05T10:00:00+00:00'}),
+  const html = V.page(snapshot(rows, {worker_error: evil, worker_error_at: '2026-10-05T10:00:00+00:00'}),
     {computing: false, summary: null, error: evil}, ui, ctx({error: evil}));
   assert.ok(!html.includes('<x-evil'), 'no raw tag');
   assert.ok(html.includes('&lt;x-evil onclick=&quot;1&quot;&gt;&#39;&quot;&amp;'));
@@ -132,14 +145,14 @@ test('text from the sites is written as text everywhere (title, link, entries, e
 });
 
 test('a finished task shows only the file name in input; a waiting one can be renamed', () => {
-  const done = V.row(task(4, 'COMPLETED', {output_name: 'Phim.mp4', media: {height: 720, video_codec: 'h264', audio_codec: 'aac'}}), SOURCES, V.createUi(), ctx());
+  const done = V.row(task(4, 'COMPLETED', {output_name: 'Phim.mp4', media: {height: 720, video_codec: 'h264', audio_codec: 'aac'}}), V.createUi(), ctx());
   assert.match(done, /Đã vào input: <strong>Phim\.mp4<\/strong>/);
   assert.match(done, /720p · h264 \+ aac/);
   assert.ok(!done.includes('data-rename'));
   assert.ok(!/E:\\|input\\/.test(done), 'no local path');
-  const queued = V.row(task(5, 'QUEUED'), SOURCES, V.createUi(), ctx());
+  const queued = V.row(task(5, 'QUEUED'), V.createUi(), ctx());
   assert.match(queued, /data-rename="5" value="Video 5"/);
-  assert.match(V.row(task(5, 'QUEUED'), SOURCES, V.createUi(), ctx({offline: true})), /data-rename="5"[^>]* disabled/);
+  assert.match(V.row(task(5, 'QUEUED'), V.createUi(), ctx({offline: true})), /data-rename="5"[^>]* disabled/);
 });
 
 test('the list has three parts; the tools bar (its select) is its own part', () => {
@@ -152,25 +165,25 @@ test('the list has three parts; the tools bar (its select) is its own part', () 
 });
 
 test('the meter has aria-valuenow only with a known percent', () => {
-  const unknown = V.row(task(6, 'DOWNLOADING', {downloaded_bytes: 10}), SOURCES, V.createUi(), ctx());
+  const unknown = V.row(task(6, 'DOWNLOADING', {downloaded_bytes: 10}), V.createUi(), ctx());
   assert.match(unknown, /class="meter download-meter indeterminate"/);
   assert.ok(!unknown.includes('aria-valuenow'));
-  const known = V.row(task(6, 'DOWNLOADING', {downloaded_bytes: 500, total_bytes: 1000}), SOURCES, V.createUi(), ctx());
+  const known = V.row(task(6, 'DOWNLOADING', {downloaded_bytes: 500, total_bytes: 1000}), V.createUi(), ctx());
   assert.match(known, /aria-valuenow="50"/);
   assert.match(known, /<strong>50%<\/strong>/);
-  assert.ok(!V.row(task(6, 'QUEUED'), SOURCES, V.createUi(), ctx()).includes('role="progressbar"'), 'no empty bar while waiting');
-  const waiting = V.row(task(6, 'WAITING_SPACE', {error_message: 'Chờ chỗ trống: cần 7 GB.'}), SOURCES, V.createUi(), ctx());
+  assert.ok(!V.row(task(6, 'QUEUED'), V.createUi(), ctx()).includes('role="progressbar"'), 'no empty bar while waiting');
+  const waiting = V.row(task(6, 'WAITING_SPACE', {error_message: 'Chờ chỗ trống: cần 7 GB.'}), V.createUi(), ctx());
   assert.equal(waiting.split('Chờ chỗ trống').length - 1, 2, 'the badge and the message, not a third time');
-  assert.ok(!V.row(task(6, 'CANCELLING'), SOURCES, V.createUi(), ctx()).includes('data-rename'), 'no rename while cancelling');
-  const done = V.row(task(6, 'COMPLETED', {output_name: 'a.mp4'}), SOURCES, V.createUi(), ctx());
+  assert.ok(!V.row(task(6, 'CANCELLING'), V.createUi(), ctx()).includes('data-rename'), 'no rename while cancelling');
+  const done = V.row(task(6, 'COMPLETED', {output_name: 'a.mp4'}), V.createUi(), ctx());
   assert.equal(done.split('Đã vào input').length - 1, 2, 'the badge and the file line only');
 });
 
 test('NEEDS_CHOICE: "Tải video đã chọn" waits for a pick', () => {
   const ui = V.createUi(), t = task(7, 'NEEDS_CHOICE', {entries: [{index: 1, title: 'a'}, {index: 2, title: 'b'}]});
-  assert.match(V.row(t, SOURCES, ui, ctx()), /data-action="dl-choose" data-id="7" disabled/);
+  assert.match(V.row(t, ui, ctx()), /data-action="dl-choose" data-id="7" disabled/);
   ui.choices.set(7, 2);
-  const picked = V.row(t, SOURCES, ui, ctx());
+  const picked = V.row(t, ui, ctx());
   assert.match(picked, /value="2" checked/);
   assert.ok(!/data-action="dl-choose" data-id="7" disabled/.test(picked));
 });
@@ -188,10 +201,10 @@ test('"Dung lượng": computing, one error per part, phone wording, nothing to 
   assert.match(V.storage(null, ctx({storageError: 'HTTP 503'})), /HTTP 503/);
 });
 
-test('notices: the worker error with its time, config warnings, a failed list', () => {
-  const html = V.notices(snapshot([], {worker_error: 'OSError: <BiliFlow>\\state', worker_error_at: '2026-10-05T10:00:00+00:00', warnings: ['w1']}), ctx({error: 'HTTP 500'}));
+test('notices: the worker error with its time, a failed list', () => {
+  const html = V.notices(snapshot([], {worker_error: 'OSError: <BiliFlow>\\state', worker_error_at: '2026-10-05T10:00:00+00:00'}), ctx({error: 'HTTP 500'}));
   assert.match(html, /Hàng tải video báo lỗi lúc .+: OSError: &lt;BiliFlow&gt;\\state/);
-  assert.match(html, /w1/); assert.match(html, /Không tải được danh sách tải video: HTTP 500/);
+  assert.match(html, /Không tải được danh sách tải video: HTTP 500/);
   assert.equal(V.notices(snapshot([]), ctx()), '');
 });
 
@@ -211,17 +224,17 @@ test('adapter: an older /api/downloads answer that arrives late is dropped', asy
 });
 
 test('adapter: download writes are BFContracts POSTs with the token; a refused batch keeps one error per line', async () => {
-  const errors = [{line: 1, code: 'HOST_NOT_ALLOWED', message: 'Tên miền không thuộc nguồn'}];
+  const errors = [{line: 1, code: 'BAD_PORT', message: 'Link không được dùng cổng riêng.'}];
   const f = fake({'POST /api/downloads': {status: 400, body: {error: 'Lô bị từ chối', code: 'BATCH_REJECTED', errors}}});
   const a = A.create({contracts: C, transport: f.transport});
-  await assert.rejects(() => a.dispatch('downloadAdd', null, {source_id: 'clips', urls: ['https://x.example/1'], rights_confirmed: true}),
+  await assert.rejects(() => a.dispatch('downloadAdd', null, {urls: ['https://x.example/1'], rights_confirmed: true}),
     error => error.status === 400 && error.errors.length === 1 && error.errors[0].line === 1);
   await a.dispatch('downloadStop', {id: 5}, {});
   await a.dispatch('downloadSettings', null, {slots: 3});
   const posts = f.posts();
   assert.deepEqual(posts.map(p => p.path), ['/api/downloads', '/api/downloads/5/stop', '/api/downloads/settings']);
   assert.ok(posts.every(p => p.headers['X-BiliFlow-Token'] === TOKEN));
-  assert.deepEqual(posts[0].body, {source_id: 'clips', urls: ['https://x.example/1'], rights_confirmed: true});
+  assert.deepEqual(posts[0].body, {urls: ['https://x.example/1'], rights_confirmed: true});
   await assert.rejects(() => a.dispatch('downloadStop', null, {}), /id/);
   for (const op of ['downloadRename', 'downloadChoose', 'downloadResume', 'downloadCancel', 'downloadRetry', 'downloadRemove']) {
     assert.equal(C.request(op, {id: 9}).method, 'POST');
@@ -302,13 +315,20 @@ test('live store: one poll timer, one request at a time, none while hidden, clea
   }
 });
 
-test('the form: source labels and domains are text, the box is read-only while a batch is sent', () => {
+test('the form: no source to pick, any site; the box is read-only while a batch is sent', () => {
   const evil = '<x-evil onclick="1">';
-  const data = snapshot([], {sources: [{id: 'a"><x-evil', label: evil, domains: [evil + '.example'], local: true}]});
   const ui = V.createUi();
+  ui.text = evil;
+  const idle = V.form(snapshot([]), ui, ctx());
+  assert.ok(!idle.includes('<x-evil'));
+  assert.ok(!/<select/.test(idle), 'no source select');
+  assert.match(idle, /từ trang nào cũng được/);
+  assert.match(idle, /"Chưa hỗ trợ"/);
+  assert.match(idle, /<textarea[^>]* aria-describedby="dl-hint dl-error"/);
+  assert.match(idle, /data-action="dl-add"(?![^>]* disabled)/);
+  assert.match(V.form(snapshot([]), V.createUi(), ctx({offline: true})), /data-action="dl-add"[^>]* disabled/);
   ui.busy.add('add');
-  const html = V.form(data, ui, ctx());
-  assert.ok(!html.includes('<x-evil'));
+  const html = V.form(snapshot([]), ui, ctx());
   assert.match(html, /<textarea[^>]* readonly>/);
   assert.match(html, /Đang kiểm tra link…/);
   const tools = V.tools(snapshot([]), {...V.createUi(), busy: new Set(['slots'])}, ctx());

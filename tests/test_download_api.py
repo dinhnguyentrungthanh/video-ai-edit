@@ -28,14 +28,14 @@ class ServiceTests(WorkerCase):
     def post(self, path, body=None):
         return self.service.handle_post(path, body or {})
 
-    def test_snapshot_lists_tasks_sources_slots_and_space(self):
-        status, created = self.post("/api/downloads", {"source_id": "clips", "urls": [CLIP],
-                                                       "rights_confirmed": True})
+    def test_snapshot_lists_tasks_slots_and_space(self):
+        status, created = self.post("/api/downloads", {"urls": [CLIP], "rights_confirmed": True})
         self.assertEqual(status, 200)
         status, snapshot = self.service.handle_get("/api/downloads", "")
         self.assertEqual(status, 200)
         self.assertEqual([task["id"] for task in snapshot["tasks"]], [created["tasks"][0]["id"]])
-        self.assertEqual([source["id"] for source in snapshot["sources"]], ["clips", "movies"])
+        self.assertNotIn("sources", snapshot)
+        self.assertNotIn("source_id", snapshot["tasks"][0])
         self.assertEqual(snapshot["settings"], {"slots": 2, "max_slots": 3})
         self.assertEqual(snapshot["counts"], {"QUEUED": 1})
         self.assertEqual(snapshot["space"]["reserve_bytes"], self.space[1])
@@ -43,7 +43,7 @@ class ServiceTests(WorkerCase):
 
     def test_public_tasks_never_carry_local_paths(self):
         self.scenario(probe={"json": video("Phim")})
-        self.post("/api/downloads", {"source_id": "clips", "urls": [CLIP], "rights_confirmed": True})
+        self.post("/api/downloads", {"urls": [CLIP], "rights_confirmed": True})
         self.run_all()
         task = self.store.list_tasks()[0]
         shown = public_task(task)
@@ -54,12 +54,11 @@ class ServiceTests(WorkerCase):
         self.assertNotIn("temp_dir", shown)
 
     def test_batch_errors_and_bad_bodies_are_400(self):
-        status, body = self.post("/api/downloads", {"source_id": "clips", "urls": ["https://x.example/a"],
-                                                    "rights_confirmed": True})
+        status, body = self.post("/api/downloads", {"urls": ["https://x.example:8080/a"], "rights_confirmed": True})
         self.assertEqual((status, body["code"]), (400, "BATCH_REJECTED"))
-        self.assertEqual(body["errors"][0]["code"], "HOST_NOT_ALLOWED")
-        self.assertEqual(self.post("/api/downloads", {"source_id": "clips", "urls": "x"})[0], 400)
-        status, body = self.post("/api/downloads", {"source_id": "clips", "urls": [CLIP]})
+        self.assertEqual(body["errors"][0]["code"], "BAD_PORT")
+        self.assertEqual(self.post("/api/downloads", {"urls": "x"})[0], 400)
+        status, body = self.post("/api/downloads", {"urls": [CLIP]})
         self.assertEqual(status, 400)
         self.assertIn("quyền", body["error"])
         self.assertEqual(self.post("/api/downloads/settings", {"slots": 9})[0], 400)
@@ -71,8 +70,7 @@ class ServiceTests(WorkerCase):
                          (200, {"tasks": 0, "freed_bytes": 0}))
 
     def test_actions_are_routed_and_unknown_paths_are_left_to_the_caller(self):
-        _, created = self.post("/api/downloads", {"source_id": "clips", "urls": [CLIP],
-                                                  "rights_confirmed": True})
+        _, created = self.post("/api/downloads", {"urls": [CLIP], "rights_confirmed": True})
         task_id = created["tasks"][0]["id"]
         status, body = self.post(f"/api/downloads/{task_id}/rename", {"name": "Tên mới"})
         self.assertEqual((status, body["task"]["title"]), (200, "Tên mới"))
@@ -101,7 +99,7 @@ class ServiceTests(WorkerCase):
         self.assertFalse(download_api.owns("/api/downloadsx"))
 
     def test_local_paths_never_reach_a_page(self):
-        _, created = self.post("/api/downloads", {"source_id": "clips", "urls": [CLIP], "rights_confirmed": True})
+        _, created = self.post("/api/downloads", {"urls": [CLIP], "rights_confirmed": True})
         task_id = created["tasks"][0]["id"]
         where = str(self.root.resolve())
         self.store.update_fields(task_id, error_message=f"[WinError 32] {where}\\temp\\downloads\\1\\a.mp4")
@@ -122,8 +120,7 @@ class ServiceTests(WorkerCase):
         self.assertEqual(self.post(f"/api/downloads/{huge}/stop")[0], 404)
 
     def test_task_detail_has_events_and_log(self):
-        _, created = self.post("/api/downloads", {"source_id": "clips", "urls": [CLIP],
-                                                  "rights_confirmed": True})
+        _, created = self.post("/api/downloads", {"urls": [CLIP], "rights_confirmed": True})
         task_id = created["tasks"][0]["id"]
         status, body = self.service.handle_get(f"/api/downloads/{task_id}", "")
         self.assertEqual(status, 200)

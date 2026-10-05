@@ -2,10 +2,10 @@
 
 A failed database write, a task restarted while its last thread still ends, a temp
 file another program holds, a file the indexer holds while it moves into input,
-two downloads sharing the free space and a source removed after the link was queued.
+two downloads sharing the free space and a host that resolves inside the network
+after the link was queued.
 Temporary roots and the fake yt-dlp only.
 """
-import json
 import os
 import shutil
 import time
@@ -182,17 +182,7 @@ class SharedSpaceTests(WorkerCase):
         self.assertEqual(self.state(second["id"]), "COMPLETED")
 
 
-class AllowlistRecheckTests(WorkerCase):
-    def test_a_source_removed_after_queueing_is_never_contacted(self):
-        task, = self.add()
-        (self.root / "config" / "download_sources.json").write_text(json.dumps(
-            {"version": 1, "sources": [{"id": "movies", "label": "Movies", "domains": ["movies.example"]}]}),
-            encoding="utf-8")
-        self.run_all()
-        failed = self.store.get(task["id"])
-        self.assertEqual((failed["state"], failed["error_code"]), ("FAILED", "SOURCE_REMOVED"))
-        self.assertEqual(self.calls(), [])
-
+class LinkRecheckTests(WorkerCase):
     def test_a_host_that_now_resolves_inside_the_network_is_not_downloaded(self):
         answers = []
 

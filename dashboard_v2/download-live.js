@@ -59,8 +59,6 @@
       return {icon: o.icon, offline: !!s.offline, remote: !!s.remote, error: s.downloads_error || '', storageError: s.storage_error || ''};
     };
     const task = id => ((data() || {}).tasks || []).find(t => t.id === Number(id));
-    const sources = () => (data() || {}).sources || [];
-    const source = () => sources().find(s => s.id === ui.source) || sources()[0] || null; // the one the select shows
 
     function html() { return V.page(data(), snap().storage_summary, ui, ctx()); }
     function watch(on) {
@@ -130,11 +128,9 @@
 
     async function add() {
       if (ui.busy.has('add')) return;
-      const chosen = source();
       let urls;
       try {
         if (ctx().offline) throw new Error('Mất kết nối Control Center. Chưa gửi link.');
-        if (!chosen) throw new Error('Chưa có nguồn tải.');
         urls = K.checkBatch(ui.text, ui.rights);
       } catch (error) {
         ui.error = error.message; ui.lineErrors = [];
@@ -143,10 +139,10 @@
         if (area) area.focus();
         return;
       }
-      ui.source = chosen.id; ui.busy.add('add'); ui.error = ''; ui.lineErrors = [];
+      ui.busy.add('add'); ui.error = ''; ui.lineErrors = [];
       try {
         refresh();
-        const result = await o.store.downloadAction('downloadAdd', null, {source_id: chosen.id, urls, rights_confirmed: true});
+        const result = await o.store.downloadAction('downloadAdd', null, {urls, rights_confirmed: true});
         ui.text = ''; ui.rights = false; ui.filter = 'all';
         const area = o.$('#dl-urls');
         if (area) area.value = '';
@@ -234,8 +230,7 @@
       return true;
     }
     function change(el) {
-      if (el.id === 'dl-source') { ui.source = el.value; ui.error = ''; ui.lineErrors = []; refresh(); }
-      else if (el.id === 'dl-rights') ui.rights = el.checked;
+      if (el.id === 'dl-rights') ui.rights = el.checked;
       else if (el.id === 'dl-slots') {
         const value = Number(el.value);
         run('slots', 'Tải đồng thời ' + value + ' video. Lượt đang chạy không bị ngắt.',

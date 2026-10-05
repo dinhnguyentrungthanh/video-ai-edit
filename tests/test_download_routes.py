@@ -66,7 +66,7 @@ class RouteCase(WorkerCase):
         return status, json.loads(reply or b"null")
 
     def batch(self, *urls, rights=True):
-        return self.post("/api/downloads", {"source_id": "clips", "urls": list(urls), "rights_confirmed": rights})
+        return self.post("/api/downloads", {"urls": list(urls), "rights_confirmed": rights})
 
 
 class PcRouteTests(RouteCase):
@@ -96,10 +96,10 @@ class PcRouteTests(RouteCase):
         self.assertEqual(self.worker.slots(), 2)
 
     def test_a_bad_batch_is_refused_whole_with_one_error_per_line(self):
-        status, body = self.batch(CLIP, "https://x.example/a", "ftp://clips.example/b", CLIP)
+        status, body = self.batch(CLIP, "https://user@x.example/a", "ftp://clips.example/b", CLIP)
         self.assertEqual((status, body["code"]), (400, "BATCH_REJECTED"))
         self.assertEqual([(error["line"], error["code"]) for error in body["errors"]],
-                         [(2, "HOST_NOT_ALLOWED"), (3, "BAD_SCHEME"), (4, "DUPLICATE_IN_BATCH")])
+                         [(2, "USERINFO"), (3, "BAD_SCHEME"), (4, "DUPLICATE_IN_BATCH")])
         self.assertEqual(self.store.list_tasks(), [])
 
     def test_a_link_already_in_the_list_is_refused(self):
@@ -122,9 +122,7 @@ class PcRouteTests(RouteCase):
         self.assertTrue(reply.startswith(b"HTTP/1.0 400"), reply[:60])
         self.assertIn("Request is too large", reply.decode("utf-8", "replace"))
         self.assertEqual(self.post("/api/downloads", raw=b"[1, 2]")[0], 400)
-        self.assertEqual(self.post("/api/downloads", {"source_id": "clips", "urls": CLIP})[0], 400)
-        self.assertEqual(self.post("/api/downloads", {"source_id": "nope", "urls": [CLIP],
-                                                      "rights_confirmed": True})[0], 400)
+        self.assertEqual(self.post("/api/downloads", {"urls": CLIP})[0], 400)
         self.assertEqual(self.post("/api/downloads/settings", {"slots": 0})[0], 400)
         self.assertEqual(self.post("/api/downloads/cleanup-temp", {})[0], 400)
         self.assertEqual(self.store.list_tasks(), [])
@@ -197,8 +195,7 @@ class PhoneRouteTests(RouteCase):
         return status, json.loads(reply or b"null")
 
     def test_the_phone_pastes_links_and_drives_tasks(self):
-        status, created = self.phone_post("/api/downloads", {"source_id": "clips", "urls": [CLIP],
-                                                             "rights_confirmed": True})
+        status, created = self.phone_post("/api/downloads", {"urls": [CLIP], "rights_confirmed": True})
         self.assertEqual(status, 200, created)
         task_id = created["tasks"][0]["id"]
         for action in ("stop", "resume", "cancel", "remove"):
@@ -211,7 +208,7 @@ class PhoneRouteTests(RouteCase):
         self.assertEqual((status, json.loads(payload)["tasks"]), (200, []))
 
     def test_the_phone_still_needs_cookie_token_and_its_own_origin(self):
-        payload = {"source_id": "clips", "urls": [CLIP], "rights_confirmed": True}
+        payload = {"urls": [CLIP], "rights_confirmed": True}
         self.assertEqual(self.phone_post("/api/downloads", payload, cookie=False)[0], 401)
         self.assertEqual(self.phone_post("/api/downloads", payload, token=None)[0], 403)
         self.assertEqual(self.phone_post("/api/downloads", payload, origin="http://evil.example")[0], 403)
