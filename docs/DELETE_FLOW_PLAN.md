@@ -172,12 +172,17 @@ Mỗi video chạy lần lượt các bước sau:
 
 ## 8. Các đợt làm
 
-- **D0:** plan này và đổi `AGENTS.md`.
-- **D1:** backend gồm `job_purge.py`, `JobStore.purge_job` và "Xóa video gốc" (`source_cleanup.py`).
-- **D2:** "Xóa video" và "Dọn video mất gốc", gồm route, `/api/status` và chặn điện thoại.
-- **D3:** Dashboard V2.
-- **D4:** trang Control Center cũ.
+- **D0:** plan này và đổi `AGENTS.md`. Xong: `22216af`.
+- **D1:** backend gồm `job_purge.py`, `JobStore.purge_job` và "Xóa video gốc" (`source_cleanup.py`). Xong: `b3be8ca`.
+- **D2:** "Xóa video" và "Dọn video mất gốc", gồm route, `/api/status` và chặn điện thoại. Xong: `6c79aeb` (kèm
+  các sửa của lần review D1 và `confirm_permanent`).
+- **D3:** Dashboard V2. Xong, commit chung với D4. Đã thử bản demo trên trình duyệt (dữ liệu giả): hộp xác nhận,
+  ô "Tôi hiểu", "Dọn video mất gốc". Máy này không có Playwright nên các browser-check để lần chạy trên cloud.
+- **D4:** trang Control Center cũ. Xong, commit chung với D3.
 - **D5:** tài liệu (README, CHANGELOG, PROJECT_STATUS, SESSION_HANDOFF), chạy cả bộ test, commit trên máy (chưa push).
+  Xong: cả bộ test 1383 OK, 26 bỏ qua.
+- **Còn thiếu (trang cũ):** video đã hủy đang ẩn (mục "Đã ẩn") chưa có nút "Xóa video" ở trang cũ; hiện lại video đó
+  trước, hoặc dùng Dashboard V2.
 - **Người dùng test:**
   1. chuyển thư mục chính sang nhánh này và khởi động lại Control Center (hỏi trước);
   2. "Dọn video mất gốc" 27 video;

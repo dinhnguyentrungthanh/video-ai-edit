@@ -12,6 +12,7 @@ This is the short, authoritative starting point for a new Codex account or chat.
   - Per the plan's log, the main folder ran `a7d8f18` of this branch (detached) on 2026-10-05, with the Control Center on that code. Check with `git status` and `git log` before any claim.
   - A session working on this branch, including a Claude cloud session, starts with `docs/DASHBOARD_V2_REVIEW_PLAN.md` (the review dialog) and `docs/DASHBOARD_V2_CLOUD_PLAN.md` (the V2 integration and phone mode).
   - `main` does not have V2. The Control Center runs V2 only while the main folder is on this branch.
+- Branch `feat/delete-flow` (from `55c6e62` of `feat/dashboard-v2`, worktree `temp/wt-delete-flow`, local commits only) holds the permanent delete flow. See "Current work — 2026-10-05 permanent delete flow" below.
 - Active branch: `main`. On 2026-10-03 the user asked to merge `improve/scan-performance-metrics` (everything since `7f5a9fb`: the scan-performance work, detector/review fixes and dashboard batches 1-4) into `main` and run it there. `main` was fast-forwarded to the branch tip (the commit that carries this note) and the working tree, which the Control Center runs from, was switched to `main` with no file change. The branch is kept.
 - Pushed at the user's request on 2026-10-03: `origin/main` (GitHub `dinhnguyentrungthanh/video-ai-edit`) moved `9155cd7..23aa1e4`. Local `main` has moved on since (the merge below); push again only when the user asks.
 - Merged at the user's request on 2026-10-03 at about 21:40, with no job running: branch `fix/export-identity-http` (worktree `temp/wt-export-fix`) was fast-forwarded into `main`. It brings export identity from the render, reuse of only a proven export, HTTP request limits and the short-export rate cap (see Current work). `origin/main` was pushed later and is at f6996bb (checked 2026-10-04). The running Control Center keeps the code it started with until it is restarted (ask the user first).
@@ -30,6 +31,18 @@ Since 2026-10-03 local `main` also holds everything from `improve/scan-performan
 5. `0b4ff3c Map logo candidates by geometry track`
 
 Always confirm this section with `git status` and `git log` because it becomes stale after new work.
+
+## Current work — 2026-10-05 permanent delete flow (branch `feat/delete-flow`, worktree `temp/wt-delete-flow`; local commits, not pushed)
+
+- Plan: `docs/DELETE_FLOW_PLAN.md` (the user's decisions, what is deleted and kept, protections, API, UI, tests, phases, real-machine numbers). `AGENTS.md` has the new source-video invariant.
+- The branch starts at `55c6e62` (`feat/dashboard-v2`). Phases D0 `22216af`, D1 `b3be8ca` and D2 `6c79aeb`, then D3 (Dashboard V2), D4 (classic page `/`) and D5 (docs, full suite) committed on the local machine. See CHANGELOG for the behavior.
+- Agents never call `/api/source-cleanup`, `/api/job-delete`, `execute_cleanup`, `execute_delete`, `purge_job` or `delete_input_file` on user files; tests use temporary roots under `temp` only.
+- Next:
+  1. The user's test (plan section 8):
+     - move the main folder to this branch and restart the Control Center (ask first, no job running);
+     - "Dọn video mất gốc" for the 27 lost jobs;
+     - "Xóa video gốc" for one exported video the user picks.
+  2. Push or merge only when the user asks. `feat/dashboard-v2` still waits for the end of U-R4 and its own merge.
 
 ## Current work — 2026-10-05 Dashboard V2 review dialog R4 and the stronger logo cover (branch `feat/dashboard-v2`, pushed; not merged)
 
@@ -651,7 +664,7 @@ Status: items 4-7 and 7c-7d are done, in batches 1-2 (commits 27dc000, 1b6ad90, 
 
 ## Safety and product constraints
 
-- Source videos are immutable. Only exception: the user-triggered “Dọn video gốc” moves an exported or skipped input video to the Windows Recycle Bin after the user confirms it (never a permanent delete); agents never run it (see AGENTS.md).
+- Source videos are immutable. Exceptions, all user-triggered on the PC after the user confirms them: “Xóa video gốc” deletes an exported or skipped input video for good (from `feat/delete-flow`; before it, “Dọn video gốc” moved it to the Windows Recycle Bin), “Xóa video” deletes a cancelled job's input video, and “Lưu trữ” / “Khôi phục bản xuất” rename it into `archive\` and back. Agents never run them (see AGENTS.md).
 - No automatic KEEP, BLUR, CUT, upload, or publish.
 - All models must be free to run locally and commercially usable under the recorded policy.
 - AI Supervisor is optional. Deterministic local Structure Audit uses no ChatGPT quota. Visual AI Audit sends only explicitly approved thumbnails and never source video/audio.

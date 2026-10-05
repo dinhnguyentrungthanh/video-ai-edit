@@ -1,3 +1,20 @@
+## Permanent delete flow (2026-10-05) — branch `feat/delete-flow`, local commits, not pushed, not merged
+
+- The user's choice (plan `docs/DELETE_FLOW_PLAN.md`):
+  - "Dọn video gốc" becomes "Xóa video gốc": the source is deleted for good after its SHA-256 check (no Recycle Bin), with the export's manifest (the `.mp4` stays) and the job's own data (DB rows, report folders, logs).
+  - "Xóa video" removes a cancelled job (its source too) or a job whose source is gone; "Dọn video mất gốc" does it for all of them at once.
+  - `output\` is never touched beyond that one manifest. No deletion log is kept.
+- Phases:
+  - D0 `22216af` (plan, AGENTS.md invariant);
+  - D1 `b3be8ca` (`job_purge.py`, `JobStore.purge_job`, the new "Xóa video gốc");
+  - D2 `6c79aeb` (`job_delete.py`, routes, `/api/status` hints, the D1 review fixes, `confirm_permanent`);
+  - D3 (Dashboard V2) and D4 (classic page `/`) committed together;
+  - D5: these docs and the full suite (1383 tests OK, 26 skipped; Playwright browser checks not run on this machine).
+- Known gap: on the classic page a hidden cancelled video has no "Xóa video" button (show it again first, or use V2).
+- Protections: the golden set (#37–#39 today), benchmark folders, links and junctions, busy jobs, legacy bin-held sources, and an install-root guard (a worktree cannot delete the main folder's files). Both POSTs are PC only and need `confirm_permanent: true`.
+- Real machine (read only): 27 jobs have lost their source and can be removed by "Dọn video mất gốc"; the only cancelled job that still has its source is #39 (about 7.1 GB), which stays locked in the golden set.
+- Next: the user's test (plan section 8). It needs the user's consent to move the main folder to this branch and restart the Control Center, with no job running.
+
 ## Dashboard V2 review dialog R0–R4 and the stronger logo cover (2026-10-04/05) — branch `feat/dashboard-v2`, not merged
 
 - The V2 review dialog replaces the prototype's review box (plan: `docs/DASHBOARD_V2_REVIEW_PLAN.md`).

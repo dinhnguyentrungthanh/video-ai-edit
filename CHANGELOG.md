@@ -1,3 +1,51 @@
+# Unreleased — permanent delete: "Xóa video gốc", "Xóa video" and "Dọn video mất gốc" — 2026-10-05
+
+Status: on branch `feat/delete-flow` (worktree `temp/wt-delete-flow`, from `55c6e62` of `feat/dashboard-v2`), committed on the local machine in phases D0–D5 of `docs/DELETE_FLOW_PLAN.md`; not pushed, not merged. The user chose this behavior on 2026-10-05. It waits for the user's test (plan section 8), which needs the user's consent to switch the main folder and restart the Control Center.
+
+- "Dọn video gốc" becomes "Xóa video gốc" (D1). After its SHA-256 check, the input video is deleted for good, not moved to the Recycle Bin. The same action deletes:
+  - the export's `…-reviewed.mp4.manifest.json` (the `.mp4` stays);
+  - the job's rows in `state/control-center.sqlite3` (jobs, revisions, stages, artifacts, events, source_cleanups, source_archives, recycle_checks, the job's settings), its own report folders in `reports\jobs` and its `logs\control-center\job-<id>-*.log`. The watcher row is reset, not deleted.
+
+  The job leaves the list and cannot be reviewed or exported again. Each video ends as DELETED, PARTIAL (the source is gone but some data stayed; "Xóa video" removes the rest), FAILED or NOT_RUN.
+- "Xóa video" (D2) removes a CANCELLED job (its input video first, after the SHA-256 check, when it is still there) or a job whose source is gone (not archived): `GET /api/job-delete/preview`, `POST /api/job-delete`. "Dọn video mất gốc" opens it for every such job, at most 50 at a time.
+- Never deleted:
+  - jobs of a golden set (`annotations\golden\*\segments.json`, by job id or SHA-256; nothing is deleted while such a file cannot be read);
+  - report folders that another job names, benchmark runs (`.biliflow-benchmark`), and anything reached through a link or junction;
+  - anything in `output\` except that one checked manifest; brand/studio memory; `archive\`;
+  - busy jobs (running, queued, an export or AI audit in flight, another source operation);
+  - legacy sources still in the Recycle Bin.
+
+  The deleting functions refuse any project root other than the install root or a folder in its `temp`.
+- Both POSTs need `confirm_permanent: true`, else 400. A page loaded before this change still promises the Recycle Bin, so it cannot delete. Both POSTs are PC only (`PC_ONLY_POSTS`).
+- `/api/status` cards get `protected` (the golden-set reason) and `delete` (the "Xóa video" hint, which never hashes and never reads the Recycle Bin).
+- Dashboard V2 (D3):
+  - the toolbar and the drawer say "Xóa video gốc"; cancelled and lost videos have "Xóa video";
+  - the list shows "Có N video không còn video gốc · Dọn video mất gốc";
+  - each dialog lists what is deleted (review decisions included), what stays and the space freed, and its button stays off until "Tôi hiểu" is ticked, also after a failed attempt;
+  - a DELETED result that left the export manifest (`source_cleanup.MANIFEST_WARNING`, pinned as `C.DELETE_NOTE`) opens the per-video results instead of a plain "Đã xóa" toast;
+  - a golden-set video has its delete buttons off, with the reason; on the phone every delete control is off with the PC-only reason.
+- Classic Control Center page `/` (D4):
+  - the "Dọn video gốc" dialog becomes "Xóa vĩnh viễn video gốc". It lists what goes and what stays with the report sizes, has a required "Tôi hiểu" box, sends `confirm_permanent: true` and reports each video's result. Card and toolbar labels say "Xóa video gốc", and the card button is red;
+  - cancelled and lost videos get a "Xóa video" card button and dialog (`/api/job-delete`);
+  - every tab shows the lost-videos notice "Có N video không còn video gốc · Dọn video mất gốc";
+  - golden-set videos have both buttons off with the reason and are left out of "Chọn tất cả";
+  - known gap: a hidden cancelled video (fold "Đã ẩn") has no "Xóa video" button there. Show it again first, or use Dashboard V2.
+
+  The classic review page `/review/<id>` and the functions V2 copies are unchanged; the new `/` pin is in `tests/fixtures/dashboard_v2_classic_pages.json`.
+- Not changed:
+  - "Lưu trữ" and "Khôi phục bản xuất" (the export still goes to the Recycle Bin), and "Kiểm tra lại Thùng rác" for legacy rows;
+  - detector thresholds, export code, `PHONE_ALLOWED_POSTS`, the CSP, scan caches.
+
+  No deletion log is kept (the user's choice).
+- Tests:
+  - new: `test_job_purge`, `test_job_delete`, `test_job_delete_http`; the source-cleanup tests were rewritten for the permanent delete;
+  - V2 `verify.cjs` (34 checks) and `verify-adapter.cjs` (30);
+  - the pinned contract-endpoints digest now includes the two new endpoints (the R0 endpoints are unchanged);
+  - full suite on the worktree: 1383 tests OK, 26 skipped (Playwright is not installed on this machine, so the browser checks are among them). The worktree has no input video, so a 1-second synthetic clip was put in its own `input` for the pipeline tests that need a file, then removed.
+- Measured on the real machine (read only):
+  - 27 jobs have lost their source: #1, #2, #5 and #6 cancelled; #3 and #4 exported; #40–#60 moved to the bin earlier and no longer in it;
+  - the only cancelled job that still has its source is #39 (about 7.1 GB), which is in the golden set and stays locked.
+
 # Unreleased — Dashboard V2 review dialog R4: "Duyệt cảnh" opens the dialog, phone and laptop layout, phone listener check — 2026-10-05
 
 Status: on branch `feat/dashboard-v2`, made in a Claude cloud session (batch R4 of `docs/DASHBOARD_V2_REVIEW_PLAN.md`, section 7.5). It waits for the local check (section 8.2), then the user's acceptance test (U-R4, section 8.3, all 8 steps). Not merged into `main`. The review dialog itself came in batches R0–R3 (view, media, decisions, bulk actions and export); see the plan.
