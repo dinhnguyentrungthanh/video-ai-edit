@@ -1,24 +1,27 @@
-"""Dọn video gốc: move exported or skipped source videos to the Windows Recycle Bin.
+"""Xóa video gốc: delete exported or skipped source videos for good, then remove their jobs.
 
-A user-clicked, per-video cleanup for jobs in the Dashboard's "Hoàn tất" tab
-(COMPLETED or SKIPPED). It decides eligibility without hashing (status hints
-and the preview), then for each confirmed video:
+A user-clicked, per-video action for jobs in the Dashboard's "Hoàn tất" tab
+(COMPLETED or SKIPPED), chosen by the user on 2026-10-05 instead of the old
+"Dọn video gốc" that moved the file to the Windows Recycle Bin
+(docs/DELETE_FLOW_PLAN.md). It decides eligibility without hashing (status
+hints and the preview), then for each confirmed video:
 
 1. without any lock: hash the source (and, for an export, the output) and
    compare the stat before and after;
 2. under ``REVIEW_QUEUE_IO`` then ``scheduler.job_action_lock`` (the only lock
-   order): re-assess from fresh reads, compare the stat again, check the bin's
-   capacity, and write a PENDING ``source_cleanups`` row, which from then on
-   locks every action on the job;
-3. without any lock again: call the injected ``recycler`` (the shell can take
-   up to 60 s) and settle the row as RECYCLED or FAILED, or leave it PENDING
-   for the late callback or for ``reconcile_pending_cleanups`` at startup.
+   order): re-assess from fresh reads (a golden-set job or a running AI audit
+   refuses too), compare the stat again, delete the source with the injected
+   ``deleter``, delete the export's ``.manifest.json`` (the ``.mp4`` stays) and
+   remove the job: its report folders and logs, then all its rows
+   (``job_purge.remove_job``).
 
-There is no default recycler anywhere: ``execute_cleanup`` must be given one,
-so a test or a half-built server can never reach the real Recycle Bin. This
-module only reads queues, manifests and edit plans. It never writes reports,
-output, work, brand/studio memory or review decisions, and never imports
-``control_center`` or ``scheduler`` (the scheduler object is passed in).
+When a file of the job stays, its rows stay too: the job then has no source
+and "Xóa video" (job_delete) removes it later. There is no default deleter:
+``execute_cleanup`` must be given one, and every deleting function refuses a
+root outside the install root (or its temp/ for tests). Legacy rows of the
+Recycle Bin cleanup are still read here (hints, the startup reconcile and
+"Kiểm tra lại Thùng rác"). This module never imports ``control_center`` or
+``scheduler`` (the scheduler object is passed in).
 """
 
 from __future__ import annotations
@@ -36,7 +39,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable
 
-from biliflow import recycle_bin
+from biliflow import job_purge, recycle_bin
 from biliflow.export_guards import (
     REVIEW_QUEUE_IO,
     ActionConflict,
@@ -65,8 +68,8 @@ ELIGIBLE_STATES = frozenset({"COMPLETED", "SKIPPED"})
 KIND_BY_STATE = {"COMPLETED": "EXPORTED", "SKIPPED": "SKIPPED"}
 # The one execute lock (the Control Center has none of its own). Only ever
 # taken with acquire(blocking=False): a second click is refused, never queued.
-# Batch 4 shares it as SOURCE_FILE_LOCK: "Dọn video gốc", "Lưu trữ",
-# "Khôi phục bản xuất" and "Kiểm tra lại Thùng rác" never run at the same time.
+# Batch 4 shares it as SOURCE_FILE_LOCK: "Xóa video gốc", "Xóa video" (job_delete),
+# "Lưu trữ", "Khôi phục bản xuất" and "Kiểm tra lại Thùng rác" never run at the same time.
 _EXECUTE_LOCK = threading.Lock()
 SOURCE_FILE_LOCK = _EXECUTE_LOCK
 _CACHE_LIMIT = 256
@@ -74,10 +77,10 @@ _PREVIEW_ID = re.compile(r"[0-9a-f]{64}")
 
 # Request errors.
 JOB_IDS_MESSAGE = "Chọn từ 1 đến 50 video mỗi lần dọn."
-PREVIEW_ID_MESSAGE = "Thiếu mã xem trước; hãy mở lại hộp thoại dọn video gốc."
-BUSY_MESSAGE = "Đang dọn video gốc; chờ lần dọn trước xong rồi thử lại."
+PREVIEW_ID_MESSAGE = "Thiếu mã xem trước; hãy mở lại hộp thoại xóa video gốc."
+BUSY_MESSAGE = "Đang xóa video gốc; chờ lần xóa trước xong rồi thử lại."
 PREVIEW_CHANGED_MESSAGE = "Danh sách đã thay đổi, hãy xem lại."
-NOTHING_ELIGIBLE_MESSAGE = "Không có video nào dọn được trong danh sách đã chọn."
+NOTHING_ELIGIBLE_MESSAGE = "Không có video gốc nào xóa được trong danh sách đã chọn."
 UNKNOWN_JOB_MESSAGE = "Không tìm thấy video #{job_id}"
 
 # Why a video cannot be cleaned (first match wins, in this order).
@@ -111,12 +114,18 @@ REASON_OUTPUT_OLDER = (
 REASON_SKIP_RECORD = "Bản ghi bỏ qua không ứng với lần duyệt hiện tại"
 
 # Per-video results and events of an execute.
-STOPPING_MESSAGE = "BiliFlow đang tắt; video này chưa được dọn."
+STOPPING_MESSAGE = "BiliFlow đang tắt; video này chưa được xóa."
 SOURCE_CHANGED_DURING_HASH = "Video gốc đã thay đổi trong lúc kiểm tra SHA-256"
+# The archive's batch stop (source_archive) still uses this one.
 NOT_RUN_MESSAGE = "Chưa chạy: lần chuyển trước chưa xong."
-PENDING_EVENT_MESSAGE = (
-    "Windows chưa trả lời; video gốc đang chờ xác nhận chuyển vào Thùng rác"
+REASON_AUDIT = "Đang chạy AI Audit cho video này; chờ xong rồi xóa"
+DELETED_MESSAGE = "Đã xóa vĩnh viễn video gốc và xóa video khỏi BiliFlow"
+MANIFEST_WARNING = ". Lưu ý: {warning}"
+PARTIAL_MESSAGE = (
+    "Đã xóa video gốc nhưng còn dữ liệu chưa xóa được ({errors}). Video vẫn có trong danh sách và "
+    "không còn video gốc; bấm “Dọn video mất gốc” để xóa nốt."
 )
+# Legacy "Dọn video gốc" rows: what the startup reconcile writes for them.
 RECYCLED_MESSAGE = "Đã chuyển video gốc vào Thùng rác"
 UNVERIFIED_MESSAGE = (
     "Video gốc đã rời thư mục input nhưng không tìm thấy bản ghi trong Thùng rác; "
@@ -152,10 +161,10 @@ RECHECK_ACTOR = "control_center_user"
 
 
 class CleanupConflict(ActionConflict):
-    """The cleanup was not started (HTTP 409); deliberately not a ValueError.
+    """The deletion was not started (HTTP 409); deliberately not a ValueError.
 
-    ``code`` is 'preview_changed', 'bin_capacity', 'bin_unavailable' or 'busy';
-    ``preview`` is the fresh preview (None for 'busy').
+    ``code`` is 'preview_changed' or 'busy'; ``preview`` is the fresh preview
+    (None for 'busy').
     """
 
 
@@ -602,13 +611,25 @@ def _preview_id(eligible: list[Assessment]) -> str:
     return hashlib.sha256(json.dumps(rows, ensure_ascii=False).encode("utf-8")).hexdigest()
 
 
-def _preview(root: Path, store: Any, scheduler: Any, job_ids: list[int], *,
-             bin_info: Callable[[Path], Any], fresh: bool) -> tuple[dict[str, Any], list[Assessment]]:
+def _delete_refusal(root: Path, job: dict[str, Any],
+                    audit_running: Callable[[int], bool] | None) -> str | None:
+    """Why a video assess_job lets go must stay anyway: a golden-set job or a running AI audit."""
+    protected = job_purge.protected_reason(root, job)
+    if protected:
+        return protected
+    if audit_running is not None and audit_running(int(job["id"])):
+        return REASON_AUDIT
+    return None
+
+
+def _preview(root: Path, store: Any, scheduler: Any, job_ids: list[int], *, fresh: bool,
+             audit_running: Callable[[int], bool] | None) -> tuple[dict[str, Any], list[Assessment]]:
     ids = parse_job_ids(job_ids)
     latest = store.latest_source_cleanups()
     archives = store.latest_source_archives()
     eligible: list[Assessment] = []
     ineligible: list[dict[str, Any]] = []
+    reports: dict[int, int] = {}
     for job_id in ids:
         try:
             job = store.get_job(job_id)
@@ -617,26 +638,14 @@ def _preview(root: Path, store: Any, scheduler: Any, job_ids: list[int], *,
             continue
         assessment = assess_job(root, store, scheduler, job, latest_row=latest.get(job_id),
                                 archive_row=archives.get(job_id), fresh=fresh)
-        if assessment.eligible:
+        reason = assessment.reason if not assessment.eligible else _delete_refusal(root, job, audit_running)
+        if reason is None:
             eligible.append(assessment)
+            reports[job_id] = job_purge.files_bytes(job_purge.job_files(root, store, job))
         else:
-            ineligible.append({"job_id": job_id, "name": assessment.name, "reason": assessment.reason})
+            ineligible.append({"job_id": job_id, "name": assessment.name, "reason": reason})
     eligible.sort(key=lambda item: item.job_id)
     ineligible.sort(key=lambda item: item["job_id"])
-    total = sum(int(item.size_bytes or 0) for item in eligible)
-    blocked: str | None = None
-    try:
-        info = bin_info(root / "input")
-    except recycle_bin.RecycleRefused as error:
-        recycle = None
-        blocked = str(error)
-    else:
-        recycle = {
-            "volume": info.volume, "used_bytes": info.used_bytes, "items": info.items,
-            "max_bytes": info.max_bytes, "after_bytes": info.used_bytes + total,
-        }
-        if eligible:
-            blocked = recycle_bin.capacity_refusal(info, total)
     preview = {
         "preview_id": _preview_id(eligible),
         "eligible": [
@@ -646,23 +655,27 @@ def _preview(root: Path, store: Any, scheduler: Any, job_ids: list[int], *,
                 "output_path": item.output_path,
                 "output_name": Path(item.output_path).name if item.output_path else None,
                 "output_bytes": item.output_bytes, "exported_at": item.exported_at,
-                "skipped_at": item.skipped_at,
+                "skipped_at": item.skipped_at, "reports_bytes": reports[item.job_id],
             }
             for item in eligible
         ],
         "ineligible": ineligible,
         "count": len(eligible),
-        "total_bytes": total,
-        "recycle_bin": recycle,
-        "blocked": blocked,
+        "total_bytes": sum(int(item.size_bytes or 0) for item in eligible),
+        "reports_bytes": sum(reports.values()),
     }
     return preview, eligible
 
 
-def preview_cleanup(root: Any, store: Any, scheduler: Any, job_ids: list[int], *,
-                    bin_info: Callable[[Path], Any], fresh: bool = False) -> dict[str, Any]:
-    """What a cleanup of ``job_ids`` would do. Read-only: no hash, no write, no recycler."""
-    preview, _ = _preview(Path(root), store, scheduler, job_ids, bin_info=bin_info, fresh=fresh)
+def preview_cleanup(root: Any, store: Any, scheduler: Any, job_ids: list[int], *, fresh: bool = False,
+                    audit_running: Callable[[int], bool] | None = None) -> dict[str, Any]:
+    """What deleting the sources of ``job_ids`` would do. Read-only: no hash, no write, no deleter.
+
+    Every eligible video lists its source (deleted for good), its export
+    (only the .manifest.json goes) and ``reports_bytes``, its report folders
+    and logs that go with the job.
+    """
+    preview, _ = _preview(Path(root), store, scheduler, job_ids, fresh=fresh, audit_running=audit_running)
     return preview
 
 
@@ -689,7 +702,7 @@ def _recycled_payload(row: dict[str, Any]) -> dict[str, Any]:
 
 
 def _settle_recycled(store: Any, row_id: int, *, verified: bool, record: str | None) -> dict[str, Any] | None:
-    """PENDING -> RECYCLED, reset the watcher and log; None when the row was settled already."""
+    """A legacy PENDING row -> RECYCLED, reset the watcher and log; None when it was settled already."""
     row = store.finish_source_cleanup(
         row_id, state="RECYCLED", verified=verified, recycle_record=record,
     )
@@ -706,56 +719,11 @@ def _settle_recycled(store: Any, row_id: int, *, verified: bool, record: str | N
     return row
 
 
-def _recycle_payload(context: dict[str, Any], error: str) -> dict[str, Any]:
-    return {
-        "stage": "recycle", "path": context["path"], "size_bytes": context["size_bytes"],
-        "sha256": context["sha256"], "error": error,
-    }
-
-
 def _source_still_there(path: str, size: int) -> bool:
     try:
         return os.path.isfile(path) and os.stat(path).st_size == size
     except OSError:
         return False
-
-
-def _settle_failure(store: Any, row_id: int, job_id: int, context: dict[str, Any],
-                    error: BaseException) -> tuple[str, str]:
-    """Settle a recycle that raised: (result status FAILED or PENDING, message)."""
-    if isinstance(error, (recycle_bin.RecycleRefused, recycle_bin.RecycleFailed)):
-        message, status = str(error), "FAILED"
-    else:
-        message = UNEXPECTED_MESSAGE.format(error=error)
-        # A file that left input/ (or changed) stays PENDING for reconciliation.
-        status = "FAILED" if _source_still_there(context["path"], context["size_bytes"]) else "PENDING"
-    if status == "FAILED":
-        store.finish_source_cleanup(row_id, state="FAILED", error=message)
-    store.add_event(
-        job_id, "SOURCE_CLEANUP_FAILED", message, level="ERROR",
-        payload=_recycle_payload(context, message),
-    )
-    return status, message
-
-
-def _late_callback(store: Any, row_id: int, job_id: int, context: dict[str, Any]) -> Callable:
-    """Settles the PENDING row when Windows answers after the timeout (recycle thread)."""
-
-    def on_late_result(result: Any, error: BaseException | None) -> None:
-        try:
-            if error is None and result is not None:
-                _settle_recycled(
-                    store, row_id, verified=bool(result.verified), record=result.record_path,
-                )
-            else:
-                _settle_failure(
-                    store, row_id, job_id, context,
-                    error if error is not None else RuntimeError("no result"),
-                )
-        except Exception:  # noqa: BLE001 - e.g. the store was closed at shutdown
-            pass
-
-    return on_late_result
 
 
 def precheck(root: Path, assessment: Any, job_sha: str,
@@ -797,12 +765,15 @@ def precheck(root: Path, assessment: Any, job_sha: str,
 
 
 def _recheck(root: Path, store: Any, scheduler: Any, assessment: Assessment, checked: dict[str, Any],
-             bin_info: Callable[[Path], Any]) -> str | None:
+             audit_running: Callable[[int], bool] | None) -> str | None:
     """Inside REVIEW_QUEUE_IO and job_action_lock: why the hashed video may no longer go, or None."""
     job = store.get_job(assessment.job_id)
     fresh = assess_job(root, store, scheduler, job, fresh=True)
     if not fresh.eligible:
         return fresh.reason
+    refusal = _delete_refusal(root, job, audit_running)
+    if refusal:
+        return refusal
     same = (
         fresh.kind, os.path.normcase(fresh.source_path), fresh.size_bytes, fresh.output_path,
         fresh.output_bytes, fresh.output_sha256,
@@ -825,135 +796,136 @@ def _recheck(root: Path, store: Any, scheduler: Any, assessment: Assessment, che
             return REASON_OUTPUT_CHANGED
         if _stat_key(output_now) != _stat_key(checked["output_stat"]):
             return REASON_OUTPUT_CHANGED
+    return None
+
+
+def _note(store: Any, job_id: int, kind: str, message: str, *, level: str, payload: dict[str, Any]) -> None:
+    """An event on a job that stays; a failure to write it never changes the result."""
     try:
-        refusal = recycle_bin.capacity_refusal(bin_info(root / "input"), int(assessment.size_bytes or 0))
-    except recycle_bin.RecycleRefused as error:
-        return str(error)
-    return refusal
+        store.add_event(job_id, kind, message, level=level, payload=payload)
+    except Exception:  # noqa: BLE001 - e.g. the store was closed at shutdown
+        pass
 
 
-def _clean_one(root: Path, store: Any, scheduler: Any, assessment: Assessment, *,
-               recycler: Callable, bin_info: Callable[[Path], Any],
-               hasher: Callable[[Path], str], timeout: float) -> tuple[dict[str, Any], bool]:
-    """One video through the three sections; returns (result, stop_the_rest)."""
+def _failed(store: Any, assessment: Assessment, stage: str, reason: str, *, level: str = "WARNING") -> dict[str, Any]:
+    _note(store, assessment.job_id, "SOURCE_CLEANUP_FAILED", reason, level=level,
+          payload={"stage": stage, "reason": reason})
+    return _result(assessment, "FAILED", reason)
+
+
+def finish_removal(root: Path, store: Any, job_id: int, *, warning: str | None = None) -> list[str]:
+    """After its source is gone: remove the job's files and rows; returns what stayed.
+
+    A job left with files logs SOURCE_DELETE_PARTIAL and keeps every row, so
+    "Xóa video" can finish it later. Called under both locks.
+    """
+    try:
+        errors = job_purge.remove_job(root, store, store.get_job(job_id))
+    except Exception as error:  # noqa: BLE001 - the job stays, without its source
+        errors = [UNEXPECTED_MESSAGE.format(error=error)]
+    if errors:
+        _note(store, job_id, "SOURCE_DELETE_PARTIAL", PARTIAL_MESSAGE.format(errors="; ".join(errors)),
+              level="WARNING", payload={"errors": errors, "manifest_warning": warning})
+    return errors
+
+
+def _delete_one(root: Path, store: Any, scheduler: Any, assessment: Assessment, *, deleter: Callable,
+                hasher: Callable[[Path], str], audit_running: Callable[[int], bool] | None) -> dict[str, Any]:
+    """One video: hash with no lock, then re-check, delete it and remove its job under both locks."""
     job_id = assessment.job_id
     job_sha = str(store.get_job(job_id).get("source_sha256") or "")
     checked, reason = precheck(root, assessment, job_sha, hasher)
     if reason is not None:
-        store.add_event(
-            job_id, "SOURCE_CLEANUP_FAILED", reason, level="WARNING",
-            payload={"stage": "precheck", "reason": reason},
-        )
-        return _result(assessment, "FAILED", reason), False
+        return _failed(store, assessment, "precheck", reason)
     with REVIEW_QUEUE_IO, scheduler.job_action_lock:
-        reason = _recheck(root, store, scheduler, assessment, checked, bin_info)
-        row_id = None
-        if reason is None:
-            row_id = store.add_source_cleanup(
-                job_id=job_id, kind=assessment.kind, source_path=assessment.source_path,
-                source_sha256=checked["sha256"], size_bytes=int(assessment.size_bytes),
-                mtime_ns=int(checked["stat"].st_mtime_ns), output_path=assessment.output_path,
-                output_sha256=checked["output_sha256"], output_bytes=assessment.output_bytes,
-                exported_at=assessment.exported_at, skipped_at=assessment.skipped_at,
-            )
-    if row_id is None:
-        store.add_event(
-            job_id, "SOURCE_CLEANUP_FAILED", reason, level="WARNING",
-            payload={"stage": "recheck", "reason": reason},
-        )
-        return _result(assessment, "FAILED", reason), False
-    context = {"path": assessment.source_path, "size_bytes": int(assessment.size_bytes), "sha256": checked["sha256"]}
-    try:
-        outcome = recycler(
-            Path(assessment.source_path), allowed_root=root / "input",
-            expected_size=int(assessment.size_bytes), timeout=timeout,
-            on_late_result=_late_callback(store, row_id, job_id, context),
-        )
-    except recycle_bin.RecycleTimeout as error:
-        store.add_event(
-            job_id, "SOURCE_CLEANUP_PENDING", PENDING_EVENT_MESSAGE, level="WARNING",
-            payload=dict(context),
-        )
-        return _result(assessment, "PENDING", str(error)), True
-    except Exception as error:  # noqa: BLE001 - every failure is settled and reported
-        status, message = _settle_failure(store, row_id, job_id, context, error)
-        return _result(assessment, status, message), False
-    try:
-        _settle_recycled(store, row_id, verified=bool(outcome.verified), record=outcome.record_path)
-    except Exception as error:  # noqa: BLE001
-        # The file left input/; the row stays PENDING until the next startup reconciles it.
-        return _result(assessment, "PENDING", UNEXPECTED_MESSAGE.format(error=error)), False
-    if outcome.verified:
-        return _result(assessment, "RECYCLED", RECYCLED_MESSAGE), False
-    return _result(assessment, "UNVERIFIED", UNVERIFIED_MESSAGE), False
+        reason = _recheck(root, store, scheduler, assessment, checked, audit_running)
+        if reason is not None:
+            return _failed(store, assessment, "recheck", reason)
+        source = assessment.source_path
+        try:
+            deleter(Path(source), allowed_root=root / "input", expected_size=int(assessment.size_bytes))
+        except Exception as error:  # noqa: BLE001 - whether the file is still there decides
+            if os.path.lexists(source):
+                known = isinstance(error, (job_purge.DeleteRefused, job_purge.DeleteFailed))
+                return _failed(
+                    store, assessment, "delete", str(error) if known else UNEXPECTED_MESSAGE.format(error=error),
+                    level="ERROR",
+                )
+        # The source is gone for good: what follows only finishes the removal.
+        warning = None
+        if assessment.kind == "EXPORTED":
+            warning = job_purge.delete_export_manifest(root, assessment.output_path)
+        errors = finish_removal(root, store, job_id, warning=warning)
+    if errors:
+        return _result(assessment, "PARTIAL", PARTIAL_MESSAGE.format(errors="; ".join(errors)))
+    return _result(assessment, "DELETED", DELETED_MESSAGE + (MANIFEST_WARNING.format(warning=warning) if warning else ""))
+
+
+def _unexpected(store: Any, assessment: Assessment, message: str) -> dict[str, Any]:
+    """An error nothing above expected: FAILED while the source is there, PARTIAL once it is gone."""
+    if os.path.lexists(assessment.source_path):
+        _note(store, assessment.job_id, "SOURCE_CLEANUP_FAILED", message, level="ERROR",
+              payload={"stage": "unexpected", "reason": message})
+        return _result(assessment, "FAILED", message)
+    _note(store, assessment.job_id, "SOURCE_DELETE_PARTIAL", PARTIAL_MESSAGE.format(errors=message),
+          level="ERROR", payload={"errors": [message], "manifest_warning": None})
+    return _result(assessment, "PARTIAL", PARTIAL_MESSAGE.format(errors=message))
 
 
 def execute_cleanup(
     root: Any, store: Any, scheduler: Any, job_ids: Any, preview_id: Any, *,
-    recycler: Callable, bin_info: Callable[[Path], Any],
-    hasher: Callable[[Path], str] = sha256_file, timeout: float = 60.0,
+    deleter: Callable, hasher: Callable[[Path], str] = sha256_file,
     should_stop: Callable[[], bool] | None = None,
+    audit_running: Callable[[int], bool] | None = None,
 ) -> dict[str, Any]:
-    """Move the confirmed videos' sources to the Recycle Bin, one by one.
+    """Delete the confirmed videos' sources for good and remove their jobs, one by one.
 
-    ``recycler`` has no default (the signature of
-    ``recycle_bin.send_to_recycle_bin``); ``bin_info`` is called with
-    ``root / 'input'``. Raises ValueError for a bad request, CleanupConflict
-    when nothing may start; otherwise every eligible video gets a result.
+    ``deleter`` has no default (``job_purge.delete_input_file`` in the Control
+    Center); ``audit_running(job_id)`` says whether an AI audit runs. Raises
+    ValueError for a bad request or a root outside the install (and its
+    temp/), CleanupConflict when nothing may start; otherwise every eligible
+    video gets a result: DELETED, PARTIAL (the source is gone but a file of
+    the job stayed, so the job stays without its source), FAILED (nothing was
+    deleted) or NOT_RUN (BiliFlow is stopping).
     """
     root = Path(root)
     ids = parse_job_ids(job_ids)
     if not isinstance(preview_id, str) or _PREVIEW_ID.fullmatch(preview_id) is None:
         raise ValueError(PREVIEW_ID_MESSAGE)
+    if not job_purge.allowed_project_root(root):
+        raise ValueError(job_purge.ROOT_MESSAGE)
     if not _EXECUTE_LOCK.acquire(blocking=False):
         raise CleanupConflict("busy", BUSY_MESSAGE)
     try:
         if recycle_bin.operations_in_progress():
             raise CleanupConflict("busy", BUSY_MESSAGE)
-        preview, eligible = _preview(root, store, scheduler, ids, bin_info=bin_info, fresh=True)
+        preview, eligible = _preview(root, store, scheduler, ids, fresh=True, audit_running=audit_running)
         if preview["preview_id"] != preview_id:
             raise CleanupConflict("preview_changed", PREVIEW_CHANGED_MESSAGE, preview)
-        if preview["recycle_bin"] is None:
-            raise CleanupConflict("bin_unavailable", preview["blocked"], preview)
-        if preview["blocked"]:
-            raise CleanupConflict("bin_capacity", preview["blocked"], preview)
         if not eligible:
             raise ValueError(NOTHING_ELIGIBLE_MESSAGE)
         results: list[dict[str, Any]] = []
-        stopped = False
         for assessment in eligible:
-            if stopped:
-                results.append(_result(assessment, "NOT_RUN", NOT_RUN_MESSAGE))
-                continue
             if should_stop is not None and should_stop():
                 results.append(_result(assessment, "NOT_RUN", STOPPING_MESSAGE))
                 continue
             try:
-                result, stopped = _clean_one(
-                    root, store, scheduler, assessment, recycler=recycler, bin_info=bin_info,
-                    hasher=hasher, timeout=timeout,
+                result = _delete_one(
+                    root, store, scheduler, assessment, deleter=deleter, hasher=hasher,
+                    audit_running=audit_running,
                 )
             except Exception as error:  # noqa: BLE001 - one video never aborts the others
-                # Raised before a row was written (the recycle step settles its own errors).
-                message = UNEXPECTED_MESSAGE.format(error=error)
-                try:
-                    store.add_event(
-                        assessment.job_id, "SOURCE_CLEANUP_FAILED", message, level="WARNING",
-                        payload={"stage": "precheck", "reason": message},
-                    )
-                except Exception:  # noqa: BLE001
-                    pass
-                result = _result(assessment, "FAILED", message)
+                result = _unexpected(store, assessment, UNEXPECTED_MESSAGE.format(error=error))
             results.append(result)
     finally:
         _EXECUTE_LOCK.release()
-    moved = [item for item in results if item["status"] in ("RECYCLED", "UNVERIFIED")]
+    gone = [item for item in results if item["status"] in ("DELETED", "PARTIAL")]
     return {
         "results": results,
-        "recycled_count": len(moved),
-        "recycled_bytes": sum(int(item["size_bytes"] or 0) for item in moved),
+        "deleted_count": sum(1 for item in results if item["status"] == "DELETED"),
+        "deleted_bytes": sum(int(item["size_bytes"] or 0) for item in gone),
         "failed_count": sum(1 for item in results if item["status"] == "FAILED"),
-        "pending": sum(1 for item in results if item["status"] == "PENDING"),
+        "partial_count": sum(1 for item in results if item["status"] == "PARTIAL"),
     }
 
 

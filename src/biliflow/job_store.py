@@ -142,6 +142,14 @@ SOURCE_ARCHIVE_FACTS = frozenset({*SOURCE_ARCHIVE_FLAGS, "export_record", "manif
 # The latest archive row of a job in one of these states locks every action on
 # the job: the source is in archive/ or on its way there or back.
 SOURCE_ARCHIVED_STATES = ("PENDING", "ARCHIVED", "RESTORING")
+# The settings a job owns, each stored as "<name>:<job id>" (scheduler and
+# Control Center). purge_job removes them with the job.
+JOB_SETTING_NAMES = ("pipeline_key", "detector_groups", "ocr_batch_size", "fast_scan", "render", "skip")
+# Tables whose rows name a job, deleted before the job row ("Xóa video"): the
+# first three have no ON DELETE action, the others cascade anyway.
+JOB_ROW_TABLES = (
+    "recycle_checks", "source_cleanups", "source_archives", "artifacts", "stages", "job_revisions", "events",
+)
 
 
 def now_iso() -> str:
@@ -911,6 +919,55 @@ class JobStore:
                 (stamp, stamp, str(Path(path).resolve(strict=False))),
             )
             self._connection.commit()
+
+    def recorded_paths(self) -> list[tuple[int, str]]:
+        """(job id, path) of every report path a job records: queues, artifacts and stage outputs."""
+        with self._lock:
+            rows = self._connection.execute(
+                """SELECT job_id, queue_path AS path FROM job_revisions
+                UNION SELECT job_id, path FROM artifacts
+                UNION SELECT id, active_queue_path FROM jobs WHERE active_queue_path IS NOT NULL
+                UNION SELECT job_id, checkpoint_path FROM stages WHERE checkpoint_path IS NOT NULL
+                UNION SELECT job_id, artifact_path FROM stages WHERE artifact_path IS NOT NULL"""
+            ).fetchall()
+        return [(int(row["job_id"]), str(row["path"])) for row in rows]
+
+    def purge_job(self, job_id: int) -> bool:
+        """Delete a job and every row that names it, in one transaction ("Xóa video").
+
+        The rows of JOB_ROW_TABLES, the job's "<name>:<id>" settings and the
+        job row go; the watcher row of its file is reset like
+        reset_watched_file (never deleted, and never one another job imported
+        since). False, writing nothing, when the job is unknown.
+        """
+        stamp = now_iso()
+        with self._lock:
+            try:
+                row = self._connection.execute(
+                    "SELECT source_path FROM jobs WHERE id=?", (job_id,)
+                ).fetchone()
+                if row is None:
+                    return False
+                for table in JOB_ROW_TABLES:
+                    self._connection.execute(
+                        f"DELETE FROM {table} WHERE job_id=?", (job_id,)  # noqa: S608 - fixed names
+                    )
+                self._connection.executemany(
+                    "DELETE FROM settings WHERE key=?",
+                    [(f"{name}:{job_id}",) for name in JOB_SETTING_NAMES],
+                )
+                self._connection.execute(
+                    """UPDATE watcher_files SET size_bytes=-1,mtime_ns=-1,imported_job_id=NULL,
+                    stable_since=?,updated_at=?
+                    WHERE imported_job_id=? OR (path=? AND imported_job_id IS NULL)""",
+                    (stamp, stamp, job_id, str(Path(row["source_path"]).resolve(strict=False))),
+                )
+                self._connection.execute("DELETE FROM jobs WHERE id=?", (job_id,))
+                self._connection.commit()
+            except sqlite3.Error:
+                self._connection.rollback()
+                raise
+        return True
 
     @staticmethod
     def _cleanup_row(row: sqlite3.Row | None) -> dict[str, Any] | None:

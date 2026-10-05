@@ -177,6 +177,21 @@ class ArchiveFixture(unittest.TestCase):
         self.bin = FakeBin()
         self.hashed = []
 
+    def legacy_cleanup(self, job_id):
+        """What the old "Dọn video gốc" left (jobs 40-60): the source in the bin and a RECYCLED row."""
+        job = self.store.get_job(job_id)
+        source = Path(job["source_path"])
+        row_id = self.store.add_source_cleanup(
+            job_id=job_id, kind="EXPORTED", source_path=str(source.resolve()),
+            source_sha256=job["source_sha256"], size_bytes=job["source_size_bytes"],
+            mtime_ns=job["source_mtime_ns"],
+        )
+        token = uuid.uuid4().hex[:6].upper()
+        os.replace(source, self.bin_dir / f"$R{token}{source.suffix}")
+        record = self.bin_dir / f"$I{token}{source.suffix}"
+        record.write_bytes(b"record")
+        return source_cleanup._settle_recycled(self.store, row_id, verified=True, record=str(record))
+
     def hasher(self, path):
         self.hashed.append(Path(path))
         return sha256_file(Path(path))
@@ -374,7 +389,7 @@ class ArchiveTests(ArchiveFixture):
         self.assertEqual(self.store.source_lock(job_id), "archived")
         self.assertEqual(set(self.bin.calls), {self.root / "output"})
         self.assertEqual(self.reason(job_id), "Video gốc đã được lưu trữ")
-        cleanup = source_cleanup.preview_cleanup(self.root, self.store, self.scheduler, [job_id], bin_info=self.bin)
+        cleanup = source_cleanup.preview_cleanup(self.root, self.store, self.scheduler, [job_id])
         self.assertEqual(cleanup["ineligible"][0]["reason"], "Video gốc đang ở kho lưu trữ")
         summary = archive_row_summary(row)
         self.assertEqual(
@@ -533,12 +548,7 @@ class EligibilityTests(ArchiveFixture):
 
     def test_cleaned_job_needs_bin_restore_first(self):
         job_id = self.make_exported_job("tap14")
-        source_cleanup.execute_cleanup(
-            self.root, self.store, self.scheduler, [job_id],
-            source_cleanup.preview_cleanup(self.root, self.store, self.scheduler, [job_id],
-                                           bin_info=self.bin)["preview_id"],
-            recycler=self.recycler, bin_info=self.bin, hasher=self.hasher,
-        )
+        self.legacy_cleanup(job_id)
         self.assertEqual(self.store.source_lock(job_id), "cleaned")
         self.assertEqual(self.reason(job_id),
                          "Video gốc đang ở Thùng rác (đã dọn); khôi phục nó về input trước khi lưu trữ")
@@ -1411,13 +1421,7 @@ class WatcherAndImportTests(ArchiveFixture):
         digest = hashlib.sha256(source.read_bytes()).hexdigest()
         job_key = safe_job_key(source, digest)
         job_id = self.make_exported_job("tap10", source_name=source.name, job_key=job_key)
-        cleanup = source_cleanup.execute_cleanup(
-            self.root, self.store, self.scheduler, [job_id],
-            source_cleanup.preview_cleanup(self.root, self.store, self.scheduler, [job_id],
-                                           bin_info=self.bin)["preview_id"],
-            recycler=self.recycler, bin_info=self.bin, hasher=self.hasher,
-        )
-        self.assertEqual(cleanup["results"][0]["status"], "RECYCLED")
+        self.assertEqual(self.legacy_cleanup(job_id)["state"], "RECYCLED")
         self.assertEqual(self.reason(job_id),
                          "Video gốc đang ở Thùng rác (đã dọn); khôi phục nó về input trước khi lưu trữ")
         recycled = next(self.bin_dir.glob("$R*.mp4"))

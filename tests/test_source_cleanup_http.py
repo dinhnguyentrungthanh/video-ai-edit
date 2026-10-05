@@ -1,16 +1,16 @@
-"""Dọn video gốc through the Control Center (batch 3, step B8).
+"""Xóa video gốc through the Control Center (batch 3 step B8, permanent delete since 2026-10-05).
 
-The preview and cleanup routes over real HTTP on port 0, the status() fields,
+The preview and delete routes over real HTTP on port 0, the status() fields,
 the 409 conflicts, the lock order with finalize and review decisions, the
-startup reconciliation and the shutdown wait.
+startup reconciliation of legacy rows and the shutdown wait.
 
 Every Control Center here is a stub built with ``ControlCenter.__new__`` on a
-temporary root (a real JobStore and JobScheduler, never the project's state),
-with a fake recycler that moves the file into a folder outside the root and a
-fake ``bin_info`` with the real numbers of drive E:. The one real
-``ControlCenter(...)`` (startup test) never calls its recycler. The module setup
-also replaces ``recycle_bin._shell_delete`` with a function that fails the
-test, so nothing here can reach the real Recycle Bin.
+temporary root under ``<install>/temp`` (a real JobStore and JobScheduler, never
+the project's state), with a deleter that records each call and then deletes
+the temporary file with ``job_purge.delete_input_file`` (which refuses any
+other root). The one real ``ControlCenter(...)`` (startup test) never deletes
+anything. The module setup also replaces ``recycle_bin._shell_delete`` with a
+function that fails the test, so nothing here can reach the real Recycle Bin.
 """
 
 import hashlib
@@ -20,7 +20,6 @@ import os
 import threading
 import time
 import unittest
-import uuid
 from datetime import datetime, timedelta, timezone
 from http.server import ThreadingHTTPServer
 from pathlib import Path
@@ -30,32 +29,34 @@ from unittest.mock import Mock, call, patch
 
 from biliflow import brand_memory
 from biliflow import control_center as cc
-from biliflow import recycle_bin, source_cleanup
+from biliflow import job_purge, recycle_bin, source_cleanup
 from biliflow.control_center import ControlCenter, _handler_class
 from biliflow.job_store import JobStore
-from biliflow.recycle_bin import BinInfo, RecycleRefused, RecycleResult
+from biliflow.recycle_bin import BinInfo, RecycleRefused
 from biliflow.review_evidence import ReviewFrameCache
 from biliflow.review_workflow import approved_operations, review_export_paths
 from biliflow.scheduler import JobScheduler
 
 
+TEMP_PARENT = recycle_bin.INSTALL_ROOT / "temp"
 GUID = "{2fd9f59c-d156-40e6-b5c9-93b787892ee9}"
 MAX_BYTES = 52_157_218_816  # MaxCapacity 49741 MiB
 USED_BYTES = 11_823_971_925
 ITEMS = 7
-NEAR_FULL = MAX_BYTES - recycle_bin.CAPACITY_MARGIN_BYTES
 NOW = datetime.now(timezone.utc)
 
-# Verbatim texts of the contract (temp/ui-plan/batch3/contract.md).
+# Verbatim texts of the contract (docs/DELETE_FLOW_PLAN.md).
 JOB_IDS_MESSAGE = "Chọn từ 1 đến 50 video mỗi lần dọn."
-PREVIEW_ID_MESSAGE = "Thiếu mã xem trước; hãy mở lại hộp thoại dọn video gốc."
-BUSY_MESSAGE = "Đang dọn video gốc; chờ lần dọn trước xong rồi thử lại."
+PREVIEW_ID_MESSAGE = "Thiếu mã xem trước; hãy mở lại hộp thoại xóa video gốc."
+BUSY_MESSAGE = "Đang xóa video gốc; chờ lần xóa trước xong rồi thử lại."
 PREVIEW_CHANGED_MESSAGE = "Danh sách đã thay đổi, hãy xem lại."
-NOTHING_ELIGIBLE_MESSAGE = "Không có video nào dọn được trong danh sách đã chọn."
-UNCONFIGURED_MESSAGE = "Chưa cấu hình Thùng rác cho Control Center này."
-RECYCLED_MESSAGE = "Đã chuyển video gốc vào Thùng rác"
-STOPPING_MESSAGE = "BiliFlow đang tắt; video này chưa được dọn."
+NOTHING_ELIGIBLE_MESSAGE = "Không có video gốc nào xóa được trong danh sách đã chọn."
+UNCONFIGURED_DELETE_MESSAGE = "Control Center này chưa được phép xóa video gốc."
+UNCONFIGURED_BIN_MESSAGE = "Chưa cấu hình Thùng rác cho Control Center này."
+DELETED_MESSAGE = "Đã xóa vĩnh viễn video gốc và xóa video khỏi BiliFlow"
+STOPPING_MESSAGE = "BiliFlow đang tắt; video này chưa được xóa."
 INTERRUPTED_MESSAGE = "Bị gián đoạn trước khi chuyển; video gốc vẫn còn."
+REASON_AUDIT = "Đang chạy AI Audit cho video này; chờ xong rồi xóa"
 REASON_RECYCLED = "Video gốc đã được dọn trước đó"
 REASON_STATE = "Chỉ dọn được video đã xuất hoặc đã bỏ qua (mục “Hoàn tất”)"
 REASON_SOURCE_MISSING = "Video gốc không còn trong thư mục input"
@@ -109,58 +110,46 @@ def tree_digest(path):
 
 
 class FakeBin:
-    """bin_info(path) -> BinInfo of drive E: (or an error); records every call."""
+    """bin_info(path) -> BinInfo of drive E:; records every call (a deletion never makes one)."""
 
-    def __init__(self, used=USED_BYTES, error=None):
-        self.used, self.error = used, error
+    def __init__(self, used=USED_BYTES):
+        self.used = used
         self.calls = []
 
     def __call__(self, path):
         self.calls.append(Path(path))
-        if self.error is not None:
-            raise self.error
         return BinInfo("E:", "E:\\", GUID, MAX_BYTES, self.used, ITEMS)
 
 
-class FakeRecycler:
-    """Moves the file into a bin folder outside the root and records every call."""
+class RecordingDeleter:
+    """Records every call, then deletes the temporary file with job_purge.delete_input_file."""
 
-    def __init__(self, bin_dir):
-        self.bin_dir = Path(bin_dir)
+    def __init__(self):
         self.calls = []
 
-    def __call__(self, path, *, allowed_root, expected_size, timeout, on_late_result):
-        self.calls.append({
-            "path": path, "allowed_root": allowed_root, "expected_size": expected_size,
-            "timeout": timeout,
-        })
-        token = uuid.uuid4().hex[:6].upper()
-        os.replace(path, self.bin_dir / f"$R{token}{Path(path).suffix}")
-        record = self.bin_dir / f"$I{token}{Path(path).suffix}"
-        record.write_bytes(b"record")
-        return RecycleResult(str(path), expected_size, True, str(record), 0.01)
+    def __call__(self, path, *, allowed_root, expected_size):
+        self.calls.append({"path": path, "allowed_root": allowed_root, "expected_size": expected_size})
+        job_purge.delete_input_file(path, allowed_root=allowed_root, expected_size=expected_size)
 
 
 class CleanupHttpFixture(unittest.TestCase):
-    """SkipFixture of test_skip_export plus exported jobs, a fake recycler and a fake bin."""
+    """SkipFixture of test_skip_export plus exported jobs and a recording deleter, under <install>/temp."""
 
     def setUp(self):
-        temp = TemporaryDirectory()
+        TEMP_PARENT.mkdir(parents=True, exist_ok=True)
+        temp = TemporaryDirectory(dir=TEMP_PARENT)
         self.addCleanup(temp.cleanup)
         self.root = Path(temp.name).resolve()
-        for name in ("input", "reports/jobs", "output", "work", "state", "logs"):
+        for name in ("input", "reports/jobs", "output", "work", "state", "logs/control-center"):
             (self.root / name).mkdir(parents=True, exist_ok=True)
         # The brand and studio-logo memories (empty, real schema) and the session file
-        # of state/: a cleanup must leave every one of them byte for byte.
+        # of state/: a deletion must leave every one of them byte for byte.
         for name, payload in (
             ("brand-memory.json", brand_memory._empty_memory()),
             ("studio-logo-memory.json", brand_memory._empty_studio_logo_memory()),
             ("control-center.json", {"schema_version": 1, "port": 0}),
         ):
             (self.root / "state" / name).write_text(json.dumps(payload), encoding="utf-8")
-        bin_temp = TemporaryDirectory()
-        self.addCleanup(bin_temp.cleanup)
-        self.bin_dir = Path(bin_temp.name).resolve()
         self.store = JobStore(self.root / "state" / "control-center.sqlite3")
         self.addCleanup(self.store.close)
         center = ControlCenter.__new__(ControlCenter)
@@ -174,14 +163,16 @@ class CleanupHttpFixture(unittest.TestCase):
         center._stopping = threading.Event()
         center.scheduler = JobScheduler(self.root, self.store)
         center.frame_cache = ReviewFrameCache(self.root, self.root / "missing-ffmpeg.exe")
-        self.recycler = FakeRecycler(self.bin_dir)
+        self.deleter = RecordingDeleter()
         self.bin = FakeBin()
-        center.recycler = self.recycler
+        center.source_deleter = self.deleter
         center.bin_info = self.bin
         self.center = center
         cc._SUMMARY_CACHE.clear()
         source_cleanup._CACHE.clear()
         self.addCleanup(source_cleanup._CACHE.clear)
+        job_purge.clear_caches()
+        self.addCleanup(job_purge.clear_caches)
         for target, kwargs in (
             # No scan stages here: a queued job's only pending stage is its render.
             ("biliflow.scheduler.pipeline_stages", {"return_value": []}),
@@ -227,9 +218,12 @@ class CleanupHttpFixture(unittest.TestCase):
     def output_of(self, job_id):
         return review_export_paths(self.root, self.queue(job_id))[1]
 
-    def manifest_of(self, job_id):
+    def manifest_path(self, job_id):
         output = self.output_of(job_id)
-        return json.loads(output.with_suffix(output.suffix + ".manifest.json").read_text(encoding="utf-8"))
+        return output.with_suffix(output.suffix + ".manifest.json")
+
+    def manifest_of(self, job_id):
+        return json.loads(self.manifest_path(job_id).read_text(encoding="utf-8"))
 
     def make_exported_job(self, name, *, decided_at=None, plan_queue=None, source_name=None,
                           items=None, operations=False):
@@ -285,6 +279,13 @@ class CleanupHttpFixture(unittest.TestCase):
     def events(self, job_id, kind):
         return [event for event in self.store.events(job_id) if event["event_type"] == kind]
 
+    def job_exists(self, job_id):
+        try:
+            self.store.get_job(job_id)
+        except KeyError:
+            return False
+        return True
+
     def db_dump(self):
         """Every row of every table: a read-only route must leave it identical."""
         with self.store._lock:
@@ -298,8 +299,8 @@ class CleanupHttpFixture(unittest.TestCase):
                 for table in tables
             }
 
-    def kept_files(self):
-        """Digests of what a cleanup must never touch (reports, output, work, state/*.json)."""
+    def all_files(self):
+        """Digests of reports, output, work and state/*.json: a read-only route leaves them all."""
         state = hashlib.sha256()
         for path in sorted((self.root / "state").glob("*.json")):
             state.update(path.name.encode() + path.read_bytes())
@@ -308,6 +309,24 @@ class CleanupHttpFixture(unittest.TestCase):
             "output": tree_digest(self.root / "output"),
             "work": tree_digest(self.root / "work"),
             "state_json": state.hexdigest(),
+        }
+
+    def kept_files(self, removed):
+        """What a deletion of the jobs keyed ``removed`` keeps: other jobs' reports, every
+        output video, work/ and state/*.json."""
+        reports = hashlib.sha256()
+        for folder in sorted((self.root / "reports" / "jobs").iterdir()):
+            if folder.name not in removed:
+                reports.update(folder.name.encode() + tree_digest(folder).encode())
+        videos = hashlib.sha256()
+        for path in sorted((self.root / "output").glob("*.mp4")):
+            videos.update(path.name.encode() + path.read_bytes())
+        state = hashlib.sha256()
+        for path in sorted((self.root / "state").glob("*.json")):
+            state.update(path.name.encode() + path.read_bytes())
+        return {
+            "reports": reports.hexdigest(), "output_videos": videos.hexdigest(),
+            "work": tree_digest(self.root / "work"), "state_json": state.hexdigest(),
         }
 
     # ------------------------------------------------- real HTTP on port 0
@@ -364,7 +383,7 @@ class CleanupHttpFixture(unittest.TestCase):
 
 
 class PreviewRouteTests(CleanupHttpFixture):
-    """GET /api/source-cleanup/preview: what a cleanup would do, without doing anything."""
+    """GET /api/source-cleanup/preview: what a deletion would do, without doing anything."""
 
     def test_preview_lists_exported_and_skipped_videos_and_is_read_only(self):
         exported = self.make_exported_job("tap12", source_name="Tập 12.mp4")
@@ -374,7 +393,9 @@ class PreviewRouteTests(CleanupHttpFixture):
         missing = self.make_exported_job("tap3")
         self.source_of(missing).unlink()
         ready = self.make_job("tap5", state="READY_TO_EXPORT", items=[item("a", decided_at=iso(NOW))])
-        dump, files = self.db_dump(), self.kept_files()
+        log = self.root / "logs" / "control-center" / f"job-{exported}-render-attempt-1.log"
+        log.write_bytes(b"log" * 7)
+        dump, files = self.db_dump(), self.all_files()
         inputs = tree_digest(self.root / "input")
         hashed = AssertionError("a preview never hashes")
         with patch.object(source_cleanup, "sha256_file", side_effect=hashed), \
@@ -388,6 +409,10 @@ class PreviewRouteTests(CleanupHttpFixture):
         output = self.output_of(exported)
         manifest = self.manifest_of(exported)
         total = exported_job["source_size_bytes"] + skipped_job["source_size_bytes"]
+        reports = {
+            exported: job_purge.files_bytes([self.root / "reports" / "jobs" / "tap12", log]),
+            skipped: job_purge.files_bytes([self.root / "reports" / "jobs" / "tap60"]),
+        }
         self.assertEqual(preview["eligible"], [
             {
                 "job_id": exported, "name": "Tập 12.mp4", "file_name": "Tập 12.mp4",
@@ -395,7 +420,7 @@ class PreviewRouteTests(CleanupHttpFixture):
                 "size_bytes": exported_job["source_size_bytes"], "kind": "EXPORTED",
                 "output_path": output.relative_to(self.root).as_posix(), "output_name": output.name,
                 "output_bytes": manifest["output"]["bytes"], "exported_at": manifest["created_at"],
-                "skipped_at": None,
+                "skipped_at": None, "reports_bytes": reports[exported],
             },
             {
                 "job_id": skipped, "name": "tap60.mp4", "file_name": "tap60.mp4",
@@ -403,6 +428,7 @@ class PreviewRouteTests(CleanupHttpFixture):
                 "size_bytes": skipped_job["source_size_bytes"], "kind": "SKIPPED",
                 "output_path": None, "output_name": None, "output_bytes": None, "exported_at": None,
                 "skipped_at": self.store.setting(f"skip:{skipped}")["skipped_at"],
+                "reports_bytes": reports[skipped],
             },
         ])
         self.assertEqual(preview["ineligible"], [
@@ -412,23 +438,21 @@ class PreviewRouteTests(CleanupHttpFixture):
             {"job_id": ready, "name": "tap5.mp4", "reason": REASON_STATE},
             {"job_id": 999, "name": "", "reason": "Không tìm thấy video #999"},
         ])
-        self.assertEqual((preview["count"], preview["total_bytes"], preview["blocked"]), (2, total, None))
-        self.assertEqual(preview["recycle_bin"], {
-            "volume": "E:", "used_bytes": USED_BYTES, "items": ITEMS, "max_bytes": MAX_BYTES,
-            "after_bytes": USED_BYTES + total,
-        })
+        self.assertEqual((preview["count"], preview["total_bytes"], preview["reports_bytes"]),
+                         (2, total, sum(reports.values())))
+        self.assertNotIn("recycle_bin", preview)
+        self.assertNotIn("blocked", preview)
         self.assertRegex(preview["preview_id"], r"^[0-9a-f]{64}$")
         self.assertEqual(
             preview["preview_id"],
-            source_cleanup.preview_cleanup(
-                self.root, self.store, self.center.scheduler, [exported, skipped], bin_info=FakeBin(),
-            )["preview_id"],
+            source_cleanup.preview_cleanup(self.root, self.store, self.center.scheduler, [exported, skipped])[
+                "preview_id"
+            ],
         )
-        # Read-only: the bin is asked once (about input/), nothing is moved or written.
-        self.assertEqual(self.bin.calls, [self.root / "input"])
-        self.assertEqual(self.recycler.calls, [])
+        # Read-only: no bin query, nothing deleted or written.
+        self.assertEqual((self.bin.calls, self.deleter.calls), ([], []))
         self.assertEqual(self.db_dump(), dump)
-        self.assertEqual(self.kept_files(), files)
+        self.assertEqual(self.all_files(), files)
         self.assertEqual(tree_digest(self.root / "input"), inputs)
 
     def test_preview_refuses_foreign_hosts_and_bad_id_lists(self):
@@ -447,20 +471,25 @@ class PreviewRouteTests(CleanupHttpFixture):
         # 50 ids is the limit, unknown ids are listed as such.
         status, body = self.get(f"/api/source-cleanup/preview?ids={','.join(str(v) for v in range(1, 51))}")
         self.assertEqual((status, body["count"], len(body["ineligible"])), (200, 1, 49))
-        self.assertEqual(self.recycler.calls, [])
+        self.assertEqual(self.deleter.calls, [])
 
-    def test_a_stub_without_a_bin_shows_the_preview_as_blocked(self):
-        exported = self.make_exported_job("tap12")
-        del self.center.bin_info  # the class default of a stub that never got a real bin
-        preview = self.preview([exported])
-        self.assertEqual((preview["count"], preview["recycle_bin"], preview["blocked"]),
-                         (1, None, UNCONFIGURED_MESSAGE))
-        self.center.bin_info = FakeBin(used=NEAR_FULL)
-        preview = self.preview([exported])
-        self.assertEqual(preview["recycle_bin"]["used_bytes"], NEAR_FULL)
-        self.assertTrue(preview["blocked"].startswith("Không thể dọn: Thùng rác của ổ E: đang chứa "))
+    def test_golden_and_audited_videos_are_listed_as_ineligible(self):
+        golden = self.make_exported_job("tap37")
+        audited = self.make_exported_job("tap38")
+        free = self.make_skipped_job("tap60")
+        segments = self.root / "annotations" / "golden" / "v1" / "segments.json"
+        segments.parent.mkdir(parents=True)
+        segments.write_text(json.dumps({"sources": {"a": {"job_id": golden, "sha256": "f" * 64}}}),
+                            encoding="utf-8")
+        self.center._audit_jobs[audited] = "reports/jobs/tap38/review-queue.json"
+        preview = self.preview([golden, audited, free])
+        self.assertEqual([entry["job_id"] for entry in preview["eligible"]], [free])
+        self.assertEqual(preview["ineligible"], [
+            {"job_id": golden, "name": "tap37.mp4", "reason": job_purge.REASON_GOLDEN},
+            {"job_id": audited, "name": "tap38.mp4", "reason": REASON_AUDIT},
+        ])
 
-    def test_a_re_recorded_decision_and_the_finalize_shortcut_keep_the_export_cleanable(self):
+    def test_a_re_recorded_decision_and_the_finalize_shortcut_keep_the_export_deletable(self):
         # Fix pass: the same KEEP posted again after the export (an undo after
         # a misclick re-posts it) writes a newer decided_at; finalize then finds
         # the export of these decisions and marks the job COMPLETED without a
@@ -503,73 +532,63 @@ class CleanupRouteTests(CleanupHttpFixture):
             with self.subTest(host=host, token=token):
                 status, payload = self.post("/api/source-cleanup", host=host, token=token, body=body)
                 self.assertEqual((status, payload), (403, {"error": error}))
-        self.assertEqual(self.recycler.calls, [])
+        self.assertEqual(self.deleter.calls, [])
         self.assertEqual(self.db_dump(), dump)
         self.assertEqual(tree_digest(self.root / "input"), inputs)
         # The same body with the right Host and token is accepted.
         status, result = self.post("/api/source-cleanup", body=body)
-        self.assertEqual((status, result["recycled_count"]), (200, 1))
+        self.assertEqual((status, result["deleted_count"]), (200, 1))
 
-    def test_a_confirmed_cleanup_recycles_and_the_dashboard_follows(self):
+    def test_a_confirmed_deletion_removes_the_videos_and_the_dashboard_follows(self):
         exported = self.make_exported_job("tap12", source_name="Tập 12.mp4")
         skipped = self.make_skipped_job("tap60")
+        kept_job = self.make_exported_job("tap13")
         preview = self.preview([skipped, exported])
         ids = [entry["job_id"] for entry in preview["eligible"]]
         self.assertEqual(ids, [exported, skipped])
         sources = {job_id: self.source_of(job_id).resolve() for job_id in ids}
         sizes = {job_id: self.store.get_job(job_id)["source_size_bytes"] for job_id in ids}
-        files = self.kept_files()
+        manifest, output = self.manifest_path(exported), self.output_of(exported)
+        files = self.kept_files(removed={"tap12", "tap60"})
         status, result = self.clean(ids, preview["preview_id"])
         self.assertEqual(status, 200, result)
         self.assertEqual(result, {
             "results": [
-                {"job_id": exported, "name": "Tập 12.mp4", "status": "RECYCLED",
-                 "message": RECYCLED_MESSAGE, "size_bytes": sizes[exported]},
-                {"job_id": skipped, "name": "tap60.mp4", "status": "RECYCLED",
-                 "message": RECYCLED_MESSAGE, "size_bytes": sizes[skipped]},
+                {"job_id": exported, "name": "Tập 12.mp4", "status": "DELETED",
+                 "message": DELETED_MESSAGE, "size_bytes": sizes[exported]},
+                {"job_id": skipped, "name": "tap60.mp4", "status": "DELETED",
+                 "message": DELETED_MESSAGE, "size_bytes": sizes[skipped]},
             ],
-            "recycled_count": 2, "recycled_bytes": sizes[exported] + sizes[skipped],
-            "failed_count": 0, "pending": 0,
+            "deleted_count": 2, "deleted_bytes": sizes[exported] + sizes[skipped],
+            "failed_count": 0, "partial_count": 0,
         })
-        self.assertEqual(self.recycler.calls, [
-            {"path": sources[job_id], "allowed_root": self.root / "input",
-             "expected_size": sizes[job_id], "timeout": 60.0}
+        self.assertEqual(self.deleter.calls, [
+            {"path": sources[job_id], "allowed_root": self.root / "input", "expected_size": sizes[job_id]}
             for job_id in ids
         ])
-        # Only the sources left: reports, output, work and state/*.json are unchanged.
-        self.assertEqual(self.kept_files(), files)
-        for job_id in ids:
-            self.assertFalse(sources[job_id].exists())
-            event = self.events(job_id, "SOURCE_RECYCLED")
-            self.assertEqual(len(event), 1)
-            self.assertEqual((event[0]["message"], event[0]["payload"]["path"]),
-                             (RECYCLED_MESSAGE, str(sources[job_id])))
+        # Gone: the sources, the export's manifest, the jobs' report folders and rows.
+        # Kept: the other job's reports, every output video, work/ and state/*.json.
+        self.assertEqual(self.kept_files(removed={"tap12", "tap60"}), files)
+        self.assertFalse(os.path.lexists(manifest))
+        self.assertTrue(output.is_file())
+        for job_id, key in ((exported, "tap12"), (skipped, "tap60")):
+            self.assertFalse(os.path.lexists(sources[job_id]))
+            self.assertFalse(os.path.lexists(self.root / "reports" / "jobs" / key))
+            self.assertFalse(self.job_exists(job_id))
+            self.assertEqual(self.store.events(job_id), [])
+        self.assertTrue(self.source_of(kept_job).is_file())
         status, value = self.get("/api/status")
         self.assertEqual(status, 200)
         self.assertFalse(value["source_cleanup_running"])
-        jobs = {job["id"]: job for job in value["jobs"]}
-        for job_id, kind in ((exported, "EXPORTED"), (skipped, "SKIPPED")):
-            with self.subTest(job_id=job_id):
-                card = jobs[job_id]
-                row = card["source_cleanup"]
-                self.assertEqual(
-                    (row["state"], row["kind"], row["verified"], row["file_name"], row["size_bytes"],
-                     row["source_path"], row["error"]),
-                    ("RECYCLED", kind, True, sources[job_id].name, sizes[job_id], str(sources[job_id]), None),
-                )
-                self.assertTrue(card["source_cleaned"])
-                self.assertFalse(card["source_present"])
-                self.assertEqual((card["cleanup"]["eligible"], card["cleanup"]["kind"], card["cleanup"]["reason"]),
-                                 (False, kind, REASON_RECYCLED))
-        # The review page learns it too (read-only page, B4).
+        self.assertEqual([job["id"] for job in value["jobs"]], [kept_job])
+        self.assertEqual(self.bin.calls, [])
+        # The review page of a removed video is gone.
         status, value = self.get(f"/api/jobs/{exported}/review/export")
-        self.assertEqual((status, value["source_cleaned"], value["source_name"]), (200, True, "Tập 12.mp4"))
-        self.assertEqual((value["source_cleanup"]["state"], value["source_cleanup"]["file_name"]),
-                         ("RECYCLED", "Tập 12.mp4"))
+        self.assertEqual(status, 404, value)
         # The same confirmation sent again runs nothing: the list changed.
         status, payload = self.clean(ids, preview["preview_id"])
         self.assertEqual((status, payload["code"], payload["preview"]["count"]), (409, "preview_changed", 0))
-        self.assertEqual(len(self.recycler.calls), 2)
+        self.assertEqual(len(self.deleter.calls), 2)
 
     def test_a_stale_preview_id_is_409_with_the_new_preview(self):
         exported = self.make_exported_job("tap12")
@@ -585,32 +604,44 @@ class CleanupRouteTests(CleanupHttpFixture):
         self.assertEqual(payload["preview"], new)
         status, payload = self.clean([exported], "f" * 64)
         self.assertEqual((status, payload["code"]), (409, "preview_changed"))
-        self.assertEqual(self.recycler.calls, [])
-        self.assertIsNone(self.store.latest_source_cleanup(exported))
+        self.assertEqual(self.deleter.calls, [])
+        self.assertTrue(source.is_file())
         status, result = self.clean([exported], new["preview_id"])
-        self.assertEqual((status, result["results"][0]["status"]), (200, "RECYCLED"))
+        self.assertEqual((status, result["results"][0]["status"]), (200, "DELETED"))
 
-    def test_a_full_or_unavailable_bin_is_409_before_anything_runs(self):
+    def test_a_deletion_never_needs_the_recycle_bin(self):
         exported = self.make_exported_job("tap12")
         preview_id = self.preview([exported])["preview_id"]
-        self.center.bin_info = FakeBin(used=NEAR_FULL)
-        status, payload = self.clean([exported], preview_id)
-        self.assertEqual((status, payload["code"]), (409, "bin_capacity"))
-        self.assertTrue(payload["error"].startswith("Không thể dọn: Thùng rác của ổ E: đang chứa "))
-        self.assertEqual(payload["preview"]["blocked"], payload["error"])
-        self.assertEqual(payload["preview"]["preview_id"], preview_id)
-        not_fixed = recycle_bin.NOT_FIXED_MESSAGE.format(volume="E:")
-        self.center.bin_info = FakeBin(error=RecycleRefused(not_fixed))
-        status, payload = self.clean([exported], preview_id)
-        self.assertEqual((status, payload["error"], payload["code"]), (409, not_fixed, "bin_unavailable"))
-        self.assertEqual((payload["preview"]["recycle_bin"], payload["preview"]["blocked"]), (None, not_fixed))
-        del self.center.bin_info  # the class default refuses too
-        status, payload = self.clean([exported], preview_id)
-        self.assertEqual((status, payload["error"], payload["code"]),
-                         (409, UNCONFIGURED_MESSAGE, "bin_unavailable"))
-        self.assertEqual(self.recycler.calls, [])
-        self.assertIsNone(self.store.latest_source_cleanup(exported))
-        self.assertTrue(self.source_of(exported).is_file())
+        del self.center.bin_info  # the class default refuses every bin query
+        with self.assertRaises(RecycleRefused):
+            self.center.bin_info(self.root / "input")
+        status, result = self.clean([exported], preview_id)
+        self.assertEqual((status, result["deleted_count"]), (200, 1), result)
+        self.assertEqual(self.bin.calls, [])
+
+    def test_a_stub_without_a_deleter_fails_each_video_and_deletes_nothing(self):
+        exported = self.make_exported_job("tap12")
+        skipped = self.make_skipped_job("tap60")
+        del self.center.source_deleter  # the class default refuses
+        status, result = self.clean([exported, skipped], self.preview([exported, skipped])["preview_id"])
+        self.assertEqual(status, 200, result)
+        self.assertEqual([(entry["status"], entry["message"]) for entry in result["results"]],
+                         [("FAILED", UNCONFIGURED_DELETE_MESSAGE)] * 2)
+        self.assertEqual((result["deleted_count"], result["failed_count"]), (0, 2))
+        for job_id in (exported, skipped):
+            self.assertTrue(self.source_of(job_id).is_file())
+            self.assertEqual(self.events(job_id, "SOURCE_CLEANUP_FAILED")[0]["payload"],
+                             {"stage": "delete", "reason": UNCONFIGURED_DELETE_MESSAGE})
+        self.assertTrue(self.manifest_path(exported).is_file())
+
+    def test_a_running_ai_audit_refuses_the_deletion(self):
+        exported = self.make_exported_job("tap12")
+        self.center._audit_jobs[exported] = "reports/jobs/tap12/review-queue.json"
+        preview = self.preview([exported])
+        self.assertEqual(preview["ineligible"][0]["reason"], REASON_AUDIT)
+        status, payload = self.clean([exported], preview["preview_id"])
+        self.assertEqual((status, payload), (400, {"error": NOTHING_ELIGIBLE_MESSAGE}))
+        self.assertEqual(self.deleter.calls, [])
 
     def test_a_running_cleanup_is_409_busy(self):
         exported = self.make_exported_job("tap12")
@@ -622,11 +653,11 @@ class CleanupRouteTests(CleanupHttpFixture):
             self.assertTrue(self.get("/api/status")[1]["source_cleanup_running"])
         finally:
             source_cleanup._EXECUTE_LOCK.release()
-        self.assertEqual(self.recycler.calls, [])
+        self.assertEqual(self.deleter.calls, [])
         self.assertFalse(self.get("/api/status")[1]["source_cleanup_running"])
         self.assertEqual(self.clean([exported], preview_id)[0], 200)
 
-    def test_bad_bodies_are_400_and_never_reach_the_recycler(self):
+    def test_bad_bodies_are_400_and_never_reach_the_deleter(self):
         exported = self.make_exported_job("tap12")
         ready = self.make_job("tap5", state="READY_TO_EXPORT", items=[item("a", decided_at=iso(NOW))])
         preview_id = self.preview([exported])["preview_id"]
@@ -655,8 +686,8 @@ class CleanupRouteTests(CleanupHttpFixture):
         self.assertEqual((status, payload), (400, {"error": NOTHING_ELIGIBLE_MESSAGE}))
         status, payload = self.post("/api/source-cleanup", raw=b"[1]")
         self.assertEqual((status, payload), (400, {"error": "JSON object required"}))
-        self.assertEqual(self.recycler.calls, [])
-        self.assertIsNone(self.store.latest_source_cleanup(exported))
+        self.assertEqual(self.deleter.calls, [])
+        self.assertTrue(self.source_of(exported).is_file())
 
     def test_a_shutdown_leaves_the_videos_not_run(self):
         exported = self.make_exported_job("tap12")
@@ -664,10 +695,10 @@ class CleanupRouteTests(CleanupHttpFixture):
         self.center._stopping.set()
         status, result = self.clean([exported], preview_id)
         self.assertEqual(status, 200)
-        self.assertEqual((result["results"][0]["status"], result["results"][0]["message"], result["recycled_count"]),
+        self.assertEqual((result["results"][0]["status"], result["results"][0]["message"], result["deleted_count"]),
                          ("NOT_RUN", STOPPING_MESSAGE, 0))
-        self.assertEqual(self.recycler.calls, [])
-        self.assertIsNone(self.store.latest_source_cleanup(exported))
+        self.assertEqual(self.deleter.calls, [])
+        self.assertTrue(self.job_exists(exported))
 
 
 class LockOrderTests(CleanupHttpFixture):
@@ -682,48 +713,48 @@ class LockOrderTests(CleanupHttpFixture):
         preview_id = self.preview([cleaned])["preview_id"]
         self.serve()
         entered, release = threading.Event(), threading.Event()
-        original = self.store.add_source_cleanup
+        deleter = self.center.source_deleter
 
-        def blocking(**kwargs):
-            # Inside REVIEW_QUEUE_IO and job_action_lock (the cleanup's locked section).
+        def blocking(path, **kwargs):
+            # Inside REVIEW_QUEUE_IO and job_action_lock (the deletion's locked section).
             entered.set()
             release.wait(10)
-            return original(**kwargs)
+            return deleter(path, **kwargs)
 
+        self.center.source_deleter = blocking
         outcome = {}
-        with patch.object(self.store, "add_source_cleanup", side_effect=blocking):
-            cleaner = threading.Thread(
-                target=lambda: outcome.update(cleanup=self.clean([cleaned], preview_id)),
-            )
-            cleaner.start()
-            self.assertTrue(entered.wait(10))
-            others = [
-                threading.Thread(target=lambda: outcome.update(finalize=self.finalize(to_export))),
-                threading.Thread(target=lambda: outcome.update(decision=self.post(
-                    f"/api/jobs/{to_decide}/review/decision", body={"id": "a", "decision": "KEEP"},
-                ))),
-                threading.Thread(target=lambda: outcome.update(status=self.center.status())),
-            ]
-            for thread in others:
-                thread.start()
-            time.sleep(0.3)
-            # All of them wait behind the locked section (the one lock order) ...
-            self.assertEqual(set(outcome), set())
-            release.set()
-            released = time.monotonic()
-            for thread in [cleaner, *others]:
-                thread.join(10)
-            self.assertLessEqual(time.monotonic() - released, 10)
+        cleaner = threading.Thread(target=lambda: outcome.update(cleanup=self.clean([cleaned], preview_id)))
+        cleaner.start()
+        self.assertTrue(entered.wait(10))
+        others = [
+            threading.Thread(target=lambda: outcome.update(finalize=self.finalize(to_export))),
+            threading.Thread(target=lambda: outcome.update(decision=self.post(
+                f"/api/jobs/{to_decide}/review/decision", body={"id": "a", "decision": "KEEP"},
+            ))),
+            threading.Thread(target=lambda: outcome.update(status=self.center.status())),
+        ]
+        for thread in others:
+            thread.start()
+        time.sleep(0.3)
+        # All of them wait behind the locked section (the one lock order) ...
+        self.assertEqual(set(outcome), set())
+        release.set()
+        released = time.monotonic()
+        for thread in [cleaner, *others]:
+            thread.join(10)
+        self.assertLessEqual(time.monotonic() - released, 10)
         self.assertFalse(any(thread.is_alive() for thread in [cleaner, *others]))
         # ... and every one of them finishes once it is released.
         status, result = outcome["cleanup"]
-        self.assertEqual((status, result["recycled_count"]), (200, 1), result)
+        self.assertEqual((status, result["deleted_count"]), (200, 1), result)
         self.assertEqual(outcome["finalize"]["status"], "QUEUED")
         status, decided = outcome["decision"]
         self.assertEqual((status, decided["status"]), (200, "READY_FOR_EDIT_PLAN"), decided)
         self.assertEqual(self.store.get_job(to_decide)["state"], "READY_TO_EXPORT")
         self.assertEqual(self.store.get_job(to_export)["state"], "QUEUED")
-        self.assertIn(cleaned, {job["id"] for job in outcome["status"]["jobs"]})
+        # The status() that waited still answered; the next one no longer lists the removed video.
+        self.assertIn(to_export, {job["id"] for job in outcome["status"]["jobs"]})
+        self.assertNotIn(cleaned, {job["id"] for job in self.center.status()["jobs"]})
 
 
 class StatusFieldTests(CleanupHttpFixture):
@@ -760,9 +791,9 @@ class StatusFieldTests(CleanupHttpFixture):
         for job in jobs.values():
             self.assertIsNone(job["source_cleanup"])
             self.assertFalse(job["source_cleaned"])
-        self.assertEqual((self.bin.calls, self.recycler.calls), ([], []))
+        self.assertEqual((self.bin.calls, self.deleter.calls), ([], []))
 
-    def test_status_rows_follow_pending_failed_and_recycled_cleanups(self):
+    def test_status_rows_follow_legacy_pending_failed_and_recycled_cleanups(self):
         jobs = {state: self.make_exported_job(f"tap-{state.lower()}") for state in ("PENDING", "FAILED", "RECYCLED")}
         for state, job_id in jobs.items():
             source = self.source_of(job_id)
@@ -782,7 +813,7 @@ class StatusFieldTests(CleanupHttpFixture):
                 self.assertEqual(card["source_cleaned"], state in ("PENDING", "RECYCLED"))
         self.assertEqual(cards[jobs["PENDING"]]["cleanup"]["reason"], "Đang chuyển video gốc này vào Thùng rác")
         self.assertEqual(cards[jobs["RECYCLED"]]["cleanup"]["reason"], REASON_RECYCLED)
-        # A failed cleanup locks nothing: the video can be cleaned again.
+        # A failed legacy cleanup locks nothing: the video can be deleted.
         self.assertTrue(cards[jobs["FAILED"]]["cleanup"]["eligible"])
         self.assertEqual(cards[jobs["FAILED"]]["source_cleanup"]["error"], "Lỗi")
 
@@ -809,10 +840,24 @@ class StatusFieldTests(CleanupHttpFixture):
         self.assertTrue(jobs[skipped]["cleanup"]["eligible"])
         self.assertIsNone(jobs[ready]["cleanup"])
 
+    def test_a_job_removed_while_status_runs_is_left_out(self):
+        removed = self.make_exported_job("tap12")
+        kept = self.make_skipped_job("tap60")
+        listed = self.store.list_jobs()
+        self.store.purge_job(removed)  # a temporary root: what a deletion does after list_jobs()
+        with patch.object(self.store, "list_jobs", return_value=listed):
+            value = self.center.status()
+        self.assertEqual([job["id"] for job in value["jobs"]], [kept])
+        # Any other KeyError is still an error.
+        with patch.object(self.center, "ai_audit_summary", side_effect=KeyError("bug")), \
+                self.assertRaises(KeyError):
+            self.center.status()
+
 
 class StartupAndShutdownTests(unittest.TestCase):
-    def test_startup_settles_pending_rows_even_without_the_import(self):
-        with TemporaryDirectory() as directory:
+    def test_startup_settles_legacy_pending_rows_even_without_the_import(self):
+        TEMP_PARENT.mkdir(parents=True, exist_ok=True)
+        with TemporaryDirectory(dir=TEMP_PARENT) as directory:
             root = Path(directory).resolve()
             (root / "input").mkdir()
             (root / "state").mkdir()
@@ -835,7 +880,7 @@ class StartupAndShutdownTests(unittest.TestCase):
                 ), source.resolve(), info.st_size)
             # The shell had moved this one before the crash.
             gone_source = rows["gone"][2]
-            bin_temp = TemporaryDirectory()
+            bin_temp = TemporaryDirectory(dir=TEMP_PARENT)
             self.addCleanup(bin_temp.cleanup)
             os.replace(gone_source, Path(bin_temp.name) / "$RABCDEF.mp4")
             store.close()
@@ -867,24 +912,24 @@ class StartupAndShutdownTests(unittest.TestCase):
                 self.assertEqual([item[:3] for item in finder_calls],
                                  [(gone_source.anchor, str(gone_source), rows["gone"][3])])
                 # The only place the real functions are bound (never called here).
-                self.assertIs(center.recycler, recycle_bin.send_to_recycle_bin)
+                self.assertIs(center.source_deleter, job_purge.delete_input_file)
                 self.assertIs(center.bin_info, recycle_bin.volume_bin_info)
+                self.assertFalse(hasattr(center, "recycler"))
             finally:
                 center.store.close()
                 center.lock.close()
 
-    def test_the_class_defaults_refuse_and_never_reach_the_shell(self):
+    def test_the_class_defaults_refuse_and_never_delete_or_reach_the_shell(self):
         stub = ControlCenter.__new__(ControlCenter)
-        for recycler in (ControlCenter.recycler, stub.recycler):
-            with self.assertRaises(RuntimeError) as caught:
-                recycler(Path("E:\\input\\x.mp4"), allowed_root=Path("E:\\input"), expected_size=1,
-                         timeout=1.0, on_late_result=None)
-            self.assertEqual(str(caught.exception), UNCONFIGURED_MESSAGE)
+        for deleter in (ControlCenter.source_deleter, stub.source_deleter):
+            with self.assertRaises(job_purge.DeleteRefused) as caught:
+                deleter(Path("E:\\input\\x.mp4"), allowed_root=Path("E:\\input"), expected_size=1)
+            self.assertEqual(str(caught.exception), UNCONFIGURED_DELETE_MESSAGE)
         for bin_info in (ControlCenter.bin_info, stub.bin_info):
             with self.assertRaises(RecycleRefused) as caught:
                 bin_info(Path("E:\\input"))
-            self.assertEqual(str(caught.exception), UNCONFIGURED_MESSAGE)
-        self.assertIsNot(ControlCenter.recycler, recycle_bin.send_to_recycle_bin)
+            self.assertEqual(str(caught.exception), UNCONFIGURED_BIN_MESSAGE)
+        self.assertIsNot(ControlCenter.source_deleter, job_purge.delete_input_file)
         self.assertIsNot(ControlCenter.bin_info, recycle_bin.volume_bin_info)
 
     def stub(self, root):
@@ -923,8 +968,8 @@ class StartupAndShutdownTests(unittest.TestCase):
     def test_serve_outlives_an_api_shutdown_until_stop_has_closed_the_store(self):
         # Fix pass: /api/shutdown runs stop() on a daemon thread; its
         # server.shutdown() ends serve_forever in the main thread. serve() must
-        # not return (and let the interpreter exit, killing the stop and recycle
-        # threads) before stop() has waited for the cleanup and closed the store.
+        # not return (and let the interpreter exit, killing the stop and delete
+        # threads) before stop() has waited for the deletion and closed the store.
         with TemporaryDirectory() as directory:
             root = Path(directory).resolve()
             (root / "state").mkdir()
@@ -970,7 +1015,12 @@ class SharedNamesTests(unittest.TestCase):
         self.assertEqual(source_cleanup.JOB_IDS_MESSAGE, JOB_IDS_MESSAGE)
         self.assertEqual(source_cleanup.PREVIEW_ID_MESSAGE, PREVIEW_ID_MESSAGE)
         self.assertEqual(source_cleanup.BUSY_MESSAGE, BUSY_MESSAGE)
-        self.assertEqual(cc.UNCONFIGURED_RECYCLE_BIN_MESSAGE, UNCONFIGURED_MESSAGE)
+        self.assertEqual(source_cleanup.NOTHING_ELIGIBLE_MESSAGE, NOTHING_ELIGIBLE_MESSAGE)
+        self.assertEqual(source_cleanup.DELETED_MESSAGE, DELETED_MESSAGE)
+        self.assertEqual(source_cleanup.STOPPING_MESSAGE, STOPPING_MESSAGE)
+        self.assertEqual(source_cleanup.REASON_AUDIT, REASON_AUDIT)
+        self.assertEqual(cc.UNCONFIGURED_DELETE_MESSAGE, UNCONFIGURED_DELETE_MESSAGE)
+        self.assertEqual(cc.UNCONFIGURED_RECYCLE_BIN_MESSAGE, UNCONFIGURED_BIN_MESSAGE)
         # Not a ValueError: the route answers 409, never the generic 400.
         self.assertFalse(issubclass(source_cleanup.CleanupConflict, ValueError))
 

@@ -1515,8 +1515,8 @@ class ControlCenterHttpTests(unittest.TestCase):
             # Batch 3 (B8): the cleanup preview (read-only, no token, like every GET).
             "/api/source-cleanup/preview?ids=1",
         ]
-        recycler = Mock(side_effect=AssertionError("recycler reached"))
-        self.center.recycler = recycler
+        deleter = Mock(side_effect=AssertionError("deleter reached"))
+        self.center.source_deleter = deleter
         for route in routes:
             for host in ("evil.example", f"evil.example:{self.port}", "127.0.0.1.evil.example",
                          f"localhost:{self.port}x", "", "[::2]"):
@@ -1563,7 +1563,7 @@ class ControlCenterHttpTests(unittest.TestCase):
                 )
                 self.assertEqual(status, 403)
                 self.assertNotIn(b"test-token", body)
-        recycler.assert_not_called()
+        deleter.assert_not_called()
         self.assertTrue(self.source.is_file())
         self.assertIsNone(self.store.latest_source_cleanup(self.job_id))
 

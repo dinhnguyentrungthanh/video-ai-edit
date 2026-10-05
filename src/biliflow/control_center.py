@@ -18,7 +18,9 @@ from typing import Any
 
 import psutil
 
-from biliflow import __version__, logo_memory_admin, recycle_bin, source_archive, source_archive_restore, source_cleanup
+from biliflow import (
+    __version__, job_purge, logo_memory_admin, recycle_bin, source_archive, source_archive_restore, source_cleanup,
+)
 from biliflow.codex_supervisor import (
     codex_connection_status,
     collect_visual_evidence,
@@ -101,6 +103,7 @@ from biliflow import phone_access
 
 
 UNCONFIGURED_RECYCLE_BIN_MESSAGE = "Chưa cấu hình Thùng rác cho Control Center này."
+UNCONFIGURED_DELETE_MESSAGE = "Control Center này chưa được phép xóa video gốc."
 # How long serve() keeps the process alive for an /api/shutdown stop() after
 # serve_forever returned: stop() waits up to 90 s for a running cleanup.
 STOP_WAIT_SECONDS = 120.0
@@ -273,8 +276,13 @@ def _phone_page(title: str, message: str, *, form: bool, attempts_left: int | No
 
 
 def _unconfigured_recycler(*_args: Any, **_kwargs: Any) -> Any:
-    """ControlCenter.recycler until __init__ binds the real one (stubs and tests never reach the shell)."""
+    """ControlCenter.export_recycler until __init__ binds the real one (stubs and tests never reach the shell)."""
     raise RuntimeError(UNCONFIGURED_RECYCLE_BIN_MESSAGE)
+
+
+def _unconfigured_deleter(*_args: Any, **_kwargs: Any) -> Any:
+    """ControlCenter.source_deleter until __init__ binds the real one (stubs never delete a file)."""
+    raise job_purge.DeleteRefused(UNCONFIGURED_DELETE_MESSAGE)
 
 
 def _unconfigured_bin_info(path: Any) -> Any:
@@ -699,11 +707,11 @@ watchArchiveDialog();watchCleanupDialog();(async()=>{watchJobsInteraction();watc
 
 
 class ControlCenter:
-    # Dọn video gốc (batch 3): no real default. A stub built with __new__ (tests)
-    # gets these, which refuse; only __init__ binds the Windows Recycle Bin.
-    recycler = staticmethod(_unconfigured_recycler)
+    # "Xóa video gốc" and "Xóa video": no real default. A stub built with __new__
+    # (tests) gets this, which refuses; only __init__ binds the permanent delete.
+    source_deleter = staticmethod(_unconfigured_deleter)
+    # Batch 4 ("Lưu trữ" and "Kiểm tra lại Thùng rác"): the same rule for the Recycle Bin.
     bin_info = staticmethod(_unconfigured_bin_info)
-    # Batch 4 ("Lưu trữ" and "Kiểm tra lại Thùng rác"): the same rule.
     export_recycler = staticmethod(_unconfigured_recycler)
     record_finder = staticmethod(_unconfigured_finder)
 
@@ -725,8 +733,8 @@ class ControlCenter:
         self.archive_reconciled = source_archive_restore.reconcile_pending_archives(
             self.root, self.store, finder=recycle_bin.find_recycle_record,
         )
-        # The only place that binds the real Recycle Bin functions.
-        self.recycler = recycle_bin.send_to_recycle_bin
+        # The only place that binds the real permanent delete and Recycle Bin functions.
+        self.source_deleter = job_purge.delete_input_file
         self.export_recycler = recycle_bin.send_export_to_recycle_bin
         self.bin_info = recycle_bin.volume_bin_info
         self.record_finder = recycle_bin.find_recycle_record
@@ -767,37 +775,16 @@ class ControlCenter:
         cleanup_checks = self.store.recycle_check_summary("SOURCE_CLEANUP")
         archives = self.store.latest_source_archives()
         archive_checks = self.store.recycle_check_summary("ARCHIVE_EXPORT")
+        shown: list[dict[str, Any]] = []
         for job in jobs:
-            place = order.get(int(job["id"]))
-            job["queue_position"] = place["position"] if place else None
-            job["queue_kind"] = place["kind"] if place else None
-            job["ai_audit"] = self.ai_audit_summary(int(job["id"]))
-            job["structure_audit"] = self.structure_audit_summary(int(job["id"]))
-            job["render_progress"] = self.render_progress_summary(job)
-            # Dashboard V2: an unfinished export request (waiting, running or failed
-            # and retryable) locks export, rerun and decisions; the card no longer guesses it.
-            job["render_request"] = self.store.render_request(int(job["id"])) is not None
-            job["ocr_recognition_batch_size"] = self.scheduler.ocr_batch_size(int(job["id"]))
-            job["fast_scan"] = self.scheduler.fast_scan(int(job["id"]))
-            job["detector_groups"] = list(
-                self.scheduler.detector_groups(int(job["id"]))
-            )
-            job["review_summary"] = self.review_summary_for(job)
-            job["source_present"] = Path(str(job["source_path"])).is_file()
-            job["skip"] = (
-                self.store.setting(f"skip:{int(job['id'])}") if job["state"] == "SKIPPED" else None
-            )
-            row = cleanups.get(int(job["id"]))
-            job["source_cleanup"] = source_cleanup.cleanup_row_summary(
-                row, cleanup_checks.get(int(row["id"])) if row else None,
-            )
-            job["source_cleaned"] = bool(row and row["state"] in ("PENDING", "RECYCLED"))
-            archive = archives.get(int(job["id"]))
-            job["source_archive"] = source_archive.archive_row_summary(
-                archive, archive_checks.get(int(archive["id"])) if archive else None,
-            )
-            job["source_archived"] = bool(archive and archive["state"] in SOURCE_ARCHIVED_STATES)
-            job["cleanup"], job["archive"] = self._source_hints(job, row, archive)
+            try:
+                self._fill_card(job, order.get(int(job["id"])), cleanups, cleanup_checks, archives, archive_checks)
+            except KeyError:
+                # Removed ("Xóa video gốc", "Xóa video") after list_jobs(): no longer listed.
+                if self._job_exists(int(job["id"])):
+                    raise
+                continue
+            shown.append(job)
         return {
             "version": __version__, "started": True, "recovered_jobs": self.recovered,
             "scheduler_paused": self.store.setting("scheduler_paused", False),
@@ -806,17 +793,59 @@ class ControlCenter:
                 "paused": bool(self.store.setting("scheduler_paused", False)),
             },
             "active": self.scheduler.active, "resources": _resources(self.root),
-            "jobs": jobs, "storage": storage_status(self.root).as_dict(),
+            "jobs": shown, "storage": storage_status(self.root).as_dict(),
             "detector_options": [
                 {"id": key, **value} for key, value in DETECTOR_GROUPS.items()
             ],
             "source_cleanup_running": source_cleanup.cleanup_running(),
         }
 
+    def _fill_card(
+        self, job: dict[str, Any], place: dict[str, Any] | None, cleanups: dict[int, Any],
+        cleanup_checks: dict[int, Any], archives: dict[int, Any], archive_checks: dict[int, Any],
+    ) -> None:
+        """The status() fields of one job card (KeyError once the job is gone)."""
+        job["queue_position"] = place["position"] if place else None
+        job["queue_kind"] = place["kind"] if place else None
+        job["ai_audit"] = self.ai_audit_summary(int(job["id"]))
+        job["structure_audit"] = self.structure_audit_summary(int(job["id"]))
+        job["render_progress"] = self.render_progress_summary(job)
+        # Dashboard V2: an unfinished export request (waiting, running or failed
+        # and retryable) locks export, rerun and decisions; the card no longer guesses it.
+        job["render_request"] = self.store.render_request(int(job["id"])) is not None
+        job["ocr_recognition_batch_size"] = self.scheduler.ocr_batch_size(int(job["id"]))
+        job["fast_scan"] = self.scheduler.fast_scan(int(job["id"]))
+        job["detector_groups"] = list(
+            self.scheduler.detector_groups(int(job["id"]))
+        )
+        job["review_summary"] = self.review_summary_for(job)
+        job["source_present"] = Path(str(job["source_path"])).is_file()
+        job["skip"] = (
+            self.store.setting(f"skip:{int(job['id'])}") if job["state"] == "SKIPPED" else None
+        )
+        row = cleanups.get(int(job["id"]))
+        job["source_cleanup"] = source_cleanup.cleanup_row_summary(
+            row, cleanup_checks.get(int(row["id"])) if row else None,
+        )
+        job["source_cleaned"] = bool(row and row["state"] in ("PENDING", "RECYCLED"))
+        archive = archives.get(int(job["id"]))
+        job["source_archive"] = source_archive.archive_row_summary(
+            archive, archive_checks.get(int(archive["id"])) if archive else None,
+        )
+        job["source_archived"] = bool(archive and archive["state"] in SOURCE_ARCHIVED_STATES)
+        job["cleanup"], job["archive"] = self._source_hints(job, row, archive)
+
+    def _job_exists(self, job_id: int) -> bool:
+        try:
+            self.store.get_job(job_id)
+        except KeyError:
+            return False
+        return True
+
     def _source_hints(
         self, job: dict[str, Any], row: dict[str, Any] | None, archive: dict[str, Any] | None,
     ) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
-        """The "Dọn video gốc" and "Lưu trữ" hints of a card, from one shared assessment.
+        """The "Xóa video gốc" and "Lưu trữ" hints of a card, from one shared assessment.
 
         Never hashes and never queries the Recycle Bin; an error only marks
         that card, never status().
@@ -849,16 +878,25 @@ class ControlCenter:
             }
         return cleanup, hint
 
+    def audit_running(self, job_id: int) -> bool:
+        """An AI audit of this job is queued or running (it writes beside the review queue)."""
+        lock = getattr(self, "_audit_lock", None)
+        if lock is None:
+            return False
+        with lock:
+            return int(job_id) in getattr(self, "_audit_jobs", {})
+
     def source_cleanup_preview(self, job_ids: Any) -> dict[str, Any]:
-        """GET /api/source-cleanup/preview: read-only (no hash, no write, no recycler)."""
+        """GET /api/source-cleanup/preview ("Xóa video gốc"): read-only (no hash, no write, no deleter)."""
         return source_cleanup.preview_cleanup(
             self.root, self.store, self.scheduler, source_cleanup.parse_job_ids(job_ids),
-            bin_info=self.bin_info,
+            audit_running=self.audit_running,
         )
 
     def source_cleanup_run(self, job_ids: Any, preview_id: Any) -> dict[str, Any]:
-        """POST /api/source-cleanup: move the confirmed sources to the Recycle Bin.
+        """POST /api/source-cleanup ("Xóa video gốc"): delete the confirmed sources for good.
 
+        Each video's export manifest goes too (the .mp4 stays), then its job.
         Raises ValueError for a bad request (400) and CleanupConflict when
         nothing may start (409). Stops between videos once BiliFlow shuts down.
         """
@@ -866,7 +904,7 @@ class ControlCenter:
             raise ValueError(source_cleanup.JOB_IDS_MESSAGE)
         return source_cleanup.execute_cleanup(
             self.root, self.store, self.scheduler, job_ids, preview_id,
-            recycler=self.recycler, bin_info=self.bin_info,
+            deleter=self.source_deleter, audit_running=self.audit_running,
             should_stop=getattr(self, "_stopping", threading.Event()).is_set,
         )
 

@@ -530,11 +530,14 @@ class StatusAndHideTests(ArchiveHttpFixture):
 
 class ClassDefaultTests(ArchiveHttpFixture):
     def test_class_defaults_refuse(self):
-        for name in ("recycler", "export_recycler", "record_finder"):
+        for name in ("export_recycler", "record_finder"):
             with self.subTest(name=name), self.assertRaises(RuntimeError) as caught:
                 getattr(ControlCenter, name)(Path("E:/x-reviewed.mp4"), allowed_root=Path("E:/"), expected_size=1,
                                              timeout=1.0, on_late_result=None)
             self.assertEqual(str(caught.exception), UNCONFIGURED_MESSAGE)
+        with self.assertRaises(ValueError) as caught:  # job_purge.DeleteRefused
+            ControlCenter.source_deleter(Path("E:/input/x.mp4"), allowed_root=Path("E:/input"), expected_size=1)
+        self.assertEqual(str(caught.exception), cc.UNCONFIGURED_DELETE_MESSAGE)
         with self.assertRaises(RecycleRefused):
             ControlCenter.bin_info(Path("E:/"))
         # A stub that never got the real export recycler: the archive is undone, the export stays.

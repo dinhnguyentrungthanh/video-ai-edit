@@ -69,8 +69,8 @@ class PhoneModeTests(unittest.TestCase):
         center._stopping = threading.Event()
         center.scheduler = JobScheduler(self.root, self.store)  # never started
         center.recovered = 0
-        recycler = Mock(side_effect=AssertionError("the Recycle Bin must never be reached"))
-        center.recycler = center.bin_info = center.record_finder = recycler
+        never = Mock(side_effect=AssertionError("no file may be deleted or recycled from here"))
+        center.source_deleter = center.export_recycler = center.bin_info = center.record_finder = never
         self.center = center
         self.pc = ThreadingHTTPServer(("127.0.0.1", 0), _handler_class(center))
         self.pc.daemon_threads = True

@@ -1,13 +1,18 @@
-"""source_cleanup: eligibility, preview, the three-section execute and startup reconciliation.
+"""source_cleanup ("Xóa video gốc"): eligibility, preview, the permanent delete and the legacy rows.
 
-A temporary root with a real JobStore and JobScheduler (never the project's
-state). The recycler is always a fake that moves the file into a folder outside
-the root, and ``bin_info`` is a fake BinInfo with the real numbers of drive E:.
-The module setup also replaces ``recycle_bin._shell_delete`` with a function
-that fails the test, so nothing here can reach the real Recycle Bin.
+Every root is a temporary folder under ``<install>/temp`` with a real JobStore
+and JobScheduler (never the project's state); the deleting functions refuse
+any other root. The deleter records each call, then deletes the temporary file
+with ``job_purge.delete_input_file``. Legacy rows of the old Recycle Bin
+cleanup (the startup reconcile, "Kiểm tra lại Thùng rác") and the archive still
+use a fake recycler that moves files into a folder there, and a fake BinInfo
+with the real numbers of drive E:. The module setup replaces
+``recycle_bin._shell_delete`` with a function that fails the test, so nothing
+here can reach the real Recycle Bin.
 """
 
 import hashlib
+import inspect
 import json
 import os
 import subprocess
@@ -21,7 +26,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
-from biliflow import recycle_bin, source_cleanup
+from biliflow import job_purge, recycle_bin, source_cleanup
 from biliflow.export_guards import (
     REVIEW_QUEUE_IO,
     SOURCE_CLEANED_MESSAGE,
@@ -29,15 +34,9 @@ from biliflow.export_guards import (
     ActionConflict,
     review_summary,
 )
-from biliflow.job_store import JobStore, now_iso, sha256_file
-from biliflow.recycle_bin import (
-    BinInfo,
-    RecycleFailed,
-    RecycleRefused,
-    RecycleResult,
-    RecycleTimeout,
-)
 from biliflow.export_identity import legacy_export_paths
+from biliflow.job_store import JOB_ROW_TABLES, JobStore, now_iso, sha256_file
+from biliflow.recycle_bin import BinInfo, RecycleResult
 from biliflow.review_workflow import approved_operations, review_export_paths
 from biliflow.scheduler import JobScheduler
 from biliflow.source_cleanup import (
@@ -46,6 +45,7 @@ from biliflow.source_cleanup import (
     cleanup_hint,
     cleanup_row_summary,
     execute_cleanup,
+    finish_removal,
     parse_job_ids,
     preview_cleanup,
     recheck_recycle_record,
@@ -53,13 +53,17 @@ from biliflow.source_cleanup import (
 )
 
 
+TEMP_PARENT = recycle_bin.INSTALL_ROOT / "temp"
 GUID = "{2fd9f59c-d156-40e6-b5c9-93b787892ee9}"
 MAX_BYTES = 52_157_218_816  # MaxCapacity 49741 MiB
 USED_BYTES = 11_823_971_925
 ITEMS = 7
-NEAR_FULL = MAX_BYTES - recycle_bin.CAPACITY_MARGIN_BYTES
 NOW = datetime.now(timezone.utc)
 FRESH_PREVIEW = object()  # execute() helper: compute the preview id first
+DELETED = "Đã xóa vĩnh viễn video gốc và xóa video khỏi BiliFlow"
+PARTIAL_PREFIX = "Đã xóa video gốc nhưng còn dữ liệu chưa xóa được ("
+PARTIAL_SUFFIX = "). Video vẫn có trong danh sách và không còn video gốc; bấm “Dọn video mất gốc” để xóa nốt."
+NOTHING = "Không có video gốc nào xóa được trong danh sách đã chọn."
 
 _SHELL_PATCH = None
 
@@ -120,28 +124,23 @@ def wait_until(predicate, timeout=5.0):
 
 
 class FakeBin:
-    """bin_info(path) -> BinInfo of drive E: (used bytes per call, or an error)."""
+    """bin_info(path) -> BinInfo of drive E: (the archive's preview and execute)."""
 
-    def __init__(self, used=USED_BYTES, error=None, sequence=None):
-        self.used, self.error, self.sequence = used, error, list(sequence or [])
+    def __init__(self, used=USED_BYTES):
+        self.used = used
         self.calls = []
 
     def __call__(self, path):
         self.calls.append(Path(path))
-        if self.error is not None:
-            raise self.error
-        used = self.sequence.pop(0) if self.sequence else self.used
-        return BinInfo("E:", "E:\\", GUID, MAX_BYTES, used, ITEMS)
+        return BinInfo("E:", "E:\\", GUID, MAX_BYTES, self.used, ITEMS)
 
 
 class FakeRecycler:
-    """Moves the file into a bin folder outside the root and records every call."""
+    """Moves a file into a bin folder under the temp root: legacy rows and the archive's exports."""
 
     def __init__(self, bin_dir):
         self.bin_dir = Path(bin_dir)
         self.calls = []
-        self.modes = {}
-        self.callbacks = []
 
     def move(self, path):
         token = uuid.uuid4().hex[:6].upper()
@@ -151,40 +150,47 @@ class FakeRecycler:
         return str(record)
 
     def __call__(self, path, *, allowed_root, expected_size, timeout, on_late_result):
-        self.calls.append({
-            "path": path, "allowed_root": allowed_root, "expected_size": expected_size,
-            "timeout": timeout,
-        })
-        mode = self.modes.get(Path(path).name, "move")
+        self.calls.append({"path": path, "allowed_root": allowed_root, "expected_size": expected_size})
+        record = self.move(path)
+        return RecycleResult(str(path), expected_size, True, record, 0.01)
+
+
+class RecordingDeleter:
+    """Records every call, then deletes the temporary file with job_purge.delete_input_file.
+
+    ``modes`` by file name: "unexpected" raises before deleting,
+    "unexpected-after-delete" raises after it, and a threading.Event blocks
+    until it is set.
+    """
+
+    def __init__(self):
+        self.calls = []
+        self.modes = {}
+
+    def __call__(self, path, *, allowed_root, expected_size):
+        self.calls.append({"path": path, "allowed_root": allowed_root, "expected_size": expected_size})
+        mode = self.modes.get(Path(path).name)
         if isinstance(mode, threading.Event):
             mode.wait(10)
-            mode = "move"
-        if mode == "fail":
-            raise RecycleFailed(recycle_bin.SHARING_MESSAGE)
-        if mode == "refused":
-            raise RecycleRefused(recycle_bin.SIZE_MESSAGE)
-        if mode == "timeout":
-            self.callbacks.append(on_late_result)
-            raise RecycleTimeout(recycle_bin.TIMEOUT_MESSAGE)
+            mode = None
         if mode == "unexpected":
             raise RuntimeError("boom")
-        record = self.move(path)
-        if mode == "unexpected-after-move":
-            raise RuntimeError("boom after the move")
-        verified = mode != "unverified"
-        return RecycleResult(str(path), expected_size, verified, record if verified else None, 0.01)
+        job_purge.delete_input_file(path, allowed_root=allowed_root, expected_size=expected_size)
+        if mode == "unexpected-after-delete":
+            raise RuntimeError("boom after the delete")
 
 
 class CleanupFixture(unittest.TestCase):
-    """A temp root with a real JobStore and JobScheduler (never the project's state)."""
+    """A temp root under <install>/temp with a real JobStore and JobScheduler (never the project's state)."""
 
     def setUp(self):
-        temp = TemporaryDirectory()
+        TEMP_PARENT.mkdir(parents=True, exist_ok=True)
+        temp = TemporaryDirectory(dir=TEMP_PARENT)
         self.addCleanup(temp.cleanup)
         self.root = Path(temp.name).resolve()
-        for name in ("input", "reports/jobs", "output", "work", "state", "logs"):
+        for name in ("input", "reports/jobs", "output", "work", "state", "logs/control-center"):
             (self.root / name).mkdir(parents=True, exist_ok=True)
-        bin_temp = TemporaryDirectory()
+        bin_temp = TemporaryDirectory(dir=TEMP_PARENT)
         self.addCleanup(bin_temp.cleanup)
         self.bin_dir = Path(bin_temp.name).resolve()
         self.store = JobStore(self.root / "state" / "control-center.sqlite3")
@@ -196,6 +202,9 @@ class CleanupFixture(unittest.TestCase):
         self.addCleanup(patcher.stop)
         source_cleanup._CACHE.clear()
         self.addCleanup(source_cleanup._CACHE.clear)
+        job_purge.clear_caches()
+        self.addCleanup(job_purge.clear_caches)
+        self.deleter = RecordingDeleter()
         self.recycler = FakeRecycler(self.bin_dir)
         self.bin = FakeBin()
         self.hashed = []
@@ -286,6 +295,9 @@ class CleanupFixture(unittest.TestCase):
     def output_of(self, job_id):
         return review_export_paths(self.root, self.queue(job_id))[1]
 
+    def manifest_of(self, job_id):
+        return self.output_of(job_id).with_suffix(".mp4.manifest.json")
+
     def skip_record(self, job_id, **overrides):
         """The skip:{id} record exactly as ControlCenter.skip_export writes it."""
         job = self.store.get_job(job_id)
@@ -313,19 +325,17 @@ class CleanupFixture(unittest.TestCase):
         return Path(self.store.get_job(job_id)["source_path"])
 
     def preview(self, ids, **kwargs):
-        kwargs.setdefault("bin_info", self.bin)
         return preview_cleanup(self.root, self.store, self.scheduler, ids, **kwargs)
 
     def execute(self, ids, preview_id=FRESH_PREVIEW, **kwargs):
         if preview_id is FRESH_PREVIEW:
-            preview_id = self.preview(ids)["preview_id"]
-        kwargs.setdefault("recycler", self.recycler)
-        kwargs.setdefault("bin_info", self.bin)
+            preview_id = self.preview(ids, audit_running=kwargs.get("audit_running"))["preview_id"]
+        kwargs.setdefault("deleter", self.deleter)
         kwargs.setdefault("hasher", self.hasher)
         return execute_cleanup(self.root, self.store, self.scheduler, ids, preview_id, **kwargs)
 
-    def reason(self, job_id):
-        preview = self.preview([job_id])
+    def reason(self, job_id, **kwargs):
+        preview = self.preview([job_id], **kwargs)
         self.assertEqual(preview["eligible"], [], preview)
         return preview["ineligible"][0]["reason"]
 
@@ -337,6 +347,24 @@ class CleanupFixture(unittest.TestCase):
             rows = self.store._connection.execute("SELECT * FROM source_cleanups ORDER BY id").fetchall()
         return [dict(row) for row in rows]
 
+    def leftover_rows(self, job_id):
+        """What still names ``job_id`` in the database ({} once the job is removed)."""
+        found = {}
+        with self.store._lock:
+            connection = self.store._connection
+            for table in ("jobs", *JOB_ROW_TABLES):
+                column = "id" if table == "jobs" else "job_id"
+                count = connection.execute(
+                    f"SELECT COUNT(*) FROM {table} WHERE {column}=?", (job_id,)  # noqa: S608 - fixed names
+                ).fetchone()[0]
+                if count:
+                    found[table] = count
+            keys = [row[0] for row in connection.execute("SELECT key FROM settings").fetchall()
+                    if str(row[0]).endswith(f":{job_id}")]
+        if keys:
+            found["settings"] = keys
+        return found
+
     def watcher_row(self, path):
         with self.store._lock:
             row = self.store._connection.execute(
@@ -344,7 +372,8 @@ class CleanupFixture(unittest.TestCase):
             ).fetchone()
         return None if row is None else dict(row)
 
-    def add_row(self, job_id, *, state):
+    def add_row(self, job_id, *, state, verified=True):
+        """A legacy row of the old Recycle Bin cleanup."""
         source = self.source_of(job_id)
         row_id = self.store.add_source_cleanup(
             job_id=job_id, kind="EXPORTED", source_path=str(source.resolve()),
@@ -352,8 +381,14 @@ class CleanupFixture(unittest.TestCase):
             size_bytes=self.store.get_job(job_id)["source_size_bytes"], mtime_ns=1,
         )
         if state != "PENDING":
-            self.store.finish_source_cleanup(row_id, state=state, verified=True)
+            self.store.finish_source_cleanup(row_id, state=state, verified=verified)
         return row_id
+
+    def write_golden(self, value, version="v1"):
+        path = self.root / "annotations" / "golden" / version / "segments.json"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(value if isinstance(value, str) else json.dumps(value), encoding="utf-8")
+        return path
 
 
 class ParseJobIdsTests(unittest.TestCase):
@@ -378,9 +413,9 @@ class ParseJobIdsTests(unittest.TestCase):
 
 class ModuleContractTests(unittest.TestCase):
     def test_cleanup_conflict_is_not_a_value_error(self):
-        error = CleanupConflict("busy", "Đang dọn video gốc; chờ lần dọn trước xong rồi thử lại.")
+        error = CleanupConflict("busy", source_cleanup.BUSY_MESSAGE)
         self.assertNotIsInstance(error, ValueError)
-        self.assertEqual(str(error), "Đang dọn video gốc; chờ lần dọn trước xong rồi thử lại.")
+        self.assertEqual(str(error), "Đang xóa video gốc; chờ lần xóa trước xong rồi thử lại.")
         self.assertEqual((error.code, error.preview), ("busy", None))
         changed = CleanupConflict("preview_changed", "Danh sách đã thay đổi, hãy xem lại.", {"count": 0})
         self.assertEqual(changed.preview, {"count": 0})
@@ -399,6 +434,15 @@ class ModuleContractTests(unittest.TestCase):
     def test_constants(self):
         self.assertEqual(source_cleanup.MAX_CLEANUP_JOBS, 50)
         self.assertEqual(source_cleanup.ELIGIBLE_STATES, frozenset({"COMPLETED", "SKIPPED"}))
+        self.assertEqual(source_cleanup.DELETED_MESSAGE, DELETED)
+
+    def test_execute_needs_a_deleter_and_never_takes_the_recycle_bin(self):
+        parameters = inspect.signature(execute_cleanup).parameters
+        self.assertEqual(parameters["deleter"].kind, inspect.Parameter.KEYWORD_ONLY)
+        self.assertIs(parameters["deleter"].default, inspect.Parameter.empty)
+        for name in ("recycler", "bin_info"):
+            self.assertNotIn(name, parameters)
+            self.assertNotIn(name, inspect.signature(preview_cleanup).parameters)
 
     def test_row_summary(self):
         self.assertIsNone(cleanup_row_summary(None))
@@ -429,97 +473,90 @@ class ModuleContractTests(unittest.TestCase):
 
 
 class EligibleCleanupTests(CleanupFixture):
-    def test_an_exported_video_goes_to_the_bin_and_nothing_else_changes(self):
+    def test_an_exported_video_is_deleted_for_good_with_its_manifest_and_its_job(self):
         job_id = self.make_exported_job("tap12")
+        other = self.make_exported_job("tap13")
         source = self.source_of(job_id)
         size = source.stat().st_size
         self.store.observe_file(source, size, source.stat().st_mtime_ns)
         self.store.mark_file_imported(source, job_id)
-        before = {
-            "reports": tree_digest(self.root / "reports"), "output": tree_digest(self.root / "output"),
-            "work": tree_digest(self.root / "work"), "queue": self.queue_file(job_id).read_bytes(),
+        self.store.set_setting(f"pipeline_key:{job_id}", "tap12")
+        self.store.add_event(job_id, "TEST_EVENT", "an event")
+        folder = self.root / "reports" / "jobs" / "tap12"
+        run = self.root / "reports" / "jobs" / "tap12-run-20261005-101010"  # a rerun folder of the job
+        (run / "frames").mkdir(parents=True)
+        (run / "frames" / "a.jpg").write_bytes(b"x" * 300)
+        bench = self.root / "reports" / "jobs" / "tap12-run-bench"  # a benchmark of the same video
+        bench.mkdir()
+        (bench / job_purge.BENCHMARK_MARKER).write_text("Isolated trial; never auto-import", encoding="utf-8")
+        logs = self.root / "logs" / "control-center"
+        log = logs / f"job-{job_id}-render-attempt-1.log"
+        log.write_bytes(b"log" * 10)
+        other_log = logs / f"job-{other}-render-attempt-1.log"
+        other_log.write_bytes(b"other")
+        output, manifest_path = self.output_of(job_id), self.manifest_of(job_id)
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        kept = {
+            "output": output.read_bytes(), "work": tree_digest(self.root / "work"),
+            "other": tree_digest(self.root / "reports" / "jobs" / "tap13"), "bench": tree_digest(bench),
+            "other_manifest": self.manifest_of(other).read_bytes(),
         }
-        output = self.output_of(job_id)
+        reports_bytes = job_purge.files_bytes([folder, run, log])
+
         preview = self.preview([job_id])
+
+        self.assertEqual(set(preview), {"preview_id", "eligible", "ineligible", "count", "total_bytes",
+                                        "reports_bytes"})
         self.assertEqual(preview["ineligible"], [])
-        self.assertEqual(preview["count"], 1)
-        self.assertEqual(preview["total_bytes"], size)
-        self.assertIsNone(preview["blocked"])
-        self.assertEqual(preview["recycle_bin"], {
-            "volume": "E:", "used_bytes": USED_BYTES, "items": ITEMS, "max_bytes": MAX_BYTES,
-            "after_bytes": USED_BYTES + size,
-        })
+        self.assertEqual((preview["count"], preview["total_bytes"], preview["reports_bytes"]),
+                         (1, size, reports_bytes))
         self.assertRegex(preview["preview_id"], r"^[0-9a-f]{64}$")
-        manifest = json.loads(output.with_suffix(".mp4.manifest.json").read_text(encoding="utf-8"))
         self.assertEqual(preview["eligible"], [{
             "job_id": job_id, "name": "tap12.mp4", "file_name": "tap12.mp4",
             "source_path": str(source.resolve()), "size_bytes": size, "kind": "EXPORTED",
             "output_path": output.relative_to(self.root).as_posix(), "output_name": output.name,
             "output_bytes": output.stat().st_size, "exported_at": manifest["created_at"],
-            "skipped_at": None,
+            "skipped_at": None, "reports_bytes": reports_bytes,
         }])
-        self.assertEqual(self.hashed, [])  # the preview never hashes
+        self.assertEqual((self.hashed, self.deleter.calls), ([], []))  # the preview never hashes or deletes
 
         result = self.execute([job_id], preview["preview_id"])
 
-        self.assertEqual(self.recycler.calls, [{
+        self.assertEqual(self.deleter.calls, [{
             "path": source.resolve(), "allowed_root": self.root / "input", "expected_size": size,
-            "timeout": 60.0,
         }])
         self.assertEqual(result, {
             "results": [{
-                "job_id": job_id, "name": "tap12.mp4", "status": "RECYCLED",
-                "message": "Đã chuyển video gốc vào Thùng rác", "size_bytes": size,
+                "job_id": job_id, "name": "tap12.mp4", "status": "DELETED", "message": DELETED,
+                "size_bytes": size,
             }],
-            "recycled_count": 1, "recycled_bytes": size, "failed_count": 0, "pending": 0,
+            "deleted_count": 1, "deleted_bytes": size, "failed_count": 0, "partial_count": 0,
         })
-        self.assertFalse(source.exists())
         self.assertEqual(self.hashed, [source.resolve(), self.root / output.relative_to(self.root)])
-        row = self.store.latest_source_cleanup(job_id)
-        job = self.store.get_job(job_id)
-        self.assertEqual(
-            {key: row[key] for key in (
-                "state", "verified", "kind", "source_path", "source_sha256", "size_bytes", "output_path",
-                "output_sha256", "output_bytes", "exported_at", "skipped_at", "error",
-            )},
-            {
-                "state": "RECYCLED", "verified": True, "kind": "EXPORTED",
-                "source_path": str(source.resolve()), "source_sha256": job["source_sha256"],
-                "size_bytes": size, "output_path": output.relative_to(self.root).as_posix(),
-                "output_sha256": manifest["output"]["sha256"], "output_bytes": manifest["output"]["bytes"],
-                "exported_at": manifest["created_at"], "skipped_at": None, "error": None,
-            },
-        )
-        self.assertTrue(row["recycle_record"].startswith(str(self.bin_dir)))
-        self.assertTrue(row["finished_at"])
-        events = self.events(job_id, "SOURCE_RECYCLED")
-        self.assertEqual(len(events), 1)
-        self.assertEqual(events[0]["message"], "Đã chuyển video gốc vào Thùng rác")
-        self.assertEqual(events[0]["level"], "INFO")
-        payload = events[0]["payload"]
-        self.assertEqual(
-            (payload["path"], payload["size_bytes"], payload["sha256"], payload["kind"], payload["verified"]),
-            (str(source.resolve()), size, job["source_sha256"], "EXPORTED", True),
-        )
-        self.assertTrue(payload["recycled_at"])
-        # Only the source left: reports, output, work and the queue are byte for byte the same.
-        self.assertEqual({
-            "reports": tree_digest(self.root / "reports"), "output": tree_digest(self.root / "output"),
-            "work": tree_digest(self.root / "work"), "queue": self.queue_file(job_id).read_bytes(),
-        }, before)
+        # Gone for good: the source (no Recycle Bin), the export's manifest, the job's folders, log and rows.
+        for path in (source, manifest_path, folder, run, log):
+            self.assertFalse(os.path.lexists(path), path)
+        with self.assertRaises(KeyError):
+            self.store.get_job(job_id)
+        self.assertEqual(self.leftover_rows(job_id), {})
+        self.assertEqual(self.all_rows(), [])
         watcher = self.watcher_row(source)
         self.assertEqual((watcher["size_bytes"], watcher["mtime_ns"], watcher["imported_job_id"]), (-1, -1, None))
-        self.assertTrue(self.store.source_cleaned(job_id))
-        self.assertEqual(set(self.bin.calls), {self.root / "input"})
-        # Every action on the job is now locked, and it is not offered again.
-        with self.assertRaises(ValueError) as caught:
-            self.scheduler.rerun(job_id)
-        self.assertEqual(str(caught.exception), SOURCE_CLEANED_MESSAGE)
-        self.assertEqual(self.reason(job_id), "Video gốc đã được dọn trước đó")
+        self.assertEqual((self.recycler.calls, self.bin.calls), ([], []))
+        # Kept: the exported video, work/, the other job and a benchmark run.
+        self.assertEqual({
+            "output": output.read_bytes(), "work": tree_digest(self.root / "work"),
+            "other": tree_digest(self.root / "reports" / "jobs" / "tap13"), "bench": tree_digest(bench),
+            "other_manifest": self.manifest_of(other).read_bytes(),
+        }, kept)
+        self.assertTrue(other_log.is_file())
+        self.assertTrue(self.source_of(other).is_file())
+        self.assertEqual(self.reason(job_id), f"Không tìm thấy video #{job_id}")
 
-    def test_a_skipped_video_with_a_matching_record_is_cleaned_without_hashing_an_output(self):
+    def test_a_skipped_video_with_a_matching_record_is_deleted_without_hashing_an_output(self):
         job_id = self.make_skipped_job("tap30")
         record = self.store.setting(f"skip:{job_id}")
+        source = self.source_of(job_id)
         preview = self.preview([job_id])
         entry = preview["eligible"][0]
         self.assertEqual(
@@ -528,13 +565,11 @@ class EligibleCleanupTests(CleanupFixture):
             ("SKIPPED", None, None, None, None, record["skipped_at"]),
         )
         result = self.execute([job_id], preview["preview_id"])
-        self.assertEqual(result["results"][0]["status"], "RECYCLED")
-        self.assertEqual(self.hashed, [self.source_of(job_id).resolve()])
-        row = self.store.latest_source_cleanup(job_id)
-        self.assertEqual(
-            (row["kind"], row["output_path"], row["output_sha256"], row["skipped_at"], row["exported_at"]),
-            ("SKIPPED", None, None, record["skipped_at"], None),
-        )
+        self.assertEqual((result["results"][0]["status"], result["results"][0]["message"]), ("DELETED", DELETED))
+        self.assertEqual(self.hashed, [source.resolve()])
+        self.assertFalse(os.path.lexists(source))
+        self.assertIsNone(self.store.setting(f"skip:{job_id}"))
+        self.assertEqual(self.leftover_rows(job_id), {})
 
     def test_a_missing_edit_plan_is_not_a_refusal(self):
         job_id = self.make_exported_job("tap20")
@@ -542,21 +577,92 @@ class EligibleCleanupTests(CleanupFixture):
             plan.unlink()
         self.assertEqual(self.preview([job_id])["count"], 1)
 
-    def test_an_unverified_move_is_reported_and_still_locks_the_job(self):
-        job_id = self.make_exported_job("tap21")
-        self.recycler.modes["tap21.mp4"] = "unverified"
-        result = self.execute([job_id])
-        self.assertEqual(result["results"][0]["status"], "UNVERIFIED")
-        self.assertEqual(
-            result["results"][0]["message"],
-            "Video gốc đã rời thư mục input nhưng không tìm thấy bản ghi trong Thùng rác; hãy kiểm tra Thùng rác.",
-        )
-        self.assertEqual((result["recycled_count"], result["failed_count"]), (1, 0))
-        row = self.store.latest_source_cleanup(job_id)
-        self.assertEqual((row["state"], row["verified"], row["recycle_record"]), ("RECYCLED", False, None))
-        events = self.events(job_id, "SOURCE_RECYCLE_UNVERIFIED")
-        self.assertEqual((len(events), events[0]["level"]), (1, "WARNING"))
-        self.assertTrue(self.store.source_cleaned(job_id))
+    def test_a_legacy_failed_row_does_not_lock_and_goes_with_the_job(self):
+        job_id = self.make_exported_job("failed")
+        self.add_row(job_id, state="FAILED")
+        self.assertEqual(self.preview([job_id])["count"], 1)
+        self.assertEqual(self.execute([job_id])["deleted_count"], 1)
+        self.assertEqual((self.all_rows(), self.leftover_rows(job_id)), ([], {}))
+
+
+class ProtectionTests(CleanupFixture):
+    def test_a_golden_job_is_never_deleted_by_id_or_by_sha(self):
+        by_id = self.make_exported_job("tap37")
+        by_sha = self.make_skipped_job("tap38")
+        free = self.make_exported_job("tap39")
+        self.write_golden({"sources": {
+            "a": {"job_id": by_id, "sha256": "f" * 64, "path": "a.mp4"},
+            "b": {"job_id": 999, "sha256": self.store.get_job(by_sha)["source_sha256"].upper()},
+        }})
+        preview = self.preview([by_id, by_sha, free])
+        self.assertEqual([entry["job_id"] for entry in preview["eligible"]], [free])
+        self.assertEqual(preview["ineligible"], [
+            {"job_id": by_id, "name": "tap37.mp4", "reason": job_purge.REASON_GOLDEN},
+            {"job_id": by_sha, "name": "tap38.mp4", "reason": job_purge.REASON_GOLDEN},
+        ])
+        result = self.execute([by_id, by_sha, free], preview["preview_id"])
+        self.assertEqual([(entry["job_id"], entry["status"]) for entry in result["results"]], [(free, "DELETED")])
+        for job_id in (by_id, by_sha):
+            self.assertTrue(self.source_of(job_id).is_file())
+            self.assertIn("jobs", self.leftover_rows(job_id))
+        # The status hint stays the cleanup's own: golden protection is a field of its own.
+        hint = cleanup_hint(self.root, self.store, self.scheduler, self.store.get_job(by_id), latest_row=None)
+        self.assertTrue(hint["eligible"])
+
+    def test_an_unreadable_golden_set_blocks_every_deletion(self):
+        job_id = self.make_exported_job("tap12")
+        for index, text in enumerate(("{not json", json.dumps({"sources": []}),
+                                      json.dumps({"sources": {"a": {"job_id": True, "sha256": "f"}}}))):
+            with self.subTest(text=text):
+                job_purge.clear_caches()
+                self.write_golden(text, version=f"v{index}")
+                reason = job_purge.REASON_GOLDEN_UNREADABLE.format(path="annotations/golden/v0/segments.json")
+                self.assertEqual(self.reason(job_id), reason)
+                with self.assertRaises(ValueError) as caught:
+                    self.execute([job_id])
+                self.assertEqual(str(caught.exception), NOTHING)
+        self.assertEqual((self.deleter.calls, self.hashed), ([], []))
+        self.assertTrue(self.source_of(job_id).is_file())
+
+    def test_a_running_ai_audit_refuses_the_video(self):
+        job_id = self.make_exported_job("tap12")
+        self.assertEqual(self.reason(job_id, audit_running=lambda value: value == job_id),
+                         "Đang chạy AI Audit cho video này; chờ xong rồi xóa")
+        self.assertEqual(self.preview([job_id], audit_running=lambda value: False)["count"], 1)
+
+    def test_a_golden_set_or_an_audit_that_starts_while_hashing_is_caught_by_the_recheck(self):
+        golden = self.make_exported_job("tap37")
+        audited = self.make_exported_job("tap38")
+        golden_source, audited_source = self.source_of(golden).resolve(), self.source_of(audited).resolve()
+        auditing = set()
+
+        def hasher(path):
+            digest = self.hasher(path)
+            if Path(path) == golden_source:
+                self.write_golden({"sources": {"a": {"job_id": golden, "sha256": "f" * 64}}})
+            elif Path(path) == audited_source:
+                auditing.add(audited)
+            return digest
+
+        result = self.execute([golden, audited], hasher=hasher, audit_running=auditing.__contains__)
+        self.assertEqual([(entry["status"], entry["message"]) for entry in result["results"]], [
+            ("FAILED", job_purge.REASON_GOLDEN),
+            ("FAILED", "Đang chạy AI Audit cho video này; chờ xong rồi xóa"),
+        ])
+        self.assertEqual(self.deleter.calls, [])
+        for job_id, source in ((golden, golden_source), (audited, audited_source)):
+            self.assertTrue(source.is_file())
+            self.assertEqual(self.events(job_id, "SOURCE_CLEANUP_FAILED")[0]["payload"]["stage"], "recheck")
+
+    def test_a_root_outside_the_install_is_refused_before_anything(self):
+        job_id = self.make_exported_job("tap12")
+        preview_id = self.preview([job_id])["preview_id"]
+        with patch.object(job_purge, "INSTALL_ROOT", self.root / "work"), \
+                self.assertRaises(ValueError) as caught:
+            self.execute([job_id], preview_id)
+        self.assertEqual(str(caught.exception), job_purge.ROOT_MESSAGE)
+        self.assertEqual((self.deleter.calls, self.hashed), ([], []))
+        self.assertTrue(self.source_of(job_id).is_file())
 
 
 class IneligibleTests(CleanupFixture):
@@ -592,7 +698,7 @@ class IneligibleTests(CleanupFixture):
     def test_a_hostile_manifest_or_queue_is_refused_never_raised(self):
         # An error here would break the Dashboard's job list (cleanup_hint).
         deep = self.make_exported_job("deep", operations=True)
-        self.output_of(deep).with_suffix(".mp4.manifest.json").write_text("[" * 100_000, encoding="utf-8")
+        self.manifest_of(deep).write_text("[" * 100_000, encoding="utf-8")
         self.assertEqual(self.reason(deep), self.MANIFEST)
         # ("nul" itself is a reserved device name on Windows.)
         nul = self.make_exported_job(
@@ -605,7 +711,7 @@ class IneligibleTests(CleanupFixture):
         self.assertEqual(self.reason(queue), "Không đọc được danh sách duyệt của video")
 
     def test_a_link_at_the_export_path_is_not_the_export(self):
-        # A link with a manifest that fits its target's bytes: cleaning would
+        # A link with a manifest that fits its target's bytes: deleting would
         # leave only a link (or a copy of the unedited source) as the export.
         job_id = self.make_exported_job("linked", operations=True)
         output = self.output_of(job_id)
@@ -618,7 +724,7 @@ class IneligibleTests(CleanupFixture):
             self.skipTest(f"cannot create a symbolic link here: {error}")
         self.assertEqual(self.reason(job_id), "Video xuất đã thay đổi so với manifest")
         # The link's own size (0 on Windows) in the manifest: only the link check refuses it.
-        manifest_path = output.with_suffix(".mp4.manifest.json")
+        manifest_path = self.manifest_of(job_id)
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
         manifest["output"]["bytes"] = os.lstat(output).st_size
         manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
@@ -640,7 +746,7 @@ class IneligibleTests(CleanupFixture):
         output = self.output_of(job_id)
         output.unlink()
         os.link(self.store.get_job(job_id)["source_path"], output)
-        manifest_path = output.with_suffix(".mp4.manifest.json")
+        manifest_path = self.manifest_of(job_id)
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
         manifest["output"]["bytes"] = output.stat().st_size
         manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
@@ -675,7 +781,7 @@ class IneligibleTests(CleanupFixture):
         # Fix pass: re-recording a decision after the export (an undo re-posts it)
         # moves decided_at, and finalize then keeps the existing export without
         # rendering. The renderer's manifest lists the operations it applied, so
-        # the export still matches the review and stays cleanable.
+        # the export still matches the review and stays deletable.
         later = iso(NOW + timedelta(minutes=5))
         same = self.make_exported_job("again", decided_at=later, operations=True)
         blurred = self.make_exported_job(
@@ -692,7 +798,7 @@ class IneligibleTests(CleanupFixture):
         )
         self.assertEqual(self.preview([constants])["count"], 1)
 
-    def test_a_rerun_with_the_same_decisions_keeps_the_export_cleanable(self):
+    def test_a_rerun_with_the_same_decisions_keeps_the_export_deletable(self):
         # Recheck residual: a rerun whose new revision has the same items and
         # decisions maps to the same export path, so finalize keeps the export
         # without rebuilding the plan, which still names the previous queue.
@@ -720,7 +826,7 @@ class IneligibleTests(CleanupFixture):
         self.queue_file(job_id).write_text(json.dumps(queue), encoding="utf-8")
         self.assertNotEqual(self.output_of(job_id), output)
         self.assertEqual(self.reason(job_id), self.STALE)
-        # Back to the exported edge mode: cleanable again.
+        # Back to the exported edge mode: deletable again.
         queue["items"][1]["decision_blur_edge_mode"] = "all_edges"
         self.queue_file(job_id).write_text(json.dumps(queue), encoding="utf-8")
         self.assertEqual(self.preview([job_id])["count"], 1)
@@ -805,16 +911,20 @@ class IneligibleTests(CleanupFixture):
         self.store.update_stage(render, "render", state="PENDING")
         self.assertEqual(self.reason(render), "Còn lệnh xuất video chưa xong")
 
-    def test_rows_already_recycled_or_still_pending(self):
+    def test_legacy_rows_still_lock_their_job(self):
         recycled = self.make_exported_job("recycled")
         self.add_row(recycled, state="RECYCLED")
         self.assertEqual(self.reason(recycled), "Video gốc đã được dọn trước đó")
         pending = self.make_exported_job("pending")
         self.add_row(pending, state="PENDING")
         self.assertEqual(self.reason(pending), "Đang chuyển video gốc này vào Thùng rác")
-        failed = self.make_exported_job("failed")
-        self.add_row(failed, state="FAILED")
-        self.assertEqual(self.preview([failed])["count"], 1)
+        for job_id in (recycled, pending):
+            with self.subTest(job_id=job_id), self.assertRaises(ValueError) as caught:
+                self.scheduler.rerun(job_id)
+            self.assertEqual(str(caught.exception), SOURCE_CLEANED_MESSAGE)
+        with self.assertRaises(ValueError) as caught:
+            self.scheduler.cancel(pending)
+        self.assertEqual(str(caught.exception), SOURCE_CLEANED_STOP_REFUSAL)
 
     def test_skip_records_that_do_not_match_the_current_review(self):
         reason = "Bản ghi bỏ qua không ứng với lần duyệt hiện tại"
@@ -839,11 +949,11 @@ class IneligibleTests(CleanupFixture):
         self.assertEqual(self.reason(escaped), "Không đọc được danh sách duyệt của video")
         preview = self.preview([999])
         self.assertEqual(preview["ineligible"], [{"job_id": 999, "name": "", "reason": "Không tìm thấy video #999"}])
-        self.assertEqual((preview["count"], preview["total_bytes"], preview["blocked"]), (0, 0, None))
+        self.assertEqual((preview["count"], preview["total_bytes"], preview["reports_bytes"]), (0, 0, 0))
         with self.assertRaises(ValueError) as caught:
             self.execute([999], preview["preview_id"])
-        self.assertEqual(str(caught.exception), "Không có video nào dọn được trong danh sách đã chọn.")
-        self.assertEqual(self.recycler.calls, [])
+        self.assertEqual(str(caught.exception), NOTHING)
+        self.assertEqual(self.deleter.calls, [])
 
     def test_preview_lists_are_sorted_and_counted(self):
         first = self.make_exported_job("a1")
@@ -856,6 +966,11 @@ class IneligibleTests(CleanupFixture):
         self.assertEqual(
             preview["total_bytes"],
             self.source_of(first).stat().st_size + self.source_of(second).stat().st_size,
+        )
+        self.assertEqual(preview["reports_bytes"], sum(entry["reports_bytes"] for entry in preview["eligible"]))
+        self.assertEqual(
+            preview["eligible"][0]["reports_bytes"],
+            (self.root / "reports" / "jobs" / "a1" / "review-queue.json").stat().st_size,
         )
 
 
@@ -872,22 +987,24 @@ class ExecuteTests(CleanupFixture):
         self.assertEqual(str(caught.exception), "Danh sách đã thay đổi, hãy xem lại.")
         self.assertNotEqual(caught.exception.preview["preview_id"], old)
         self.assertEqual(caught.exception.preview["count"], 1)
-        self.assertEqual((self.recycler.calls, self.hashed, self.all_rows()), ([], [], []))
+        self.assertEqual((self.deleter.calls, self.hashed), ([], []))
+        self.assertTrue(source.is_file())
 
-    def test_bad_preview_ids_and_a_missing_recycler(self):
+    def test_bad_preview_ids_and_a_missing_deleter(self):
         job_id = self.make_exported_job("tap12")
         for value in (None, "", "abc", "A" * 64, "g" * 64, 12):
             with self.subTest(value=value), self.assertRaises(ValueError) as caught:
                 self.execute([job_id], value)
-            self.assertEqual(str(caught.exception), "Thiếu mã xem trước; hãy mở lại hộp thoại dọn video gốc.")
+            self.assertEqual(str(caught.exception), "Thiếu mã xem trước; hãy mở lại hộp thoại xóa video gốc.")
         for ids in ([], list(range(1, 52))):
             with self.assertRaises(ValueError):
                 self.execute(ids, "0" * 64)
         with self.assertRaises(TypeError):
-            execute_cleanup(self.root, self.store, self.scheduler, [job_id], "0" * 64, bin_info=self.bin)
-        self.assertEqual(self.recycler.calls, [])
+            execute_cleanup(self.root, self.store, self.scheduler, [job_id], "0" * 64)
+        self.assertEqual(self.deleter.calls, [])
+        self.assertTrue(self.source_of(job_id).is_file())
 
-    def test_a_changed_output_or_source_fails_before_any_row(self):
+    def test_a_changed_output_or_source_fails_before_anything_is_deleted(self):
         changed_output = self.make_exported_job("tap12")
         output = self.output_of(changed_output)
         data = bytearray(output.read_bytes())
@@ -899,15 +1016,17 @@ class ExecuteTests(CleanupFixture):
         data[-1] ^= 0xFF
         source.write_bytes(bytes(data))
         result = self.execute([changed_output, changed_source])
-        self.assertEqual([(item["status"], item["message"]) for item in result["results"]], [
+        self.assertEqual([(entry["status"], entry["message"]) for entry in result["results"]], [
             ("FAILED", "Video xuất đã thay đổi so với manifest"),
             ("FAILED", "Video gốc đã thay đổi so với lúc quét"),
         ])
-        self.assertEqual((result["failed_count"], result["recycled_count"], result["pending"]), (2, 0, 0))
-        self.assertEqual((self.recycler.calls, self.all_rows()), ([], []))
-        self.assertTrue(self.source_of(changed_output).is_file())
+        self.assertEqual((result["failed_count"], result["deleted_count"], result["partial_count"]), (2, 0, 0))
+        self.assertEqual(result["deleted_bytes"], 0)
+        self.assertEqual(self.deleter.calls, [])
         for job_id, reason in ((changed_output, "Video xuất đã thay đổi so với manifest"),
                                (changed_source, "Video gốc đã thay đổi so với lúc quét")):
+            self.assertTrue(self.source_of(job_id).is_file())
+            self.assertTrue(self.manifest_of(job_id).is_file())
             events = self.events(job_id, "SOURCE_CLEANUP_FAILED")
             self.assertEqual(len(events), 1)
             self.assertEqual(events[0]["level"], "WARNING")
@@ -926,136 +1045,74 @@ class ExecuteTests(CleanupFixture):
 
         result = self.execute([job_id], hasher=hasher)
         self.assertEqual(result["results"][0]["message"], "Video gốc đã thay đổi trong lúc kiểm tra SHA-256")
-        self.assertEqual((self.recycler.calls, self.all_rows()), ([], []))
+        self.assertEqual(self.deleter.calls, [])
+        self.assertTrue(source.is_file())
 
+    @unittest.skipUnless(sys.platform == "win32", "open files block a delete only on Windows")
     def test_one_failure_does_not_stop_the_other_videos(self):
         ids = [self.make_exported_job(f"tap{index}") for index in (1, 2, 3)]
-        self.recycler.modes["tap2.mp4"] = "fail"
-        result = self.execute(ids)
-        self.assertEqual([item["status"] for item in result["results"]], ["RECYCLED", "FAILED", "RECYCLED"])
-        self.assertEqual(result["results"][1]["message"], recycle_bin.SHARING_MESSAGE)
-        self.assertEqual((result["recycled_count"], result["failed_count"], result["pending"]), (2, 1, 0))
-        self.assertEqual(
-            result["recycled_bytes"],
-            sum(self.store.get_job(job_id)["source_size_bytes"] for job_id in (ids[0], ids[2])),
-        )
-        self.assertFalse(self.source_of(ids[0]).exists())
-        self.assertTrue(self.source_of(ids[1]).is_file())
-        self.assertFalse(self.source_of(ids[2]).exists())
-        row = self.store.latest_source_cleanup(ids[1])
-        self.assertEqual((row["state"], row["error"]), ("FAILED", recycle_bin.SHARING_MESSAGE))
-        self.assertFalse(self.store.source_cleaned(ids[1]))
+        sources = {job_id: self.source_of(job_id) for job_id in ids}
+        sizes = {job_id: self.store.get_job(job_id)["source_size_bytes"] for job_id in ids}
+        with sources[ids[1]].open("rb"):  # open in a video player: Windows keeps it
+            result = self.execute(ids)
+        self.assertEqual([entry["status"] for entry in result["results"]], ["DELETED", "FAILED", "DELETED"])
+        self.assertEqual(result["results"][1]["message"], job_purge.IN_USE_MESSAGE)
+        self.assertEqual((result["deleted_count"], result["failed_count"], result["partial_count"]), (2, 1, 0))
+        self.assertEqual(result["deleted_bytes"], sizes[ids[0]] + sizes[ids[2]])
+        self.assertFalse(os.path.lexists(sources[ids[0]]))
+        self.assertTrue(sources[ids[1]].is_file())
+        self.assertFalse(os.path.lexists(sources[ids[2]]))
+        # The failed video keeps its job, its manifest and its report folder.
+        self.assertEqual(self.store.get_job(ids[1])["state"], "COMPLETED")
+        self.assertTrue(self.manifest_of(ids[1]).is_file())
         events = self.events(ids[1], "SOURCE_CLEANUP_FAILED")
-        self.assertEqual(events[0]["level"], "ERROR")
-        job = self.store.get_job(ids[1])
-        self.assertEqual(events[0]["payload"], {
-            "stage": "recycle", "path": str(self.source_of(ids[1]).resolve()),
-            "size_bytes": job["source_size_bytes"], "sha256": job["source_sha256"],
-            "error": recycle_bin.SHARING_MESSAGE,
-        })
+        self.assertEqual(
+            (events[0]["level"], events[0]["payload"]),
+            ("ERROR", {"stage": "delete", "reason": job_purge.IN_USE_MESSAGE}),
+        )
         # The failed video is offered again.
         self.assertEqual(self.preview([ids[1]])["count"], 1)
 
-    def test_unexpected_errors_fail_or_stay_pending_depending_on_the_file(self):
-        still_there = self.make_exported_job("tap1")
-        moved = self.make_exported_job("tap2")
-        self.recycler.modes.update({"tap1.mp4": "unexpected", "tap2.mp4": "unexpected-after-move"})
-        result = self.execute([still_there, moved])
-        self.assertEqual([(item["status"], item["message"]) for item in result["results"]], [
+    def test_unexpected_errors_fail_or_leave_a_job_without_its_source(self):
+        before, after, hashing, late = (self.make_exported_job(f"tap{index}") for index in (1, 2, 3, 4))
+        sources = {job_id: self.source_of(job_id) for job_id in (before, after, hashing, late)}
+        late_output = self.output_of(late).relative_to(self.root).as_posix()
+        self.deleter.modes.update({"tap1.mp4": "unexpected", "tap2.mp4": "unexpected-after-delete"})
+        original = job_purge.delete_export_manifest
+
+        def hasher(path):
+            if Path(path) == sources[hashing].resolve():
+                raise RuntimeError("hash boom")
+            return self.hasher(path)
+
+        def manifest(root, output_path):
+            if output_path == late_output:
+                raise RuntimeError("manifest boom")
+            return original(root, output_path)
+
+        with patch.object(job_purge, "delete_export_manifest", side_effect=manifest):
+            result = self.execute([before, after, hashing, late], hasher=hasher)
+        self.assertEqual([(entry["status"], entry["message"]) for entry in result["results"]], [
             ("FAILED", "Lỗi không mong đợi: boom"),
-            ("PENDING", "Lỗi không mong đợi: boom after the move"),
+            ("DELETED", DELETED),  # the file went before the error: the removal goes on
+            ("FAILED", "Lỗi không mong đợi: hash boom"),
+            ("PARTIAL", PARTIAL_PREFIX + "Lỗi không mong đợi: manifest boom" + PARTIAL_SUFFIX),
         ])
-        self.assertEqual((result["failed_count"], result["pending"]), (1, 1))
-        self.assertEqual(self.store.latest_source_cleanup(still_there)["state"], "FAILED")
-        self.assertEqual(self.store.latest_source_cleanup(moved)["state"], "PENDING")
-        for job_id in (still_there, moved):
-            self.assertEqual(self.events(job_id, "SOURCE_CLEANUP_FAILED")[0]["level"], "ERROR")
-
-    def test_a_timeout_leaves_the_row_pending_and_stops_the_batch(self):
-        first = self.make_exported_job("tap1")
-        second = self.make_exported_job("tap2")
-        self.recycler.modes["tap1.mp4"] = "timeout"
-        result = self.execute([first, second])
-        self.assertEqual([(item["status"], item["message"]) for item in result["results"]], [
-            ("PENDING", recycle_bin.TIMEOUT_MESSAGE),
-            ("NOT_RUN", "Chưa chạy: lần chuyển trước chưa xong."),
-        ])
-        self.assertEqual((result["pending"], result["recycled_count"], result["failed_count"]), (1, 0, 0))
-        self.assertEqual(len(self.recycler.calls), 1)
-        row = self.store.latest_source_cleanup(first)
-        self.assertEqual(row["state"], "PENDING")
-        self.assertIsNone(self.store.latest_source_cleanup(second))
-        events = self.events(first, "SOURCE_CLEANUP_PENDING")
-        self.assertEqual(
-            (events[0]["level"], events[0]["message"]),
-            ("WARNING", "Windows chưa trả lời; video gốc đang chờ xác nhận chuyển vào Thùng rác"),
-        )
-        self.assertEqual(set(events[0]["payload"]), {"path", "size_bytes", "sha256"})
-        # PENDING locks every action on the job.
-        with self.assertRaises(ValueError) as caught:
-            self.scheduler.rerun(first)
-        self.assertEqual(str(caught.exception), SOURCE_CLEANED_MESSAGE)
-        with self.assertRaises(ValueError) as caught:
-            self.scheduler.cancel(first)
-        self.assertEqual(str(caught.exception), SOURCE_CLEANED_STOP_REFUSAL)
-        self.assertEqual(self.reason(first), "Đang chuyển video gốc này vào Thùng rác")
-        # Windows answers later: the callback settles the row like a normal move.
-        source = self.source_of(first)
-        record = self.recycler.move(source)
-        self.recycler.callbacks[0](RecycleResult(str(source), row["size_bytes"], True, record, 61.0), None)
-        row = self.store.latest_source_cleanup(first)
-        self.assertEqual((row["state"], row["verified"], row["recycle_record"]), ("RECYCLED", True, record))
-        self.assertEqual(len(self.events(first, "SOURCE_RECYCLED")), 1)
-        self.assertEqual(self.watcher_row(source), None)  # never observed: nothing to reset
-
-    def test_a_late_failure_and_a_closed_store_in_the_callback(self):
-        job_id = self.make_exported_job("tap1")
-        self.recycler.modes["tap1.mp4"] = "timeout"
-        self.execute([job_id])
-        callback = self.recycler.callbacks[0]
-        callback(None, RecycleFailed(recycle_bin.ABORTED_MESSAGE))
-        row = self.store.latest_source_cleanup(job_id)
-        self.assertEqual((row["state"], row["error"]), ("FAILED", recycle_bin.ABORTED_MESSAGE))
-        self.assertEqual(self.events(job_id, "SOURCE_CLEANUP_FAILED")[0]["level"], "ERROR")
-        # A second answer for the same row changes nothing, and a closed store is swallowed.
-        callback(RecycleResult("x", 1, True, None, 1.0), None)
-        self.assertEqual(self.store.latest_source_cleanup(job_id)["state"], "FAILED")
-        self.store.close()
-        callback(RecycleResult("x", 1, True, None, 1.0), None)
-
-    def test_a_full_or_unavailable_bin_blocks_before_anything_runs(self):
-        job_id = self.make_exported_job("tap12")
-        size = self.source_of(job_id).stat().st_size
-        self.bin = FakeBin(used=NEAR_FULL)
-        preview = self.preview([job_id])
-        capacity = recycle_bin.capacity_refusal(BinInfo("E:", "E:\\", GUID, MAX_BYTES, NEAR_FULL, ITEMS), size)
-        self.assertEqual(preview["blocked"], capacity)
-        self.assertTrue(capacity.startswith("Không thể dọn: Thùng rác của ổ E: đang chứa 48,5 GB, giới hạn 48,6 GB;"))
-        with self.assertRaises(CleanupConflict) as caught:
-            self.execute([job_id], preview["preview_id"])
-        self.assertEqual((caught.exception.code, str(caught.exception)), ("bin_capacity", capacity))
-        self.assertEqual(caught.exception.preview["blocked"], capacity)
-        self.bin = FakeBin(error=RecycleRefused(recycle_bin.NUKE_MESSAGE.format(volume="E:")))
-        preview = self.preview([job_id])
-        self.assertIsNone(preview["recycle_bin"])
-        self.assertEqual(preview["blocked"], recycle_bin.NUKE_MESSAGE.format(volume="E:"))
-        with self.assertRaises(CleanupConflict) as caught:
-            self.execute([job_id], preview["preview_id"])
-        self.assertEqual(caught.exception.code, "bin_unavailable")
-        self.assertEqual(str(caught.exception), recycle_bin.NUKE_MESSAGE.format(volume="E:"))
-        self.assertEqual((self.recycler.calls, self.hashed, self.all_rows()), ([], [], []))
-
-    def test_the_bin_is_checked_again_for_each_video(self):
-        ids = [self.make_exported_job(f"tap{index}") for index in (1, 2)]
-        # Preview, execute preview and video 1's re-check see room; video 2's does not.
-        self.bin = FakeBin(sequence=[USED_BYTES, USED_BYTES, USED_BYTES, NEAR_FULL])
-        result = self.execute(ids)
-        self.assertEqual([item["status"] for item in result["results"]], ["RECYCLED", "FAILED"])
-        self.assertTrue(result["results"][1]["message"].startswith("Không thể dọn: Thùng rác của ổ E:"))
-        events = self.events(ids[1], "SOURCE_CLEANUP_FAILED")
-        self.assertEqual(events[0]["payload"]["stage"], "recheck")
-        self.assertIsNone(self.store.latest_source_cleanup(ids[1]))
-        self.assertTrue(self.source_of(ids[1]).is_file())
+        self.assertEqual((result["deleted_count"], result["failed_count"], result["partial_count"]), (1, 2, 1))
+        self.assertTrue(sources[before].is_file())
+        self.assertEqual(self.events(before, "SOURCE_CLEANUP_FAILED")[0]["payload"],
+                         {"stage": "delete", "reason": "Lỗi không mong đợi: boom"})
+        self.assertEqual(self.leftover_rows(after), {})
+        self.assertTrue(sources[hashing].is_file())
+        event = self.events(hashing, "SOURCE_CLEANUP_FAILED")[0]
+        self.assertEqual((event["level"], event["payload"]["stage"]), ("ERROR", "unexpected"))
+        # The source is gone but the job stays: "Dọn video mất gốc" removes it later.
+        self.assertFalse(os.path.lexists(sources[late]))
+        self.assertEqual(self.store.get_job(late)["state"], "COMPLETED")
+        event = self.events(late, "SOURCE_DELETE_PARTIAL")[0]
+        self.assertEqual((event["level"], event["payload"]),
+                         ("ERROR", {"errors": ["Lỗi không mong đợi: manifest boom"], "manifest_warning": None}))
+        self.assertEqual(self.reason(late), "Video gốc không còn trong thư mục input")
 
     def test_a_rerun_between_hashing_and_the_lock_is_caught_by_the_recheck(self):
         job_id = self.make_exported_job("tap12")
@@ -1073,7 +1130,7 @@ class ExecuteTests(CleanupFixture):
         self.assertEqual(
             result["results"][0]["message"], "Chỉ dọn được video đã xuất hoặc đã bỏ qua (mục “Hoàn tất”)",
         )
-        self.assertEqual((self.recycler.calls, self.all_rows()), ([], []))
+        self.assertEqual(self.deleter.calls, [])
         self.assertTrue(self.source_of(job_id).is_file())
         events = self.events(job_id, "SOURCE_CLEANUP_FAILED")
         self.assertEqual(events[0]["payload"]["stage"], "recheck")
@@ -1083,42 +1140,43 @@ class ExecuteTests(CleanupFixture):
         ids = [self.make_exported_job(f"tap{index}") for index in (1, 2)]
         stop = threading.Event()
 
-        def recycler(path, **kwargs):
-            stop.set()  # BiliFlow starts shutting down during the first move
-            return self.recycler(path, **kwargs)
+        def deleter(path, **kwargs):
+            stop.set()  # BiliFlow starts shutting down during the first deletion
+            return self.deleter(path, **kwargs)
 
-        result = self.execute(ids, recycler=recycler, should_stop=stop.is_set)
-        self.assertEqual([(item["status"], item["message"]) for item in result["results"]], [
-            ("RECYCLED", "Đã chuyển video gốc vào Thùng rác"),
-            ("NOT_RUN", "BiliFlow đang tắt; video này chưa được dọn."),
+        result = self.execute(ids, deleter=deleter, should_stop=stop.is_set)
+        self.assertEqual([(entry["status"], entry["message"]) for entry in result["results"]], [
+            ("DELETED", DELETED),
+            ("NOT_RUN", "BiliFlow đang tắt; video này chưa được xóa."),
         ])
-        self.assertEqual(len(self.recycler.calls), 1)
+        self.assertEqual(len(self.deleter.calls), 1)
+        self.assertTrue(self.source_of(ids[1]).is_file())
 
     def test_a_second_execute_while_one_runs_is_busy(self):
         first = self.make_exported_job("tap1")
         second = self.make_exported_job("tap2")
         release = threading.Event()
-        self.recycler.modes["tap1.mp4"] = release
+        self.deleter.modes["tap1.mp4"] = release
         first_id = self.preview([first])["preview_id"]
         second_id = self.preview([second])["preview_id"]
         outcome = {}
         worker = threading.Thread(target=lambda: outcome.update(result=self.execute([first], first_id)))
         worker.start()
         try:
-            self.assertTrue(wait_until(lambda: len(self.recycler.calls) == 1))
+            self.assertTrue(wait_until(lambda: len(self.deleter.calls) == 1))
             self.assertTrue(source_cleanup.cleanup_running())
             self.assertFalse(source_cleanup.wait_idle(0.1))
             with self.assertRaises(CleanupConflict) as caught:
                 self.execute([second], second_id)
             self.assertEqual(
                 (caught.exception.code, str(caught.exception), caught.exception.preview),
-                ("busy", "Đang dọn video gốc; chờ lần dọn trước xong rồi thử lại.", None),
+                ("busy", "Đang xóa video gốc; chờ lần xóa trước xong rồi thử lại.", None),
             )
         finally:
             release.set()
             worker.join(10)
         self.assertFalse(worker.is_alive())
-        self.assertEqual(outcome["result"]["recycled_count"], 1)
+        self.assertEqual(outcome["result"]["deleted_count"], 1)
         self.assertTrue(source_cleanup.wait_idle(1.0))
         self.assertFalse(source_cleanup.cleanup_running())
         with patch.object(recycle_bin, "operations_in_progress", return_value=frozenset({"E:\\x.mp4"})):
@@ -1126,54 +1184,105 @@ class ExecuteTests(CleanupFixture):
             with self.assertRaises(CleanupConflict) as caught:
                 self.execute([second], second_id)
             self.assertEqual(caught.exception.code, "busy")
-        self.assertEqual(self.execute([second], second_id)["recycled_count"], 1)
+        self.assertEqual(self.execute([second], second_id)["deleted_count"], 1)
 
     def test_no_deadlock_with_finalize_rerun_and_status_hints(self):
         cleaned = self.make_exported_job("tap1")
         rerun_job = self.make_exported_job("tap2")
         hint_job = self.make_exported_job("tap3")
         entered, release = threading.Event(), threading.Event()
-        original = self.store.add_source_cleanup
 
-        def blocking(**kwargs):
+        def blocking(path, **kwargs):
             entered.set()
             release.wait(10)
-            return original(**kwargs)
+            return self.deleter(path, **kwargs)
 
         outcome = {}
-        with patch.object(self.store, "add_source_cleanup", side_effect=blocking):
-            cleaner = threading.Thread(target=lambda: outcome.update(result=self.execute([cleaned])))
-            cleaner.start()
-            self.assertTrue(entered.wait(10))
+        cleaner = threading.Thread(target=lambda: outcome.update(result=self.execute([cleaned], deleter=blocking)))
+        cleaner.start()
+        self.assertTrue(entered.wait(10))
 
-            def finalize_like():
-                with REVIEW_QUEUE_IO, self.scheduler.job_action_lock:
-                    outcome["finalize"] = True
+        def finalize_like():
+            with REVIEW_QUEUE_IO, self.scheduler.job_action_lock:
+                outcome["finalize"] = True
 
-            def rerun():
-                outcome["rerun"] = self.scheduler.rerun(rerun_job)["state"]
+        def rerun():
+            outcome["rerun"] = self.scheduler.rerun(rerun_job)["state"]
 
-            def hint():
-                job = self.store.get_job(hint_job)
-                outcome["hint"] = cleanup_hint(self.root, self.store, self.scheduler, job, latest_row=None)
+        def hint():
+            job = self.store.get_job(hint_job)
+            outcome["hint"] = cleanup_hint(self.root, self.store, self.scheduler, job, latest_row=None)
 
-            others = [threading.Thread(target=target) for target in (finalize_like, rerun, hint)]
-            for thread in others:
-                thread.start()
-            time.sleep(0.2)
-            # All three wait behind the locked section (lock order, not a deadlock) ...
-            self.assertEqual(set(outcome), set())
-            release.set()
-            released = time.monotonic()
-            for thread in [cleaner, *others]:
-                thread.join(5)
-            self.assertLess(time.monotonic() - released, 5)
+        others = [threading.Thread(target=target) for target in (finalize_like, rerun, hint)]
+        for thread in others:
+            thread.start()
+        time.sleep(0.2)
+        # All three wait behind the locked section (lock order, not a deadlock) ...
+        self.assertEqual(set(outcome), set())
+        release.set()
+        released = time.monotonic()
+        for thread in [cleaner, *others]:
+            thread.join(5)
+        self.assertLess(time.monotonic() - released, 5)
         self.assertFalse(any(thread.is_alive() for thread in [cleaner, *others]))
         # ... and all of them finish once it is released.
-        self.assertEqual(outcome["result"]["recycled_count"], 1)
+        self.assertEqual(outcome["result"]["deleted_count"], 1)
         self.assertTrue(outcome["finalize"])
         self.assertEqual(outcome["rerun"], "QUEUED")
         self.assertTrue(outcome["hint"]["eligible"])
+
+
+@unittest.skipUnless(sys.platform == "win32", "open files block a delete only on Windows")
+class PartialRemovalTests(CleanupFixture):
+    def test_a_locked_report_file_leaves_the_job_without_its_source(self):
+        job_id = self.make_exported_job("tap12")
+        source = self.source_of(job_id)
+        size = source.stat().st_size
+        output, manifest = self.output_of(job_id), self.manifest_of(job_id)
+        locked = self.root / "reports" / "jobs" / "tap12" / "frames" / "a.jpg"
+        locked.parent.mkdir(parents=True)
+        locked.write_bytes(b"x" * 10)
+        log = self.root / "logs" / "control-center" / f"job-{job_id}-render-attempt-1.log"
+        log.write_bytes(b"log")
+        with locked.open("rb"):
+            result = self.execute([job_id])
+        entry = result["results"][0]
+        self.assertEqual(entry["status"], "PARTIAL")
+        self.assertTrue(entry["message"].startswith(PARTIAL_PREFIX + "reports/jobs/tap12: a.jpg: "), entry["message"])
+        self.assertTrue(entry["message"].endswith(PARTIAL_SUFFIX), entry["message"])
+        self.assertEqual(
+            (result["deleted_count"], result["partial_count"], result["failed_count"], result["deleted_bytes"]),
+            (0, 1, 0, size),
+        )
+        self.assertFalse(os.path.lexists(source))
+        self.assertFalse(os.path.lexists(manifest))
+        self.assertFalse(os.path.lexists(log))  # the other files went
+        self.assertTrue(output.is_file())
+        # Every row stays, so the job is still listed without its source.
+        self.assertEqual(self.store.get_job(job_id)["state"], "COMPLETED")
+        events = self.events(job_id, "SOURCE_DELETE_PARTIAL")
+        self.assertEqual((len(events), events[0]["level"]), (1, "WARNING"))
+        self.assertEqual((len(events[0]["payload"]["errors"]), events[0]["payload"]["manifest_warning"]), (1, None))
+        self.assertEqual(self.reason(job_id), "Video gốc không còn trong thư mục input")
+        # Once the file is free, finishing the removal takes the rest.
+        self.assertEqual(finish_removal(self.root, self.store, job_id), [])
+        self.assertEqual(self.leftover_rows(job_id), {})
+        self.assertFalse(os.path.lexists(locked.parent.parent))
+
+    def test_a_manifest_that_cannot_be_deleted_is_only_a_warning(self):
+        job_id = self.make_exported_job("tap12")
+        manifest = self.manifest_of(job_id)
+        with manifest.open("rb"):
+            result = self.execute([job_id])
+        entry = result["results"][0]
+        self.assertEqual(entry["status"], "DELETED")
+        self.assertTrue(
+            entry["message"].startswith(DELETED + ". Lưu ý: Không xóa được manifest của bản xuất ("), entry["message"],
+        )
+        self.assertTrue(entry["message"].endswith("); file .mp4 vẫn còn."), entry["message"])
+        self.assertEqual((result["deleted_count"], result["partial_count"]), (1, 0))
+        self.assertTrue(manifest.is_file())
+        self.assertEqual(self.leftover_rows(job_id), {})
 
 
 class HintAndReconcileTests(CleanupFixture):
@@ -1193,7 +1302,7 @@ class HintAndReconcileTests(CleanupFixture):
             os.utime(queue_file, ns=(info.st_atime_ns, info.st_mtime_ns + 1_000_000_000))
             cleanup_hint(self.root, self.store, self.scheduler, job, latest_row=None)
             self.assertEqual(parse.call_count, 2)
-        manifest = json.loads(output.with_suffix(".mp4.manifest.json").read_text(encoding="utf-8"))
+        manifest = json.loads(self.manifest_of(job_id).read_text(encoding="utf-8"))
         self.assertEqual(hints[0], {
             "eligible": True, "kind": "EXPORTED", "reason": None,
             "size_bytes": job["source_size_bytes"], "output_name": output.name,
@@ -1221,7 +1330,7 @@ class HintAndReconcileTests(CleanupFixture):
                          (False, "EXPORTED", "Video gốc đã được dọn trước đó"))
         self.assertEqual(row["id"], row_id)
 
-    def test_reconcile_settles_pending_rows_after_a_crash(self):
+    def test_reconcile_settles_legacy_pending_rows_after_a_crash(self):
         present = self.make_exported_job("present")
         gone = self.make_exported_job("gone")
         unverified = self.make_exported_job("unverified")
@@ -1259,7 +1368,7 @@ class HintAndReconcileTests(CleanupFixture):
         self.assertEqual(self.store.latest_source_cleanup(running)["state"], "PENDING")
         gone_row = self.store.latest_source_cleanup(gone)
         created = datetime.fromisoformat(gone_row["created_at"]).timestamp()
-        call = next(item for item in calls if Path(item[1]).name == "gone.mp4")
+        call = next(entry for entry in calls if Path(entry[1]).name == "gone.mp4")
         self.assertEqual(call[0], Path(gone_row["source_path"]).anchor)
         self.assertEqual((call[1], call[2]), (gone_row["source_path"], gone_row["size_bytes"]))
         self.assertAlmostEqual(call[3], created - 5, places=3)
@@ -1275,9 +1384,11 @@ class RecycleRecheckTests(CleanupFixture):
     RECORD = "E:\\$Recycle.Bin\\S-1-5-21-1000\\$I4RHHWK.mp4"
 
     def unverified(self, name="a"):
+        """A legacy RECYCLED row whose bin record the old cleanup did not find."""
         job_id = self.make_exported_job(name)
-        self.recycler.modes[f"{name}.mp4"] = "unverified"
-        self.assertEqual(self.execute([job_id])["results"][0]["status"], "UNVERIFIED")
+        row_id = self.add_row(job_id, state="PENDING")
+        self.recycler.move(self.source_of(job_id))
+        self.store.finish_source_cleanup(row_id, state="RECYCLED", verified=False)
         return job_id, self.store.latest_source_cleanup(job_id)
 
     def recheck(self, subject_id, finder, kind="source_cleanup"):
@@ -1305,7 +1416,7 @@ class RecycleRecheckTests(CleanupFixture):
         # The cleanup row is exactly what the cleanup recorded.
         self.assertEqual(self.store.latest_source_cleanup(job_id), row)
         checks = self.store.recycle_checks("SOURCE_CLEANUP", row["id"])
-        self.assertEqual([(item["found"], item["recycle_record"], item["actor"]) for item in checks],
+        self.assertEqual([(entry["found"], entry["recycle_record"], entry["actor"]) for entry in checks],
                          [(False, None, "control_center_user"), (True, self.RECORD, "control_center_user")])
         self.assertEqual((checks[0]["path"], checks[0]["size_bytes"], checks[0]["job_id"]),
                          (row["source_path"], row["size_bytes"], job_id))
@@ -1368,7 +1479,7 @@ class RecycleRecheckTests(CleanupFixture):
         self.assertEqual(str(caught.exception), "Không tìm thấy bản ghi #9999.")
         with self.assertRaises(ValueError):
             self.recheck(row["id"], never, kind="archive_export")
-        # Busy: another cleanup, archive, restore or re-check holds the one lock.
+        # Busy: a deletion, archive, restore or re-check holds the one lock.
         self.assertTrue(SOURCE_FILE_LOCK.acquire(blocking=False))
         try:
             with self.assertRaises(ActionConflict) as caught:
@@ -1384,10 +1495,9 @@ class RecycleRecheckTests(CleanupFixture):
         self.assertEqual(self.events(job_id, "SOURCE_RECYCLE_STILL_UNVERIFIED"), [])
         # Verified at cleanup, failed, restored, or no longer the job's latest row: nothing to check.
         verified_job = self.make_exported_job("verified")
-        self.execute([verified_job])
+        self.add_row(verified_job, state="RECYCLED", verified=True)
         failed_job = self.make_exported_job("failed")
-        self.recycler.modes["failed.mp4"] = "fail"
-        self.execute([failed_job])
+        self.add_row(failed_job, state="FAILED")
         cases = {
             "already_verified": self.store.latest_source_cleanup(verified_job)["id"],
             "not_recheckable": self.store.latest_source_cleanup(failed_job)["id"],
@@ -1404,7 +1514,7 @@ class RecycleRecheckTests(CleanupFixture):
 
 
 class ArchiveInteractionTests(CleanupFixture):
-    """Batch 4: "Lưu trữ" locks a job against "Dọn video gốc", and both share one lock."""
+    """Batch 4: "Lưu trữ" locks a job against "Xóa video gốc", and both share one lock."""
 
     def add_archive(self, job_id):
         job = self.store.get_job(job_id)
@@ -1420,7 +1530,7 @@ class ArchiveInteractionTests(CleanupFixture):
             output_manifest_bytes=1,
         )
 
-    def test_an_archived_job_cannot_be_cleaned(self):
+    def test_an_archived_job_cannot_be_deleted(self):
         job_id = self.make_exported_job("tap20")
         job = self.store.get_job(job_id)
         reason = "Video gốc đang ở kho lưu trữ"
@@ -1441,8 +1551,8 @@ class ArchiveInteractionTests(CleanupFixture):
                 self.assertEqual((hint["eligible"], hint["reason"]), (False, reason))
                 with self.assertRaises(ValueError):  # nothing eligible
                     self.execute([job_id])
-        self.assertEqual((self.hashed, self.recycler.calls, self.all_rows()), ([], [], []))
-        # Restored: the job may be cleaned again (and a FAILED archive never locked it).
+        self.assertEqual((self.hashed, self.deleter.calls), ([], []))
+        # Restored: the job may be deleted again (and a FAILED archive never locked it).
         self.store.finish_archive_restore(row_id, mtime_ns=job["source_mtime_ns"], job_state=None)
         self.assertIsNone(self.store.source_lock(job_id))
         self.assertEqual(self.preview([job_id])["count"], 1)
@@ -1450,9 +1560,12 @@ class ArchiveInteractionTests(CleanupFixture):
         self.store.finish_source_archive(self.add_archive(failed), state="FAILED", error="x")
         self.assertEqual(self.preview([failed])["count"], 1)
         result = self.execute([job_id, failed])
-        self.assertEqual([entry["status"] for entry in result["results"]], ["RECYCLED", "RECYCLED"])
+        self.assertEqual([entry["status"] for entry in result["results"]], ["DELETED", "DELETED"])
+        for removed in (job_id, failed):
+            self.assertEqual(self.leftover_rows(removed), {})
+            self.assertIsNone(self.store.latest_source_archive(removed))
 
-    def test_cleanup_and_archive_share_one_lock(self):
+    def test_deletion_and_archive_share_one_lock(self):
         from biliflow.source_archive import execute_archive, preview_archive
         from biliflow.source_archive_restore import restore_archive
 
@@ -1460,13 +1573,13 @@ class ArchiveInteractionTests(CleanupFixture):
         skipped = self.make_skipped_job("tap23")
         archive_id = preview_archive(self.root, self.store, self.scheduler, [skipped], bin_info=self.bin)["preview_id"]
         release = threading.Event()
-        self.recycler.modes["tap22.mp4"] = release
+        self.deleter.modes["tap22.mp4"] = release
         cleanup_id = self.preview([cleaned])["preview_id"]
         outcome = {}
         worker = threading.Thread(target=lambda: outcome.update(cleanup=self.execute([cleaned], cleanup_id)))
         worker.start()
         try:
-            self.assertTrue(wait_until(lambda: len(self.recycler.calls) == 1))
+            self.assertTrue(wait_until(lambda: len(self.deleter.calls) == 1))
             for action in (
                 lambda: execute_archive(self.root, self.store, self.scheduler, [skipped], archive_id,
                                         recycler=self.recycler, bin_info=self.bin, hasher=self.hasher),
@@ -1479,8 +1592,8 @@ class ArchiveInteractionTests(CleanupFixture):
         finally:
             release.set()
             worker.join(10)
-        self.assertEqual(outcome["cleanup"]["recycled_count"], 1)
-        # An archive holds the lock while it hashes: a cleanup is refused, never queued.
+        self.assertEqual(outcome["cleanup"]["deleted_count"], 1)
+        # An archive holds the lock while it hashes: a deletion is refused, never queued.
         hashing, resume = threading.Event(), threading.Event()
         other = self.make_exported_job("tap24")
         other_id = self.preview([other])["preview_id"]
@@ -1506,7 +1619,7 @@ class ArchiveInteractionTests(CleanupFixture):
         self.assertFalse(archiver.is_alive())
         self.assertEqual(outcome["archive"]["archived_count"], 1)
         self.assertEqual(self.store.source_lock(skipped), "archived")
-        self.assertEqual(self.execute([other], other_id)["recycled_count"], 1)
+        self.assertEqual(self.execute([other], other_id)["deleted_count"], 1)
 
 
 if __name__ == "__main__":
