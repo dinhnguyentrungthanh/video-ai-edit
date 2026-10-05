@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import sqlite3
 import threading
 from datetime import datetime, timezone
@@ -162,6 +163,15 @@ def sha256_file(path: Path) -> str:
         for chunk in iter(lambda: handle.read(1024 * 1024), b""):
             digest.update(chunk)
     return digest.hexdigest()
+
+
+def _watch_key(path: Any) -> str:
+    """The watcher_files key of ``path`` (resolved like the watcher does; its plain
+    absolute form when resolving fails, e.g. a link loop or an unreachable share)."""
+    try:
+        return str(Path(path).resolve(strict=False))
+    except (OSError, RuntimeError):
+        return os.path.abspath(str(path))
 
 
 class JobStore:
@@ -942,12 +952,14 @@ class JobStore:
         """
         stamp = now_iso()
         with self._lock:
+            row = self._connection.execute(
+                "SELECT source_path FROM jobs WHERE id=?", (job_id,)
+            ).fetchone()
+            if row is None:
+                return False
+            # Before the first DELETE: once it runs, nothing may fail outside the try.
+            watched = _watch_key(row["source_path"])
             try:
-                row = self._connection.execute(
-                    "SELECT source_path FROM jobs WHERE id=?", (job_id,)
-                ).fetchone()
-                if row is None:
-                    return False
                 for table in JOB_ROW_TABLES:
                     self._connection.execute(
                         f"DELETE FROM {table} WHERE job_id=?", (job_id,)  # noqa: S608 - fixed names
@@ -960,11 +972,13 @@ class JobStore:
                     """UPDATE watcher_files SET size_bytes=-1,mtime_ns=-1,imported_job_id=NULL,
                     stable_since=?,updated_at=?
                     WHERE imported_job_id=? OR (path=? AND imported_job_id IS NULL)""",
-                    (stamp, stamp, job_id, str(Path(row["source_path"]).resolve(strict=False))),
+                    (stamp, stamp, job_id, watched),
                 )
                 self._connection.execute("DELETE FROM jobs WHERE id=?", (job_id,))
                 self._connection.commit()
-            except sqlite3.Error:
+            except BaseException:
+                # Any error (not only SQLite's): the next commit on this shared
+                # connection must never complete half a removal.
                 self._connection.rollback()
                 raise
         return True

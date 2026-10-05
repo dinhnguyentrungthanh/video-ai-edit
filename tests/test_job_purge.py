@@ -8,6 +8,7 @@ input, output, reports, archive or state.
 import hashlib
 import json
 import os
+import shutil
 import stat
 import sys
 import unittest
@@ -16,7 +17,7 @@ from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
 from biliflow import job_purge, recycle_bin
-from biliflow.job_store import JOB_SETTING_NAMES, JobStore
+from biliflow.job_store import JOB_ROW_TABLES, JOB_SETTING_NAMES, JobStore
 
 
 TEMP_PARENT = recycle_bin.INSTALL_ROOT / "temp"
@@ -131,6 +132,51 @@ class PurgeFixture(unittest.TestCase):
 
 
 class PurgeJobRowsTests(PurgeFixture):
+    def test_any_error_mid_purge_rolls_every_row_back(self):
+        job = self.make_job("alpha")
+        self.populate(job)
+        before = self.counts(job["id"])
+
+        class Broken:
+            def __iter__(self):
+                raise RuntimeError("boom")
+
+        # The settings are deleted after the rows of every job table: a transaction is open by then.
+        with patch("biliflow.job_store.JOB_SETTING_NAMES", Broken()), self.assertRaises(RuntimeError):
+            self.store.purge_job(job["id"])
+        self.assertFalse(self.store._connection.in_transaction)
+        self.store.add_event(job["id"], "AFTER", "a later commit never completes half a removal")
+        after = self.counts(job["id"])
+        self.assertEqual({**after, "events": after["events"] - 1}, before)
+        self.assertTrue(self.store.purge_job(job["id"]))
+        self.assertEqual(set(self.counts(job["id"]).values()), {0})
+
+    def test_a_source_path_that_cannot_be_resolved_still_purges(self):
+        job = self.make_job("alpha")
+        self.populate(job)
+        with patch.object(Path, "resolve", side_effect=RuntimeError("Symlink loop")):
+            self.assertTrue(self.store.purge_job(job["id"]))
+        self.assertFalse(self.store._connection.in_transaction)
+        self.assertEqual(set(self.counts(job["id"]).values()), {0})
+        row = self.watcher_row(job["source_path"])
+        self.assertEqual((row["size_bytes"], row["mtime_ns"], row["imported_job_id"]), (-1, -1, None))
+
+    def test_every_table_with_a_key_to_jobs_is_purged(self):
+        """A table added later (another branch) that names jobs(id) must be listed or cascade."""
+        with self.store._lock:
+            connection = self.store._connection
+            tables = [row[0] for row in connection.execute("SELECT name FROM sqlite_master WHERE type='table'")]
+            naming = {
+                table: key["on_delete"]
+                for table in tables
+                for key in connection.execute(f'PRAGMA foreign_key_list("{table}")').fetchall()
+                if key["table"] == "jobs"
+            }
+        self.assertTrue(set(JOB_ROW_TABLES) <= set(naming), naming)
+        for table, on_delete in naming.items():
+            with self.subTest(table=table):
+                self.assertTrue(table in JOB_ROW_TABLES or on_delete in ("CASCADE", "SET NULL"), on_delete)
+
     def test_every_row_of_the_job_goes_and_nothing_else_changes(self):
         alpha, beta = self.make_job("alpha"), self.make_job("beta")
         self.populate(alpha)
@@ -333,6 +379,14 @@ class RemoveJobFilesTests(PurgeFixture):
                     job_purge.remove_job_files(self.root, [path])
         self.assertTrue(Path(job["source_path"]).is_file())
 
+    def test_a_benchmark_run_is_refused_even_when_listed(self):
+        bench = self.root / "reports" / "jobs" / "alpha-1234abcd-run-bench"
+        bench.mkdir()
+        (bench / job_purge.BENCHMARK_MARKER).write_text("", encoding="utf-8")
+        with self.assertRaises(job_purge.DeleteRefused):
+            job_purge.remove_job_files(self.root, [bench])
+        self.assertTrue((bench / job_purge.BENCHMARK_MARKER).is_file())
+
     def test_a_root_outside_the_install_temp_is_refused(self):
         folder = self.root / "reports" / "jobs" / "alpha"
         folder.mkdir()
@@ -370,6 +424,35 @@ class RemoveJobTests(PurgeFixture):
         self.assertTrue(kept.is_dir())
         self.assertEqual(set(self.counts(alpha["id"]).values()), {0})
         self.assertEqual(self.counts(beta["id"])["jobs"], 1)
+
+    def test_an_archive_or_a_pending_legacy_cleanup_locks_the_job(self):
+        for kind in ("PENDING", "ARCHIVED", "RESTORING", "CLEANUP_PENDING"):
+            with self.subTest(kind=kind):
+                key = f"locked-{kind.lower().replace('_', '-')}-1234abcd"
+                job = self.make_job(key.rsplit("-", 1)[0], key=key)
+                own = self.make_report(job, key)
+                if kind == "CLEANUP_PENDING":
+                    self.store.add_source_cleanup(
+                        job_id=job["id"], kind="EXPORTED", source_path=job["source_path"],
+                        source_sha256=job["source_sha256"], size_bytes=job["source_size_bytes"], mtime_ns=1,
+                    )
+                else:
+                    row = self.store.add_source_archive(
+                        job_id=job["id"], kind="EXPORTED", source_path=job["source_path"],
+                        archive_path=f"archive/sources/{key}/a.mp4",
+                        manifest_path=f"archive/sources/{key}/archive-manifest.json",
+                        source_sha256=job["source_sha256"], size_bytes=job["source_size_bytes"], mtime_ns=1,
+                        queue_path=f"reports/jobs/{key}/review-queue.json",
+                    )
+                    if kind != "PENDING":
+                        self.store.finish_source_archive(row, state="ARCHIVED")
+                    if kind == "RESTORING":
+                        self.store.begin_archive_restore(row)
+                with self.assertRaises(job_purge.DeleteRefused) as caught:
+                    job_purge.remove_job(self.root, self.store, job)
+                self.assertEqual(str(caught.exception), job_purge.LOCKED_MESSAGE)
+                self.assertTrue(own.is_dir())
+                self.assertEqual(self.counts(job["id"])["jobs"], 1)
 
     @unittest.skipUnless(sys.platform == "win32", "open files block a delete only on Windows")
     def test_a_file_that_stays_keeps_every_row(self):
@@ -441,6 +524,77 @@ class DeleteInputFileTests(PurgeFixture):
         with self.assertRaises(job_purge.DeleteFailed):
             job_purge.delete_input_file(path, allowed_root=self.root / "input", expected_size=path.stat().st_size)
         self.assertTrue(path.is_file())
+
+
+@unittest.skipUnless(sys.platform == "win32", "directory junctions are a Windows feature")
+class LinkedFolderTests(PurgeFixture):
+    """A folder of the install that is a junction: nothing is deleted through it."""
+
+    def junction(self, name):
+        """Replace ``root/name`` with a junction to a folder beside it; return that folder."""
+        import _winapi
+
+        target = self.root / ("elsewhere-" + name.replace("/", "-"))
+        target.mkdir()
+        link = self.root / name
+        shutil.rmtree(link)
+        _winapi.CreateJunction(str(target), str(link))
+        return target
+
+    def test_a_junctioned_input_is_refused_and_its_file_stays(self):
+        target = self.junction("input")
+        video = target / "alpha.mp4"
+        video.write_bytes(b"x" * 10)
+        for path in (self.root / "input" / "alpha.mp4", video):
+            with self.subTest(path=path), self.assertRaises(job_purge.DeleteRefused) as caught:
+                job_purge.delete_input_file(path, allowed_root=self.root / "input", expected_size=10)
+            self.assertEqual(str(caught.exception), job_purge.FOLDER_LINK_MESSAGE.format(name="input"))
+        self.assertTrue(video.is_file())
+
+    def test_a_junctioned_output_keeps_every_manifest(self):
+        target = self.junction("output")
+        manifest = target / "alpha-reviewed.mp4.manifest.json"
+        manifest.write_text("{}", encoding="utf-8")
+        self.assertEqual(job_purge.delete_export_manifest(self.root, "output/alpha-reviewed.mp4"),
+                         job_purge.FOLDER_LINK_MESSAGE.format(name="output"))
+        self.assertTrue(manifest.is_file())
+
+    def test_junctioned_report_or_log_folders_give_nothing_to_delete(self):
+        job = self.make_job("alpha", key="alpha-1234abcd")
+        logs = self.junction("logs/control-center")
+        log = logs / f"job-{job['id']}-text-attempt-1.log"
+        log.write_text("log", encoding="utf-8")
+        self.assertEqual(job_purge.job_log_files(self.root, job["id"]), [])
+        with self.assertRaises(job_purge.DeleteRefused):
+            job_purge.remove_job_files(self.root, [self.root / "logs" / "control-center" / log.name])
+        reports = self.junction("reports")
+        folder = reports / "jobs" / "alpha-1234abcd"
+        folder.mkdir(parents=True)
+        self.assertEqual(job_purge.owned_report_dirs(self.root, self.store, job), [])
+        with self.assertRaises(job_purge.DeleteRefused):
+            job_purge.remove_job_files(self.root, [self.root / "reports" / "jobs" / "alpha-1234abcd"])
+        self.assertEqual(job_purge.remove_job(self.root, self.store, job), [])  # the rows only
+        self.assertTrue(log.is_file())
+        self.assertTrue(folder.is_dir())
+
+    def test_a_link_inside_an_owned_folder_is_removed_without_following_it(self):
+        import _winapi
+
+        job = self.make_job("alpha", key="alpha-1234abcd")
+        own = self.make_report(job, "alpha-1234abcd")
+        target = self.root / "elsewhere"
+        target.mkdir()
+        (target / "keep.txt").write_text("keep", encoding="utf-8")
+        _winapi.CreateJunction(str(target), str(own / "frames" / "linked"))
+        self.assertEqual(job_purge.remove_job(self.root, self.store, job), [])
+        self.assertFalse(own.exists())
+        self.assertEqual((target / "keep.txt").read_text(encoding="utf-8"), "keep")
+        # A link given as the folder itself is refused, never followed.
+        link = self.root / "reports" / "jobs" / "beta-5678ef01"
+        _winapi.CreateJunction(str(target), str(link))
+        self.assertEqual(job_purge.remove_job_files(self.root, [link]),
+                         [f"reports/jobs/beta-5678ef01: {job_purge.LINK_MESSAGE}"])
+        self.assertTrue((target / "keep.txt").is_file())
 
 
 class DeleteExportManifestTests(PurgeFixture):

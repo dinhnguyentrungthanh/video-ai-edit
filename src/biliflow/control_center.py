@@ -19,7 +19,8 @@ from typing import Any
 import psutil
 
 from biliflow import (
-    __version__, job_purge, logo_memory_admin, recycle_bin, source_archive, source_archive_restore, source_cleanup,
+    __version__, job_delete, job_purge, logo_memory_admin, recycle_bin, source_archive, source_archive_restore,
+    source_cleanup,
 )
 from biliflow.codex_supervisor import (
     codex_connection_status,
@@ -104,6 +105,12 @@ from biliflow import phone_access
 
 UNCONFIGURED_RECYCLE_BIN_MESSAGE = "Chưa cấu hình Thùng rác cho Control Center này."
 UNCONFIGURED_DELETE_MESSAGE = "Control Center này chưa được phép xóa video gốc."
+# "Xóa video gốc" and "Xóa video" delete for good since 2026-10-05: a POST must
+# say so, so a page loaded before (which promised the Recycle Bin) cannot delete.
+CONFIRM_PERMANENT_MESSAGE = (
+    "Thiếu xác nhận xóa vĩnh viễn (trang này có thể đã cũ). Tải lại trang, mở lại hộp thoại, "
+    "đánh dấu “Tôi hiểu” rồi xóa."
+)
 # How long serve() keeps the process alive for an /api/shutdown stop() after
 # serve_forever returned: stop() waits up to 90 s for a running cleanup.
 STOP_WAIT_SECONDS = 120.0
@@ -771,14 +778,18 @@ class ControlCenter:
         order = {item["job_id"]: item for item in self.scheduler.queue_order()}
         # One read of every job's latest cleanup row; the hints never hash and
         # never query the Recycle Bin (they re-read a queue only when it changed).
-        cleanups = self.store.latest_source_cleanups()
-        cleanup_checks = self.store.recycle_check_summary("SOURCE_CLEANUP")
-        archives = self.store.latest_source_archives()
-        archive_checks = self.store.recycle_check_summary("ARCHIVE_EXPORT")
+        context = {
+            "cleanups": self.store.latest_source_cleanups(),
+            "cleanup_checks": self.store.recycle_check_summary("SOURCE_CLEANUP"),
+            "archives": self.store.latest_source_archives(),
+            "archive_checks": self.store.recycle_check_summary("ARCHIVE_EXPORT"),
+            # One read of the golden sets per call ("protected" and the "Xóa video" hints).
+            "golden": job_purge.golden_index(self.root),
+        }
         shown: list[dict[str, Any]] = []
         for job in jobs:
             try:
-                self._fill_card(job, order.get(int(job["id"])), cleanups, cleanup_checks, archives, archive_checks)
+                self._fill_card(job, order.get(int(job["id"])), context)
             except KeyError:
                 # Removed ("Xóa video gốc", "Xóa video") after list_jobs(): no longer listed.
                 if self._job_exists(int(job["id"])):
@@ -800,10 +811,7 @@ class ControlCenter:
             "source_cleanup_running": source_cleanup.cleanup_running(),
         }
 
-    def _fill_card(
-        self, job: dict[str, Any], place: dict[str, Any] | None, cleanups: dict[int, Any],
-        cleanup_checks: dict[int, Any], archives: dict[int, Any], archive_checks: dict[int, Any],
-    ) -> None:
+    def _fill_card(self, job: dict[str, Any], place: dict[str, Any] | None, context: dict[str, Any]) -> None:
         """The status() fields of one job card (KeyError once the job is gone)."""
         job["queue_position"] = place["position"] if place else None
         job["queue_kind"] = place["kind"] if place else None
@@ -823,17 +831,30 @@ class ControlCenter:
         job["skip"] = (
             self.store.setting(f"skip:{int(job['id'])}") if job["state"] == "SKIPPED" else None
         )
-        row = cleanups.get(int(job["id"]))
-        job["source_cleanup"] = source_cleanup.cleanup_row_summary(
-            row, cleanup_checks.get(int(row["id"])) if row else None,
-        )
+        row = context["cleanups"].get(int(job["id"]))
+        check = context["cleanup_checks"].get(int(row["id"])) if row else None
+        job["source_cleanup"] = source_cleanup.cleanup_row_summary(row, check)
         job["source_cleaned"] = bool(row and row["state"] in ("PENDING", "RECYCLED"))
-        archive = archives.get(int(job["id"]))
+        archive = context["archives"].get(int(job["id"]))
         job["source_archive"] = source_archive.archive_row_summary(
-            archive, archive_checks.get(int(archive["id"])) if archive else None,
+            archive, context["archive_checks"].get(int(archive["id"])) if archive else None,
         )
         job["source_archived"] = bool(archive and archive["state"] in SOURCE_ARCHIVED_STATES)
         job["cleanup"], job["archive"] = self._source_hints(job, row, archive)
+        # A golden-set job: every delete button stays off, with this reason.
+        job["protected"] = job_purge.protected_reason(self.root, job, index=context["golden"])
+        job["delete"] = self._delete_hint(job, row, archive, check, context["golden"])
+
+    def _delete_hint(self, job: dict[str, Any], row: dict[str, Any] | None, archive: dict[str, Any] | None,
+                     check: dict[str, Any] | None, golden: job_purge.GoldenIndex) -> dict[str, Any] | None:
+        """The "Xóa video" hint (a cancelled job, or one whose source is gone); an error marks only that card."""
+        try:
+            return job_delete.delete_hint(
+                self.root, self.store, self.scheduler, job, latest_row=row, archive_row=archive, check=check,
+                audit_running=self.audit_running, index=golden,
+            )
+        except Exception as error:  # noqa: BLE001 - one unreadable job must not break the Dashboard
+            return {"eligible": False, "kind": None, "reason": f"Không kiểm tra được: {error}", "size_bytes": 0}
 
     def _job_exists(self, job_id: int) -> bool:
         try:
@@ -893,18 +914,46 @@ class ControlCenter:
             audit_running=self.audit_running,
         )
 
-    def source_cleanup_run(self, job_ids: Any, preview_id: Any) -> dict[str, Any]:
+    def source_cleanup_run(self, job_ids: Any, preview_id: Any, confirm_permanent: Any = None) -> dict[str, Any]:
         """POST /api/source-cleanup ("Xóa video gốc"): delete the confirmed sources for good.
 
         Each video's export manifest goes too (the .mp4 stays), then its job.
-        Raises ValueError for a bad request (400) and CleanupConflict when
-        nothing may start (409). Stops between videos once BiliFlow shuts down.
+        Raises ValueError for a bad request (400; also without
+        ``confirm_permanent: true``) and CleanupConflict when nothing may start
+        (409). Stops between videos once BiliFlow shuts down.
         """
+        if confirm_permanent is not True:
+            raise ValueError(CONFIRM_PERMANENT_MESSAGE)
         if not isinstance(job_ids, list):
             raise ValueError(source_cleanup.JOB_IDS_MESSAGE)
         return source_cleanup.execute_cleanup(
             self.root, self.store, self.scheduler, job_ids, preview_id,
             deleter=self.source_deleter, audit_running=self.audit_running,
+            should_stop=getattr(self, "_stopping", threading.Event()).is_set,
+        )
+
+    def job_delete_preview(self, job_ids: Any) -> dict[str, Any]:
+        """GET /api/job-delete/preview ("Xóa video"): read-only; reads the Recycle Bin only for a
+        source the old cleanup moved there without a known record."""
+        return job_delete.preview_delete(
+            self.root, self.store, self.scheduler, source_cleanup.parse_job_ids(job_ids),
+            finder=self.record_finder, audit_running=self.audit_running,
+        )
+
+    def job_delete_run(self, job_ids: Any, preview_id: Any, confirm_permanent: Any = None) -> dict[str, Any]:
+        """POST /api/job-delete ("Xóa video", "Dọn video mất gốc"): remove cancelled or lost videos.
+
+        A cancelled video's source in input goes for good; output is never touched.
+        ValueError (400) for a bad request or without ``confirm_permanent: true``,
+        CleanupConflict (409) when nothing may start.
+        """
+        if confirm_permanent is not True:
+            raise ValueError(CONFIRM_PERMANENT_MESSAGE)
+        if not isinstance(job_ids, list):
+            raise ValueError(source_cleanup.JOB_IDS_MESSAGE)
+        return job_delete.execute_delete(
+            self.root, self.store, self.scheduler, job_ids, preview_id,
+            deleter=self.source_deleter, finder=self.record_finder, audit_running=self.audit_running,
             should_stop=getattr(self, "_stopping", threading.Event()).is_set,
         )
 
@@ -1465,13 +1514,16 @@ class ControlCenter:
             connection = self.ai_status()
             if not connection["ready"]:
                 raise ValueError(connection["message"])
-        job = self.store.get_job(job_id)
-        queue_path = self.queue_path(job_id)
-        queue_relative = queue_path.relative_to(self.root).as_posix()
-        with self._audit_lock:
-            if job_id in self._audit_jobs:
-                raise ValueError("AI Supervisor is already auditing this job")
-            self._audit_jobs[job_id] = queue_relative
+        # Under job_action_lock like "Xóa video gốc"/"Xóa video": a removal either
+        # sees this audit in its locked re-check, or has finished and get_job fails.
+        with self.scheduler.job_action_lock:
+            job = self.store.get_job(job_id)
+            queue_path = self.queue_path(job_id)
+            queue_relative = queue_path.relative_to(self.root).as_posix()
+            with self._audit_lock:
+                if job_id in self._audit_jobs:
+                    raise ValueError("AI Supervisor is already auditing this job")
+                self._audit_jobs[job_id] = queue_relative
         audit_label = "Visual AI Audit" if visual_opt_in else "Local structure audit"
         event_scope = {"visual_opt_in": visual_opt_in, "queue_path": queue_relative}
         self.store.add_event(
@@ -1981,6 +2033,15 @@ def _handler_class(center: ControlCenter) -> type[BaseHTTPRequestHandler]:
                         self.send_json(400, {"error": str(error)})
                     else:
                         self.send_json(200, value)
+                elif path == "/api/job-delete/preview":
+                    # "Xóa video": read-only like the cleanup preview (no hash, no write, no deleter).
+                    ids = urllib.parse.parse_qs(parsed.query).get("ids", [""])[0]
+                    try:
+                        value = center.job_delete_preview(ids)
+                    except ValueError as error:
+                        self.send_json(400, {"error": str(error)})
+                    else:
+                        self.send_json(200, value)
                 elif (logo_memory := logo_memory_admin.handle_get(center.root, path, parsed.query)) is not None:
                     # "Bộ nhớ logo" (batch 4a): GET /logo-memory, /api/logo-memory,
                     # /api/logo-memory/frame?key=&i= — read-only; errors come back as JSON.
@@ -2031,9 +2092,16 @@ def _handler_class(center: ControlCenter) -> type[BaseHTTPRequestHandler]:
                                      kwargs={"immediate": mode == "immediate"}, daemon=True).start()
                     return
                 elif path == "/api/source-cleanup":
-                    # Host and token were checked above; the recycler is reached
+                    # Host and token were checked above; the deleter is reached
                     # only through execute_cleanup's own checks.
-                    result = center.source_cleanup_run(body.get("job_ids"), body.get("preview_id"))
+                    result = center.source_cleanup_run(
+                        body.get("job_ids"), body.get("preview_id"), body.get("confirm_permanent"),
+                    )
+                elif path == "/api/job-delete":
+                    # "Xóa video": the deleter is reached only through execute_delete's own checks.
+                    result = center.job_delete_run(
+                        body.get("job_ids"), body.get("preview_id"), body.get("confirm_permanent"),
+                    )
                 elif path == "/api/source-recycle-check":
                     # Reads the Recycle Bin only; appends one recycle_checks row.
                     result = center.source_recycle_check(body.get("kind"), body.get("id"))

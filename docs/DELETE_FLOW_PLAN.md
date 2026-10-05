@@ -86,6 +86,19 @@ Hai thứ còn lại **không xóa**, để chính sách dọn có giới hạn 
   chối.
 - **Lớp bảo vệ thêm:** hàm xóa chỉ chạy khi thư mục gốc là thư mục cài BiliFlow hoặc nằm trong `temp` của nó (test).
   Code trong một worktree vì thế không thể xóa file của thư mục chính.
+  - `input`, `output`, `reports`, `reports\jobs`, `logs`, `logs\control-center` là liên kết (symlink/junction): không
+    xóa gì qua đó (review D1, 2026-10-05). Hôm nay máy thật không có liên kết nào trong thư mục cài.
+  - Video có dòng "Lưu trữ" PENDING/ARCHIVED/RESTORING hoặc dòng dọn cũ PENDING: hàm xóa dữ liệu từ chối luôn, dù nơi
+    gọi đã kiểm.
+  - Xóa dòng DB chạy trong một giao dịch; lỗi bất kỳ (không chỉ lỗi SQLite) đều hoàn tác hết.
+  - AI Audit chỉ bắt đầu dưới cùng khóa `job_action_lock`: lệnh xóa thấy audit đang chạy, hoặc audit thấy video đã
+    bị xóa.
+- **Lưu ý cho người dùng (không chặn):**
+  - Sau khi xóa manifest, file `.mp4` cũ trong `output` không còn gắn với video nào. Nếu sau này chép lại đúng video
+    gốc đó và xuất lại cùng quyết định, BiliFlow sẽ không ghi đè file `.mp4` cũ (báo file đã tồn tại); hãy xóa hoặc đổi
+    tên file `.mp4` cũ trước.
+  - `rebuild-brand-memory` dựng lại bộ nhớ logo từ các danh sách duyệt còn lại; quyết định của video đã xóa không còn
+    để dựng lại (bộ nhớ hiện có thì không đổi).
 
 ## 4. Thứ tự an toàn
 
@@ -113,10 +126,12 @@ Mỗi video chạy lần lượt các bước sau:
   - liệt kê video xóa được và không xóa được, kèm lý do;
   - mỗi video có dung lượng video gốc và dung lượng báo cáo sẽ xóa;
   - không còn thông tin Thùng rác.
-- **`POST /api/source-cleanup`** `{job_ids, preview_id}`: xóa video gốc, manifest và dữ liệu như mục 2. Kết quả từng
-  video là `DELETED`, `PARTIAL`, `FAILED` hoặc `NOT_RUN`.
-- **`GET /api/job-delete/preview?ids=…`** và **`POST /api/job-delete`** `{job_ids, preview_id}`: "Xóa video" cho
-  video đã hủy và video mất gốc.
+- **`POST /api/source-cleanup`** `{job_ids, preview_id, confirm_permanent: true}`: xóa video gốc, manifest và dữ liệu
+  như mục 2. Kết quả từng video là `DELETED`, `PARTIAL`, `FAILED` hoặc `NOT_RUN`.
+- **`GET /api/job-delete/preview?ids=…`** và **`POST /api/job-delete`** `{job_ids, preview_id, confirm_permanent: true}`:
+  "Xóa video" cho video đã hủy và video mất gốc.
+- **400** khi thiếu `confirm_permanent: true` (đúng giá trị `true`): trang mở từ trước bản này (hộp thoại cũ còn hứa
+  "vào Thùng rác") không xóa được, người dùng phải tải lại trang và đánh dấu "Tôi hiểu".
 - **409** khi danh sách đổi (`preview_changed`, kèm danh sách mới) hoặc khi đang có thao tác khác (`busy`).
 - **`/api/status`:** mỗi video có thêm hai trường:
   - `protected`: lý do khóa vì bộ nhãn vàng, hoặc null;

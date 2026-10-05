@@ -83,9 +83,13 @@ UNLOCK_LOCKED_MESSAGE = (
 UNLOCKED_MESSAGE = "Đã gỡ khóa. Nhập mã truy cập 8 ký tự hiện trên PC."
 WRONG_UNLOCK_MESSAGE = "Khóa mở không đúng. Nhập mã vẫn đang bị khóa."
 
-PC_ONLY_SOURCE = "Chỉ làm trên PC: dọn, lưu trữ, khôi phục video gốc và kiểm tra lại Thùng rác không làm qua điện thoại."
+PC_ONLY_SOURCE = (
+    "Chỉ làm trên PC: xóa video và video gốc, lưu trữ, khôi phục và kiểm tra lại Thùng rác "
+    "không làm qua điện thoại."
+)
 PC_ONLY_POSTS = {
     "/api/source-cleanup": PC_ONLY_SOURCE,
+    "/api/job-delete": PC_ONLY_SOURCE,
     "/api/source-archive": PC_ONLY_SOURCE,
     "/api/source-archive/restore": PC_ONLY_SOURCE,
     "/api/source-recycle-check": PC_ONLY_SOURCE,

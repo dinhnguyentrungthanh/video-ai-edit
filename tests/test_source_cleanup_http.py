@@ -52,6 +52,10 @@ BUSY_MESSAGE = "Đang xóa video gốc; chờ lần xóa trước xong rồi th�
 PREVIEW_CHANGED_MESSAGE = "Danh sách đã thay đổi, hãy xem lại."
 NOTHING_ELIGIBLE_MESSAGE = "Không có video gốc nào xóa được trong danh sách đã chọn."
 UNCONFIGURED_DELETE_MESSAGE = "Control Center này chưa được phép xóa video gốc."
+CONFIRM_PERMANENT_MESSAGE = (
+    "Thiếu xác nhận xóa vĩnh viễn (trang này có thể đã cũ). Tải lại trang, mở lại hộp thoại, "
+    "đánh dấu “Tôi hiểu” rồi xóa."
+)
 UNCONFIGURED_BIN_MESSAGE = "Chưa cấu hình Thùng rác cho Control Center này."
 DELETED_MESSAGE = "Đã xóa vĩnh viễn video gốc và xóa video khỏi BiliFlow"
 STOPPING_MESSAGE = "BiliFlow đang tắt; video này chưa được xóa."
@@ -372,7 +376,9 @@ class CleanupHttpFixture(unittest.TestCase):
         return body
 
     def clean(self, ids, preview_id):
-        return self.post("/api/source-cleanup", body={"job_ids": list(ids), "preview_id": preview_id})
+        return self.post("/api/source-cleanup", body={
+            "job_ids": list(ids), "preview_id": preview_id, "confirm_permanent": True,
+        })
 
     def finalize(self, job_id):
         with (
@@ -521,7 +527,7 @@ class CleanupRouteTests(CleanupHttpFixture):
         exported = self.make_exported_job("tap12")
         preview_id = self.preview([exported])["preview_id"]
         dump, inputs = self.db_dump(), tree_digest(self.root / "input")
-        body = {"job_ids": [exported], "preview_id": preview_id}
+        body = {"job_ids": [exported], "preview_id": preview_id, "confirm_permanent": True}
         for host, token, error in (
             ("evil.example", "test-token", HOST_REFUSAL),
             ("127.0.0.1.evil.example", "test-token", HOST_REFUSAL),
@@ -678,8 +684,14 @@ class CleanupRouteTests(CleanupHttpFixture):
         ]
         for body, error in cases:
             with self.subTest(body=body):
-                status, payload = self.post("/api/source-cleanup", body=body)
+                status, payload = self.post("/api/source-cleanup", body={**body, "confirm_permanent": True})
                 self.assertEqual((status, payload), (400, {"error": error}))
+        # A page loaded before the permanent delete (it promised the Recycle Bin) never sends the flag.
+        for flag in ({}, {"confirm_permanent": False}, {"confirm_permanent": "true"}, {"confirm_permanent": 1}):
+            with self.subTest(flag=flag):
+                status, payload = self.post("/api/source-cleanup",
+                                            body={"job_ids": [exported], "preview_id": preview_id, **flag})
+                self.assertEqual((status, payload), (400, {"error": CONFIRM_PERMANENT_MESSAGE}))
         # Nothing eligible in the list (its own, correct preview id).
         empty = self.preview([ready])
         status, payload = self.clean([ready], empty["preview_id"])
@@ -1021,6 +1033,7 @@ class SharedNamesTests(unittest.TestCase):
         self.assertEqual(source_cleanup.REASON_AUDIT, REASON_AUDIT)
         self.assertEqual(cc.UNCONFIGURED_DELETE_MESSAGE, UNCONFIGURED_DELETE_MESSAGE)
         self.assertEqual(cc.UNCONFIGURED_RECYCLE_BIN_MESSAGE, UNCONFIGURED_BIN_MESSAGE)
+        self.assertEqual(cc.CONFIRM_PERMANENT_MESSAGE, CONFIRM_PERMANENT_MESSAGE)
         # Not a ValueError: the route answers 409, never the generic 400.
         self.assertFalse(issubclass(source_cleanup.CleanupConflict, ValueError))
 

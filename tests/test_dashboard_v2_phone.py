@@ -301,6 +301,7 @@ class PhoneModeTests(unittest.TestCase):
         self.assertEqual((code, json.loads(body)), (200, {"paused": True}))
         pc_only = {
             "/api/source-cleanup": {"job_ids": [1], "preview_id": "a" * 64},
+            "/api/job-delete": {"job_ids": [1], "preview_id": "a" * 64},
             "/api/source-archive": {"job_ids": [1], "preview_id": "a" * 64},
             "/api/source-archive/restore": {"job_id": 1},
             "/api/source-recycle-check": {"kind": "source_cleanup", "id": 1},

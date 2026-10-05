@@ -1514,6 +1514,7 @@ class ControlCenterHttpTests(unittest.TestCase):
             f"/api/jobs/{self.job_id}/review/video?k={self.key(self.job_id)}",
             # Batch 3 (B8): the cleanup preview (read-only, no token, like every GET).
             "/api/source-cleanup/preview?ids=1",
+            "/api/job-delete/preview?ids=1",
         ]
         deleter = Mock(side_effect=AssertionError("deleter reached"))
         self.center.source_deleter = deleter
@@ -1550,19 +1551,21 @@ class ControlCenterHttpTests(unittest.TestCase):
                     status, _, _ = self.request(route, host=host, method="POST", headers=headers, body=b"{}")
                     self.assertEqual(status, 403)
                 self.assertEqual(self.store.get_job(self.job_id)["state"], "WAITING_REVIEW")
-        # Batch 3 (B8): the cleanup POST needs the local Host and the session token.
-        cleanup_body = json.dumps({"job_ids": [self.job_id], "preview_id": "a" * 64}).encode()
-        for host, token in (("evil.example", "test-token"), (f"evil.example:{self.port}", "test-token"),
-                            (None, "wrong"), (None, None)):
-            with self.subTest(route="/api/source-cleanup", host=host, token=token):
-                headers = {"Content-Type": "application/json"}
-                if token:
-                    headers["X-BiliFlow-Token"] = token
-                status, _, body = self.request(
-                    "/api/source-cleanup", host=host, method="POST", headers=headers, body=cleanup_body,
-                )
-                self.assertEqual(status, 403)
-                self.assertNotIn(b"test-token", body)
+        # Batch 3 (B8): the cleanup and delete POSTs need the local Host and the session token.
+        cleanup_body = json.dumps(
+            {"job_ids": [self.job_id], "preview_id": "a" * 64, "confirm_permanent": True}
+        ).encode()
+        for route in ("/api/source-cleanup", "/api/job-delete"):
+            for host, token in (("evil.example", "test-token"), (f"evil.example:{self.port}", "test-token"),
+                                (None, "wrong"), (None, None)):
+                with self.subTest(route=route, host=host, token=token):
+                    headers = {"Content-Type": "application/json"}
+                    if token:
+                        headers["X-BiliFlow-Token"] = token
+                    status, _, body = self.request(route, host=host, method="POST", headers=headers,
+                                                   body=cleanup_body)
+                    self.assertEqual(status, 403)
+                    self.assertNotIn(b"test-token", body)
         deleter.assert_not_called()
         self.assertTrue(self.source.is_file())
         self.assertIsNone(self.store.latest_source_cleanup(self.job_id))

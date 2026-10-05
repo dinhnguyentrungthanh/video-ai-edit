@@ -162,7 +162,7 @@ class RepositoryCacheScopeTests(unittest.TestCase):
         "review_workflow.py", "export_dialog.py",
         "export_guards.py", "recycle_bin.py", "source_cleanup.py",
         "source_archive.py", "source_archive_files.py", "source_archive_restore.py",
-        "job_purge.py",
+        "job_purge.py", "job_delete.py",
     )
 
     def test_control_plane_modules_are_in_no_scan_stage_key(self):

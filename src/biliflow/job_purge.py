@@ -7,12 +7,14 @@ Control Center logs, files first and rows last. The callers delete the
 source video and the export manifest before that, with the checks of
 their action. Never deleted here: output videos, a folder another job
 still names, a benchmark run, a link, anything outside ``reports/jobs`` and
-the logs folder, and no job of a golden set (``protected_reason``).
+the logs folder, and no job of a golden set (``protected_reason``) or one an
+archive or a legacy cleanup row still locks.
 
 Every deleting function refuses a project root other than the install
-root or a folder inside its ``temp/`` (tests), so code run from a worktree
-never deletes files of the main folder. This module never imports
-control_center, scheduler or source_cleanup.
+root or a folder inside its ``temp/`` (tests), and anything reached through
+an input/, output/, reports/ or logs/ folder that is a link or junction, so
+code run from a worktree never deletes files of the main folder. This
+module never imports control_center, scheduler or source_cleanup.
 """
 
 from __future__ import annotations
@@ -28,6 +30,7 @@ from pathlib import Path
 from typing import Any, Iterable
 
 from biliflow import recycle_bin
+from biliflow.job_store import SOURCE_ARCHIVED_STATES
 
 
 INSTALL_ROOT = recycle_bin.INSTALL_ROOT
@@ -42,6 +45,11 @@ REASON_GOLDEN_UNREADABLE = (
     "Không đọc được {path}; tạm khóa mọi thao tác xóa để không xóa nhầm video của bộ nhãn vàng"
 )
 ROOT_MESSAGE = "Chỉ xóa được trong thư mục cài BiliFlow (hoặc thư mục temp của nó khi chạy test)."
+FOLDER_LINK_MESSAGE = (
+    "Thư mục “{name}” của BiliFlow là liên kết (symlink/junction) hoặc không phải thư mục thật; "
+    "không xóa gì trong đó."
+)
+LOCKED_MESSAGE = "Video đang được lưu trữ hoặc đang chuyển vào Thùng rác; BiliFlow không xóa video này."
 PATH_MESSAGE = "Không xóa “{path}”: đây không phải thư mục báo cáo hay log của một video."
 IN_USE_MESSAGE = (
     "Video gốc đang được mở (ví dụ trong trang duyệt hoặc một trình xem video). "
@@ -119,6 +127,24 @@ def _is_link(path: Any) -> bool:
     try:
         return _is_link_info(os.lstat(path))
     except OSError:
+        return False
+
+
+def _real_folder(root: Path, name: str) -> bool:
+    """``root/name`` is a folder at its own path: no link or junction from the root down to it.
+
+    Otherwise a junctioned input/, output/ or logs/ would let a delete reach
+    files outside the install (both sides of the path checks resolve to the
+    target).
+    """
+    try:
+        path = Path(root).resolve()
+        for part in Path(name).parts:
+            path = path / part
+            if _is_link(path):
+                return False
+        return path.is_dir() and os.path.normcase(str(path.resolve())) == os.path.normcase(str(path))
+    except (OSError, RuntimeError):
         return False
 
 
@@ -235,9 +261,10 @@ def _owner_key(name: str, keys: Iterable[str]) -> str | None:
 
 def owned_report_dirs(root: Any, store: Any, job: dict[str, Any]) -> list[Path]:
     """The job's own folders directly in reports/jobs, by name; never one another job names,
-    a benchmark run (``.biliflow-benchmark``) or a link."""
+    a benchmark run (``.biliflow-benchmark``) or a link, and none at all when reports/ or
+    reports/jobs is a link."""
     jobs_dir = Path(root) / "reports" / "jobs"
-    if _is_link(jobs_dir) or not jobs_dir.is_dir():
+    if not _real_folder(root, "reports/jobs"):
         return []
     job_id, key = int(job["id"]), str(job["job_key"])
     keys = {str(other["job_key"]) for other in store.list_jobs()} | {key}
@@ -266,6 +293,8 @@ def job_log_files(root: Any, job_id: int) -> list[Path]:
     """The job's Control Center logs: logs/control-center/job-<id>-*.log."""
     folder = Path(root) / "logs" / "control-center"
     prefix = f"job-{int(job_id)}-"
+    if not _real_folder(root, "logs/control-center"):
+        return []  # never a log reached through a link (it lies outside the install)
     try:
         with os.scandir(folder) as entries:
             found = [
@@ -310,15 +339,16 @@ def files_bytes(paths: Iterable[Any]) -> int:
 
 
 def _removable(root: Path, path: Path) -> bool:
-    """A folder directly in reports/jobs, or a job log directly in logs/control-center."""
+    """A folder directly in reports/jobs (never a benchmark run), or a job log directly in
+    logs/control-center; neither folder may be reached through a link."""
     absolute = os.path.normcase(os.path.abspath(path))
     parent, name = os.path.dirname(absolute), os.path.basename(absolute)
     if name in ("", ".", ".."):
         return False
     if parent == os.path.normcase(str(root / "reports" / "jobs")):
-        return not _is_link(root / "reports" / "jobs") and not _is_link(root / "reports")
+        return _real_folder(root, "reports/jobs") and not os.path.lexists(Path(path) / BENCHMARK_MARKER)
     if parent == os.path.normcase(str(root / "logs" / "control-center")):
-        return _JOB_LOG.fullmatch(name) is not None
+        return _JOB_LOG.fullmatch(name) is not None and _real_folder(root, "logs/control-center")
     return False
 
 
@@ -373,7 +403,17 @@ def remove_job(root: Any, store: Any, job: dict[str, Any]) -> list[str]:
 
     The caller holds REVIEW_QUEUE_IO and job_action_lock and has already
     handled the source video. Run again after a failure, it finishes.
+    Raises DeleteRefused, deleting nothing, while an archive row
+    (PENDING/ARCHIVED/RESTORING) or a legacy cleanup row (PENDING) locks the
+    job: those rows are never "repaired" by a removal.
     """
+    job_id = int(job["id"])
+    archive = store.latest_source_archive(job_id)
+    cleanup = store.latest_source_cleanup(job_id)
+    if (archive and archive.get("state") in SOURCE_ARCHIVED_STATES) or (
+        cleanup and cleanup.get("state") == "PENDING"
+    ):
+        raise DeleteRefused(LOCKED_MESSAGE)
     errors = remove_job_files(root, job_files(root, store, job))
     if errors:
         return errors
@@ -395,6 +435,8 @@ def delete_input_file(path: Any, *, allowed_root: Any, expected_size: int) -> No
     allowed = Path(allowed_root)
     if allowed.name.casefold() != "input" or not allowed_project_root(allowed.parent):
         raise DeleteRefused(ROOT_MESSAGE)
+    if not _real_folder(allowed.parent, allowed.name):
+        raise DeleteRefused(FOLDER_LINK_MESSAGE.format(name=allowed.name))
     absolute = os.path.abspath(str(path))
     refusal = recycle_bin.path_refusal(absolute, allowed_root=allowed, wording=DELETE_WORDING)
     if refusal:
@@ -433,6 +475,8 @@ def delete_export_manifest(root: Any, output_path: Any) -> str | None:
         or os.path.normcase(str(manifest.parent)) != os.path.normcase(str(root / "output"))
     ):
         return MANIFEST_NAME_MESSAGE
+    if not _real_folder(root, "output"):
+        return FOLDER_LINK_MESSAGE.format(name="output")
     if not os.path.lexists(manifest):
         return None
     refusal = recycle_bin.path_refusal(str(manifest), allowed_root=root / "output", wording=MANIFEST_WORDING)

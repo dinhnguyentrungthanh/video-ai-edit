@@ -45,7 +45,7 @@
   const SOURCE_MISSING_MESSAGE = 'Video gốc không còn trong input; không thể xuất.';
   /* Phone mode (batch 2): these actions are refused by the phone listener (403 pc_only). */
   const pcOnlyOps = ['cleanup','archive','restore','recheck'];
-  const PC_ONLY_REASON = 'Chỉ làm trên PC: dọn, lưu trữ, khôi phục video gốc và kiểm tra lại Thùng rác không làm qua điện thoại.';
+  const PC_ONLY_REASON = 'Chỉ làm trên PC: xóa video và video gốc, lưu trữ, khôi phục và kiểm tra lại Thùng rác không làm qua điện thoại.';
   function reviewStats(j) {
     const r=j.review_summary||{},d=r.decisions||{};
     const total=Number(r.main_items)||0,resolved=['KEEP','BLUR','CUT'].reduce((n,k)=>n+(Number(d[k])||0),0);
