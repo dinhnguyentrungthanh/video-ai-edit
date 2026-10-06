@@ -28,7 +28,10 @@ function seed() {
     entry_count: 0, media: {extractor: 'generic', height: null, video_codec: null, audio_codec: null}, ...extra});
   return [
     t(1, 'DOWNLOADING', {downloaded_bytes: 700 * MB, total_bytes: 1.2 * GB, speed: 5.2 * MB, eta: 105}),
-    t(2, 'DOWNLOADING', {url: 'https://movies.example/phim/mau-2', downloaded_bytes: 230 * MB, speed: 3.1 * MB}),
+    t(2, 'DOWNLOADING', {url: 'https://media.example/show/index.m3u8', downloaded_bytes: 230 * MB, speed: 3.1 * MB, eta: 240,
+      progress_basis: 'fragments', fragments_done: 120, fragments_total: 480, transfer_stage: 'downloading',
+      media: {extractor: null, height: 1080, video_codec: 'h264', audio_codec: 'aac', provider: 'direct', transport: 'hls',
+        source_label: 'Link HLS trực tiếp'}}),
     t(3, 'PROBING'),
     t(4, 'QUEUED', {title: LONG, original_title: LONG}),
     t(5, 'NEEDS_CHOICE', {url: 'https://movies.example/phim/tuyen-tap', entry_count: 3, entries: [

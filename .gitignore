@@ -31,6 +31,8 @@ config/app.yaml
 # The downloader's local list of sites, read before D4b; still ignored so an old copy with real domains
 # is never committed.
 config/download_sources.local.json
+# Real host names of the downloader's site providers (download_sources.py); see the .example file.
+config/download_providers.local.json
 .env
 .env.*
 !.env.example

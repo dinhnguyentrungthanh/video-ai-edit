@@ -56,7 +56,7 @@ _MASKS = (
 
 def mask_line(line: str) -> str:
     """Hide token-, cookie- and header-like values before a line reaches the log."""
-    text = line.rstrip("\r\n")
+    text = line.rstrip("\r\n")[:MAX_LOG_LINE * 4]  # bounded work: the masks never scan a huge line
     for pattern, replace in _MASKS:
         text = pattern.sub(replace, text)
     return text[:MAX_LOG_LINE]
@@ -85,13 +85,26 @@ def kill_process_tree(pid: int, *, timeout: float = KILL_WAIT_SECONDS) -> list[i
     return [process.pid for process in alive]
 
 
+def _run_closer(closer: Callable[[], None]) -> None:
+    try:
+        closer()
+    except Exception:  # noqa: BLE001 - a socket already closed or a thread already gone
+        pass
+
+
 class ProcessControl:
-    """Shared between a task thread and the API: who asked the process to end, and why."""
+    """Shared between a task thread and the API: who asked the process to end, and why.
+
+    Besides a child process (``attach``), a source transfer registers closers (``add_closer``): open
+    sockets and its segment pool, so a stop or a cancel never waits for a read to time out.
+    """
 
     def __init__(self) -> None:
         self._lock = threading.Lock()
         self._event = threading.Event()
         self._pid: int | None = None
+        self._closers: dict[int, Callable[[], None]] = {}
+        self._next_closer = 0
         self.reason: str | None = None
 
     @property
@@ -104,9 +117,27 @@ class ProcessControl:
             if self.reason is None or reason == "cancel":
                 self.reason = reason
             pid = self._pid
+            closers = list(self._closers.values())
         self._event.set()
+        for closer in closers:
+            _run_closer(closer)
         if pid is not None:
             kill_process_tree(pid)
+
+    def add_closer(self, closer: Callable[[], None]) -> Callable[[], None]:
+        """Run ``closer`` on the next request (at once when one was already made); returns its remover."""
+        with self._lock:
+            key = self._next_closer
+            self._next_closer += 1
+            self._closers[key] = closer
+            requested = self.reason is not None
+        if requested:
+            _run_closer(closer)
+
+        def remove() -> None:
+            with self._lock:
+                self._closers.pop(key, None)
+        return remove
 
     def attach(self, pid: int) -> None:
         with self._lock:
@@ -126,10 +157,17 @@ class ProcessControl:
 
 @dataclass(frozen=True)
 class Progress:
+    """``downloaded_bytes`` is always real bytes. A segmented transfer counts its own unit in
+    ``fragments_done``/``fragments_total`` (``basis`` "fragments"); ``stage`` is "downloading" or
+    "remuxing" for a source transfer (None for yt-dlp)."""
     downloaded_bytes: int
     total_bytes: int | None
     speed: float | None
     eta: float | None
+    basis: str = "bytes"
+    fragments_done: int | None = None
+    fragments_total: int | None = None
+    stage: str | None = None
 
 
 class ProgressTracker:
@@ -175,13 +213,17 @@ class SizeGuard:
             self.tripped = True
         return self.tripped
 
-    def watch(self, pid: int) -> None:
-        """Read the task folder every ``interval`` seconds until ``stop``; kill the tree when it is too big."""
+    def watch(self, pid: int | None = None, *, on_trip: Callable[[], None] | None = None) -> None:
+        """Read the task folder every ``interval`` seconds until ``stop``; when it is too big, kill the
+        tree of ``pid`` and/or call ``on_trip`` (a source transfer closes its sockets and its pool)."""
         def run() -> None:
             while not self._done.wait(self.interval):
                 if self.max_disk_bytes and tree_size(self.task_dir) > self.max_disk_bytes:
                     self.tripped = True
-                    kill_process_tree(pid)
+                    if pid is not None:
+                        kill_process_tree(pid)
+                    if on_trip is not None:
+                        _run_closer(on_trip)
                     return
         threading.Thread(target=run, name="download-size-guard", daemon=True).start()
 
@@ -203,11 +245,14 @@ class ProbeOutcome:
 
 @dataclass(frozen=True)
 class DownloadOutcome:
+    """``resumable``: the part on disk is good and "Tiếp tục" may continue it (a network error after the
+    retries of a source transfer); the worker then ends the task INTERRUPTED instead of FAILED."""
     ok: bool
     code: str | None = None
     message: str | None = None
     final_path: Path | None = None
     returncode: int | None = None
+    resumable: bool = False
 
 
 _STOP_CODES = {"stop": "STOPPED", "cancel": "CANCELLED", "shutdown": "SHUTDOWN"}
@@ -217,6 +262,11 @@ _STOP_MESSAGES = {"stop": "Đã dừng.", "cancel": "Đã hủy.", "shutdown": "
 def _stopped(control: ProcessControl) -> tuple[str, str]:
     reason = control.reason or "stop"
     return _STOP_CODES[reason], _STOP_MESSAGES[reason]
+
+
+def stop_reason(control: ProcessControl) -> tuple[str, str]:
+    """(code, message) of a requested end (STOPPED, CANCELLED, SHUTDOWN), as the yt-dlp runner reports it."""
+    return _stopped(control)
 
 
 def _value(text: str) -> float | None:

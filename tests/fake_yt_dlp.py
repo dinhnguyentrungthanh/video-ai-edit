@@ -12,7 +12,45 @@ import sys
 import time
 from pathlib import Path
 
+try:
+    import msvcrt
+except ImportError:  # not Windows
+    msvcrt = None
+
 ENV_KEYS = ("DENO_DIR", "DENO_NO_UPDATE_CHECK", "PYTHONUTF8", "TEMP", "TMP", "XDG_CACHE_HOME")
+LOCK_OFFSET = 2 ** 30  # one byte far past the end of the log: a lock there blocks no read and no append
+LOCK_TRIES = 2000  # 5 ms apart: about 10 s
+
+
+def append_call(log, record):
+    """One JSON line per call. On Windows two processes appending to one file at once can overwrite each
+    other's line, so the fakes take turns (``take_turn``) while each writes its line in one write."""
+    line = (json.dumps(record) + "\n").encode("utf-8")
+    fd = os.open(log, os.O_WRONLY | os.O_APPEND | os.O_CREAT | getattr(os, "O_BINARY", 0))
+    try:
+        locked = take_turn(fd)
+        try:
+            os.write(fd, line)
+        finally:
+            if locked:
+                os.lseek(fd, LOCK_OFFSET, os.SEEK_SET)
+                msvcrt.locking(fd, msvcrt.LK_UNLCK, 1)
+    finally:
+        os.close(fd)
+
+
+def take_turn(fd):
+    """Lock the byte at LOCK_OFFSET; False when there is no lock (not Windows, or still busy after LOCK_TRIES)."""
+    if msvcrt is None:
+        return False
+    for _ in range(LOCK_TRIES):
+        os.lseek(fd, LOCK_OFFSET, os.SEEK_SET)
+        try:
+            msvcrt.locking(fd, msvcrt.LK_NBLCK, 1)
+            return True
+        except OSError:
+            time.sleep(0.005)
+    return False
 
 
 def option_values(argv, name):
@@ -90,9 +128,7 @@ def main():
     argv = sys.argv[1:]
     log = os.environ.get("FAKE_YTDLP_LOG")
     if log:
-        with open(log, "a", encoding="utf-8") as handle:
-            handle.write(json.dumps({"argv": argv, "pid": os.getpid(),
-                                     "env": {key: os.environ.get(key) for key in ENV_KEYS}}) + "\n")
+        append_call(log, {"argv": argv, "pid": os.getpid(), "env": {key: os.environ.get(key) for key in ENV_KEYS}})
     url = argv[argv.index("--") + 1] if "--" in argv else ""
     with open(os.environ["FAKE_YTDLP_SCENARIO"], encoding="utf-8") as handle:
         scenario = json.load(handle)

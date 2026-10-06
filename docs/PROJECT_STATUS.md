@@ -1,3 +1,87 @@
+## Headless embedded-player adapter — 2026-10-06 (uncommitted)
+
+- The user approved adding Playwright. Installed/pinned Playwright 1.63.0, pyee 13.0.1 and greenlet 3.5.6; uses the existing Microsoft Edge, with no browser download. Dependency licenses are recorded in download_tools.json (Apache-2.0, MIT, MIT AND PSF-2.0); tool audit has zero blockers and the equivalent standard model license audit has 9 allowed, zero blocked.
+- Native `embedded-media` is registered alongside `player-hls`, `article-mp4`, and `direct`. Exact real hosts are enabled in the Git-ignored local config. It runs Edge headless in a fresh profile under the task directory, closes the browser and removes the profile on completion/error/stop; it never uses a user's profile or calls an outside extraction script.
+- Page requests are intercepted and fulfilled via SafeHttp only; no browser route continues unchecked. Service workers, WebSockets, popups and browser downloads are blocked. Cookies/auth headers are not forwarded. Media itself is aborted in the browser and fetched by the existing native transfers after identifying the designated player subtree. Internal browser URLs do not make HTTP requests. Signed links remain private.
+- Verified real HTTPS source probe: the user-provided episode source has H.264/AAC, duration 2634.19 seconds and size 311090096 bytes; resolving again produces the same identity. No browser profile remained. This was probe-only under an isolated temporary root, not a full episode download or production API write.
+- Five synthetic browser tests passed: nested movie iframe versus ads, actual headless launch, no cookies forwarded, private-address refusal, stop during page read/profile cleanup, missing library error, and the real download worker publishing a verified synthetic MP4. Full downloader regression: 453 tests OK (7 conditional skips); includes the five browser tests. git diff --check clean; local host config is Git-ignored.
+- Worktree remains `temp\wt-download-source-providers`, branch `feat/download-source-providers`, uncommitted. No merge, push or production Control Center restart. Earlier notes about pending browser approval are historical and superseded here.
+
+## Native page adapters — 2026-10-06 (uncommitted)
+
+- Worktree `temp\wt-download-source-providers`, branch `feat/download-source-providers`. The existing common downloader is preserved. No merge, push, or restart of the production Control Center.
+- `player-hls` reads only the designated player iframe, its episode JSON and the public literal URL transform. It resolves a fresh HLS link on every probe/download/resume. PNG cover removal is opt-in for this adapter, bounded and CRC checked; ordinary HLS still rejects PNG responses. Every stored TS packet is validated before ordered FFmpeg remux.
+- `article-mp4` reads the page's public article API through bounded checked POST. It ignores main/trailer and advertising sources, unwraps the outer media parameter exactly once, requires video/audio and at least 600 seconds, and asks for a version when several exist. The chosen version is resolved and probed before downloading. A moov index at the end of an MP4 is read through bounded byte ranges; ffprobe receives only a local sample.
+- Both adapters run inside the backend and reuse queue, progress, cancellation, resume, verification and publishing. They call no external extraction/download script. Exact real hosts are enabled only in the Git-ignored local config. Signed media URLs are not stored in public identities.
+- Verified with synthetic fixtures and the downloader regression tests. Real HTTPS probes of the two user-provided sources succeeded: fresh identities matched, an HLS sample of three segments (12.02 seconds) passed video/audio/head/tail validation, and the API source reported H.264/AAC and about 125 minutes. These checks used an isolated temp root and did not download the complete films or submit tasks to production.
+- Final checks: all 448 downloader tests OK (7 conditional skips), including 14 native-adapter tests; dashboard download gate 22/22; `git diff --check` clean. Local host config is confirmed Git-ignored and the active registry is `player-hls`, `article-mp4`, `direct`.
+- Browser-based page extraction remains pending approval to add Playwright to BiliFlow (not currently installed). The two HTTP adapters add no package or tool dependency.
+- The common-only scope notes below describe the earlier implementation phase; the native adapters above supersede their statements that no site provider exists.
+
+## "Tải video": direct MP4/HLS links and the provider interface (2026-10-06): branch `feat/download-source-providers`, not committed
+
+- Worktree `temp\wt-download-source-providers`, made from `main` `6dc2210` with the uncommitted scope documents. Nothing is committed, merged or pushed. The running Control Center still runs `main` and was not restarted.
+- **Works, tested only with self-made fixtures.** These links are downloaded by BiliFlow itself through the existing queue, progress, Stop, Resume, Cancel and Retry:
+  - the generic provider `direct`, for links to a file (`.mp4`, `.m4v`, `.mov`, `.mkv`, `.webm`, `.ts`);
+  - VOD MPEG-TS HLS playlists (`.m3u8`). Segments download in parallel and are joined in order with the project FFmpeg, without re-encoding.
+
+  Picture and sound are checked at the probe, and `verify_video` runs before `input`. Signed links are resolved again on every resume, with an identity check.
+- **Not done.**
+  - No site-specific provider (`SITE_PROVIDERS = ()`).
+  - The readers for the three film sites of the reference document were declined.
+  - DRM and live HLS are refused.
+  - AES-128, fMP4/CMAF and other HLS forms go to yt-dlp, as do all other links.
+  - No real link and no real TLS were tested.
+- **Checks.**
+  - Full suite: 1783 tests. The only errors are the 28 known `input\*.mp4` errors of a worktree.
+  - `test_download*`: 380 OK, 196 of them new.
+  - `test_dashboard_v2*`: 93 OK.
+  - Node gates: 35 / 30 / 22 / 31.
+  - Manual run on a test Control Center (temporary root, port 8797, fixture links):
+    - the MP4 arrived byte-identical;
+    - a stopped and resumed HLS download is byte-identical to an uninterrupted one;
+    - Cancel left nothing behind;
+    - no-audio, DRM and live were refused with their reasons.
+- **Dashboard test run (2026-10-06).**
+  - `tests/try_source_downloads.py` serves the fixtures over HTTPS (a throwaway test CA) and HTTP, with slow MP4/HLS links to press Dừng or Hủy. It needs no environment variable.
+  - A test Control Center was started for the user on port 8797, on a temporary root.
+  - Fixed: the progress of a direct file only moved in 256 KiB steps (`read1` now).
+  - HTTPS is tested locally: `tests/test_download_https.py`, 9 tests.
+  - `test_download*`: 393 OK.
+  - Full suite: only the 28 known errors, plus one Windows file-lock error while a test was deleting its temp files (that module passes alone).
+  - The code review approved; its LOW note is fixed.
+- **The user's test, the full-suite errors and the dispatcher (2026-10-06).**
+  - The user downloaded `demo.mp4` and `slow.mp4` on the 8797 test dashboard. Both completed and played with picture and sound. The user did not report trying Stop, Resume or Cancel.
+  - Full suite after every fix of this round:
+    - in the worktree, 1837 tests and 28 errors, all of them the `input\*.mp4` `StopIteration` errors. `main` `6dc2210` has the same 28 in the same environment.
+    - in an isolated copy with a synthetic clip in `input\`, 1837 tests, OK (26 skipped).
+  - The earlier `WinError 32` is a race in an unchanged detector test: the `BackgroundSha256` thread still holds the file. It is not fixed here; see CHANGELOG.
+  - Dispatcher (`SourceRegistry`), completed rather than duplicated:
+    - one host parser (`check_link`, plus `check_host` for the config);
+    - the registry gates site providers by exact host;
+    - the config can only switch on providers of the code, and its mistakes show on the downloads page, with their reasons and never more of a link than its host;
+    - a host listed without a provider is only recognized: it goes to yt-dlp, with a note.
+  - Review fixes, over four rounds (nothing above LOW after the first):
+    - Hosts that Python's IDNA reads otherwise than a browser are refused, with a hint to use the `xn--` form: `ß`, `ς`, ZWJ/ZWNJ, U+1806 and characters added after Unicode 3.2. IP shorthands are refused too.
+    - The Referer goes out as a browser sends it by default, on every request and redirect.
+    - A lone surrogate in the config no longer breaks `/api/downloads`.
+    - A race in the fake yt-dlp's call log is fixed.
+  - New worker-level tests use `.example` hosts. Mutation check: 17 of 17 caught.
+  - Providers registered and working: only `direct`.
+- **Next.**
+  - The user reviews the branch and decides whether to commit it.
+  - Optional: the user tries Stop, Resume and Cancel on the test dashboard, then one HTTPS MP4/HLS link of their own on the test Control Center (`--probe` first).
+  - The user decides on the User-Agent (it is now the same browser string yt-dlp sends).
+  - A real check with an allowed direct link runs only on a test Control Center, with a link the user gives.
+  - A separate decision: the `BackgroundSha256` race (detector code).
+  - Site providers are a separate later step: none is written.
+
+## Downloader provider scope expanded (2026-10-06) — docs only
+
+- At the user's request, the project no longer forbids site-specific source resolution for public page/player data. AGENTS.md and VIDEO_DOWNLOAD_PLAN.md now describe the allowed provider scope.
+- No provider/runtime implementation changed, no real download was started and the Control Center was not restarted.
+- DRM/paywall circumvention, user cookies/logins, challenge bypass and browser impersonation to bypass blocks remain excluded. Public-repository hygiene, isolated download tests and source-video protections are unchanged.
+
 ## `main` has Dashboard V2, "Tải video", the permanent delete and the phone deletes (2026-10-06) — local, not pushed
 
 - The user could not test the phone yet. At their request, the phone deletes were checked, then `main` was fast-forwarded from `f6996bb` to the tip of `test/download-delete`. The main folder runs `main`. `origin/main` is still `f6996bb`.

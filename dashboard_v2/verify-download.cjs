@@ -93,6 +93,26 @@ test('progress never invents a percent; 100 % only once the file is in input', (
   assert.equal(K.progress(task(1, 'STOPPED', {downloaded_bytes: 250, total_bytes: 1000, speed: 99, eta: 9})).speed, '');
 });
 
+test('an HLS link counts segments; bytes stay bytes; joining has no percent; 100 % only once in input', () => {
+  const hls = extra => task(1, 'DOWNLOADING', {progress_basis: 'fragments', fragments_total: 40, transfer_stage: 'downloading', ...extra});
+  let p = K.progress(hls({fragments_done: 10, downloaded_bytes: 50e6, speed: 1048576, eta: 30}));
+  assert.equal(p.percent, 25); assert.equal(p.sizeText, '10/40 đoạn · 48 MB'); assert.equal(p.speed, '1 MB/s'); assert.equal(p.stage, '');
+  assert.equal(K.progress(hls({fragments_done: 40, downloaded_bytes: 200e6})).percent, 99, 'every segment is not the file in input');
+  assert.equal(K.progress(hls({fragments_done: 99})).sizeText, '40/40 đoạn', 'never more than the total');
+  p = K.progress(hls({fragments_done: 40, transfer_stage: 'remuxing', speed: 5, eta: 5}));
+  assert.equal(p.percent, null); assert.equal(p.indeterminate, true); assert.equal(p.stage, 'Đang ghép các đoạn thành MP4');
+  assert.equal(p.speed, ''); assert.equal(p.eta, '');
+  assert.equal(K.progress({...hls({fragments_done: 12}), state: 'STOPPED'}).percent, 30);
+  assert.equal(K.progress({...hls({fragments_done: 40}), state: 'COMPLETED'}).percent, 100);
+  assert.equal(K.progress(hls({fragments_total: 0, downloaded_bytes: 5e6})).sizeText, '5 MB đã tải', 'no total: bytes only');
+  const joining = V.row(hls({fragments_done: 40, transfer_stage: 'remuxing'}), V.createUi(), ctx());
+  assert.match(joining, /Đang ghép các đoạn thành MP4/);
+  assert.ok(!joining.includes('aria-valuenow'));
+  const labelled = V.row(hls({fragments_done: 3, media: {source_label: 'Link HLS trực tiếp <b>'}}), V.createUi(), ctx());
+  assert.match(labelled, /Nguồn: Link HLS trực tiếp &lt;b&gt;/);
+  assert.ok(!V.row(task(2, 'DOWNLOADING'), V.createUi(), ctx()).includes('Nguồn:'), 'a yt-dlp link has no source line');
+});
+
 test('a batch needs links, at most 20, and the rights box; blank lines are dropped', () => {
   assert.throws(() => K.checkBatch(' \n\n', true), /ít nhất một link/);
   assert.throws(() => K.checkBatch(Array.from({length: 21}, (_, i) => 'https://clips.example/' + i).join('\n'), true), /tối đa 20/);

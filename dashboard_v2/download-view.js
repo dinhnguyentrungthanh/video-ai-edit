@@ -44,7 +44,10 @@
       '<p class="muted dl-note">BiliFlow nhận video như file bạn tự chép vào; chỉ quét khi bạn bấm Thiết lập &amp; bắt đầu.</p></div>' +
       '<div class="download-demo-note"><strong>Giới hạn</strong><p>Không dùng cookie hay đăng nhập. Trang cần đăng nhập, có DRM ' +
       'hoặc đang phát trực tiếp sẽ báo lý do. Link danh sách phát hay kênh sẽ bị từ chối; hãy dán link của từng video. Trang yt-dlp không có ' +
-      'bộ đọc riêng: chỉ lấy video từ 10 phút để bỏ quảng cáo; có nhiều video dài thì hỏi bạn.</p></div></section>';
+      'bộ đọc riêng: chỉ lấy video từ 10 phút để bỏ quảng cáo; có nhiều video dài thì hỏi bạn.</p>' +
+      '<p>Link thẳng tới file video (.mp4, .mkv, .webm, .mov, .ts) hoặc playlist HLS (.m3u8) BiliFlow tự tải: HLS tải nhiều đoạn ' +
+      'cùng lúc rồi ghép đúng thứ tự, không mã hóa lại; HLS mã hóa AES-128 hay dạng fMP4 chuyển sang yt-dlp. Chỉ dán link từ nguồn ' +
+      'bạn được phép dùng.</p></div></section>';
   }
 
   function tools(data, ui, ctx) {
@@ -119,10 +122,11 @@
     const id = Number(task.id);
     const p = K.progress(task);
     const percent = p.percent === null ? '' : p.percent + '%';
-    // Sizes, speed and time left only: the badge already names the state.
-    const meta = [p.sizeText, p.speed, p.eta].filter(Boolean).join(' · ');
+    // Sizes, speed and time left (or the joining stage) only: the badge already names the state.
+    const meta = [p.stage, p.sizeText, p.speed, p.eta].filter(Boolean).join(' · ');
     const media = task.state === 'COMPLETED' && task.media && task.media.height ? '<p class="muted dl-media">' + esc(task.media.height + 'p · ' +
       [task.media.video_codec, task.media.audio_codec].filter(Boolean).join(' + ')) + '</p>' : '';
+    const source = task.media && task.media.source_label ? '<p class="muted dl-media">Nguồn: ' + esc(task.media.source_label) + '</p>' : '';
     const buttons = K.actions(task, ctx).map(a => '<button class="' + (a.id === 'cancel' ? 'danger' : 'secondary') + ' small" data-action="dl-op" data-id="' +
       id + '" data-op="' + a.id + '"' + attr(!a.enabled || ui.busy.has(a.id + id), 'disabled') + ' title="' + esc(a.reason || a.label) + '">' +
       esc(a.label) + '</button>').join('');
@@ -135,7 +139,7 @@
     return '<article class="download-item" data-download-id="' + id + '"><div class="download-item-top"><div class="download-item-name">' +
       '<span class="download-item-number">' + id + '</span><h3>' + esc(task.title || 'Lượt tải ' + id) + '</h3></div><span class="badge ' +
       (K.TONES[task.state] || 'grey') + '">' + esc(K.label(task)) + '</span></div><p class="download-source">' +
-      esc(task.url) + '</p>' + rename(task, ui, ctx) + line + meter + message(task) + choice(task, ui, ctx) + media +
+      esc(task.url) + '</p>' + source + rename(task, ui, ctx) + line + meter + message(task) + choice(task, ui, ctx) + media +
       (buttons ? '<div class="download-item-actions">' + buttons + '</div>' : '') + log(task, ui) + '</article>';
   }
 
