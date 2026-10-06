@@ -21,7 +21,13 @@
     ai:['GET','/api/ai'],aiConfig:['POST','/api/ai/config'],aiCheck:['POST','/api/ai/check'],aiLogin:['POST','/api/ai/login'],
     cleanupPreview:['GET','/api/source-cleanup/preview'],cleanup:['POST','/api/source-cleanup'],deletePreview:['GET','/api/job-delete/preview'],delete:['POST','/api/job-delete'],archivePreview:['GET','/api/source-archive/preview'],archive:['POST','/api/source-archive'],restore:['POST','/api/source-archive/restore'],recheck:['POST','/api/source-recycle-check'],
     logoPage:['GET','/logo-memory'],logos:['GET','/api/logo-memory'],logoFrame:['GET','/api/logo-memory/frame'],logoClass:['POST','/api/logo-memory/class'],logoDelete:['POST','/api/logo-memory/delete'],
-    phoneStatus:['GET','/api/phone-mode'],phoneMode:['POST','/api/phone-mode']
+    phoneStatus:['GET','/api/phone-mode'],phoneMode:['POST','/api/phone-mode'],
+    /* "Tải video" (docs/VIDEO_DOWNLOAD_PLAN.md §5): {id} is the download task id, not a job id. */
+    downloads:['GET','/api/downloads'],downloadTask:['GET','/api/downloads/{id}'],storageSummary:['GET','/api/storage-summary'],
+    downloadAdd:['POST','/api/downloads'],downloadSettings:['POST','/api/downloads/settings'],downloadCleanup:['POST','/api/downloads/cleanup-temp'],
+    downloadRename:['POST','/api/downloads/{id}/rename'],downloadChoose:['POST','/api/downloads/{id}/choose'],downloadStop:['POST','/api/downloads/{id}/stop'],
+    downloadResume:['POST','/api/downloads/{id}/resume'],downloadCancel:['POST','/api/downloads/{id}/cancel'],downloadRetry:['POST','/api/downloads/{id}/retry'],
+    downloadRemove:['POST','/api/downloads/{id}/remove']
   };
   const cleaned = j => !!j && (!!j.source_cleaned || ['PENDING','RECYCLED'].includes(j.source_cleanup?.state));
   const archived = j => !!j && (!!j.source_archived || ['PENDING','ARCHIVED','RESTORING'].includes(j.source_archive?.state));

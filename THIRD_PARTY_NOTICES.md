@@ -24,4 +24,17 @@ The exact downloaded revisions and SHA-256 checksums are recorded in each model 
 
 The local runtime also uses free/open-source packages. Direct dependencies include Apache-2.0 components (EasyOCR, Hugging Face Hub, safetensors, timm, Transformers), MIT components (PyYAML), BSD-3-Clause components (protobuf), Apache-2.0 components (SentencePiece), BSD components (psutil and NVIDIA's Python NVML binding), MIT-CMU Pillow, and PyTorch's published permissive license expression. Exact installed versions remain locked in the local environment and `requirements.lock.txt`.
 
+## Video download tools
+
+The "Tải video" feature runs these local tools. Exact versions, licenses, sources and the Deno SHA-256 are pinned in `config/download_tools.json` and checked by `python -m biliflow.download_tools audit`.
+
+| Component | License | Source |
+|---|---|---|
+| yt-dlp 2026.8.19 (PyPI wheel, run as `python -m yt_dlp`) | Unlicense | https://pypi.org/project/yt-dlp/ |
+| yt-dlp-ejs 0.8.0 | Unlicense AND MIT AND ISC | https://pypi.org/project/yt-dlp-ejs/ |
+| Deno 2.9.7 (`tools\deno\deno.exe`) | MIT | https://github.com/denoland/deno |
+| requests, urllib3, charset-normalizer, certifi, idna, brotli, websockets, pycryptodomex | Apache-2.0, MIT, MIT, MPL-2.0, BSD-3-Clause, MIT, BSD-3-Clause, BSD-2-Clause AND public domain | PyPI |
+
+The standalone `yt-dlp.exe` build bundles GPLv3+ code and is not used. `mutagen` (GPL-2.0-or-later) and `curl_cffi` are not installed.
+
 The bundled FFmpeg 9.0.1 build reports GPLv3 configuration because it includes GPL codecs such as x264/x265. Local execution is free. If BiliFlow or the FFmpeg binary is redistributed, the distributor must also satisfy the corresponding license, notice and source-offer obligations.

@@ -12,7 +12,7 @@ import subprocess
 import unittest
 from pathlib import Path
 
-from biliflow import control_center, logo_memory_admin
+from biliflow import control_center, download_api, logo_memory_admin
 
 ROOT = Path(__file__).resolve().parents[1]
 CONTRACTS = ROOT / "dashboard_v2" / "contracts.js"
@@ -51,6 +51,9 @@ def _routes() -> tuple[list[str], list[str]]:
     get_routes += [re.escape(p) for p in (
         logo_memory_admin.PAGE_PATH, logo_memory_admin.API_LIST, logo_memory_admin.API_FRAME)]
     post_routes += [re.escape(p) for p in (logo_memory_admin.API_CLASS, logo_memory_admin.API_DELETE)]
+    # "Tải video": the handler hands every /api/downloads… path to download_api, which lists its routes.
+    get_routes += list(download_api.GET_ROUTES)
+    post_routes += list(download_api.POST_ROUTES)
     return get_routes, post_routes
 
 
@@ -79,7 +82,7 @@ class EndpointContractTests(unittest.TestCase):
             concrete = template.replace("{id}", "7").replace("{path}", "x")
             other = post_routes if method == "GET" else get_routes
             if any(re.fullmatch(pattern, concrete) for pattern in other) and \
-                    template not in ("/api/source-archive/restore", "/api/phone-mode"):
+                    template not in ("/api/source-archive/restore", "/api/phone-mode", "/api/downloads"):
                 wrong.append(f"{name}: {method} {template} also matches the other method")
         self.assertEqual(wrong, [])
 

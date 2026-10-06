@@ -2,8 +2,8 @@
 
 The new files are whitelisted and served on the PC listener and, with the access cookie, on the phone
 listener; the CSP is unchanged, the new files have no blob:, inline script or fetch; the classic pages
-stay byte-identical (D2); PHONE_ALLOWED_POSTS and the R0 contract endpoints are unchanged (only the two PC-only
-"Xóa video" endpoints were added); review-core.js
+stay byte-identical (D2); the R0 entries of PHONE_ALLOWED_POSTS and of the contract endpoints are unchanged (the
+video download plan added its "Tải video" routes and endpoints, the delete flow its two PC-only endpoints); review-core.js
 matches the classic page (verify-review.cjs) and, for S1, counts bulk actions like the real server.
 R2: the bodies the dialog sends (review-core.js decisionBody / undoPlan, equal to the classic page's) are
 POSTed to the real /api/jobs/<id>/review/decision|clear route on a temporary root with a synthetic queue,
@@ -61,10 +61,16 @@ PHONE_POSTS_LITERAL = (
     r"/api/jobs/\d+/(?:start|resume|pause|stop-after-stage|cancel|retry|rerun|skip|unskip|hide|unhide)",
     r"/api/jobs/\d+/ai-audit",
     r"/api/jobs/\d+/review/(?:decision|clear|bulk-keep|bulk-accept|finalize)",
+    # "Tải video" (video download plan, D2).
+    r"/api/downloads",
+    r"/api/downloads/\d+/(?:rename|choose|stop|resume|cancel|retry|remove)",
+    r"/api/downloads/settings",
+    r"/api/downloads/cleanup-temp",
 )
-# SHA-256 of JSON.stringify(contracts.js endpoints, keys sorted): the 50 endpoints of R0 plus deletePreview and
-# delete of "Xóa video" (2026-10-05; without these two keys the digest is still 06c1dd42…0c9a).
-ENDPOINTS_SHA256 = "071106c5bc042d120dcf292e8a5dd4cfad8e1798428f7e65a1bf776db6be1f9b"
+# SHA-256 of JSON.stringify(contracts.js endpoints, keys sorted): 50 endpoints at the start of R0 (06c1dd42…),
+# 63 with the 13 "Tải video" endpoints of the video download plan (D3, a28b19df…), 52 with deletePreview and delete
+# of "Xóa video" (delete flow, 071106c5…), and 65 with both (test/download-delete).
+ENDPOINTS_SHA256 = "489eca65d8a778651d939c4b25b06e1b5cc05f7d82b7de380361a628eedbfbd6"
 
 
 def node(script: str) -> str:

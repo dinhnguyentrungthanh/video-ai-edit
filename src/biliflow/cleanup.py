@@ -21,6 +21,19 @@ FILE_CACHE_POLICIES = {
     },
 }
 
+# Video download tools (yt-dlp, Deno). Kept out of FILE_CACHE_POLICIES: that
+# pruning runs after every scan stage, possibly while Deno holds its cache open.
+DOWNLOAD_CACHE_POLICIES = {
+    "cache/yt-dlp": {
+        "max_age": timedelta(days=30),
+        "max_bytes": 1024**3,
+    },
+    "cache/deno": {
+        "max_age": timedelta(days=30),
+        "max_bytes": 1024**3,
+    },
+}
+
 
 def cleanup_candidates(project_root: Path, now: datetime | None = None) -> list[dict]:
     project_root = project_root.resolve(strict=True)
@@ -77,12 +90,36 @@ def prune_file_caches(
     project_root: Path, *, now: datetime | None = None,
 ) -> dict[str, int]:
     """Bound independent file caches by both age and total bytes."""
+    return _prune_caches(project_root, FILE_CACHE_POLICIES, now=now, skip_locked=False)
+
+
+def prune_download_caches(
+    project_root: Path, *, now: datetime | None = None,
+) -> dict[str, int]:
+    """Bound the yt-dlp and Deno caches. The download worker calls this only
+    while no download runs; a file still held open is skipped, never fatal."""
+    return _prune_caches(project_root, DOWNLOAD_CACHE_POLICIES, now=now, skip_locked=True)
+
+
+def _unlink(path: Path, *, skip_locked: bool) -> bool:
+    try:
+        path.unlink(missing_ok=True)
+    except OSError:
+        if not skip_locked:
+            raise
+        return False
+    return True
+
+
+def _prune_caches(
+    project_root: Path, policies: dict[str, dict], *, now: datetime | None, skip_locked: bool,
+) -> dict[str, int]:
     project_root = project_root.resolve(strict=True)
     now = now or datetime.now(timezone.utc)
     removed_files = 0
     removed_bytes = 0
     kept_bytes = 0
-    for relative, policy in FILE_CACHE_POLICIES.items():
+    for relative, policy in policies.items():
         raw_base = project_root / relative
         if not raw_base.exists():
             continue
@@ -99,8 +136,8 @@ def prune_file_caches(
         cutoff = now - policy["max_age"]
         retained: list[tuple[float, int, Path]] = []
         for modified, size, path in files:
-            if datetime.fromtimestamp(modified, timezone.utc) < cutoff:
-                path.unlink(missing_ok=True)
+            if (datetime.fromtimestamp(modified, timezone.utc) < cutoff
+                    and _unlink(path, skip_locked=skip_locked)):
                 removed_files += 1
                 removed_bytes += size
             else:
@@ -109,7 +146,8 @@ def prune_file_caches(
         for _modified, size, path in sorted(retained):
             if total <= int(policy["max_bytes"]):
                 break
-            path.unlink(missing_ok=True)
+            if not _unlink(path, skip_locked=skip_locked):
+                continue
             removed_files += 1
             removed_bytes += size
             total -= size

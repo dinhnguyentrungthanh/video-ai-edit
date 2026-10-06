@@ -22,6 +22,7 @@ from biliflow import (
     __version__, job_delete, job_purge, logo_memory_admin, recycle_bin, source_archive, source_archive_restore,
     source_cleanup,
 )
+from biliflow import download_api
 from biliflow.codex_supervisor import (
     codex_connection_status,
     collect_visual_evidence,
@@ -122,6 +123,7 @@ DASHBOARD_V2_DIR = Path(__file__).resolve().parents[2] / "dashboard_v2"
 DASHBOARD_V2_PAGE = "live.html"
 DASHBOARD_V2_FILES = frozenset({
     "styles.css", "theme.css", "contracts.js", "adapter.js", "download-demo.js", "app.js",
+    "download-core.js", "download-view.js", "download-live.js",
     "review.css", "review-core.js", "review-detail.js", "review-media.js", "review-cards.js", "review.js",
     "assets/mark.svg", "assets/poster-amber.svg", "assets/poster-blue.svg",
     "assets/poster-rose.svg", "assets/poster-sage.svg", "assets/poster-violet.svg",
@@ -227,6 +229,23 @@ def _review_page_for_phone(html: str) -> str:
     head, rest = html.split("</head>", 1)
     body, tail = rest.rsplit("</body>", 1)
     return head + REVIEW_PHONE_STYLE + "</head>" + body + REVIEW_PHONE_SCRIPT + "</body>" + tail
+
+
+def _download_answer(center: Any, method: str, path: str, value: Any) -> tuple[int, Any] | None:
+    """The "Tải video" and "Dung lượng" routes, or None for every other path.
+
+    ``value`` is the query string (GET) or the JSON body (POST). The handler has
+    already checked Host, the token (POST) and, on the phone, PHONE_ALLOWED_POSTS.
+    """
+    if not download_api.owns(path):
+        return None
+    service = getattr(center, "downloads", None)
+    if service is None:
+        error = getattr(center, "downloads_error", None) or "chưa khởi tạo"
+        return 503, {"error": download_api.UNAVAILABLE_MESSAGE.format(error=error)}
+    if method == "GET":
+        return service.handle_get(path, value)
+    return service.handle_post(path, value)
 
 
 def _phone_access(center: Any) -> phone_access.PhoneAccess:
@@ -794,6 +813,43 @@ class ControlCenter:
         self.frame_cache = ReviewFrameCache(
             self.root, self.root / "tools" / "ffmpeg" / "bin" / "ffmpeg.exe",
         )
+        # "Tải video": its own database (state/downloads.sqlite3) and worker, started in serve().
+        # A broken download database answers 503 on its routes; scans and review keep running.
+        self.downloads: download_api.DownloadService | None = None
+        self.downloads_error: str | None = None
+        try:
+            self.downloads = download_api.DownloadService(
+                self.root, cleanable=self.cleanable_sources, bin_reader=recycle_bin.volume_bin_info,
+            )
+        except Exception as error:  # noqa: BLE001
+            self.downloads_error = f"{type(error).__name__}: {error}"
+
+    def cleanable_sources(self) -> tuple[int, int]:
+        """"Dung lượng": the jobs whose source "Dọn video gốc" could clean now, and their bytes.
+
+        The same read-only assessment as the card hints: no hash, no Recycle Bin query.
+        """
+        cleanups = self.store.latest_source_cleanups()
+        archives = self.store.latest_source_archives()
+        count = total = 0
+        for job in self.store.list_jobs():
+            if job.get("state") not in source_cleanup.ELIGIBLE_STATES:
+                continue
+            hint, _ = self._source_hints(job, cleanups.get(int(job["id"])), archives.get(int(job["id"])))
+            if hint and hint["eligible"]:
+                count += 1
+                total += int(hint["size_bytes"] or 0)
+        return count, total
+
+    def stop_downloads(self) -> None:
+        """Stop the download worker (its yt-dlp trees die) and close its database."""
+        service = getattr(self, "downloads", None)
+        if service is None:
+            return
+        try:
+            service.stop()
+        except Exception as error:  # noqa: BLE001 - the scheduler and the store must still stop
+            self.store.add_event(None, "DOWNLOADS_STOP_FAILED", f"Dừng tải video lỗi: {error}", level="ERROR")
 
     def status(self) -> dict[str, Any]:
         jobs = self.store.list_jobs()
@@ -1730,6 +1786,8 @@ class ControlCenter:
             _write_json(self.root / "state" / "control-center.json", state)
             self.scheduler.start()
             self.watcher.start()
+            if getattr(self, "downloads", None) is not None:
+                self.downloads.start()  # recovery, then the worker; an error shows on #downloads
             print(f"BiliFlow Control Center: {state['url']}", flush=True)
             self.server.serve_forever(poll_interval=0.5)
         finally:
@@ -1743,6 +1801,7 @@ class ControlCenter:
                 self.stop_ai_audits()
                 self.stop_ai_login()
                 self.watcher.shutdown()
+                self.stop_downloads()
                 self.scheduler.shutdown(immediate=True)
                 if self.server:
                     self.server.server_close()
@@ -1777,6 +1836,7 @@ class ControlCenter:
             self.stop_ai_audits()
             self.stop_ai_login()
             self.watcher.shutdown()
+            self.stop_downloads()
             self.scheduler.shutdown(immediate=immediate)
             if self.server:
                 self.server.shutdown()
@@ -2065,6 +2125,9 @@ def _handler_class(center: ControlCenter) -> type[BaseHTTPRequestHandler]:
                         self.send_json(400, {"error": str(error)})
                     else:
                         self.send_json(200, value)
+                elif (download := _download_answer(center, "GET", path, parsed.query)) is not None:
+                    # "Tải video" snapshot and task detail, "Dung lượng" (read-only).
+                    self.send_json(*download)
                 elif (logo_memory := logo_memory_admin.handle_get(center.root, path, parsed.query)) is not None:
                     # "Bộ nhớ logo" (batch 4a): GET /logo-memory, /api/logo-memory,
                     # /api/logo-memory/frame?key=&i= — read-only; errors come back as JSON.
@@ -2237,6 +2300,12 @@ def _handler_class(center: ControlCenter) -> type[BaseHTTPRequestHandler]:
                                 size_mode=str(body.get("size_mode") or "default"),
                                 max_output_gb=body.get("max_output_gb"),
                             )
+                elif (download := _download_answer(center, "POST", path, body)) is not None:
+                    # "Tải video" (download_api.POST_ROUTES). Host and token were checked above;
+                    # the worker never touches input files other than its own new ones.
+                    status, result = download
+                    if status != 200:
+                        self.send_json(status, result); return
                 elif (logo_memory := logo_memory_admin.handle_post(center.root, path, body)) is not None:
                     # "Bộ nhớ logo" (batch 4a): POST /api/logo-memory/class {key, memory_class,
                     # platform?, expected_sha256} and /api/logo-memory/delete {key, expected_sha256}.

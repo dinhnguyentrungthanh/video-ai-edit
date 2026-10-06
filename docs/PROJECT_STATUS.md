@@ -1,3 +1,9 @@
+## Test branch `test/download-delete` (2026-10-06): "Tải video" and the permanent delete, for one real-machine test
+
+- `feat/delete-flow` (`0ed2f96`) with `feat/video-download` (`caedb8b`) merged in; neither feature branch was changed. Six files conflicted and keep both sides: routes, phone rules, the V2 page, the endpoints pin and these docs. See CHANGELOG.
+- Checks: full suite 1579 tests, no failure, only the 28 known `input\*.mp4` errors of the worktree (they pass with a temporary synthetic clip); node gates `verify` 35, `verify-adapter` 30, `verify-download` 21, `verify-review` 31.
+- Next: the user's real-machine test of both features (download a link; cancel and "Xóa video" a downloaded video; "Dọn video mất gốc"; "Xóa video gốc"). Push or merge only when the user asks.
+
 ## Permanent delete flow (2026-10-05) — branch `feat/delete-flow`, local commits, not pushed, not merged
 
 - The user's choice (plan `docs/DELETE_FLOW_PLAN.md`):
@@ -14,6 +20,18 @@
 - Protections: the golden set (#37–#39 today), benchmark folders, links and junctions, busy jobs, legacy bin-held sources, and an install-root guard (a worktree cannot delete the main folder's files). Both POSTs are PC only and need `confirm_permanent: true`.
 - Real machine (read only): 27 jobs have lost their source and can be removed by "Dọn video mất gốc"; the only cancelled job that still has its source is #39 (about 7.1 GB), which stays locked in the golden set.
 - Next: the user's test (plan section 8). It needs the user's consent to move the main folder to this branch and restart the Control Center, with no job running.
+
+## Real video download "Tải video" (2026-10-05) — branch `feat/video-download`, local, not pushed, not merged
+
+- Plan, decisions and log: `docs/VIDEO_DOWNLOAD_PLAN.md` (D0–D5 done). The Dashboard V2 page `#downloads` downloads with yt-dlp, on the PC and from the phone.
+  - Any public link is accepted. The yt-dlp probe decides; a page it cannot read shows "Chưa hỗ trợ".
+  - A checked file goes into `input\`; no auto scan.
+- Commits: D0 `6a6fdfd` (tools: yt-dlp 2026.08.19, yt-dlp-ejs 0.8.0, Deno 2.9.7 copied from WinGet; `config/download_tools.json`), D1 `918bc2c` (backend), D2 `a046a93` (API and Control Center routes, phone), D3 `cc7812b` (live page), D4 `f378619` (real download on a test Control Center), D4b `6f4fbee` (no source list; probe decides; review fixes), D5 (docs and the `AGENTS.md` rule).
+- D4 (temporary root, port 8797, links from the user):
+  - YouTube → COMPLETED, 1080p H.264 + AAC, 1.28 GB, picked up as NEEDS_METADATA.
+  - The user's reference movie page → not supported ("Unsupported URL"), probe only.
+- Full suite on D4b: 1488 tests, only the 28 known `input/*.mp4` errors of the worktree. The scan cache key files are untouched.
+- Next: the user's test on the real machine. It needs the main folder on this branch and a Control Center restart, both only with the user's consent and no job running. `feat/dashboard-v2` has moved on since a7d8f18 (`55c6e62`, R4-B4 and R4-U1/U2); bringing those commits in is the user's call. Merge into `main` only when the user asks.
 
 ## Dashboard V2 review dialog R0–R4 and the stronger logo cover (2026-10-04/05) — branch `feat/dashboard-v2`, not merged
 

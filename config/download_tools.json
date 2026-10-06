@@ -1,0 +1,91 @@
+{
+  "version": 1,
+  "profile": "free-commercial-safe-local",
+  "note": "Công cụ của tính năng Tải video. Ghi riêng ở đây, không trong license_policy.json, để không đổi khóa cache quét (stage_cache). Kiểm tra: python -m biliflow.download_tools audit. Không tự cập nhật: đổi phiên bản là việc người dùng yêu cầu, sửa file này và requirements.lock.txt cùng lúc rồi chạy lại lệnh kiểm tra.",
+  "allowed_licenses": [
+    "Unlicense",
+    "MIT",
+    "ISC",
+    "Apache-2.0",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "MPL-2.0",
+    "LicenseRef-Public-Domain"
+  ],
+  "python_packages": {
+    "yt-dlp": {
+      "version": "2026.8.19",
+      "license_spdx": "Unlicense",
+      "source_url": "https://pypi.org/project/yt-dlp/2026.8.19/",
+      "role": "Trình tải, gọi bằng python -m yt_dlp. Chỉ dùng wheel PyPI; bản yt-dlp.exe (PyInstaller) gộp mã GPLv3+ nên không dùng."
+    },
+    "yt-dlp-ejs": {
+      "version": "0.8.0",
+      "license_spdx": "Unlicense AND MIT AND ISC",
+      "source_url": "https://pypi.org/project/yt-dlp-ejs/0.8.0/",
+      "role": "Script giải thử thách JavaScript của YouTube, chạy bằng Deno."
+    },
+    "requests": {
+      "version": "2.34.2",
+      "license_spdx": "Apache-2.0",
+      "source_url": "https://pypi.org/project/requests/2.34.2/",
+      "role": "Bộ xử lý HTTP của yt-dlp."
+    },
+    "urllib3": {
+      "version": "2.7.0",
+      "license_spdx": "MIT",
+      "source_url": "https://pypi.org/project/urllib3/2.7.0/",
+      "role": "Phụ thuộc của requests."
+    },
+    "charset-normalizer": {
+      "version": "3.5.0",
+      "license_spdx": "MIT",
+      "source_url": "https://pypi.org/project/charset-normalizer/3.5.0/",
+      "role": "Phụ thuộc của requests."
+    },
+    "certifi": {
+      "version": "2026.7.22",
+      "license_spdx": "MPL-2.0",
+      "source_url": "https://pypi.org/project/certifi/2026.7.22/",
+      "role": "Chứng chỉ gốc cho HTTPS; đã có sẵn trong môi trường."
+    },
+    "idna": {
+      "version": "3.20",
+      "license_spdx": "BSD-3-Clause",
+      "source_url": "https://pypi.org/project/idna/3.20/",
+      "role": "Tên miền quốc tế; đã có sẵn trong môi trường."
+    },
+    "brotli": {
+      "version": "1.2.0",
+      "license_spdx": "MIT",
+      "source_url": "https://pypi.org/project/brotli/1.2.0/",
+      "role": "Giải nén phản hồi HTTP nén brotli."
+    },
+    "websockets": {
+      "version": "17.0.1",
+      "license_spdx": "BSD-3-Clause",
+      "source_url": "https://pypi.org/project/websockets/17.0.1/",
+      "role": "Bộ xử lý websocket của yt-dlp."
+    },
+    "pycryptodomex": {
+      "version": "3.23.0",
+      "license_spdx": "BSD-2-Clause AND LicenseRef-Public-Domain",
+      "source_url": "https://pypi.org/project/pycryptodomex/3.23.0/",
+      "role": "Giải mã AES của luồng HLS không DRM."
+    }
+  },
+  "binaries": {
+    "deno": {
+      "path": "tools/deno/deno.exe",
+      "version": "2.9.7",
+      "sha256": "e020f3e232bd16e33768dee528e5983349c962952051ced0a5d58ad42f5d9b33",
+      "license_spdx": "MIT",
+      "source_url": "https://github.com/denoland/deno/releases/tag/v2.9.7",
+      "role": "Chạy script yt-dlp-ejs. SHA-256 trùng file deno-x86_64-pc-windows-msvc.sha256sum của bản phát hành."
+    }
+  },
+  "forbidden_python_packages": {
+    "mutagen": "GPL-2.0-or-later; yt-dlp chỉ dùng để nhúng metadata, BiliFlow không cần.",
+    "curl_cffi": "Giả trình duyệt để lách chặn, ngoài phạm vi tính năng."
+  }
+}

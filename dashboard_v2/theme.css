@@ -390,6 +390,48 @@ code { font-size: 12px; color: #304b70; background: #edf2f9; }
   .download-result h3 { font-size: 18px; }
 }
 
+/* Live "Tải video": form extras, task rows and the read-only "Dung lượng" panel. Colors come from
+   the theme variables, so light and dark need no extra rules; no backdrop-filter (R4-B3). */
+.dl-rights { display: flex; align-items: flex-start; gap: 9px; margin: 0 0 6px; font-size: 13px; line-height: 1.6; cursor: pointer; }
+.dl-rights input { flex-shrink: 0; width: 18px; height: 18px; margin: 2px 0 0; accent-color: var(--mint); }
+.download-form .modal-error { margin: 12px 0 0; font-size: 13px; }
+.download-form .modal-error[hidden] { display: none; }
+.download-form .download-start { margin-top: 16px; }
+.download-form .download-destination { margin-top: 22px; }
+.dl-line-errors { margin: 8px 0 0; padding-left: 18px; font-size: 12px; line-height: 1.7; }
+.dl-line-errors li { overflow-wrap: anywhere; }
+.dl-note { font-size: 12px; line-height: 1.7; margin: 10px 0 0; }
+.dl-space { font-size: 12px; margin: -8px 0 16px; overflow-wrap: anywhere; }
+.dl-rename { display: flex; flex-wrap: wrap; gap: 7px; margin: 10px 0 0; }
+.dl-rename input { flex: 1 1 180px; min-width: 0; min-height: 36px; padding: 6px 10px; font-size: 13px; }
+.dl-output { margin: 10px 0 0; font-size: 13px; color: var(--muted); overflow-wrap: anywhere; }
+.dl-output strong { color: var(--text); font-weight: 550; }
+.dl-message,.dl-media { margin: 8px 0 0; font-size: 12px; overflow-wrap: anywhere; }
+.download-item .download-item-error { margin: 8px 0 0; overflow-wrap: anywhere; }
+.dl-choice { margin: 12px 0 0; padding: 10px 12px 12px; border: 1px solid var(--line); border-radius: 9px; background: var(--panel-up); min-width: 0; }
+.dl-choice legend { padding: 0 6px; font-size: 13px; font-weight: 550; }
+.dl-choice label { display: flex; align-items: flex-start; gap: 8px; padding: 7px 0; font-size: 13px; line-height: 1.5; overflow-wrap: anywhere; cursor: pointer; }
+.dl-choice input { flex-shrink: 0; margin: 3px 0 0; accent-color: var(--mint); }
+.dl-choice button { margin-top: 8px; }
+.download-log ol.dl-log-lines { max-height: 260px; overflow: auto; font-size: 11px; line-height: 1.6; white-space: pre-wrap; }
+.download-meter.indeterminate i { animation: dl-slide 1.4s ease-in-out infinite; }
+@keyframes dl-slide { from { transform: translateX(-100%); } to { transform: translateX(340%); } }
+@media (prefers-reduced-motion: reduce) {
+  .download-meter.indeterminate i { animation: none; width: 100% !important; opacity: .45; }
+}
+#dl-notices .notice { margin-bottom: 12px; overflow-wrap: anywhere; }
+.storage-panel { margin-top: 22px; }
+.storage-panel .key-value { grid-template-columns: 170px 1fr; font-size: 13px; margin: 8px 0; }
+.storage-panel .key-value a { color: var(--blue); }
+.storage-panel .download-item-error { overflow-wrap: anywhere; }
+@media(max-width:700px) {
+  .storage-panel { margin-top: 15px; }
+  .storage-panel .key-value { grid-template-columns: 118px 1fr; }
+  .download-item-actions button,.dl-rename button,.dl-choice button,.download-queue-tools select,.download-queue-tools button,
+  .download-filters .filter-tab,.storage-panel .section-top button { min-height: 40px; }
+  .dl-choice label { padding: 9px 0; }
+}
+
 /* Source line (same text as the classic dashboard card) and the phone panel. */
 .cell-sub.tone-error, .source-line.tone-error { color: var(--red); font-weight: 600; }
 .source-line { margin: 8px 0 0; font-size: 13px; overflow-wrap: anywhere; }

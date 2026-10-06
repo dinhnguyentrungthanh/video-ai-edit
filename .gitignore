@@ -28,6 +28,9 @@ __pycache__/
 # Local machine configuration
 config/ai_supervisor.json
 config/app.yaml
+# The downloader's local list of sites, read before D4b; still ignored so an old copy with real domains
+# is never committed.
+config/download_sources.local.json
 .env
 .env.*
 !.env.example

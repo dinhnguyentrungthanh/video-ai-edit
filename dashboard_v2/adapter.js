@@ -28,6 +28,7 @@
       this.code = extra && extra.code || null;      // 409 body.code (top level)
       this.preview = extra && extra.preview || null; // 409 body.preview when the list changed
       this.operation = extra && extra.operation || null;
+      this.errors = extra && Array.isArray(extra.errors) ? extra.errors : []; // 400 BATCH_REJECTED: one per link
     }
   }
 
@@ -56,7 +57,8 @@
   function errorFrom(status, body, operation) {
     const reason = body && typeof body.error === 'string' && body.error ? body.error : (MESSAGES[status] || ('HTTP ' + status));
     const message = status === 409 ? reason + (body && body.code ? ' (' + body.code + ')' : '') : reason;
-    return new AdapterError(status, message, {code: body && body.code, preview: body && body.preview, operation});
+    return new AdapterError(status, message, {code: body && body.code, preview: body && body.preview, operation,
+      errors: body && body.errors});
   }
 
   function create(options) {
@@ -65,7 +67,7 @@
     if (!C) throw new Error('BFContracts is required');
     const transport = options.transport || fetchTransport(options.fetch || (typeof fetch === 'function' ? fetch.bind(globalThis) : null));
     let token = null, tokenRequest = null;
-    let statusSeq = 0, statusApplied = 0;
+    let statusSeq = 0, statusApplied = 0, downloadsSeq = 0, downloadsApplied = 0;
     const inflight = new Map(), writers = new Map();
     const sleep = options.sleep || (ms => new Promise(resolve => setTimeout(resolve, ms)));
     const WRITE_RETRY_MS = [300, 900];
@@ -210,6 +212,17 @@
         if (!Number.isInteger(id) || id <= 0) return Promise.reject(new AdapterError(400, 'Thiếu job id hợp lệ.'));
         return get(C.endpoints.detail[1].replace('{id}', id));
       },
+      /* "Tải video": GET /api/downloads, guarded like loadStatus (null = a newer answer was applied). */
+      async loadDownloads() {
+        const seq = ++downloadsSeq;
+        const body = await get(C.endpoints.downloads[1]);
+        if (seq <= downloadsApplied) return null;
+        downloadsApplied = seq;
+        return body;
+      },
+      loadDownload: id => get(C.request('downloadTask', {id: Number(id)}).path),
+      /* "Dung lượng": read-only; refresh asks the server to compute again (it answers at once with the last value). */
+      loadStorage: refresh => get(C.endpoints.storageSummary[1] + (refresh ? '?refresh=1' : '')),
       loadAI: () => get(C.endpoints.ai[1]),
       loadMemory: () => get(C.endpoints.logos[1]),
       /* Phone mode: on the PC the status (code included); on the phone only {remote: true}. */
@@ -286,6 +299,11 @@
       memory_loaded: !!memory || !!previous.memory_loaded,
       phone: previous.phone || null,
       remote: !!previous.remote,
+      // "Tải video" polls on its own (only while #downloads is open); /api/status keeps its last answer.
+      downloads: previous.downloads || null,
+      downloads_error: previous.downloads_error || null,
+      storage_summary: previous.storage_summary || null, // "Dung lượng" (/api/storage-summary); `storage` above is /api/status
+      storage_error: previous.storage_error || null,
       offline: false,
       requests: [],
     };
@@ -296,8 +314,32 @@
     options = options || {};
     let snap = {mode: 'live', jobs: [], logos: [], active: null, queue: {length: 0, paused: false}, resources: {cpu_percent: 0, memory: {percent: 0}, disk: {}, gpu: null}, ai: {ready: false, config: {}, message: 'Đang tải…'}, offline: false, loading: true, requests: []};
     const listeners = new Set();
-    let ai = null, memory = null, timer = null, phone = null, paused = false;
-    const emit = () => listeners.forEach(fn => fn(snap));
+    let ai = null, memory = null, timer = null, phone = null, paused = false, downloadTimer = null;
+    // A listener that throws (a render bug) must not turn a finished request into a failed one: reported apart.
+    const emit = () => listeners.forEach(fn => { try { fn(snap); } catch (error) { setTimeout(() => { throw error; }); } });
+
+    async function loadDownloads() {
+      try {
+        const body = await adapter.loadDownloads();
+        if (body === null) return snap; // an older poll answered late
+        snap = {...snap, downloads: body, downloads_error: null};
+      } catch (error) {
+        snap = {...snap, downloads_error: error.message};
+      }
+      emit();
+      return snap;
+    }
+    async function loadStorage(refresh) {
+      try {
+        // Await first: {...snap, x: await …} would copy snap before the wait and drop what changed meanwhile.
+        const summary = await adapter.loadStorage(refresh);
+        snap = {...snap, storage_summary: summary, storage_error: null};
+      } catch (error) {
+        snap = {...snap, storage_error: error.message};
+      }
+      emit();
+      return snap;
+    }
 
     async function refresh() {
       try {
@@ -348,7 +390,33 @@
           if (phone && phone.enabled && !phone.remote) loadPhone(); // failed attempts / lock on the PC panel
         }, intervalMs);
       },
-      stop() { clearInterval(timer); timer = null; },
+      stop() { clearInterval(timer); timer = null; clearInterval(downloadTimer); downloadTimer = null; },
+      loadDownloads,
+      loadStorage,
+      loadDownload: id => adapter.loadDownload(id),
+      /* #downloads open: its list every intervalMs (and "Dung lượng" while the server computes it); closed: nothing.
+       * One poll at a time (a slow link never piles requests up), none while the tab is hidden; after a
+       * "Dung lượng" error it waits for "Tính lại". */
+      watchDownloads(on, intervalMs) {
+        clearInterval(downloadTimer); downloadTimer = null;
+        if (!on) return;
+        let polling = null;
+        const poll = opening => {
+          if (polling || (!opening && typeof document !== 'undefined' && document.hidden)) return;
+          const summary = snap.storage_summary, again = opening || (summary ? summary.computing : !snap.storage_error);
+          polling = Promise.all([loadDownloads(), again ? loadStorage(false) : null]).finally(() => { polling = null; });
+        };
+        poll(true); // opening the page: the list and "Dung lượng" (the server recomputes it when older than 5 minutes)
+        downloadTimer = setInterval(() => poll(false), intervalMs || 2000);
+      },
+      /* Download writes refresh the download list only (never /api/status), also after a refusal (409: it changed). */
+      async downloadAction(operation, id, body) {
+        try {
+          return (await adapter.dispatch(operation, id ? {id: Number(id)} : null, body)).body;
+        } finally {
+          await loadDownloads();
+        }
+      },
       /* Review dialog open: /api/status polling pauses; on close it refreshes at once and resumes. */
       pause() { paused = true; },
       resume() { if (!paused) return; paused = false; refresh(); },

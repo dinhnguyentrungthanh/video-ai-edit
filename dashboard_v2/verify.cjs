@@ -33,37 +33,42 @@ check('Overview pending review and ready export stay separate',()=>{
   assert.equal(C.overviewMatch(job('READY_TO_EXPORT'),'review_pending'),false);
   assert.equal(C.overviewMatch(job('CANCELLED',{hidden_at:'x'}),'review_pending'),false);
 });
-check('Download demo accepts the two requested sources and YouTube short links',()=>{
-  assert.equal(D.domains.length,2);
-  assert.equal(D.validate('youtube.com',' https://www.youtube.com/watch?v=demo ').domain,'youtube.com');
-  assert.equal(D.validate('youtube.com','https://youtu.be/demo').domain,'youtube.com');
-  assert.equal(D.validate('phimmoi.example','https://phimmoi.example/phim/video-demo').domain,'phimmoi.example');
+check('Download demo accepts a link from any site, with no source to pick',()=>{
+  assert.equal(D.domains,undefined);
+  assert.deepEqual(D.validate(' https://video.example/watch?v=demo '),{host:'video.example',url:'https://video.example/watch?v=demo'});
+  assert.equal(D.validate('https://phim.example/phim/video-demo').host,'phim.example');
 });
-check('Download demo rejects blank, unsafe, homepage and mismatched links',()=>{
-  for(const link of ['', 'not a url','javascript:alert(1)','file:///E:/input/video.mp4','https://youtube.com.evil.example/watch?v=demo','https://evil.example/watch?v=demo','https://user:secret@youtube.com/watch?v=demo','https://www.youtube.com:8443/watch?v=demo','https://www.youtube.com/'])assert.throws(()=>D.validate('youtube.com',link));
-  assert.throws(()=>D.validate('phimmoi.example','https://www.youtube.com/watch?v=demo'));
+check('Download demo rejects blank, unsafe, homepage and IP links',()=>{
+  for(const link of ['', 'not a url','javascript:alert(1)','file:///E:/input/video.mp4','https://user:secret@video.example/watch?v=demo','https://video.example:8443/watch?v=demo','https://video.example/','https://127.0.0.1/v','https://[::1]/v','https://localhost/v'])assert.throws(()=>D.validate(link),undefined,link);
+});
+check('Download demo shows a page it cannot read as not supported',()=>{
+  const q=D.createQueue();
+  assert.equal(D.enqueue(q,'https://'+D.UNSUPPORTED_PREFIX+'example/phim/1\nhttps://video.example/watch?v=1'),2);
+  assert.equal(q.items[0].state,'FAILED');assert.equal(q.items[0].code,'UNSUPPORTED');assert.match(q.items[0].error,/chưa được hỗ trợ/);
+  assert.equal(q.items[1].state,'DOWNLOADING');
+  assert.equal(D.action(q,q.items[0].id,'retry'),false,'a retry does not make the page supported');assert.equal(q.items[0].state,'FAILED');
 });
 check('Hidden applies only to cancelled state',()=>{
   assert.equal(C.hidden(job('CANCELLED',{hidden_at:'x'})),true);
   assert.equal(C.hidden(job('COMPLETED',{hidden_at:'x'})),false);
 });
 check('Download batches validate atomically and reject duplicate links',()=>{
-  const q=D.createQueue(),link=n=>'https://www.youtube.com/watch?v='+n;
-  assert.throws(()=>D.enqueue(q,'youtube.com',link(1)+'\nhttps://evil.example/video'));assert.equal(q.items.length,0);assert.equal(q.serial,0);
-  assert.throws(()=>D.enqueue(q,'youtube.com',link(1)+'\n'+link(1)));assert.equal(q.items.length,0);
-  assert.equal(D.enqueue(q,'youtube.com',link(1)+'\n'+link(2)+'\n'+link(3)),3);
+  const q=D.createQueue(),link=n=>'https://video.example/watch?v='+n;
+  assert.throws(()=>D.enqueue(q,link(1)+'\nhttps://user@video.example/video'));assert.equal(q.items.length,0);assert.equal(q.serial,0);
+  assert.throws(()=>D.enqueue(q,link(1)+'\n'+link(1)));assert.equal(q.items.length,0);
+  assert.equal(D.enqueue(q,link(1)+'\n'+link(2)+'\n'+link(3)),3);
   assert.deepEqual(q.items.map(t=>t.state),['DOWNLOADING','DOWNLOADING','QUEUED']);
-  assert.throws(()=>D.enqueue(q,'youtube.com',link(4)+'\n'+link(1)));assert.equal(q.items.length,3);
+  assert.throws(()=>D.enqueue(q,link(4)+'\n'+link(1)));assert.equal(q.items.length,3);
 });
 check('Download slots preserve FIFO and verification must finish before completion',()=>{
-  const q=D.createQueue();D.setParallel(q,1);D.enqueue(q,'youtube.com',[1,2,3].map(n=>'https://youtu.be/demo'+n).join('\n'));
+  const q=D.createQueue();D.setParallel(q,1);D.enqueue(q,[1,2,3].map(n=>'https://video.example/demo'+n).join('\n'));
   for(let i=0;i<8;i++)D.tick(q);assert.equal(q.items[0].state,'VERIFYING');assert.equal(q.items[0].progress,96);assert.equal(q.items[1].state,'QUEUED');
   D.tick(q);assert.equal(q.items[0].state,'COMPLETED');assert.equal(q.items[1].state,'DOWNLOADING');assert.equal(q.items[2].state,'QUEUED');
   D.setParallel(q,3);assert.equal(D.stats(q).active,2);D.setParallel(q,1);assert.equal(D.stats(q).active,2);
   assert.throws(()=>D.setParallel(q,4));assert.equal(q.parallel,1);
 });
 check('Pause, cancel, failure and retry keep independent task identity',()=>{
-  const q=D.createQueue();D.setParallel(q,1);D.enqueue(q,'youtube.com',[1,2].map(n=>'https://youtu.be/demo'+n).join('\n'));
+  const q=D.createQueue();D.setParallel(q,1);D.enqueue(q,[1,2].map(n=>'https://video.example/demo'+n).join('\n'));
   D.tick(q);const progress=q.items[0].progress;D.togglePause(q);D.tick(q);assert.equal(q.items[0].progress,progress);D.togglePause(q);
   D.action(q,1,'pause');assert.equal(q.items[0].state,'PAUSED');assert.equal(q.items[1].state,'DOWNLOADING');assert.equal(D.action(q,1,'resume'),false);
   D.action(q,2,'fail');assert.equal(q.items[1].state,'FAILED');assert.equal(D.action(q,1,'resume'),true);assert.equal(q.items[0].progress,progress);

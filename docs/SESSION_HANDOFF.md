@@ -13,6 +13,8 @@ This is the short, authoritative starting point for a new Codex account or chat.
   - A session working on this branch, including a Claude cloud session, starts with `docs/DASHBOARD_V2_REVIEW_PLAN.md` (the review dialog) and `docs/DASHBOARD_V2_CLOUD_PLAN.md` (the V2 integration and phone mode).
   - `main` does not have V2. The Control Center runs V2 only while the main folder is on this branch.
 - Branch `feat/delete-flow` (from `55c6e62` of `feat/dashboard-v2`, worktree `temp/wt-delete-flow`, local commits only) holds the permanent delete flow. See "Current work — 2026-10-05 permanent delete flow" below.
+- Branch `feat/video-download` (from `feat/dashboard-v2` a7d8f18, worktree `temp\wt-video-download`, 2026-10-05) holds the real video download feature, D0–D5 done (see "Current work — 2026-10-05 real video download" below). A session on this branch starts at `docs/VIDEO_DOWNLOAD_PLAN.md` and asks the user before downloading any tool or package. Dashboard V2 merges into `main` on its own.
+- Branch `test/download-delete` (worktree `temp\wt-download-delete`, 2026-10-06) is `feat/delete-flow` with `feat/video-download` merged in, for the user's real-machine test of both. See "Current work — 2026-10-06 test branch" below.
 - Active branch: `main`. On 2026-10-03 the user asked to merge `improve/scan-performance-metrics` (everything since `7f5a9fb`: the scan-performance work, detector/review fixes and dashboard batches 1-4) into `main` and run it there. `main` was fast-forwarded to the branch tip (the commit that carries this note) and the working tree, which the Control Center runs from, was switched to `main` with no file change. The branch is kept.
 - Pushed at the user's request on 2026-10-03: `origin/main` (GitHub `dinhnguyentrungthanh/video-ai-edit`) moved `9155cd7..23aa1e4`. Local `main` has moved on since (the merge below); push again only when the user asks.
 - Merged at the user's request on 2026-10-03 at about 21:40, with no job running: branch `fix/export-identity-http` (worktree `temp/wt-export-fix`) was fast-forwarded into `main`. It brings export identity from the render, reuse of only a proven export, HTTP request limits and the short-export rate cap (see Current work). `origin/main` was pushed later and is at f6996bb (checked 2026-10-04). The running Control Center keeps the code it started with until it is restarted (ask the user first).
@@ -32,6 +34,13 @@ Since 2026-10-03 local `main` also holds everything from `improve/scan-performan
 
 Always confirm this section with `git status` and `git log` because it becomes stale after new work.
 
+## Current work — 2026-10-06 test branch `test/download-delete` ("Tải video" and the permanent delete; local, not pushed)
+
+- Made at the user's request: `git worktree add temp\wt-download-delete -b test/download-delete feat/delete-flow`, then a merge of `feat/video-download` (`caedb8b`). Neither feature branch was changed; their own sections below still describe them.
+- Six files conflicted (`CHANGELOG.md`, `dashboard_v2/app.js`, `docs/PROJECT_STATUS.md`, `docs/SESSION_HANDOFF.md`, `src/biliflow/control_center.py`, `tests/test_dashboard_v2_review.py`); both sides were kept. See CHANGELOG for the details and the checks.
+- The rules of both sections below apply: agents never POST to `/api/downloads*` or to the delete, cleanup, archive or restore routes on the real Control Center.
+- Next: the user tests both features on the real machine with the main folder detached at this branch's merge commit (moved only with the user's consent and no job running), then decides about push and merge.
+
 ## Current work — 2026-10-05 permanent delete flow (branch `feat/delete-flow`, worktree `temp/wt-delete-flow`; local commits, not pushed)
 
 - Plan: `docs/DELETE_FLOW_PLAN.md` (the user's decisions, what is deleted and kept, protections, API, UI, tests, phases, real-machine numbers). `AGENTS.md` has the new source-video invariant.
@@ -43,6 +52,25 @@ Always confirm this section with `git status` and `git log` because it becomes s
      - "Dọn video mất gốc" for the 27 lost jobs;
      - "Xóa video gốc" for one exported video the user picks.
   2. Push or merge only when the user asks. `feat/dashboard-v2` still waits for the end of U-R4 and its own merge.
+
+## Current work — 2026-10-05 real video download (branch `feat/video-download`, local; not pushed, not merged)
+
+- Plan, decisions, results and log: `docs/VIDEO_DOWNLOAD_PLAN.md`. D0–D5 are done: D0 `6a6fdfd`, D1 `918bc2c`, D2 `a046a93`, D3 `cc7812b`, D4 `f378619`, D4b `6f4fbee`, and D5, the docs.
+- What it does:
+  - The V2 page `#downloads` takes links from any public site, on the PC or from the phone.
+  - yt-dlp probes each page first. "Chưa hỗ trợ" means it cannot read a video there.
+  - The download is checked, then moves into `input\` under a unique name; the watcher picks it up; no auto scan.
+  - No cookies, logins, DRM work-arounds or site-specific code.
+- Rules for agents (also in `AGENTS.md`):
+  - Never start, resume or retry a download on the user's real Control Center, and never POST to `/api/downloads*` there.
+  - Real checks use a test Control Center: `python -m biliflow --project-root <temp root> control-center --port 8797 --no-import-existing`, with a copied `config\` and `tools\` and links the user gave.
+  - No real links, titles or non-example domains in the repository.
+  - Ask before downloading any tool or package.
+- The scan cache key files are untouched (`pyproject.toml`, `config/license_policy.json`, `scripts/env.ps1`, `cli.py`); tool pins live in `config/download_tools.json`.
+- Next:
+  1. Done 2026-10-06: the user's test on the real machine passed (main folder detached at `9781c70`, Control Center started 2026-10-05 23:43:59; one public YouTube video downloaded into `input`; a movie-site link read "Chưa hỗ trợ"; "Xóa khỏi danh sách" removes only the download row). The branch includes `feat/dashboard-v2` up to `55c6e62`.
+  2. Next: combine with `feat/delete-flow` (D5 `0ed2f96`) on a test branch so the user tests both at once. Six files conflict: `CHANGELOG.md`, `dashboard_v2/app.js`, `docs/PROJECT_STATUS.md`, `docs/SESSION_HANDOFF.md`, `src/biliflow/control_center.py`, `tests/test_dashboard_v2_review.py`.
+  3. Merge into `main` only when the user asks.
 
 ## Current work — 2026-10-05 Dashboard V2 review dialog R4 and the stronger logo cover (branch `feat/dashboard-v2`, pushed; not merged)
 
