@@ -10,6 +10,7 @@
  *    (the same body: it sets one decision, or keeps / accepts the still undecided items of a filter).
  *    finalize is never repeated (dispatch).
  *  - GET is retried only when the user asks; a GET 403 never refreshes the token.
+ *  - A GET with no answer after 15 s is cut and fails like a dropped connection; a POST is never cut.
  *  - Polling responses carry a sequence number; an older response never replaces a newer one.
  *  - The token lives only in this closure: never in a URL, localStorage or a log line.
  */
@@ -39,18 +40,29 @@
     500: 'Control Center gặp lỗi khi xử lý (500).',
   };
 
-  /* Default transport: window.fetch, same origin, no cookies sent elsewhere, no cache. */
-  function fetchTransport(fetchImpl) {
+  /* Default transport: window.fetch, same origin, no cookies sent elsewhere, no cache. A GET with no full answer after
+   * GET_TIMEOUT_MS is cut (2026-10-06: a phone waking up on a dead connection would hang a poll for minutes): it fails
+   * like a dropped connection, so the page says it is offline and the next poll tries again. A POST is never cut: the
+   * Control Center may still be running it. */
+  const GET_TIMEOUT_MS = 15000;
+  function fetchTransport(fetchImpl, getTimeoutMs = GET_TIMEOUT_MS) {
     return async function transport(method, path, options) {
       const init = {method, cache: 'no-store', credentials: 'same-origin', redirect: 'error', headers: options.headers || {}};
       if (options.body !== undefined) init.body = options.body;
-      const response = await fetchImpl(path, init);
-      // raw: only the status matters (video probe); the body is never read or parsed.
-      if (options.raw) { try { if (response.body && response.body.cancel) await response.body.cancel(); } catch (_) { /* nothing to release */ } return {status: response.status, body: null}; }
-      let body = null;
-      const text = await response.text();
-      if (text) { try { body = JSON.parse(text); } catch (_) { body = {error: text.slice(0, 300)}; } }
-      return {status: response.status, body};
+      const limit = method === 'GET' && typeof AbortController === 'function' ? new AbortController() : null;
+      const timer = limit ? setTimeout(() => limit.abort(), getTimeoutMs) : null;
+      if (limit) init.signal = limit.signal;
+      try {
+        const response = await fetchImpl(path, init);
+        // raw: only the status matters (video probe); the body is never read or parsed.
+        if (options.raw) { try { if (response.body && response.body.cancel) await response.body.cancel(); } catch (_) { /* nothing to release */ } return {status: response.status, body: null}; }
+        let body = null;
+        const text = await response.text();
+        if (text) { try { body = JSON.parse(text); } catch (_) { body = {error: text.slice(0, 300)}; } }
+        return {status: response.status, body};
+      } finally {
+        clearTimeout(timer);
+      }
     };
   }
 
@@ -314,7 +326,7 @@
     options = options || {};
     let snap = {mode: 'live', jobs: [], logos: [], active: null, queue: {length: 0, paused: false}, resources: {cpu_percent: 0, memory: {percent: 0}, disk: {}, gpu: null}, ai: {ready: false, config: {}, message: 'Đang tải…'}, offline: false, loading: true, requests: []};
     const listeners = new Set();
-    let ai = null, memory = null, timer = null, phone = null, paused = false, downloadTimer = null;
+    let ai = null, memory = null, timer = null, phone = null, paused = false, downloadTimer = null, statusPolling = null;
     // A listener that throws (a render bug) must not turn a finished request into a failed one: reported apart.
     const emit = () => listeners.forEach(fn => { try { fn(snap); } catch (error) { setTimeout(() => { throw error; }); } });
 
@@ -352,6 +364,23 @@
       emit();
       return snap;
     }
+    /* /api/status polling (2026-10-06): one poll at a time, so a slow phone link never piles polls up, and none while
+     * the tab is hidden (screen off, another tab). Showing the tab again sends a fresh request at once instead of
+     * waiting on one that may hang on a dead connection (the transport cuts it after 15 s). Writes, resume() and the
+     * export dialog still refresh at once: loadStatus drops whichever answer is older. */
+    function pollStatus() {
+      if (statusPolling) return statusPolling;
+      const request = refresh().finally(() => { if (statusPolling === request) statusPolling = null; });
+      statusPolling = request;
+      return request;
+    }
+    function tick() {
+      if (paused || (typeof document !== 'undefined' && document.hidden)) return; // paused: the review dialog polls its own queue (Q7)
+      pollStatus();
+      if (ai && ai.login_running) loadAI();
+      if (phone && phone.enabled && !phone.remote) loadPhone(); // failed attempts / lock on the PC panel
+    }
+    function onVisible() { if (!timer || document.hidden || paused) return; statusPolling = null; tick(); }
     async function loadAI() {
       try { ai = await adapter.loadAI(); snap = {...snap, ai}; emit(); } catch (_) { /* the settings page shows the last state */ }
     }
@@ -382,15 +411,15 @@
       loadMemory,
       loadPhone,
       start(intervalMs) {
-        refresh(); loadAI(); loadPhone();
-        if (!timer && intervalMs) timer = setInterval(() => {
-          if (paused) return; // the review dialog is open (Q7): it polls its own queue
-          refresh();
-          if (ai && ai.login_running) loadAI();
-          if (phone && phone.enabled && !phone.remote) loadPhone(); // failed attempts / lock on the PC panel
-        }, intervalMs);
+        pollStatus(); loadAI(); loadPhone();
+        if (timer || !intervalMs) return;
+        timer = setInterval(tick, intervalMs);
+        if (typeof document !== 'undefined' && document.addEventListener) document.addEventListener('visibilitychange', onVisible);
       },
-      stop() { clearInterval(timer); timer = null; clearInterval(downloadTimer); downloadTimer = null; },
+      stop() {
+        clearInterval(timer); timer = null; clearInterval(downloadTimer); downloadTimer = null;
+        if (typeof document !== 'undefined' && document.removeEventListener) document.removeEventListener('visibilitychange', onVisible);
+      },
       loadDownloads,
       loadStorage,
       loadDownload: id => adapter.loadDownload(id),

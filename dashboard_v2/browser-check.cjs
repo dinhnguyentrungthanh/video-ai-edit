@@ -402,23 +402,33 @@ async function check(name, fn) { await fn(); passed++; results.push(name); proce
       await page.evaluate(() => { document.querySelector('#main .list-section').dataset.mark = 'kept'; });
       await waitPoll(); await waitPoll();
       assert.equal(await page.locator('#main .list-section[data-mark="kept"]').count(), 1, 'no rebuild without a change');
-      // Changed snapshot: rebuilt, the fold stays open and the page does not jump.
+      // Changed snapshot (U4): patched in place. The section, the rows and their posters are the same nodes (a JS mark
+      // survives; the attribute mark goes, the new markup has none), the new % shows, the fold stays open, no jump.
+      await page.evaluate(() => { document.querySelector('#main .list-section').__kept = 1; document.querySelectorAll('#main img.poster').forEach(i => { i.__kept = 1; }); });
       jobs.find(j => j.id === 104).progress = 0.5;
-      jobs.find(j => j.id === 102).progress = (jobs.find(j => j.id === 102).progress + 0.01) % 1;
+      const p102 = jobs.find(j => j.id === 102);
+      p102.progress = (p102.progress + 0.01) % 1;
       await waitPoll(); await waitPoll();
-      assert.equal(await page.locator('#main .list-section[data-mark="kept"]').count(), 0, 'rebuilt after a change');
+      assert.deepEqual(await page.evaluate(() => { const s = document.querySelector('#main .list-section'), p = [...document.querySelectorAll('#main img.poster')]; return [!!s.__kept, s.dataset.mark || null, p.length > 0 && p.every(i => i.__kept)]; }),
+        [true, null, true], 'patched in place after a change: same section and posters, the stale attribute is gone');
+      assert.equal((await page.locator('#main .job-row[data-job="102"] .row-progress span').textContent()).trim(), Math.round(p102.progress * 100) + '%', 'the new progress shows');
       assert.equal(await page.locator('details.fold[data-fold="cancelled"]').evaluate(d => d.open), true, 'the fold stays open');
       assert.equal(await page.evaluate(() => window.scrollY), y, 'scrollY unchanged');
-      // A focused select is not rebuilt.
+      // U4: a focused search box keeps its node and focus across a changed snapshot.
+      await page.evaluate(() => { const s = document.getElementById('search'); s.__kept = 1; s.focus({preventScroll: true}); });
+      p102.progress = (p102.progress + 0.01) % 1;
+      await waitPoll(); await waitPoll();
+      assert.deepEqual(await page.evaluate(() => { const s = document.getElementById('search'); return [!!s.__kept, document.activeElement === s]; }), [true, true], 'the focused search box stays');
+      // A focused select is not touched; once it loses focus, the next change patches #main around the same node.
       await page.locator('#sort').focus();
-      await page.evaluate(() => { document.getElementById('sort').dataset.mark = 'same'; });
+      await page.evaluate(() => { const s = document.getElementById('sort'); s.dataset.mark = 'same'; s.__kept = 1; });
       jobs.find(j => j.id === 104).progress = 0.25;
       await waitPoll(); await waitPoll();
-      assert.equal(await page.locator('#sort[data-mark="same"]').count(), 1, 'the open select is not replaced');
+      assert.equal(await page.locator('#sort[data-mark="same"]').count(), 1, 'the open select is not touched');
       assert.equal(await page.evaluate(() => document.activeElement && document.activeElement.id), 'sort');
       await page.locator('h1').click();
       await waitPoll(); await waitPoll();
-      assert.equal(await page.locator('#sort[data-mark="same"]').count(), 0, 'rebuilt once the select lost focus');
+      assert.deepEqual(await page.evaluate(() => { const s = document.getElementById('sort'); return [!!s.__kept, s.dataset.mark || null]; }), [true, null], 'patched once the select lost focus: same node');
       assert.equal(await page.locator('details.fold[data-fold="cancelled"]').evaluate(d => d.open), true);
       await page.setViewportSize({width: 1280, height: 900});
     });
@@ -426,7 +436,7 @@ async function check(name, fn) { await fn(); passed++; results.push(name); proce
     await check('U2: the detail drawer keeps its scroll, open sections and focus across polling (1440 px and 390 px)', async () => {
       const drawerState = () => page.evaluate(() => {
         const d = document.querySelector('.drawer'), a = document.activeElement;
-        return {scroll: d.scrollTop, max: d.scrollHeight - d.clientHeight, kept: d.dataset.mark === 'u2',
+        return {scroll: d.scrollTop, max: d.scrollHeight - d.clientHeight, kept: d.__u2 === 1, poster: d.querySelector('.drawer-poster').__u2 === 1,
           open: [...d.querySelectorAll('details')].map(x => x.open),
           focus: a && d.contains(a) ? [a.tagName, a.dataset.action || '', a.dataset.op || '', a.textContent.trim()] : null,
           percent: (d.querySelector('.progress-summary .hero-status strong') || {}).textContent || null};
@@ -438,7 +448,7 @@ async function check(name, fn) { await fn(); passed++; results.push(name); proce
           const d = document.querySelector('.drawer');
           d.querySelectorAll('details').forEach(x => { x.open = true; });
           const b = d.querySelector('.drawer-body button:not(:disabled)'); if (b) b.focus({preventScroll: true});
-          d.dataset.mark = 'u2';
+          d.__u2 = 1; d.querySelector('.drawer-poster').__u2 = 1; // JS marks: a patch keeps them, a rebuild would not
         });
         const max = await page.evaluate(() => { const d = document.querySelector('.drawer'); return d.scrollHeight - d.clientHeight; });
         const target = Math.min(400, max - 20);
@@ -460,7 +470,8 @@ async function check(name, fn) { await fn(); passed++; results.push(name); proce
         assert.ok(Math.abs(after.scroll - still.scroll) <= 2, width + ': scrollTop ' + still.scroll + ' → ' + after.scroll);
         assert.deepEqual(after.open, still.open, width + ': open sections');
         assert.deepEqual(after.focus, still.focus, width + ': focus');
-        // A scanning job whose progress changes between polls: rebuilt, the place in the drawer is kept, the new % shows.
+        // A scanning job whose progress changes between polls (U4): patched in place, so the same drawer and poster,
+        // its place, open sections and focus stay, and the new % shows.
         const job = jobs.find(j => j.id === 102);
         job.progress = 0.41;
         await waitPoll();
@@ -469,11 +480,11 @@ async function check(name, fn) { await fn(); passed++; results.push(name); proce
         job.progress = 0.77;
         await waitPoll(); await waitPoll();
         const moved = await drawerState();
-        assert.equal(moved.kept, false, width + ': a changed drawer is rebuilt');
+        assert.deepEqual([moved.kept, moved.poster], [true, true], width + ': a changed drawer is patched in place (same drawer, same poster)');
         assert.equal(moved.percent, '77%', width + ': the new progress shows');
         assert.ok(Math.abs(moved.scroll - running.scroll) <= 2, width + ': scrollTop ' + running.scroll + ' → ' + moved.scroll);
-        assert.deepEqual(moved.open, running.open, width + ': open sections after a rebuild');
-        assert.deepEqual(moved.focus, running.focus, width + ': focus after a rebuild');
+        assert.deepEqual(moved.open, running.open, width + ': open sections after the patch');
+        assert.deepEqual(moved.focus, running.focus, width + ': focus after the patch');
         await page.keyboard.press('Escape');
         assert.equal(await page.locator('.drawer').count(), 0);
         job.progress = 0.64;
