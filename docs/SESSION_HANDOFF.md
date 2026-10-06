@@ -1,20 +1,25 @@
 # BiliFlow session handoff
 
-Updated: 2026-10-05 (Asia/Bangkok)
+Updated: 2026-10-06 (Asia/Bangkok)
 
 This is the short, authoritative starting point for a new Codex account or chat. It complements the detailed history in `PROJECT_STATUS.md` and `CHANGELOG.md`.
 
 ## Repository state
 
 - Project root: `E:\DungChung\BiliFlow`
+- **Since 2026-10-06 the active branch is `main`.** At the user's request it was fast-forwarded from `f6996bb` to the tip of `test/download-delete`.
+  - It now has Dashboard V2 (`feat/dashboard-v2`), "Tải video" (`feat/video-download`), the permanent delete (`feat/delete-flow`) and the phone deletes.
+  - The main folder is on `main`, and the Control Center runs it.
+  - `origin/main` is still `f6996bb`: push only when the user asks.
+  - The feature branches and the test branch are kept. Start new work on a new branch from `main`.
 - Branch `feat/dashboard-v2` (from `main` f6996bb, pushed 2026-10-03) holds the Dashboard V2 prototype and its integration plan.
   - 2026-10-05: it also holds the V2 review dialog (batches R0–R4 of `docs/DASHBOARD_V2_REVIEW_PLAN.md`) and the local commit `0334f8c` (stronger logo cover in exports). See "Current work — 2026-10-05" below.
   - Per the plan's log, the main folder ran `a7d8f18` of this branch (detached) on 2026-10-05, with the Control Center on that code. Check with `git status` and `git log` before any claim.
   - A session working on this branch, including a Claude cloud session, starts with `docs/DASHBOARD_V2_REVIEW_PLAN.md` (the review dialog) and `docs/DASHBOARD_V2_CLOUD_PLAN.md` (the V2 integration and phone mode).
-  - `main` does not have V2. The Control Center runs V2 only while the main folder is on this branch.
+  - Since 2026-10-06 `main` has V2 and everything listed in the `main` bullet above.
 - Branch `feat/delete-flow` (from `55c6e62` of `feat/dashboard-v2`, worktree `temp/wt-delete-flow`, local commits only) holds the permanent delete flow. See "Current work — 2026-10-05 permanent delete flow" below.
 - Branch `feat/video-download` (from `feat/dashboard-v2` a7d8f18, worktree `temp\wt-video-download`, 2026-10-05) holds the real video download feature, D0–D5 done (see "Current work — 2026-10-05 real video download" below). A session on this branch starts at `docs/VIDEO_DOWNLOAD_PLAN.md` and asks the user before downloading any tool or package. Dashboard V2 merges into `main` on its own.
-- Branch `test/download-delete` (worktree `temp\wt-download-delete`, 2026-10-06) is `feat/delete-flow` with `feat/video-download` merged in, for the user's real-machine test of both (passed), plus the phone deletes the user asked for next. See "Current work — 2026-10-06 test branch" below.
+- Branch `test/download-delete` (worktree `temp\wt-download-delete`, 2026-10-06) is `feat/delete-flow` with `feat/video-download` merged in, for the user's real-machine test of both (passed), plus the phone deletes the user asked for next. `main` was fast-forwarded to it on 2026-10-06. See "Current work — 2026-10-06 test branch" below.
 - Active branch: `main`. On 2026-10-03 the user asked to merge `improve/scan-performance-metrics` (everything since `7f5a9fb`: the scan-performance work, detector/review fixes and dashboard batches 1-4) into `main` and run it there. `main` was fast-forwarded to the branch tip (the commit that carries this note) and the working tree, which the Control Center runs from, was switched to `main` with no file change. The branch is kept.
 - Pushed at the user's request on 2026-10-03: `origin/main` (GitHub `dinhnguyentrungthanh/video-ai-edit`) moved `9155cd7..23aa1e4`. Local `main` has moved on since (the merge below); push again only when the user asks.
 - Merged at the user's request on 2026-10-03 at about 21:40, with no job running: branch `fix/export-identity-http` (worktree `temp/wt-export-fix`) was fast-forwarded into `main`. It brings export identity from the render, reuse of only a proven export, HTTP request limits and the short-export rate cap (see Current work). `origin/main` was pushed later and is at f6996bb (checked 2026-10-04). The running Control Center keeps the code it started with until it is restarted (ask the user first).
@@ -34,7 +39,7 @@ Since 2026-10-03 local `main` also holds everything from `improve/scan-performan
 
 Always confirm this section with `git status` and `git log` because it becomes stale after new work.
 
-## Current work — 2026-10-06 test branch `test/download-delete` ("Tải video" and the permanent delete; local, not pushed)
+## Current work — 2026-10-06 test branch `test/download-delete` ("Tải video" and the permanent delete; now in `main`, not pushed)
 
 - Made at the user's request: `git worktree add temp\wt-download-delete -b test/download-delete feat/delete-flow`, then a merge of `feat/video-download` (`caedb8b`). Neither feature branch was changed; their own sections below still describe them.
 - Six files conflicted (`CHANGELOG.md`, `dashboard_v2/app.js`, `docs/PROJECT_STATUS.md`, `docs/SESSION_HANDOFF.md`, `src/biliflow/control_center.py`, `tests/test_dashboard_v2_review.py`); both sides were kept. See CHANGELOG for the details and the checks.
@@ -44,11 +49,22 @@ Always confirm this section with `git status` and `git log` because it becomes s
   - Done in the commit after `a6c8b8b`: `/api/source-cleanup` and `/api/job-delete` are in `PHONE_ALLOWED_POSTS`, V2 `pcOnlyOps` is archive/restore/recheck, and the phone tests use the real listener on temporary roots. Details in CHANGELOG and `docs/DELETE_FLOW_PLAN.md` section 10.
   - Archive, restore and the bin check stay PC only.
   - Reviews: the security review found no CRITICAL or HIGH issue. Its MEDIUM risk went to the user: a stolen phone session could "Hủy" any unfinished video and then "Xóa video" it. The user chose to keep the PC behaviour on the phone (option 1) and accepts the risk. The code review approved; its LOW notes are fixed.
+- 2026-10-06 09:28: GETs showed no job or download running. The main folder moved to `e87d915` and the Control Center restarted (11 jobs, phone mode off).
+- 2026-10-06: the user could not test the phone yet and asked for a check of the code, logic and performance, then a merge into `main` with BiliFlow running it.
+  - Done:
+    - end-to-end on a test Control Center through the real phone listener;
+    - a logic review and a performance check (see CHANGELOG);
+    - text fixes;
+    - full suite: 1587 tests OK.
+  - `main` was fast-forwarded to this branch, and the main folder is on `main`.
+  - No restart was needed: after `e87d915` only `app.js` (read from disk on every request) and docs changed.
 - Next:
-  1. The user approved restarting the Control Center on this commit. Check with GETs that no job or download runs, then move the main folder and restart.
-  2. The user turns the phone mode on (V2 > Cài đặt) and tests the deletes from the phone.
-  3. Push or merge only when the user asks.
-  4. Possible later hardening, suggested by the security review, not requested: bind the cookie to the IP with an event for a new IP, a delete PIN, a firewall rule for the phone's IP only.
+  1. The user tests the deletes from the phone when they can (V2 > Cài đặt turns the phone mode on).
+  2. Push `main` only when the user asks (`origin/main` is `f6996bb`).
+  3. Later, not requested:
+     - the performance items in CHANGELOG: the report-folder index once per request, long phone deletes, parallel hashing, a poll guard and gzip, the cost of `status()`;
+     - the stale download check in `browser-check.cjs`;
+     - the security review's hardening ideas: cookie bound to the IP with an event for a new IP, a delete PIN, a firewall rule for the phone's IP only.
 
 ## Current work — 2026-10-05 permanent delete flow (branch `feat/delete-flow`, worktree `temp/wt-delete-flow`; local commits, not pushed)
 

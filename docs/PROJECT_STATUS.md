@@ -1,3 +1,17 @@
+## `main` has Dashboard V2, "Tải video", the permanent delete and the phone deletes (2026-10-06) — local, not pushed
+
+- The user could not test the phone yet. At their request, the phone deletes were checked, then `main` was fast-forwarded from `f6996bb` to the tip of `test/download-delete`. The main folder runs `main`. `origin/main` is still `f6996bb`.
+- Checks (details in CHANGELOG):
+  - end-to-end on a test Control Center through the real phone listener at 375 px: all four delete actions worked and archive was refused;
+  - logic review: no CRITICAL, HIGH or MEDIUM finding;
+  - performance: fine at today's size. The SHA-256 check takes about 5 s per exported episode and previews take milliseconds. It gets slower from about 200–500 jobs;
+  - full suite: 1587 tests OK.
+- Fixed before the merge: the phone-mode risk wording, a phone hint for long deletes, a stale help text and fallback about downloads, and the API table of `docs/DASHBOARD_V2_UPDATE_GUIDE.md`.
+- Next:
+  - the user tests the deletes from the phone when they can;
+  - push `main` only when asked;
+  - the later performance items, the stale `browser-check.cjs` download check and the security hardening ideas wait for a request.
+
 ## Phone deletes (2026-10-06) — branch `test/download-delete`, local, not pushed
 
 - The user's real-machine test of the merge `a6c8b8b` passed. They then asked that four actions also work from the Dashboard V2 phone mode:

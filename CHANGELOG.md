@@ -1,3 +1,53 @@
+# Unreleased — `main` now has Dashboard V2, "Tải video", the permanent delete and the phone deletes — 2026-10-06
+
+Status: the user could not test the phone part yet and asked for a check of the code, logic and performance, then a merge into `main` if it was OK, with BiliFlow running that branch. `main` (`f6996bb`) was an ancestor of `test/download-delete`, so `main` was fast-forwarded to this commit. That brings no merge commit, and no `main` commit was missing from the branch. The main folder runs `main` from now on. Not pushed: `origin/main` stays at `f6996bb` until the user asks.
+
+- What `main` gains (97 commits, see the entries below):
+  - Dashboard V2 with its review dialog and phone mode (`feat/dashboard-v2`);
+  - "Tải video" (`feat/video-download`);
+  - the permanent delete flow (`feat/delete-flow`);
+  - the phone deletes.
+- Pre-merge checks of the phone deletes, the part the user could not test:
+  - **End-to-end on a test Control Center.** A real `ControlCenter` ran on a temporary root under the worktree's `temp`, with the phone listener on 127.0.0.1 only, and a browser at 375 px logged in with that instance's own code.
+    - From the phone:
+      - "Hủy" then "Xóa video" for a video waiting for setup;
+      - "Dọn video mất gốc" for 3 lost videos;
+      - "Xóa video gốc" for an exported and a skipped video together, then for a 1.5 GiB source alone.
+    - "Lưu trữ" stayed off with the PC-only reason.
+    - Afterwards `input` was empty, both `.mp4` exports stayed in `output` without their manifests, and every report folder and job row was gone.
+    - Server time: previews took 3–7 ms and deletes 0.03–0.18 s. The 1.5 GiB source took 4.0 s, for its SHA-256.
+  - **Logic review (agent): no CRITICAL, HIGH or MEDIUM finding.**
+    - Checked:
+      - the PC and the phone deleting at once (one lock, 409 `busy`);
+      - a forged or stale `preview_id` (409 `preview_changed`, nothing changed);
+      - a dropped connection: the server finishes, a retry gives 409 `busy` or `preview_changed`, and nothing is deleted twice;
+      - cancel then delete; the 50-video limit; PARTIAL; the golden set;
+      - 19 path variants of the allowlist;
+      - archive blocked on the phone in three places.
+    - Its LOW notes:
+      - The phone-mode warning now says that unexported videos can be deleted too ("Hủy" then "Xóa video").
+      - A live page whose `download-live.js` failed to load now says so, instead of showing the old download simulation.
+      - The dropped-connection message already says the action may have run, and a retry is safe, so that stays.
+      - The phone logic in `app.js` has only Playwright checks, which cannot run here. The end-to-end run above stands in for them.
+  - **Performance check (agent, on temporary roots).**
+    - SHA-256 runs at about 450 MB/s on this PC. It is CPU-bound; drive E: is NVMe.
+    - "Xóa video gốc" therefore takes about 5 s per exported episode, because both the source and the export are checked. A batch of 50 large videos takes several minutes.
+    - Previews and polling are fast at today's size (11 videos). With 500 jobs, a preview takes about 5 s, a 50-video POST about 10 s, and `/api/status` about 2 s.
+    - The phone delete dialog now says three things: large deletes take minutes, keep the screen on, and the PC finishes the delete if the connection drops. It shows this only when a source must be checked.
+  - **Later, not done** (suggested by the performance check):
+    - build the report-folder owner index of `job_purge.owned_report_dirs` once per request (today it runs three times per video);
+    - a 202 answer with a result route, or a byte cap, for long phone deletes;
+    - hash two to four files at once on an SSD;
+    - a poll guard (request in flight, hidden tab) and gzip for `/api/status`;
+    - fewer `Path.resolve` calls and a larger summary cache in `status()`.
+- Other fixes in this commit:
+  - The LIVE help text no longer says the download page is a simulation.
+  - The API table of `docs/DASHBOARD_V2_UPDATE_GUIDE.md` now has the right rows for "Xóa video gốc", "Xóa video / Dọn video mất gốc", archive and the bin check (both PC only), and "Tải video".
+- Known: the Playwright check `Downloads stay a labelled simulation…` in `browser-check.cjs` has been stale since the real downloader. Update it when Playwright is available.
+- Checks:
+  - full suite: 1587 tests OK, 26 skipped, no error. A temporary 1-second synthetic clip was put in the worktree's `input` for the run and removed afterwards.
+  - after the last `app.js` text changes: the V2, download and frontend modules (277 tests), and the node gates `verify.cjs` 35, `verify-adapter.cjs` 30, `verify-download.cjs` 21, `verify-review.cjs` 31.
+
 # Unreleased — the delete actions also work from the phone — 2026-10-06
 
 Status: branch `test/download-delete` (worktree `temp\wt-download-delete`), on top of the merge `a6c8b8b`. Not pushed, not merged; the feature branches are unchanged. The user's real-machine test of the merge passed (download, cancel and "Xóa video", "Dọn video mất gốc", "Xóa video gốc"). They then asked that four actions also work through the Dashboard V2 phone mode:
