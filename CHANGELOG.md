@@ -7,7 +7,8 @@ At the user's request, after their phone check of U4: use V2 for good, turn the 
   - The classic page (`_dashboard_html()`) stays in the code behind `CLASSIC_DASHBOARD = False`. Set it to `True` and restart the Control Center to serve it at `/` again, byte for byte as before.
   - `/review/<id>` and `/logo-memory` are unchanged. The review page's "← Quay lại Dashboard" goes to `/`, so it now lands on V2.
   - The three redirects (`/`, `/dashboard-v2` → `/dashboard-v2/`, the phone listener's `/`) share one `redirect()` helper. Their status codes and headers are unchanged.
-- V2 no longer calls itself a preview: the page title is "BiliFlow Control Center", the footer says "Dashboard V2 · chạy trên máy này" and the profile line "Dashboard V2".
+- V2 no longer calls itself a preview: the page title is "BiliFlow Control Center", the footer says "Dashboard V2 · chạy cục bộ" and the profile line "Dashboard V2".
+- The phone-mode notice (H3) lived only on the classic page. While the phone mode is on, V2 on the PC now shows "Đang mở cho điện thoại: <link> · tắt trong Cài đặt" at the top of every page except Cài đặt, whose panel shows the state. It never shows the code and never appears on the phone; the text comes from `C.phoneNotice` in `contracts.js`. Like the classic notice, a tab opened before the mode was turned on shows it after a reload or a visit to Cài đặt; it goes away by itself when the mode turns off.
 - Checked before the switch: every API call of the classic page is also in V2. That covers job actions, cleanup, delete, archive and restore, the Recycle Bin check, scheduler, shutdown, AI login/config/check, Visual AI Audit, hide and unhide. No function is lost.
 - `Start-BiliFlow.cmd` still opens `127.0.0.1:8765/`, which now shows V2. The Python change applies at the next Control Center start; until then the running one keeps the classic page at `/`.
 - `control_center.py` is in no scan stage's import graph, so the scan cache stays valid.
@@ -15,7 +16,11 @@ At the user's request, after their phone check of U4: use V2 for good, turn the 
   - D2 (`test_dashboard_v2_route`) checks that `/` redirects to V2 by default. With `CLASSIC_DASHBOARD` patched on, it checks that the classic page still matches the f6996bb fixture byte for byte.
   - P5, the H3 notice checks, the review D2 check and the L4 framing and Host checks were updated the same way.
   - 8 focused tests failed before the change (RED) and pass after; `ControlCenterHttpTests` 24 OK.
-  - Node gates 35 / 33 / 21 / 31; full suite: 1588 tests OK (26 skipped), with the usual temporary synthetic clip.
+  - Only `test_the_classic_dashboard_is_off_by_default` pins the switch; the other tests set it themselves. With the switch on in memory, 1 of the 96 related tests fails (that one); with it off, 96 OK.
+  - `verify.cjs` has a new check for `C.phoneNotice` (it failed before the function existed).
+  - Headless Chrome on a test Control Center (temporary root, port 8796, phone listener on 127.0.0.1 only), 6 of 6: `/` opens V2 with the banner and the link but not the code; no banner in Cài đặt; the banner again on "Video của bạn"; none through the phone listener; it goes when the mode is turned off; no JS error.
+  - Node gates 36 / 33 / 21 / 31; full suite: 1589 tests OK (26 skipped), with the usual temporary synthetic clip.
+- Code review (agent): no CRITICAL or HIGH. Fixed: the MEDIUM (the H3 notice, above) and three LOW notes (tests independent of the switch, `dashboard_v2/README.md` and `docs/DASHBOARD_V2_PHONE.md` still said the classic page is at `/`, "chạy trên máy này" was wrong on the phone).
 - README: `127.0.0.1:8765/` opens V2; how to bring the classic page back.
 
 # Unreleased — Dashboard V2: the video list no longer blinks on every refresh (U4) — 2026-10-06

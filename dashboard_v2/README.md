@@ -3,7 +3,7 @@
 Có hai trang dùng chung giao diện (`app.js`):
 
 - **Demo** (`index.html`): dữ liệu mẫu trong bộ nhớ (`mock-data.js` + `demo-store.js`), CSP `connect-src 'none'`, không kết nối Control Center.
-- **Bản live** (`live.html`): `adapter.js` đọc/ghi Control Center cùng origin, CSP `connect-src 'self'`. Control Center phục vụ trang này ở `/dashboard-v2/` (Pha 3). Dashboard cũ ở `/` giữ nguyên. Máy thật kiểm từng đợt theo `docs/DASHBOARD_V2_CLOUD_PLAN.md` và `docs/DASHBOARD_V2_REVIEW_PLAN.md`.
+- **Bản live** (`live.html`): `adapter.js` đọc/ghi Control Center cùng origin, CSP `connect-src 'self'`. Control Center phục vụ trang này ở `/dashboard-v2/` (Pha 3). Từ 2026-10-06 `/` cũng mở trang này; dashboard cũ tạm tắt (`CLASSIC_DASHBOARD` trong `src/biliflow/control_center.py`). Máy thật kiểm từng đợt theo `docs/DASHBOARD_V2_CLOUD_PLAN.md` và `docs/DASHBOARD_V2_REVIEW_PLAN.md`.
 
 Trang **Tải video**: bản demo vẫn là mô phỏng (không downloader, không gọi mạng). Bản live dùng API tải của Control Center (`/api/downloads…`, `/api/storage-summary`): nhận link từ trang nào cũng được, yt-dlp thăm dò trang trước khi tải và trang không có video đọc được hiện "Chưa hỗ trợ"; file tải xong vào `input`, không tự quét. Thiết kế và giới hạn: [`docs/VIDEO_DOWNLOAD_PLAN.md`](../docs/VIDEO_DOWNLOAD_PLAN.md).
 

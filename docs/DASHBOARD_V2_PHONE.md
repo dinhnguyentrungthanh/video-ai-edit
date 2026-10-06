@@ -136,7 +136,7 @@ Hộp thoại vẫn liệt kê từng video, vẫn có ô "Tôi hiểu", và ser
   - khi **địa chỉ Wi-Fi của PC đổi**, ví dụ đổi Wi-Fi hoặc mất mạng; kiểm tra mỗi phút.
 - Khung "Mở trên điện thoại" cho biết lần tắt gần nhất vì sao: người dùng tắt, hết 8 giờ, đổi địa chỉ, hoặc Control Center dừng.
 - Mỗi lần bật lại sẽ có mã mới.
-- Khi chế độ đang bật, dashboard cũ (`/`) có dòng báo "Đang mở cho điện thoại: …". `Start-BiliFlow.cmd` cũng in dòng `NOTE: phone mode is ON` khi dùng lại Control Center đang bật chế độ này.
+- Khi chế độ đang bật, Dashboard V2 trên PC có dòng báo "Đang mở cho điện thoại: …" ở đầu mọi trang trừ Cài đặt (từ 2026-10-06; trước đó dòng này ở dashboard cũ `/`). Dòng báo không bao giờ có mã. Tab V2 mở từ trước lúc bật chế độ chỉ hiện dòng này sau khi tải lại trang hoặc vào Cài đặt. `Start-BiliFlow.cmd` cũng in dòng `NOTE: phone mode is ON` khi dùng lại Control Center đang bật chế độ này.
 - **Một mã cho mọi thiết bị:** trong một lần bật, mọi thiết bị đã nhập đúng mã đều vào được. Muốn đuổi hết thiết bị: tắt rồi bật lại để có mã mới.
 
 ## 6. Nhật ký

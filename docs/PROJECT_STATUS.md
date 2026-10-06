@@ -2,8 +2,10 @@
 
 - At the user's request, `/` on the PC opens V2 (`303` to `/dashboard-v2/`), as on the phone. The classic page stays in the code behind `CLASSIC_DASHBOARD` in `control_center.py`, for a rollback (set `True`, restart).
 - V2 already makes every API call the classic page makes, so nothing is lost. V2 no longer calls itself a preview.
+- The phone-mode notice (H3) moved with it: while the mode is on, V2 on the PC shows "Đang mở cho điện thoại: <link>" at the top of every page except Cài đặt, never with the code and never on the phone.
+- Code review (agent): no CRITICAL or HIGH; the MEDIUM (that notice) and three LOW notes are fixed.
 - Applies at the next Control Center start. The scan cache is not affected.
-- Tests: 8 focused tests RED then GREEN; `ControlCenterHttpTests` 24 OK; node gates 35 / 33 / 21 / 31; full suite 1588 tests OK (26 skipped), with the usual temporary synthetic clip.
+- Tests: 8 focused tests RED then GREEN; only one test pins the switch (with it on, 1 of 96 related tests fails); node gates 36 / 33 / 21 / 31; headless Chrome on a test Control Center 6 of 6; full suite 1589 tests OK (26 skipped), with the usual temporary synthetic clip.
 
 ## Dashboard V2 list no longer blinks on every refresh, U4 (2026-10-06) — in `main`, pushed
 

@@ -1011,9 +1011,11 @@ cổng trần ra Internet (ví dụ đi qua VPN). Trong đợt test này ngườ
   - trang cũ vẫn còn trong code, sau công tắc `CLASSIC_DASHBOARD = False`: đặt `True` rồi khởi động lại Control Center thì `/` lại là trang cũ, trùng byte fixture f6996bb (test D2 vẫn kiểm);
   - `/review/<id>` và `/logo-memory` không đổi; nút "← Quay lại Dashboard" của trang duyệt cũ về `/`, tức là về V2.
 - **Kiểm trước khi tắt:** mọi API trang cũ gọi đều có trong V2 (thao tác job, dọn, xóa, lưu trữ, khôi phục, kiểm tra Thùng rác, scheduler, tắt máy chủ, AI, Visual AI Audit, ẩn/hiện).
-- V2 bỏ chữ "xem thử": tiêu đề "BiliFlow Control Center", chân trang "Dashboard V2 · chạy trên máy này", dòng hồ sơ "Dashboard V2".
+- V2 bỏ chữ "xem thử": tiêu đề "BiliFlow Control Center", chân trang "Dashboard V2 · chạy cục bộ", dòng hồ sơ "Dashboard V2".
+- Dòng báo chế độ điện thoại (H3) trước chỉ có ở trang cũ. Nay khi chế độ bật, V2 trên PC hiện "Đang mở cho điện thoại: <link> · tắt trong Cài đặt" ở đầu mọi trang trừ Cài đặt; không bao giờ có mã, không hiện trên điện thoại (`C.phoneNotice` trong `contracts.js`).
+- Review (agent): không có CRITICAL/HIGH; đã sửa MEDIUM (dòng báo H3) và ba LOW (test không phụ thuộc công tắc, `dashboard_v2/README.md` và `docs/DASHBOARD_V2_PHONE.md`, chữ "chạy trên máy này" sai khi xem trên điện thoại).
 - Có hiệu lực từ lần khởi động Control Center kế tiếp. Cache quét không bị ảnh hưởng.
 
 | ID | Hạng mục | Máy thật | Bằng chứng |
 | --- | --- | --- | --- |
-| V2-MAIN | `/` mở V2; trang cũ tắt nhưng bật lại được | — | 8 test tập trung đỏ trước khi sửa, xanh sau; `ControlCenterHttpTests` 24 OK; node 35 / 33 / 21 / 31; full suite 1588 OK (26 bỏ qua). Chờ Control Center khởi động lại. |
+| V2-MAIN | `/` mở V2; trang cũ tắt nhưng bật lại được; dòng báo H3 trên V2 (PC) | — | 8 test tập trung đỏ trước khi sửa, xanh sau; chỉ một test ghim công tắc; node 36 / 33 / 21 / 31; Chrome headless trên Control Center thử 6/6; full suite 1589 OK (26 bỏ qua). Chờ Control Center khởi động lại. |
