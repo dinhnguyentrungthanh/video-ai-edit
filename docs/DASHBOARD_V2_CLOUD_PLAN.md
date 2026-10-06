@@ -1002,3 +1002,18 @@ cổng trần ra Internet (ví dụ đi qua VPN). Trong đợt test này ngườ
 | ID | Hạng mục | Máy thật | Bằng chứng |
 | --- | --- | --- | --- |
 | U4 | Làm mới không dựng lại danh sách và drawer, không tạo lại poster, không kéo trang; một yêu cầu `/api/status` mỗi lúc, không hỏi khi tab ẩn | [x] | Nhánh `fix/v2-list-flicker`, đã vào `main` và push (2026-10-06). Trước: mỗi 5 lần hỏi ở Tổng quan, 25 nút bị gỡ rồi thêm lại, 8/8 poster tạo lại. Sau: 0 nút, 0 poster, chỉ các thuộc tính và chữ đổi. **Người dùng** kiểm trên điện thoại với Control Center thật (2026-10-06): đạt. |
+
+## 19. V2 thành dashboard chính, dashboard cũ tạm tắt (2026-10-06)
+
+- **Người dùng:** sau khi kiểm U4 trên điện thoại, yêu cầu dùng hẳn V2, tạm tắt dashboard cũ, sửa xong thì commit và push thẳng vào `main`.
+- **Sửa** (`control_center.py`):
+  - `/` trên PC trả `303` sang `/dashboard-v2/` (`Cache-Control: no-store`), giống listener điện thoại;
+  - trang cũ vẫn còn trong code, sau công tắc `CLASSIC_DASHBOARD = False`: đặt `True` rồi khởi động lại Control Center thì `/` lại là trang cũ, trùng byte fixture f6996bb (test D2 vẫn kiểm);
+  - `/review/<id>` và `/logo-memory` không đổi; nút "← Quay lại Dashboard" của trang duyệt cũ về `/`, tức là về V2.
+- **Kiểm trước khi tắt:** mọi API trang cũ gọi đều có trong V2 (thao tác job, dọn, xóa, lưu trữ, khôi phục, kiểm tra Thùng rác, scheduler, tắt máy chủ, AI, Visual AI Audit, ẩn/hiện).
+- V2 bỏ chữ "xem thử": tiêu đề "BiliFlow Control Center", chân trang "Dashboard V2 · chạy trên máy này", dòng hồ sơ "Dashboard V2".
+- Có hiệu lực từ lần khởi động Control Center kế tiếp. Cache quét không bị ảnh hưởng.
+
+| ID | Hạng mục | Máy thật | Bằng chứng |
+| --- | --- | --- | --- |
+| V2-MAIN | `/` mở V2; trang cũ tắt nhưng bật lại được | — | 8 test tập trung đỏ trước khi sửa, xanh sau; `ControlCenterHttpTests` 24 OK; node 35 / 33 / 21 / 31; full suite 1588 OK (26 bỏ qua). Chờ Control Center khởi động lại. |

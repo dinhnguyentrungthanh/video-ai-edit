@@ -1,3 +1,10 @@
+## Dashboard V2 is the dashboard; the classic one is off for now (2026-10-06) — in `main`, pushed
+
+- At the user's request, `/` on the PC opens V2 (`303` to `/dashboard-v2/`), as on the phone. The classic page stays in the code behind `CLASSIC_DASHBOARD` in `control_center.py`, for a rollback (set `True`, restart).
+- V2 already makes every API call the classic page makes, so nothing is lost. V2 no longer calls itself a preview.
+- Applies at the next Control Center start. The scan cache is not affected.
+- Tests: 8 focused tests RED then GREEN; `ControlCenterHttpTests` 24 OK; node gates 35 / 33 / 21 / 31; full suite 1588 tests OK (26 skipped), with the usual temporary synthetic clip.
+
 ## Dashboard V2 list no longer blinks on every refresh, U4 (2026-10-06) — in `main`, pushed
 
 - The user saw the video list blink on the phone every few seconds in every tab, and asked for a check of the look and of the refresh cost.

@@ -1,3 +1,23 @@
+# Unreleased — Dashboard V2 is the dashboard; the classic one is off for now — 2026-10-06
+
+At the user's request, after their phone check of U4: use V2 for good, turn the old dashboard off for now, and commit and push straight to `main`. Done on the short branch `feat/v2-default-dashboard` (from `main` `463cf1f`, worktree `temp\wt-v2-flicker`), then `main` was fast-forwarded to it and pushed.
+
+- `control_center.py`:
+  - `GET /` on the PC listener answers `303 See Other` to `/dashboard-v2/` with `Cache-Control: no-store`, so the switch can be undone. The phone listener already did this.
+  - The classic page (`_dashboard_html()`) stays in the code behind `CLASSIC_DASHBOARD = False`. Set it to `True` and restart the Control Center to serve it at `/` again, byte for byte as before.
+  - `/review/<id>` and `/logo-memory` are unchanged. The review page's "← Quay lại Dashboard" goes to `/`, so it now lands on V2.
+  - The three redirects (`/`, `/dashboard-v2` → `/dashboard-v2/`, the phone listener's `/`) share one `redirect()` helper. Their status codes and headers are unchanged.
+- V2 no longer calls itself a preview: the page title is "BiliFlow Control Center", the footer says "Dashboard V2 · chạy trên máy này" and the profile line "Dashboard V2".
+- Checked before the switch: every API call of the classic page is also in V2. That covers job actions, cleanup, delete, archive and restore, the Recycle Bin check, scheduler, shutdown, AI login/config/check, Visual AI Audit, hide and unhide. No function is lost.
+- `Start-BiliFlow.cmd` still opens `127.0.0.1:8765/`, which now shows V2. The Python change applies at the next Control Center start; until then the running one keeps the classic page at `/`.
+- `control_center.py` is in no scan stage's import graph, so the scan cache stays valid.
+- Tests:
+  - D2 (`test_dashboard_v2_route`) checks that `/` redirects to V2 by default. With `CLASSIC_DASHBOARD` patched on, it checks that the classic page still matches the f6996bb fixture byte for byte.
+  - P5, the H3 notice checks, the review D2 check and the L4 framing and Host checks were updated the same way.
+  - 8 focused tests failed before the change (RED) and pass after; `ControlCenterHttpTests` 24 OK.
+  - Node gates 35 / 33 / 21 / 31; full suite: 1588 tests OK (26 skipped), with the usual temporary synthetic clip.
+- README: `127.0.0.1:8765/` opens V2; how to bring the classic page back.
+
 # Unreleased — Dashboard V2: the video list no longer blinks on every refresh (U4) — 2026-10-06
 
 Branch `fix/v2-list-flicker` (from `main` `6dc2210`, worktree `temp\wt-v2-flicker`). The user checked it on the phone against the real Control Center (2026-10-06; the three static files were copied into the main folder first, so a page reload was enough): the list no longer blinks. At their request it was committed, `main` was fast-forwarded to it, and `main` was pushed to `origin`.
