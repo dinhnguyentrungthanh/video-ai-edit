@@ -59,6 +59,9 @@
   /* "Dọn video mất gốc": every video the server marks as lost and deletable (status delete hint), never a golden one. */
   function lostIds(jobs){return (jobs||[]).filter(j=>!!j&&!!j.delete&&j.delete.kind==='LOST'&&j.delete.eligible===true&&!j.protected).map(j=>j.id).sort((a,b)=>a-b);}
   const PC_ONLY_REASON = 'Chỉ làm trên PC: lưu trữ, khôi phục bản xuất và kiểm tra lại Thùng rác không làm qua điện thoại.';
+  /* H3: while the phone mode is on, the PC says so (the classic "/" page did until V2 replaced it on 2026-10-06).
+   * Only on the PC (the phone listener answers {remote: true}), never with the code. */
+  function phoneNotice(phone,{live,remote}={}){return live&&!remote&&!!phone&&phone.enabled===true?'Đang mở cho điện thoại: '+(phone.url||''):'';}
   function reviewStats(j) {
     const r=j.review_summary||{},d=r.decisions||{};
     const total=Number(r.main_items)||0,resolved=['KEEP','BLUR','CUT'].reduce((n,k)=>n+(Number(d[k])||0),0);
@@ -195,5 +198,5 @@
     if (pairs.length) path += '?'+pairs.join('&');
     return {operation:id,method:ep[0],path,body:body||{}};
   }
-  return {pcOnlyOps,permanentOps,DELETE_NOTE,lostIds,PC_ONLY_REASON,SOURCE_MISSING_MESSAGE,sourceLine,formatStamp,formatBytes,detectors,tabs,labels,scanning,pausable,rerunnable,endpoints,cleaned,archived,hidden,locked,inFlight,eligible,reviewStats,tab,phase,overviewLabels,overviewMatch,operations,primary,validateScan,exportSelection,EXPORT_GATE_MESSAGE,EXPORT_SIZE_OPTIONS,EXPORT_CUSTOM_GB,exportDescription,exportConfirmText,exportPolicyChoice,OUTPUT_MOVED_REASON,reexportState,resourceItems,request};
+  return {pcOnlyOps,permanentOps,DELETE_NOTE,lostIds,PC_ONLY_REASON,phoneNotice,SOURCE_MISSING_MESSAGE,sourceLine,formatStamp,formatBytes,detectors,tabs,labels,scanning,pausable,rerunnable,endpoints,cleaned,archived,hidden,locked,inFlight,eligible,reviewStats,tab,phase,overviewLabels,overviewMatch,operations,primary,validateScan,exportSelection,EXPORT_GATE_MESSAGE,EXPORT_SIZE_OPTIONS,EXPORT_CUSTOM_GB,exportDescription,exportConfirmText,exportPolicyChoice,OUTPUT_MOVED_REASON,reexportState,resourceItems,request};
 });

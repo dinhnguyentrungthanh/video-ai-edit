@@ -1753,6 +1753,7 @@ class ControlCenterHttpTests(unittest.TestCase):
         finally:
             connection.close()
 
+    @patch("biliflow.control_center.CLASSIC_DASHBOARD", False)  # "/" redirects; independent of a rollback
     def test_foreign_host_header_is_refused_on_every_route(self):
         routes = [
             "/", "/healthz", "/api/session", f"/review/{self.job_id}",
@@ -1819,6 +1820,7 @@ class ControlCenterHttpTests(unittest.TestCase):
         self.assertTrue(self.source.is_file())
         self.assertIsNone(self.store.latest_source_cleanup(self.job_id))
 
+    @patch("biliflow.control_center.CLASSIC_DASHBOARD", False)  # "/" redirects; independent of a rollback
     def test_every_response_forbids_framing_by_another_site(self):
         # Security review (L4): pages, JSON, streamed media, refusals and the server's own errors
         # all say SAMEORIGIN (a page of this Control Center may still frame another one).

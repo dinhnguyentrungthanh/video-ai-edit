@@ -428,7 +428,8 @@ class PhoneModeTests(unittest.TestCase):
     # P5 --------------------------------------------------------------------
     def test_p5_the_127_0_0_1_listener_is_unchanged(self):
         self.enable()
-        code, headers, body = request(self.pc_port, "/")
+        with patch.object(control_center, "CLASSIC_DASHBOARD", False):  # the default since 2026-10-06
+            code, headers, body = request(self.pc_port, "/")
         self.assertEqual((code, header(headers, "Location"), body), (303, ["/dashboard-v2/"], b""),
                          "V2 is the dashboard on the PC too (2026-10-06); the classic page is off")
         with patch.object(control_center, "CLASSIC_DASHBOARD", True):  # the classic page, kept for a rollback

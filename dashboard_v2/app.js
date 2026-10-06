@@ -274,7 +274,9 @@ function patchHtml(el,html){morphChildren(el,parseHtml(html));}
 let lastMainHtml=null,shownNotice=null; // shownNotice: the banner on the page ("Tải video" refreshes in place)
 function topNotice(){
   // id: a key for the patch (U4), so a banner that comes or goes never shifts the blocks after it
-  return state.offline?'<div class="notice" id="top-notice" role="alert">Mất kết nối hệ thống · đang hiển thị dữ liệu đã tải. Thao tác thay đổi được khóa đến khi kết nối lại.</div>':state.source_cleanup_running?'<div class="notice" id="top-notice">Một thao tác với video gốc đang chạy. Đợi hoàn tất trước khi xóa, lưu trữ hoặc khôi phục.</div>':'';
+  const phone=view==='settings'?'':C.phoneNotice(state.phone,{live:LIVE,remote:state.remote}); // Cài đặt has its panel
+  return (state.offline?'<div class="notice" id="top-notice" role="alert">Mất kết nối hệ thống · đang hiển thị dữ liệu đã tải. Thao tác thay đổi được khóa đến khi kết nối lại.</div>':state.source_cleanup_running?'<div class="notice" id="top-notice">Một thao tác với video gốc đang chạy. Đợi hoàn tất trước khi xóa, lưu trữ hoặc khôi phục.</div>':'')+
+    (phone?'<div class="notice" id="phone-notice" role="status">'+esc(phone)+' · tắt trong <a href="#settings">Cài đặt</a></div>':'');
 }
 function mainHtml(){
   return topNotice()+(view==='downloads'?downloadsView():view==='queue'?queueView():view==='logos'?logosView():view==='settings'?settingsView():heading(view==='overview'?'Trung tâm xử lý':'Video của bạn',view==='overview'?'Theo dõi tiến trình, duyệt cảnh và hoàn tất video của bạn.':'Tìm nhanh video và tiếp tục công việc ở đúng bước.')+(view==='overview'?kpis()+hero():'')+list());
@@ -668,7 +670,7 @@ if(LIVE){
   const pill=$('.demo-pill');if(pill)pill.textContent='CONTROL CENTER';
   const reset=$('[data-action="reset"]');if(reset)reset.remove();
   const mini=$('.storage-mini small');if(mini)mini.textContent='Xem dung lượng thật ở Tổng quan';
-  const footer=$('.page-footer span:last-child');if(footer)footer.textContent='Dashboard V2 · chạy trên máy này';
+  const footer=$('.page-footer span:last-child');if(footer)footer.textContent='Dashboard V2 · chạy cục bộ';
   const profile=$('.profile small');if(profile)profile.textContent='Dashboard V2';
   window.addEventListener('hashchange',()=>{if(view==='logos')store.loadMemory().catch(e=>toast(e.message,true));if(view==='settings'){store.loadAI();store.loadPhone();}});
   store.start(3000);
