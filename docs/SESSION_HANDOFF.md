@@ -1,5 +1,28 @@
 # BiliFlow session handoff
 
+## Source providers in `main`; real Control Center restarted; the user's real test passed — 2026-10-06
+
+- **Merged at the user's request.** `main` was fast-forwarded `84a5db1` → `a3b69f0`: `5056d94` (source providers) and `a3b69f0` (merge of `main` into `feat/download-source-providers`). Not pushed: `main` is 2 commits ahead of `origin/main`. The two sections below marked "(uncommitted)" are in `main` now; their "no merge, push or production Control Center restart" lines are historical.
+- **The main folder's uncommitted documents.** AGENTS.md, CHANGELOG.md, docs/PROJECT_STATUS.md, docs/SESSION_HANDOFF.md and docs/VIDEO_DOWNLOAD_PLAN.md held an older draft of the downloader scope update. They were backed up with their diff in `temp\main-folder-backup-20261006-214658`, then restored to `HEAD` before the fast-forward. The branch has all of their text, with three statements of the draft already updated ("providers are not yet implemented", "Chưa thay đổi runtime/backend ở đợt cập nhật tài liệu này.", "Các provider mới chưa được triển khai"). The same folder keeps copies of `state\control-center.sqlite3` and `state\downloads.sqlite3`, taken while the Control Center was stopped, before the new code added its columns to `download_tasks`.
+- **Local config.** `config\download_providers.local.json` was copied from the worktree into the install, where none existed. It is Git-ignored (`.gitignore:35`). The registry built from the install: `player-hls`, `article-mp4` and `embedded-media` with 2 exact hosts each, then `direct`; no config problems. Playwright 1.63.0 is in `.venv`; `embedded-media` launches the installed Edge headless.
+- **Checks on `a3b69f0` in the main folder** (`TEMP` = `<install>\temp`, the project FFmpeg):
+  - `test_download*`: 453 tests OK, including the five headless Edge tests.
+  - `test_dashboard_v2*`: 95 OK (1 skipped: the phone review browser check needs Node Playwright). Node gates: `verify.cjs` 36/36, `verify-adapter.cjs` 33/33, `verify-download.cjs` 22/22, `verify-review.cjs` 31/31.
+  - `test_control_center*`: 55 OK.
+  - Tool audit (`python -m biliflow.download_tools audit`): 0 blocked. Model license audit (`scripts\run.ps1 license-audit`): 9 allowed, 0 blocked.
+  - The full suite ran on the same tree before the fast-forward: 1858 tests OK (26 skipped) in an isolated copy with a synthetic clip in `input\`. In the worktree: 1858 tests, and the only errors were the 28 known `input\*.mp4` `StopIteration` errors.
+- **Real Control Center.** It was already stopped when checked: no listener on 8765, no state file, last start 20:39, clean stop at about 21:34 (not by this session; nothing recorded the cause). It was idle: no job or stage running, no download running, no source archive or cleanup row. The phone mode was off (last event `PHONE_MODE_DISABLED` at 20:37) and stays off.
+  - Started at 21:52:47 with `scripts\Start-BiliFlow.ps1` (existing database, `--no-import-existing`), PID 55128, from `E:\DungChung\BiliFlow` on `main` `a3b69f0`. Its err log is empty.
+  - Checked with GET only: `/healthz` ok (0.7.24); `/api/status` started, 0 recovered jobs; `/api/phone-mode` off; `/api/downloads` has no `worker_error` and nothing running. Task #4 (FAILED, `UNSUPPORTED`, attempt 2) is unchanged and now has the new fields (`progress_basis`, `transfer_stage`, `media.provider`).
+  - An offline check, with no request sent, shows that task #4's link now goes to `embedded-media` instead of yt-dlp.
+- **The user's real test passed** ("Phim tải oke rồi bạn"). The user retried task #4 and added four more links on the dashboard; this session sent nothing to `/api/downloads*`.
+  - The task counter went from 4 to 8. Five videos reached `input\` and became jobs 70–74 (43–48 minutes, 279–357 MB each), imported between 22:26:56 and 22:28:46.
+  - Job 70 is task #4's episode: 311,090,096 bytes, the size of the earlier probe of that link (see "Headless embedded-player adapter" below).
+  - The user then removed the five rows from the downloads list (before 30 days only the `remove` action deletes a row), so the provider of the other four is no longer recorded.
+  - At 22:45: job 70 reviewed and queued for export (`render`), 71–73 `WAITING_REVIEW`, 74 scanning. The downloader's temp is empty, there is no `worker_error` and the err log is empty.
+- Opening `state\*.sqlite3` with `mode=ro` while the Control Center was stopped left empty `-wal`/`-shm` files beside them. They are harmless (SQLite reuses them). Next time use the API, or `immutable=1` on a copy.
+- The test Control Center on port 8797 (root `temp\try-source-downloads-_jrilqlm`) still runs from the worktree.
+
 ## Headless embedded-player adapter — 2026-10-06 (uncommitted)
 
 - The user approved adding Playwright. Installed/pinned Playwright 1.63.0, pyee 13.0.1 and greenlet 3.5.6; uses the existing Microsoft Edge, with no browser download. Dependency licenses are recorded in download_tools.json (Apache-2.0, MIT, MIT AND PSF-2.0); tool audit has zero blockers and the equivalent standard model license audit has 9 allowed, zero blocked.
@@ -100,6 +123,7 @@ This is the short, authoritative starting point for a new Codex account or chat.
   - The main folder is on `main`, and the Control Center runs it.
   - 2026-10-06: at the user's request `main` was pushed to `origin` (with the U4 fix below). Push again only when the user asks.
   - The user asked on 2026-10-06 to use `main` as the working line from now on. The feature branches and the test branch are kept.
+- 2026-10-06, about 21:50, at the user's request: `main` was fast-forwarded `84a5db1` → `a3b69f0` (the video downloader's source providers; see "Source providers in `main`" above), and the real Control Center was restarted on it. Not pushed: `origin/main` is `84a5db1`.
 - 2026-10-06: **Dashboard V2 is the dashboard.** `/` on the PC redirects to `/dashboard-v2/` (the phone already did). The classic page is off behind `CLASSIC_DASHBOARD = False` in `src/biliflow/control_center.py`; set it to `True` and restart the Control Center to bring it back (then `test_the_classic_dashboard_is_off_by_default` must change too). While the phone mode is on, V2 on the PC shows "Đang mở cho điện thoại" (H3), as the classic page did. Made on the short branch `feat/v2-default-dashboard` (worktree `temp\wt-v2-flicker`), then fast-forwarded into `main` and pushed. The real Control Center was restarted at 20:37:51 (`Stop-BiliFlow` + `Start-BiliFlow`) and `/` opens V2; the user confirmed. Its phone mode is off until the user turns it on. `Start-BiliFlow.cmd` alone reuses a running Control Center, so after a code change stop it first.
 - Branch `fix/v2-list-flicker` (from `main` `6dc2210`, worktree `temp\wt-v2-flicker`, 2026-10-06): the Dashboard V2 list no longer blinks on every refresh (U4). It is in `main` and pushed. See "Current work — 2026-10-06 U4" below.
 - Branch `feat/dashboard-v2` (from `main` f6996bb, pushed 2026-10-03) holds the Dashboard V2 prototype and its integration plan.

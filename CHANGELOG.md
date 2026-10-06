@@ -1,3 +1,12 @@
+## Source providers in `main`; real Control Center restarted; the user's real test passed — 2026-10-06
+
+- At the user's request, `main` was fast-forwarded `84a5db1` → `a3b69f0` (`5056d94` source providers, `a3b69f0` merge of `main`). Not pushed. The sections below marked "(uncommitted)" are in `main` now.
+- The main folder's uncommitted draft of the downloader scope update (5 documents) was backed up with its diff in `temp\main-folder-backup-20261006-214658` and restored to `HEAD`. The branch already had all of it, with three statements updated. The backup also keeps copies of both `state\*.sqlite3` from before the restart.
+- `config\download_providers.local.json` was copied into the install (Git-ignored). Registry: `player-hls`, `article-mp4`, `embedded-media` (2 exact hosts each) and `direct`, no config problems. Playwright 1.63.0, Edge headless.
+- Checks on `a3b69f0`: `test_download*` 453 OK; `test_dashboard_v2*` 95 OK (1 skipped); `test_control_center*` 55 OK; Node gates 36/36, 33/33, 22/22, 31/31; tool audit 0 blocked; model license audit 9 allowed, 0 blocked. Full suite of the same tree before the fast-forward: 1858 OK (26 skipped) with a synthetic clip.
+- The real Control Center was already stopped (clean, about 21:34) and idle. It was started at 21:52:47 with `scripts\Start-BiliFlow.ps1` on `a3b69f0`, phone mode off as before. GET checks: no `worker_error`, nothing running, task #4 (FAILED, `UNSUPPORTED`) unchanged and left for the user to retry.
+- The user's real test passed: task #4 retried and four more links, five videos into `input\` (jobs 70–74, 43–48 minutes). Job 70 is task #4's episode (311,090,096 bytes, the size of the earlier probe). The user removed the rows afterwards.
+
 ## Headless embedded-player adapter — 2026-10-06 (uncommitted)
 
 - The user approved adding Playwright. Installed/pinned Playwright 1.63.0, pyee 13.0.1 and greenlet 3.5.6; uses the existing Microsoft Edge, with no browser download. Dependency licenses are recorded in download_tools.json (Apache-2.0, MIT, MIT AND PSF-2.0); tool audit has zero blockers and the equivalent standard model license audit has 9 allowed, zero blocked.

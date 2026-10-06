@@ -1,3 +1,11 @@
+## Source providers in `main`; real Control Center restarted; the user's real test passed — 2026-10-06
+
+- `main` = `a3b69f0` (fast-forward from `84a5db1` at the user's request; 2 commits ahead of `origin/main`, not pushed). The real Control Center runs it since 21:52:47 (PID 55128, phone mode off).
+- Active download readers: `player-hls`, `article-mp4`, `embedded-media` (exact hosts from the Git-ignored `config\download_providers.local.json`, 2 each) and `direct`. Every other link still goes to yt-dlp. `embedded-media` uses Playwright 1.63.0 with headless Edge.
+- Verified: `test_download*` 453 OK, `test_dashboard_v2*` 95 OK (1 skipped), `test_control_center*` 55 OK, Node gates 36/33/22/31 all passed, tool audit 0 blocked, model license audit 9 allowed and 0 blocked. The full suite of the same tree: 1858 OK (26 skipped) with a synthetic clip.
+- The user's real test on the real Control Center passed (about 22:27): task #4 retried and four new links, five videos into `input\` as jobs 70–74 (43–48 minutes). Job 70 is task #4's episode (311,090,096 bytes, the size of the earlier probe). The user removed the rows afterwards; at 22:45 the jobs were in review, scan and export as usual.
+- Backup of the main folder's superseded draft documents, and of `state\*.sqlite3` before the restart: `temp\main-folder-backup-20261006-214658`.
+
 ## Headless embedded-player adapter — 2026-10-06 (uncommitted)
 
 - The user approved adding Playwright. Installed/pinned Playwright 1.63.0, pyee 13.0.1 and greenlet 3.5.6; uses the existing Microsoft Edge, with no browser download. Dependency licenses are recorded in download_tools.json (Apache-2.0, MIT, MIT AND PSF-2.0); tool audit has zero blockers and the equivalent standard model license audit has 9 allowed, zero blocked.
