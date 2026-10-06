@@ -33,7 +33,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest import mock
 
-from biliflow import export_dialog, phone_access, review_workflow
+from biliflow import control_center, export_dialog, phone_access, review_workflow
 from biliflow.control_center import (
     DASHBOARD_V2_CSP,
     DASHBOARD_V2_DIR,
@@ -194,7 +194,10 @@ class ReviewR0Serving(unittest.TestCase):
                          CLASSIC["review_job_1_token_test_sha256"])
         code, _, body = self.pc_get("/review/1")
         self.assertEqual((code, hashlib.sha256(body).hexdigest()), (200, CLASSIC["review_job_1_token_test_sha256"]))
-        code, _, body = self.pc_get("/")
+        with mock.patch.object(control_center, "CLASSIC_DASHBOARD", False):  # the default since 2026-10-06
+            self.assertEqual(self.pc_get("/")[0], 303, "V2 is the dashboard; the classic page is off")
+        with mock.patch.object(control_center, "CLASSIC_DASHBOARD", True):  # kept for a rollback
+            code, _, body = self.pc_get("/")
         self.assertEqual((code, hashlib.sha256(body).hexdigest()), (200, CLASSIC["dashboard_sha256"]))
 
     def test_phone_posts_and_contract_endpoints_are_unchanged(self):

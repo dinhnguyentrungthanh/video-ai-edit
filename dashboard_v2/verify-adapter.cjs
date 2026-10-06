@@ -352,6 +352,106 @@ test('Live store: pause() stops /api/status polling while the review dialog is o
   }
 });
 
+test('Transport: a GET with no answer is cut after its time limit; an answered GET is not; a POST never is', async () => {
+  const inits = [];
+  const fetchImpl = (path, init) => {
+    inits.push(init);
+    return new Promise((resolve, reject) => {
+      if (init.signal) init.signal.addEventListener('abort', () => reject(new Error('aborted')));
+      if (path === '/ok') resolve({status: 200, text: async () => '{"a":1}'});
+    });
+  };
+  const t = A.fetchTransport(fetchImpl, 30);
+  const started = Date.now();
+  await assert.rejects(() => t('GET', '/hang', {headers: {}}), /aborted/, 'a phone waking up on a dead connection');
+  assert.ok(Date.now() - started >= 25, 'cut after the limit, not before');
+  assert.deepEqual(await t('GET', '/ok', {headers: {}}), {status: 200, body: {a: 1}});
+  await new Promise(resolve => setTimeout(resolve, 60));
+  assert.equal(inits[1].signal.aborted, false, 'an answered GET is never cut afterwards');
+  t('POST', '/write', {headers: {}, body: '{}'}); // never answers here: the Control Center may still be running it
+  assert.equal(inits[2].signal, undefined, 'a POST gets no time limit');
+});
+
+test('Live store: back from a hidden tab a fresh /api/status goes even while an older one hangs; a late answer frees only its own poll', async () => {
+  const timers = new Map(), listeners = new Map(), realSet = global.setInterval, realClear = global.clearInterval;
+  let next = 1;
+  global.setInterval = (fn, ms) => { const id = next++; timers.set(id, {fn, ms}); return id; };
+  global.clearInterval = id => { timers.delete(id); };
+  global.document = {hidden: false, addEventListener: (type, fn) => listeners.set(type, fn),
+    removeEventListener: (type, fn) => { if (listeners.get(type) === fn) listeners.delete(type); }};
+  const settle = () => new Promise(resolve => setImmediate(resolve));
+  try {
+    const releases = [];
+    const f = fake({'GET /api/status': () => new Promise(resolve => releases.push(() => resolve({status: 200, body: {version: 't', jobs: []}})))});
+    const store = A.createLiveStore(adapterWith(f));
+    const statuses = () => f.calls.filter(c => c.path === '/api/status').length;
+    store.start(3000);
+    const [timer] = timers.values();
+    await settle();
+    assert.equal(statuses(), 1, 'the first request hangs (the phone falls asleep)');
+    global.document.hidden = true;
+    listeners.get('visibilitychange')();
+    timer.fn();
+    await settle();
+    assert.equal(statuses(), 1, 'nothing while hidden');
+    global.document.hidden = false;
+    listeners.get('visibilitychange')();
+    await settle();
+    assert.equal(statuses(), 2, 'shown again: a fresh request, not a wait on the hung one');
+    releases[0]();
+    await settle();
+    timer.fn();
+    await settle();
+    assert.equal(statuses(), 2, 'the late answer did not free the newer pending poll');
+    releases[1]();
+    await settle();
+    timer.fn();
+    await settle();
+    assert.equal(statuses(), 3, 'the next poll goes once the newer one answered');
+    store.stop();
+  } finally {
+    global.setInterval = realSet; global.clearInterval = realClear; delete global.document;
+  }
+});
+
+test('Live store: one /api/status poll at a time, none while the tab is hidden, one at once when it shows again', async () => {
+  const timers = new Map(), listeners = new Map(), realSet = global.setInterval, realClear = global.clearInterval;
+  let next = 1, release;
+  global.setInterval = (fn, ms) => { const id = next++; timers.set(id, {fn, ms}); return id; };
+  global.clearInterval = id => { timers.delete(id); };
+  global.document = {hidden: false, addEventListener: (type, fn) => listeners.set(type, fn),
+    removeEventListener: (type, fn) => { if (listeners.get(type) === fn) listeners.delete(type); }};
+  const settle = () => new Promise(resolve => setImmediate(resolve));
+  try {
+    const slow = new Promise(resolve => { release = resolve; });
+    const f = fake({'GET /api/status': async () => { await slow; return {status: 200, body: {version: 't', jobs: []}}; }});
+    const store = A.createLiveStore(adapterWith(f));
+    const statuses = () => f.calls.filter(c => c.path === '/api/status').length;
+    store.start(3000);
+    assert.equal(timers.size, 1, 'one poll timer');
+    const [timer] = timers.values();
+    assert.equal(timer.ms, 3000);
+    timer.fn(); timer.fn(); // the first answer has not arrived (a slow phone link)
+    await settle();
+    assert.equal(statuses(), 1, 'no second request while one is pending');
+    release();
+    await settle();
+    global.document.hidden = true; // screen off or another tab
+    timer.fn();
+    await settle();
+    assert.equal(statuses(), 1, 'no poll while the tab is hidden');
+    global.document.hidden = false;
+    listeners.get('visibilitychange')();
+    await settle();
+    assert.equal(statuses(), 2, 'one poll at once when the tab shows again');
+    store.stop();
+    assert.equal(timers.size, 0, 'stop() clears the timer');
+    assert.equal(listeners.has('visibilitychange'), false, 'stop() removes the listener');
+  } finally {
+    global.setInterval = realSet; global.clearInterval = realClear; delete global.document;
+  }
+});
+
 /* R2: review writes of one job: a serial chain (never once()), retries 300/900 ms on a network error or >= 500. */
 function writeAdapter(script) {
   const f = fake(script), sleeps = [];
@@ -459,12 +559,19 @@ test('R3: finalize is sent once, never retried (500, network error, 409), and on
   }
 });
 
+// A test awaiting a promise nobody settles ends the event loop quietly, with exit code 0: count it as a failure.
+let running = null, finished = false;
+process.on('exit', code => {
+  if (!finished && code === 0) { process.stderr.write('Never finished: ' + running + '\n'); process.exitCode = 1; }
+});
 (async () => {
   for (const [name, fn] of tests) {
+    running = name;
     try { await fn(); } catch (error) { error.message = name + ': ' + error.message; throw error; }
     passed++;
     process.stdout.write('OK ' + name + '\n');
   }
+  finished = true;
   process.stdout.write(JSON.stringify({passed, failed: 0}) + '\n');
 })().catch(error => {
   // R0-T1: exit even if a failed test left a timer running (a store that was never stopped).

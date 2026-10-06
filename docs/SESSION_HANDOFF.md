@@ -98,8 +98,10 @@ This is the short, authoritative starting point for a new Codex account or chat.
 - **Since 2026-10-06 the active branch is `main`.** At the user's request it was fast-forwarded from `f6996bb` to the tip of `test/download-delete`.
   - It now has Dashboard V2 (`feat/dashboard-v2`), "Tải video" (`feat/video-download`), the permanent delete (`feat/delete-flow`) and the phone deletes.
   - The main folder is on `main`, and the Control Center runs it.
-  - `origin/main` is still `f6996bb`: push only when the user asks.
-  - The feature branches and the test branch are kept. Start new work on a new branch from `main`.
+  - 2026-10-06: at the user's request `main` was pushed to `origin` (with the U4 fix below). Push again only when the user asks.
+  - The user asked on 2026-10-06 to use `main` as the working line from now on. The feature branches and the test branch are kept.
+- 2026-10-06: **Dashboard V2 is the dashboard.** `/` on the PC redirects to `/dashboard-v2/` (the phone already did). The classic page is off behind `CLASSIC_DASHBOARD = False` in `src/biliflow/control_center.py`; set it to `True` and restart the Control Center to bring it back (then `test_the_classic_dashboard_is_off_by_default` must change too). While the phone mode is on, V2 on the PC shows "Đang mở cho điện thoại" (H3), as the classic page did. Made on the short branch `feat/v2-default-dashboard` (worktree `temp\wt-v2-flicker`), then fast-forwarded into `main` and pushed. The real Control Center was restarted at 20:37:51 (`Stop-BiliFlow` + `Start-BiliFlow`) and `/` opens V2; the user confirmed. Its phone mode is off until the user turns it on. `Start-BiliFlow.cmd` alone reuses a running Control Center, so after a code change stop it first.
+- Branch `fix/v2-list-flicker` (from `main` `6dc2210`, worktree `temp\wt-v2-flicker`, 2026-10-06): the Dashboard V2 list no longer blinks on every refresh (U4). It is in `main` and pushed. See "Current work — 2026-10-06 U4" below.
 - Branch `feat/dashboard-v2` (from `main` f6996bb, pushed 2026-10-03) holds the Dashboard V2 prototype and its integration plan.
   - 2026-10-05: it also holds the V2 review dialog (batches R0–R4 of `docs/DASHBOARD_V2_REVIEW_PLAN.md`) and the local commit `0334f8c` (stronger logo cover in exports). See "Current work — 2026-10-05" below.
   - Per the plan's log, the main folder ran `a7d8f18` of this branch (detached) on 2026-10-05, with the Control Center on that code. Check with `git status` and `git log` before any claim.
@@ -126,6 +128,17 @@ Since 2026-10-03 local `main` also holds everything from `improve/scan-performan
 5. `0b4ff3c Map logo candidates by geometry track`
 
 Always confirm this section with `git status` and `git log` because it becomes stale after new work.
+
+## Current work — 2026-10-06 U4: the Dashboard V2 list blinked on every refresh (in `main`, pushed)
+
+- The user's report, from the phone: the video list blinked every few seconds in every tab ("Tất cả", "Chờ xử lý", …); they also asked whether the constant refresh costs too much.
+- Cause and fix: see CHANGELOG. In short, a 3 s poll rebuilt all of `#main` whenever anything changed (always, on the overview), re-creating every row and its lazy-loaded poster. Now a poll patches the page in place with the patch "Tải video" already used, now shared from `app.js`. The drawer is patched the same way. `/api/status` polls one at a time and not while the tab is hidden. A GET with no answer after 15 s is cut, so a dead connection never stops the polls.
+- Only static files changed: `dashboard_v2/app.js`, `adapter.js`, `download-live.js`, `verify-adapter.cjs` and `browser-check.cjs`. No Control Center restart is needed; a page reload is enough.
+- Checked on test Control Centers with temporary roots under each worktree's `temp` (old code on port 8793, new code on 8794): DOM churn and CPU before and after, and 17 behaviour checks.
+- A code review (agent) found no CRITICAL issue. Its HIGH, MEDIUM and LOW findings are fixed.
+- Gates: node 35 / 33 / 21 / 31; V2 and download Python tests 277 OK.
+- `browser-check.cjs` was updated to the new behaviour, but it needs Playwright, which is not installed here.
+- The user checked the phone against the real Control Center (the three static files were copied into the main folder first): OK. At their request the branch was committed, `main` was fast-forwarded to it, and `main` was pushed.
 
 ## Current work — 2026-10-06 test branch `test/download-delete` ("Tải video" and the permanent delete; now in `main`, not pushed)
 

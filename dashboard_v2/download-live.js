@@ -16,40 +16,12 @@
   // The dialog's own close button is "Hủy": the confirm button of a cancel needs another word.
   const CONFIRM_LABELS = {cancel: 'Hủy lượt tải'};
 
-  /* In-place DOM patch: the nodes stay, so focus, an IME composition, a selection, an open <details>
-   * and the scroll of a log survive the 2 s refresh; only attributes and text that changed are written.
-   * Children match by key (a task row, an id) or by position with the same tag. */
-  const keyOf = node => node.nodeType === 1 ? node.getAttribute('data-download-id') || node.id || '' : '';
-  const same = (a, b) => a.nodeType === b.nodeType && a.nodeName === b.nodeName && keyOf(a) === keyOf(b);
-  function morph(from, to) {
-    if (from.nodeType !== 1) { if (from.nodeValue !== to.nodeValue) from.nodeValue = to.nodeValue; return; }
-    const keepOpen = from.nodeName === 'DETAILS'; // the user opens and closes it; the toggle listener records it
-    for (const {name} of [...from.attributes]) if (!to.hasAttribute(name) && !(keepOpen && name === 'open')) from.removeAttribute(name);
-    for (const {name, value} of [...to.attributes]) if (from.getAttribute(name) !== value) from.setAttribute(name, value);
-    if (from.nodeName === 'INPUT' && (from.type === 'checkbox' || from.type === 'radio')) from.checked = to.hasAttribute('checked');
-    if (from.nodeName === 'TEXTAREA') return; // its text is the user's draft; add() clears it on purpose
-    morphChildren(from, to);
-    if (from.nodeName === 'SELECT' && from !== document.activeElement) from.value = to.value;
-  }
-  function morphChildren(from, to) {
-    const next = [...to.childNodes];
-    const keyed = new Map([...from.childNodes].filter(keyOf).map(node => [keyOf(node), node]));
-    const wanted = new Set(next.map(keyOf).filter(Boolean));
-    keyed.forEach((node, key) => { if (!wanted.has(key)) node.remove(); });
-    next.forEach((node, i) => {
-      const at = from.childNodes[i] || null, key = keyOf(node), old = key ? keyed.get(key) : at;
-      if (old && old.parentNode === from && same(old, node)) {
-        if (old !== at) from.insertBefore(old, at);
-        morph(old, node);
-      } else from.insertBefore(node, at);
-    });
-    while (from.childNodes.length > next.length) from.lastChild.remove();
-  }
-  function parse(html) { const box = document.createElement('div'); box.innerHTML = html; return box; }
-  const patch = (el, html) => morphChildren(el, parse(html));
-
   function create(o) {
     const V = o.view, K = o.core, ui = V.createUi(), esc = V.esc;
+    /* In-place DOM patch from app.js (U4, the same one the video list uses): the nodes stay, so focus, an IME
+     * composition, a selection, an open log (the toggle listener records it), a rename draft and the scroll of a log
+     * survive the 2 s refresh. Task rows match by data-download-id; add() clears the link box on purpose. */
+    const {morph, parse, patch} = o.dom;
     const loading = new Set(), loadedAt = new Map(), loadedState = new Map();
     let watching = false, reveal = null; // reveal: the first task of the last add, brought into view once
     const snap = () => o.store.snapshot();

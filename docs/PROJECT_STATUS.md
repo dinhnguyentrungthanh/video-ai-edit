@@ -82,6 +82,31 @@
 - No provider/runtime implementation changed, no real download was started and the Control Center was not restarted.
 - DRM/paywall circumvention, user cookies/logins, challenge bypass and browser impersonation to bypass blocks remain excluded. Public-repository hygiene, isolated download tests and source-video protections are unchanged.
 
+## Dashboard V2 is the dashboard; the classic one is off for now (2026-10-06) — in `main`, pushed
+
+- At the user's request, `/` on the PC opens V2 (`303` to `/dashboard-v2/`), as on the phone. The classic page stays in the code behind `CLASSIC_DASHBOARD` in `control_center.py`, for a rollback (set `True`, restart).
+- V2 already makes every API call the classic page makes, so nothing is lost. V2 no longer calls itself a preview.
+- The phone-mode notice (H3) moved with it: while the mode is on, V2 on the PC shows "Đang mở cho điện thoại: <link>" at the top of every page except Cài đặt, never with the code and never on the phone.
+- Code review (agent): no CRITICAL or HIGH; the MEDIUM (that notice) and three LOW notes are fixed.
+- Real machine: the Control Center was restarted at 20:37:51 with `Stop-BiliFlow` + `Start-BiliFlow` (`Start-BiliFlow.cmd` alone reuses a running one). `/` opens V2, and the user confirmed it. The phone mode is off after the restart until the user turns it on. The scan cache is not affected.
+- Tests: 8 focused tests RED then GREEN; only one test pins the switch (with it on, 1 of 96 related tests fails); node gates 36 / 33 / 21 / 31; headless Chrome on a test Control Center 6 of 6; full suite 1589 tests OK (26 skipped), with the usual temporary synthetic clip.
+
+## Dashboard V2 list no longer blinks on every refresh, U4 (2026-10-06) — in `main`, pushed
+
+- The user saw the video list blink on the phone every few seconds in every tab, and asked for a check of the look and of the refresh cost.
+- Cause: every 3 s poll that changed anything rebuilt all of `#main` (on the overview the CPU/RAM numbers always change), so each row and its lazy-loaded poster were re-created. The drawer was rebuilt the same way, and the poll had no guard.
+- Fix, static files only (`dashboard_v2/app.js`, `adapter.js`, `download-live.js`):
+  - a poll patches the page in place, using the patch of "Tải video", now shared;
+  - the drawer is patched too; the menu is written only on change; row posters load at once; a poll no longer scrolls the page;
+  - one `/api/status` poll at a time, none while the tab is hidden, a fresh one when it shows again;
+  - a GET with no answer after 15 s is cut (offline banner, next poll retries); a POST never is.
+- Checks on a test Control Center at 390×844 (details in CHANGELOG):
+  - per 5 polls on the overview: 25 nodes and 8 posters re-created before, none after; layout + style 48 ms before, 4–7 ms after;
+  - 17 of 17 behaviour checks passed (drawer, search box, selection boxes, download link box, hidden tab, offline banner, drawer actions changing, no JS error).
+- Code review (agent): no CRITICAL; the HIGH (a hung poll could stop polling) and the MEDIUM (`browser-check.cjs` still asserted rebuilds) are fixed, and so are the LOW notes.
+- Tests: node gates 35 / 33 / 21 / 31; `tests.test_dashboard_v2_*` and `tests.test_download_*` 277 OK.
+- The user checked the phone against the real Control Center: OK. At their request `fix/v2-list-flicker` was committed, `main` was fast-forwarded to it, and `main` was pushed to `origin`. That push also published the 98 earlier local commits of `main`.
+
 ## `main` has Dashboard V2, "Tải video", the permanent delete and the phone deletes (2026-10-06) — local, not pushed
 
 - The user could not test the phone yet. At their request, the phone deletes were checked, then `main` was fast-forwarded from `f6996bb` to the tip of `test/download-delete`. The main folder runs `main`. `origin/main` is still `f6996bb`.

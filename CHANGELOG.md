@@ -299,6 +299,93 @@ Status: branch `feat/download-source-providers`, worktree `temp\wt-download-sour
 - Updated SESSION_HANDOFF.md and PROJECT_STATUS.md so future sessions distinguish this scope change from the current yt-dlp-only implementation. No runtime code, dependency or Control Center state changed.
 - Verification: reviewed the scoped documentation diff; no runtime tests required for these documentation-only changes.
 
+# Unreleased — Dashboard V2 is the dashboard; the classic one is off for now — 2026-10-06
+
+At the user's request, after their phone check of U4: use V2 for good, turn the old dashboard off for now, and commit and push straight to `main`. Done on the short branch `feat/v2-default-dashboard` (from `main` `463cf1f`, worktree `temp\wt-v2-flicker`), then `main` was fast-forwarded to it and pushed.
+
+- `control_center.py`:
+  - `GET /` on the PC listener answers `303 See Other` to `/dashboard-v2/` with `Cache-Control: no-store`, so the switch can be undone. The phone listener already did this.
+  - The classic page (`_dashboard_html()`) stays in the code behind `CLASSIC_DASHBOARD = False`. Set it to `True` and restart the Control Center to serve it at `/` again, byte for byte as before.
+  - `/review/<id>` and `/logo-memory` are unchanged. The review page's "← Quay lại Dashboard" goes to `/`, so it now lands on V2.
+  - The three redirects (`/`, `/dashboard-v2` → `/dashboard-v2/`, the phone listener's `/`) share one `redirect()` helper. Their status codes and headers are unchanged.
+- V2 no longer calls itself a preview: the page title is "BiliFlow Control Center", the footer says "Dashboard V2 · chạy cục bộ" and the profile line "Dashboard V2".
+- The phone-mode notice (H3) lived only on the classic page. While the phone mode is on, V2 on the PC now shows "Đang mở cho điện thoại: <link> · tắt trong Cài đặt" at the top of every page except Cài đặt, whose panel shows the state. It never shows the code and never appears on the phone; the text comes from `C.phoneNotice` in `contracts.js`. Like the classic notice, a tab opened before the mode was turned on shows it after a reload or a visit to Cài đặt; it goes away by itself when the mode turns off.
+- Checked before the switch: every API call of the classic page is also in V2. That covers job actions, cleanup, delete, archive and restore, the Recycle Bin check, scheduler, shutdown, AI login/config/check, Visual AI Audit, hide and unhide. No function is lost.
+- `Start-BiliFlow.cmd` still opens `127.0.0.1:8765/`, which now shows V2. The Python change applies at the next Control Center start; until then the running one keeps the classic page at `/`.
+- Real machine (2026-10-06): the user first ran `Start-BiliFlow.cmd` alone and still saw the classic page. The launcher only reuses a running Control Center, and that one had started at 16:48, before the change. It was then stopped with `Stop-BiliFlow` and started again with `Start-BiliFlow` at 20:37:51, while idle (no job running, empty queue, no download). `/` now answers 303 to `/dashboard-v2/`; all 10 jobs are there and none was interrupted. The phone mode went off with the restart. The user confirmed V2 on the PC: OK.
+- `control_center.py` is in no scan stage's import graph, so the scan cache stays valid.
+- Tests:
+  - D2 (`test_dashboard_v2_route`) checks that `/` redirects to V2 by default. With `CLASSIC_DASHBOARD` patched on, it checks that the classic page still matches the f6996bb fixture byte for byte.
+  - P5, the H3 notice checks, the review D2 check and the L4 framing and Host checks were updated the same way.
+  - 8 focused tests failed before the change (RED) and pass after; `ControlCenterHttpTests` 24 OK.
+  - Only `test_the_classic_dashboard_is_off_by_default` pins the switch; the other tests set it themselves. With the switch on in memory, 1 of the 96 related tests fails (that one); with it off, 96 OK.
+  - `verify.cjs` has a new check for `C.phoneNotice` (it failed before the function existed).
+  - Headless Chrome on a test Control Center (temporary root, port 8796, phone listener on 127.0.0.1 only), 6 of 6: `/` opens V2 with the banner and the link but not the code; no banner in Cài đặt; the banner again on "Video của bạn"; none through the phone listener; it goes when the mode is turned off; no JS error.
+  - Node gates 36 / 33 / 21 / 31; full suite: 1589 tests OK (26 skipped), with the usual temporary synthetic clip.
+- Code review (agent): no CRITICAL or HIGH. Fixed: the MEDIUM (the H3 notice, above) and three LOW notes (tests independent of the switch, `dashboard_v2/README.md` and `docs/DASHBOARD_V2_PHONE.md` still said the classic page is at `/`, "chạy trên máy này" was wrong on the phone).
+- README: `127.0.0.1:8765/` opens V2; how to bring the classic page back.
+
+# Unreleased — Dashboard V2: the video list no longer blinks on every refresh (U4) — 2026-10-06
+
+Branch `fix/v2-list-flicker` (from `main` `6dc2210`, worktree `temp\wt-v2-flicker`). The user checked it on the phone against the real Control Center (2026-10-06; the three static files were copied into the main folder first, so a page reload was enough): the list no longer blinks. At their request it was committed, `main` was fast-forwarded to it, and `main` was pushed to `origin`.
+
+- The user saw the video list blink on the phone every few seconds, in every tab ("Tất cả", "Chờ xử lý", …). They asked for a check of the look and of the cost of the constant refresh.
+- Cause:
+  - V2 polls `/api/status` every 3 s. On the overview the CPU and RAM numbers change on every poll; during a scan, the progress changes too.
+  - Any change made `onSnapshot()` replace all of `#main` with `innerHTML`. Every row was rebuilt, and each poster `<img loading="lazy">` was re-created and stayed blank until the lazy loader showed it again. On a phone that is a visible blink every 3 s, plus a layout of the whole page.
+  - The details drawer was rebuilt the same way while its video changed, so its poster blinked too.
+  - The poll had no guard. On a slow phone link the requests could pile up, and the polls went on with the screen off.
+- Fix (static files only; a page reload is enough, no Control Center restart):
+  - `app.js`: a poll patches the page in place. Only the attributes and text that changed are written. Rows match by video id, so the posters, the focus, a text selection, open folds and the scroll stay.
+    - The patch is the one "Tải video" already used. It moved from `download-live.js` to `app.js`, and `download-live.js` now gets it through `create()`.
+    - `render()` still builds the page when the user opens a view or picks a filter.
+  - The drawer is patched the same way. The menu and the storage line are written only when they change. Row posters load at once (no `loading="lazy"`).
+  - A poll no longer scrolls the page back with `window.scrollTo`, which stopped a swipe on the phone.
+  - `adapter.js`:
+    - one `/api/status` poll at a time;
+    - no poll while the tab is hidden (screen off, another tab);
+    - when the tab shows again, a fresh request goes at once, even if an older one hangs.
+  - `adapter.js` transport: a GET with no answer after 15 s is cut and fails like a dropped connection, so the page says it is offline and the next poll tries again. This also covers the "Tải video" and review-dialog polls. A POST is never cut, because the Control Center may still be running it.
+  - Keys for the patch, so a block that comes and goes never shifts the blocks after it:
+    - an `id` on the offline/busy banner and on the lost-source notice;
+    - `data-fold` on the three drawer sections. Their open state now also survives a change of the actions.
+- Measured on a test Control Center (temporary root, 10 fake videos, headless Chrome at 390×844, 15 s = 5 polls per phase; times are this PC's, a phone is slower):
+
+  | Phase | Before | After |
+  | --- | --- | --- |
+  | Overview, "Tất cả" | 25 nodes removed and added again, 8 of 8 posters re-created, layout + style 48 ms | 0 nodes; 12 attributes and 10 texts (the CPU/RAM meters); 0 posters; 7 ms |
+  | Overview, "Chờ xử lý" | 25 nodes, 2 of 2 posters, 31 ms | 0 nodes, 0 posters, 4 ms |
+  | "Video của bạn" while a scan moves | 10 nodes, 8 of 8 posters, 25 ms | only the progress of the scanning row; no layout |
+
+- Behaviour checks on the same test Control Center, 13 of 13 passed:
+  - the drawer keeps its poster, scroll and focus while its progress moves;
+  - the search box keeps its focus, text and selection across polls;
+  - "Chọn tối đa 50", a box unticked by hand, and "Bỏ chọn" all stay right after a poll;
+  - the "Tải video" link box keeps its focus and text;
+  - a hidden tab sends no `/api/status`, and one goes at once when it shows again;
+  - no JS error.
+
+  After the review fixes, 4 more checks passed:
+  - the offline banner comes and goes while the list section, its posters and a focused search box stay;
+  - in the demo, "Tạm dừng" changes the drawer's actions while the drawer, its poster and its three open sections stay;
+  - no JS error.
+
+  The measurement was unchanged: 0 nodes, 0 posters, 5 polls per 15 s.
+- Code review (agent):
+  - no CRITICAL finding;
+  - **HIGH:** the one-poll guard could wait forever on a request that never answers. Fixed by the 15 s GET limit and the fresh request when the tab shows again. There is a test for each, and both failed before the fix;
+  - **MEDIUM:** `browser-check.cjs` U1/U2 still asserted that a changed snapshot rebuilds `#main` and the drawer. They now assert the same nodes: list section, posters, search box, select, drawer and its poster. Playwright is not installed here, so it was not run;
+  - **LOW:**
+    - `<select>` value is read before its options move;
+    - the keys above;
+    - clearer names in `adapter.js`.
+- The `verify-adapter.cjs` runner now fails a test that never finishes. Before, such a test ended the run with exit code 0 and no summary.
+- Tests:
+  - node gates 35 / 33 / 21 / 31; the adapter gate has three new tests: the poll guard, the GET time limit, and the fresh poll after a hang;
+  - `tests.test_dashboard_v2_*` and `tests.test_download_*`: 277 OK;
+  - full suite: 1587 tests OK (26 skipped), with the usual temporary synthetic clip.
+- User check (2026-10-06, phone, real Control Center): OK. The user then asked to commit and push.
+
 # Unreleased — `main` now has Dashboard V2, "Tải video", the permanent delete and the phone deletes — 2026-10-06
 
 Status: the user could not test the phone part yet and asked for a check of the code, logic and performance, then a merge into `main` if it was OK, with BiliFlow running that branch. `main` (`f6996bb`) was an ancestor of `test/download-delete`, so `main` was fast-forwarded to this commit. That brings no merge commit, and no `main` commit was missing from the branch. The main folder runs `main` from now on. Not pushed: `origin/main` stays at `f6996bb` until the user asks.

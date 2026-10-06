@@ -1,6 +1,7 @@
 """GET /dashboard-v2/ on the real Control Center handler (port 0, temporary root, stub center).
 
-D1 whitelist, D2 classic pages unchanged, D3 CSP, D4 POST still needs the token.
+D1 whitelist, D2 "/" opens V2 and the classic pages are unchanged behind CLASSIC_DASHBOARD,
+D3 CSP, D4 POST still needs the token.
 No scheduler thread, watcher, video or real project data.
 """
 from __future__ import annotations
@@ -13,7 +14,9 @@ import unittest
 from http.server import ThreadingHTTPServer
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from unittest import mock
 
+from biliflow import control_center
 from biliflow.control_center import (
     DASHBOARD_V2_CSP,
     DASHBOARD_V2_DIR,
@@ -119,8 +122,24 @@ class DashboardV2RouteTests(unittest.TestCase):
         self.assertEqual(status, 403, body)
 
     # D2 ---------------------------------------------------------------
+    def test_the_classic_dashboard_is_off_by_default(self):
+        # The user's choice (2026-10-06): V2 is the dashboard. The only test that pins it; a rollback changes it too.
+        self.assertFalse(control_center.CLASSIC_DASHBOARD)
+
+    def test_root_opens_dashboard_v2_while_the_classic_dashboard_is_off(self):
+        with mock.patch.object(control_center, "CLASSIC_DASHBOARD", False):
+            status, headers, body = self.request("/")
+            refused = self.request("/", host="evil.example")[0]
+        self.assertEqual((status, body), (303, b""))
+        self.assertEqual(self.header(headers, "Location"), ["/dashboard-v2/"])
+        self.assertEqual(self.header(headers, "Cache-Control"), ["no-store"], "not cached: the switch can be undone")
+        self.assertEqual(self.header(headers, "Content-Security-Policy"), ["frame-ancestors 'self'"])
+        self.assertEqual(refused, 403)
+
     def test_classic_dashboard_and_review_page_are_byte_identical_to_before_v2(self):
-        status, headers, body = self.request("/")
+        # The classic page stays in the code for a rollback: CLASSIC_DASHBOARD = True serves it at "/" again.
+        with mock.patch.object(control_center, "CLASSIC_DASHBOARD", True):
+            status, headers, body = self.request("/")
         self.assertEqual(status, 200)
         self.assertEqual(body, _dashboard_html().encode())
         self.assertEqual((len(body), hashlib.sha256(body).hexdigest()),

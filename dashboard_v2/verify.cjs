@@ -234,6 +234,17 @@ check('Demo store review writes (R2, R3): decision / clear / bulk change the syn
   assert.equal(r.pendingWrites(),0);
   assert.ok(!/fetch\(|XMLHttpRequest/.test(fs.readFileSync(path.join(__dirname,'demo-store.js'),'utf8')));
 });
+check('H3 on V2 (the classic "/" page is off since 2026-10-06): the PC says the phone mode is on, never with the code; the phone does not',()=>{
+  const on={enabled:true,url:'http://192.168.1.23:8767/',code:'abcd2345'};
+  const text=C.phoneNotice(on,{live:true,remote:false});
+  assert.equal(text,'Đang mở cho điện thoại: http://192.168.1.23:8767/');
+  assert.ok(!text.includes(on.code),'never the code');
+  assert.equal(C.phoneNotice(on,{live:true,remote:true}),'','not on the phone itself');
+  assert.equal(C.phoneNotice({...on,enabled:false},{live:true,remote:false}),'');
+  assert.equal(C.phoneNotice(null,{live:true,remote:false}),'','status not loaded yet');
+  assert.equal(C.phoneNotice({unavailable:true},{live:true,remote:false}),'','an older Control Center');
+  assert.equal(C.phoneNotice(on,{live:false,remote:false}),'','the demo has no phone mode');
+});
 check('Delete flow: "Xóa video" follows the server hint, the golden set and the file lock, on the PC and the phone',()=>{
   const cancelled=job('CANCELLED',{delete:{eligible:true,kind:'CANCELLED',reason:null,size_bytes:5}});
   assert.deepEqual([has(cancelled,'delete').label,has(cancelled,'delete').enabled],['Xóa video',true]);

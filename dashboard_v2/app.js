@@ -16,7 +16,7 @@ const D=window.BFDownload;
 let downloadDraft={url:'',error:''},downloadQueue=D.createQueue(),downloadFilter='all',downloadTimer=null;
 const $=s=>document.querySelector(s), esc=value=>String(value??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 /* Live "Tải video" (download-live.js) keeps its own page state; the demo keeps the simulation below. */
-const DL=LIVE&&window.BFDownloadLive?window.BFDownloadLive.create({store,view:window.BFDownloadView,core:window.BFDownloadCore,$,icon:id=>icon(id),toast:(message,error)=>toast(message,error),showModal:(...args)=>showModal(...args),openCleanable:()=>changeFilter('completed')}):null;
+const DL=LIVE&&window.BFDownloadLive?window.BFDownloadLive.create({store,view:window.BFDownloadView,core:window.BFDownloadCore,$,icon:id=>icon(id),toast:(message,error)=>toast(message,error),showModal:(...args)=>showModal(...args),openCleanable:()=>changeFilter('completed'),dom:{morph,parse:parseHtml,patch:patchHtml}}):null;
 const icons={
 overview:'<rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/>',
 videos:'<rect x="3" y="5" width="18" height="14" rx="3"/><path d="m10 9 5 3-5 3z"/>',
@@ -55,7 +55,7 @@ function drawerActions(j){
   const actions=ops(j),primary=C.primary(j);
   const featured=primary==='detail'?['stopAfter']:primary==='finalize'?['finalize','review']:primary==='reexport'?['reexport','review']:[primary];
   const main=featured.map(id=>actions.find(a=>a.id===id)).filter(Boolean),other=actions.filter(a=>!featured.includes(a.id));
-  return '<h3>Thao tác chính</h3>'+(main.length?'<div class="drawer-primary-actions">'+main.map(a=>btn(j,a,'')).join('')+'</div>':'<p class="muted">Xem trạng thái và kết quả kiểm tra bên dưới.</p>')+(other.length?'<details class="more-actions"><summary>Thao tác khác</summary><div class="action-grid">'+other.map(a=>btn(j,a)).join('')+'</div></details>':'');
+  return '<h3>Thao tác chính</h3>'+(main.length?'<div class="drawer-primary-actions">'+main.map(a=>btn(j,a,'')).join('')+'</div>':'<p class="muted">Xem trạng thái và kết quả kiểm tra bên dưới.</p>')+(other.length?'<details class="more-actions" data-fold="more-actions"><summary>Thao tác khác</summary><div class="action-grid">'+other.map(a=>btn(j,a)).join('')+'</div></details>':'');
 }
 function drawerFocusable(el){
   for(let parent=el.parentElement;parent&&!parent.classList.contains('drawer');parent=parent.parentElement){
@@ -69,10 +69,12 @@ function badge(j){
   return '<span class="badge '+tone+'"><span class="live-dot" style="background:currentColor"></span>'+esc(text)+'</span>';
 }
 function btn(j,a,extra){return '<button '+(a.enabled?'':'disabled')+' class="'+(a.id==='finalize'||a.id==='start'?'primary':a.id==='cancel'?'danger':'secondary')+' '+(extra||'small')+'" data-action="job" data-id="'+j.id+'" data-op="'+a.id+'" title="'+esc(a.reason||a.label)+'">'+esc(a.label)+'</button>';}
+let lastNavHtml=null; // U4: a poll rewrites the menu only when a link or the video count changed
 function nav(){
   const labels={overview:'Tổng quan',downloads:'Tải video',videos:'Video của bạn',queue:'Hàng đợi',logos:'Bộ nhớ logo',settings:'Cài đặt'};
-  $('#navigation').innerHTML=Object.entries(labels).map(([id,label])=>'<a class="nav-link '+(view===id?'active':'')+'" href="#'+id+'" '+(view===id?'aria-current="page"':'')+' aria-label="'+label+'" title="'+label+'">'+icon(id)+'<span>'+label+'</span>'+(id==='videos'?'<span class="nav-count">'+state.jobs.filter(j=>!C.hidden(j)).length+'</span>':'')+'</a>').join('');
-  $('#breadcrumb').textContent=labels[view];
+  const html=Object.entries(labels).map(([id,label])=>'<a class="nav-link '+(view===id?'active':'')+'" href="#'+id+'" '+(view===id?'aria-current="page"':'')+' aria-label="'+label+'" title="'+label+'">'+icon(id)+'<span>'+label+'</span>'+(id==='videos'?'<span class="nav-count">'+state.jobs.filter(j=>!C.hidden(j)).length+'</span>':'')+'</a>').join('');
+  if(html!==lastNavHtml){$('#navigation').innerHTML=html;lastNavHtml=html;}
+  if($('#breadcrumb').textContent!==labels[view])$('#breadcrumb').textContent=labels[view];
 }
 function scenarioOptions(){return [['normal','Hoạt động bình thường'],['rendering','Đang kiểm tra bản xuất'],['offline','Mất kết nối'],['bin_full','Thùng rác gần đầy'],['busy','Đang quản lý video gốc'],['conflict','Xung đột dữ liệu 409']].map(([id,label])=>'<option value="'+id+'" '+(state.scenario===id?'selected':'')+'>'+label+'</option>').join('');}
 function heading(title,subtitle,actions){return '<div class="page-heading"><div><h1>'+title+'</h1><p>'+subtitle+'</p></div><div class="heading-actions">'+(actions||'<span class="live-status"><span class="live-dot"></span> '+(state.scheduler_paused?'Hàng đợi tạm dừng':'Một GPU · xử lý tuần tự')+'</span><button class="secondary small" data-action="scheduler" '+(state.offline?'disabled':'')+'>'+(state.scheduler_paused?'Tiếp tục hàng đợi':'Tạm dừng hàng đợi')+'</button>')+'</div></div>';}
@@ -123,7 +125,7 @@ function row(j){
   const note=src&&src[1]==='error'?src[0]:C.archived(j)?'Đã lưu trữ video gốc':C.cleaned(j)?'Video gốc trong Thùng rác':j.state==='WAITING_REVIEW'?remaining+' cảnh cần duyệt':j.queue_position?'Lượt #'+j.queue_position:'Revision '+j.active_revision;
   const why=filter==='completed'&&!selectable(j)?selectReason(j):'';
   const whyLine=why&&!note.includes(why)?'<span class="cell-sub select-reason">Không chọn được: '+esc(why)+'</span>':'';
-  return '<article class="job-row" data-job="'+j.id+'"><div class="video-cell">'+(filter==='completed'?selectBox(j):'')+'<img class="poster" src="assets/poster-'+j.palette+'.svg" alt="" loading="lazy"><div class="video-text"><button class="video-title" data-action="detail" data-id="'+j.id+'" title="'+esc(j.name)+'">'+esc(j.name)+'</button><div class="video-meta"><span>#'+j.id+'</span><span>·</span><span>'+j.duration+'</span><span>·</span><span>'+bytes(j.source_size_bytes)+'</span></div></div></div><div class="status-cell">'+badge(j)+'<span class="cell-sub'+(src&&src[1]==='error'?' tone-error':'')+'">'+esc(note)+'</span>'+whyLine+'</div><div class="scope-cell">'+scope(j)+'</div><div class="progress-cell"><div class="row-progress"><span>'+progText+'</span><div class="meter"><i style="width:'+p+'%"></i></div></div></div><div class="row-actions">'+(isExport?'':main?btn(j,{...main,label:main.id==='start'?'Thiết lập':main.id==='restore'?'Khôi phục':main.label},''): '<button class="secondary small" data-action="detail" data-id="'+j.id+'">Chi tiết</button>')+'<button class="icon-button" data-action="detail" data-id="'+j.id+'" aria-label="Thao tác video '+j.id+'" title="Thao tác video">⋯</button></div></article>';
+  return '<article class="job-row" data-job="'+j.id+'"><div class="video-cell">'+(filter==='completed'?selectBox(j):'')+'<img class="poster" src="assets/poster-'+j.palette+'.svg" alt=""><div class="video-text"><button class="video-title" data-action="detail" data-id="'+j.id+'" title="'+esc(j.name)+'">'+esc(j.name)+'</button><div class="video-meta"><span>#'+j.id+'</span><span>·</span><span>'+j.duration+'</span><span>·</span><span>'+bytes(j.source_size_bytes)+'</span></div></div></div><div class="status-cell">'+badge(j)+'<span class="cell-sub'+(src&&src[1]==='error'?' tone-error':'')+'">'+esc(note)+'</span>'+whyLine+'</div><div class="scope-cell">'+scope(j)+'</div><div class="progress-cell"><div class="row-progress"><span>'+progText+'</span><div class="meter"><i style="width:'+p+'%"></i></div></div></div><div class="row-actions">'+(isExport?'':main?btn(j,{...main,label:main.id==='start'?'Thiết lập':main.id==='restore'?'Khôi phục':main.label},''): '<button class="secondary small" data-action="detail" data-id="'+j.id+'">Chi tiết</button>')+'<button class="icon-button" data-action="detail" data-id="'+j.id+'" aria-label="Thao tác video '+j.id+'" title="Thao tác video">⋯</button></div></article>';
 }
 function allFiltered(){
   const needle=query.normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase();
@@ -148,7 +150,7 @@ function listBody(){
 function lostNotice(){
   const ids=C.lostIds(state.jobs);if(!ids.length)return '';
   const off=state.source_cleanup_running||state.offline?' disabled':'';
-  return '<div class="notice lost-notice">Có '+ids.length+' video không còn video gốc · <button class="small" data-action="purge-lost"'+off+'>Dọn video mất gốc</button>'+(ids.length>50?' <small>Mỗi lần tối đa 50 video.</small>':'')+'</div>';
+  return '<div class="notice lost-notice" id="lost-notice">Có '+ids.length+' video không còn video gốc · <button class="small" data-action="purge-lost"'+off+'>Dọn video mất gốc</button>'+(ids.length>50?' <small>Mỗi lần tối đa 50 video.</small>':'')+'</div>';
 }
 function list(){
   const visible=visibleJobs();
@@ -237,9 +239,44 @@ function settingsView(){
 /* U1: open <details data-fold> keep their state across re-renders (keyed, never by position). */
 function foldState(root){const out={};if(root)root.querySelectorAll('details[data-fold]').forEach(d=>{out[d.dataset.fold]=d.open;});return out;}
 function restoreFolds(root,saved){if(root)root.querySelectorAll('details[data-fold]').forEach(d=>{if(d.dataset.fold in saved)d.open=saved[d.dataset.fold];});}
+/* U4 (2026-10-06): in-place DOM patch for the polls, also used by "Tải video" (download-live.js gets it through
+   create()). Only the attributes and text that changed are written: the nodes stay, so a poll no longer rebuilds the
+   list (posters reloading, the list blinking on the phone), and focus, an IME composition, a selection, an open
+   <details> and the scroll survive. Children match by key (a video row, a download row, a fold, an id) or by position
+   with the same tag. The markup is parsed in a <template>: nothing loads until a new node is put on the page. */
+function domKey(n){return n.nodeType!==1?'':n.dataset.job?'job:'+n.dataset.job:n.dataset.downloadId?'dl:'+n.dataset.downloadId:n.dataset.fold?'fold:'+n.dataset.fold:n.id?'#'+n.id:'';}
+function sameNode(a,b){return a.nodeType===b.nodeType&&a.nodeName===b.nodeName&&domKey(a)===domKey(b);}
+function morph(from,to){
+  if(from.nodeType!==1){if(from.nodeValue!==to.nodeValue)from.nodeValue=to.nodeValue;return;}
+  const keepOpen=from.nodeName==='DETAILS'; // the user opens and closes it
+  for(const {name} of [...from.attributes])if(!to.hasAttribute(name)&&!(keepOpen&&name==='open'))from.removeAttribute(name);
+  for(const {name,value} of [...to.attributes])if(from.getAttribute(name)!==value)from.setAttribute(name,value);
+  if(from.nodeName==='INPUT'&&(from.type==='checkbox'||from.type==='radio'))from.checked=to.hasAttribute('checked');
+  if(from.nodeName==='TEXTAREA')return; // its text is the user's draft
+  const value=from.nodeName==='SELECT'?to.value:null; // read first: morphChildren moves new options out of `to`
+  morphChildren(from,to);
+  if(value!==null&&from!==document.activeElement)from.value=value;
+}
+function morphChildren(from,to){
+  const next=[...to.childNodes];
+  const keyed=new Map([...from.childNodes].filter(domKey).map(node=>[domKey(node),node]));
+  const wanted=new Set(next.map(domKey).filter(Boolean));
+  keyed.forEach((node,key)=>{if(!wanted.has(key))node.remove();});
+  next.forEach((node,i)=>{
+    const at=from.childNodes[i]||null,key=domKey(node),old=key?keyed.get(key):at;
+    if(old&&old.parentNode===from&&sameNode(old,node)){if(old!==at)from.insertBefore(old,at);morph(old,node);}
+    else from.insertBefore(node,at);
+  });
+  while(from.childNodes.length>next.length)from.lastChild.remove();
+}
+function parseHtml(html){const t=document.createElement('template');t.innerHTML=html;return t.content;}
+function patchHtml(el,html){morphChildren(el,parseHtml(html));}
 let lastMainHtml=null,shownNotice=null; // shownNotice: the banner on the page ("Tải video" refreshes in place)
 function topNotice(){
-  return state.offline?'<div class="notice" role="alert">Mất kết nối hệ thống · đang hiển thị dữ liệu đã tải. Thao tác thay đổi được khóa đến khi kết nối lại.</div>':state.source_cleanup_running?'<div class="notice">Một thao tác với video gốc đang chạy. Đợi hoàn tất trước khi xóa, lưu trữ hoặc khôi phục.</div>':'';
+  // id: a key for the patch (U4), so a banner that comes or goes never shifts the blocks after it
+  const phone=view==='settings'?'':C.phoneNotice(state.phone,{live:LIVE,remote:state.remote}); // Cài đặt has its panel
+  return (state.offline?'<div class="notice" id="top-notice" role="alert">Mất kết nối hệ thống · đang hiển thị dữ liệu đã tải. Thao tác thay đổi được khóa đến khi kết nối lại.</div>':state.source_cleanup_running?'<div class="notice" id="top-notice">Một thao tác với video gốc đang chạy. Đợi hoàn tất trước khi xóa, lưu trữ hoặc khôi phục.</div>':'')+
+    (phone?'<div class="notice" id="phone-notice" role="status">'+esc(phone)+' · tắt trong <a href="#settings">Cài đặt</a></div>':'');
 }
 function mainHtml(){
   return topNotice()+(view==='downloads'?downloadsView():view==='queue'?queueView():view==='logos'?logosView():view==='settings'?settingsView():heading(view==='overview'?'Trung tâm xử lý':'Video của bạn',view==='overview'?'Theo dõi tiến trình, duyệt cảnh và hoàn tất video của bạn.':'Tìm nhanh video và tiếp tục công việc ở đúng bước.')+(view==='overview'?kpis()+hero():'')+list());
@@ -249,30 +286,32 @@ function render(){
   const main=$('#main'),saved=foldState(main),html=mainHtml();
   main.innerHTML=html;lastMainHtml=html;shownNotice=topNotice();restoreFolds(main,saved);
 }
-function refreshList(){const body=$('#list-body');if(!body)return;const saved=foldState(body);body.innerHTML=listBody();restoreFolds(body,saved);lastMainHtml=null;}
+/* A poll: the same page with new data, patched in place (U4). render() still builds the page when the user opens a
+   view or picks a filter. */
+function patchMain(html){
+  nav();
+  const main=$('#main'),saved=foldState(main);
+  patchHtml(main,html);lastMainHtml=html;shownNotice=topNotice();restoreFolds(main,saved);
+}
+function refreshList(){const body=$('#list-body');if(!body)return;const saved=foldState(body);patchHtml(body,listBody());restoreFolds(body,saved);lastMainHtml=null;}
 function changeFilter(f,fromSummary){filter=f;page=1;if(fromSummary)query='';if(!['overview','videos'].includes(view)){view='videos';location.hash='videos';}render();$('#video-list')?.scrollIntoView({block:'start',behavior:'instant'});}
 /* U2: the scrolling element is aside.drawer (.drawer{overflow:auto}), not .drawer-body. A snapshot whose drawer
-   markup is unchanged leaves the drawer untouched (nodes, scroll, open sections, focus, selection, poster); a changed
-   one is rebuilt and gets its scroll, open sections and focus back. */
+   markup is unchanged leaves the drawer untouched. U4: a changed one is patched in place, so its nodes, scroll, open
+   sections, selection and poster stay; focus goes back to the same action when its button was replaced. */
 let lastDrawerHtml=null;
 function refreshDrawer(){
   const root=$('#drawer-root'),aside=root.querySelector('.drawer');if(!currentJob||!aside)return;
   const j=getJob(currentJob);if(!j){closeDrawer();return;}
   const html=drawerHtml(j);if(html===lastDrawerHtml)return;
-  const body=root.querySelector('.drawer-body'),open=[...root.querySelectorAll('details')].map(d=>d.open),scroll=aside.scrollTop,bodyScroll=body?body.scrollTop:0,focus=document.activeElement;
-  const key=focus&&root.contains(focus)?[focus.dataset.action,focus.dataset.op,focus.tagName,[...root.querySelectorAll(focus.tagName)].indexOf(focus)]:null;
-  openDrawer(currentJob,true);
-  root.querySelectorAll('details').forEach((d,i)=>{if(i<open.length)d.open=open[i];});
-  const next=root.querySelector('.drawer'),nextBody=root.querySelector('.drawer-body');
-  if(nextBody)nextBody.scrollTop=bodyScroll;
-  if(next)next.scrollTop=scroll;
-  if(key){const same=[...root.querySelectorAll(key[2])],target=key[0]?same.find(el=>el.dataset.action===key[0]&&el.dataset.op===key[1]&&!el.disabled):same[key[3]];if(target)target.focus({preventScroll:true});}
+  const focus=document.activeElement,key=focus&&root.contains(focus)?[focus.dataset.action,focus.dataset.op,focus.tagName,[...root.querySelectorAll(focus.tagName)].indexOf(focus)]:null;
+  patchHtml(root,html);lastDrawerHtml=html;
+  if(key&&!root.contains(document.activeElement)){const same=[...root.querySelectorAll(key[2])],target=key[0]?same.find(el=>el.dataset.action===key[0]&&el.dataset.op===key[1]&&!el.disabled):same[key[3]];if(target)target.focus({preventScroll:true});}
 }
-function openDrawer(id,refresh){
-  const j=getJob(id);if(!j){if(refresh)closeDrawer();return;}currentJob=j.id;if(!refresh)drawerFocus=document.activeElement;
+function openDrawer(id){
+  const j=getJob(id);if(!j)return;currentJob=j.id;drawerFocus=document.activeElement;
   const html=drawerHtml(j);
   $('#drawer-root').innerHTML=html;lastDrawerHtml=html;
-  document.body.style.overflow='hidden';if(!refresh)$('.drawer [data-action="close-drawer"]').focus();
+  document.body.style.overflow='hidden';$('.drawer [data-action="close-drawer"]').focus();
 }
 function drawerHtml(j){
   const review=j.review_summary,structure=j.structure_audit,ai=j.ai_audit,sourceInfo=C.sourceLine(j);
@@ -306,8 +345,8 @@ function drawerHtml(j){
           '<div class="key-value"><span>Chế độ quét</span><span>'+esc(({careful:'Tỉ mỉ',fast:'Nhanh'})[j.profile]||'Chưa thiết lập')+' · OCR '+(j.ocr_recognition_batch_size===8?'tăng tốc thử nghiệm':'chuẩn')+'</span></div>'+
           '<div class="key-value"><span>Tăng tốc</span><span>'+(j.fast_scan?'Bật · giữ mật độ quét':'Tắt')+'</span></div>'+
         '</section>'+
-        '<details class="detail-section audit-details"><summary>Kết quả kiểm tra & xuất video</summary><div class="detail-grid">'+checkTiles.map(([title,value,note])=>'<div class="detail-tile"><small>'+title+'</small><strong>'+esc(value)+'</strong><p>'+esc(note)+'</p></div>').join('')+'</div></details>'+
-        '<details class="detail-section technical"><summary>Video gốc & thông tin kỹ thuật</summary>'+
+        '<details class="detail-section audit-details" data-fold="audit"><summary>Kết quả kiểm tra & xuất video</summary><div class="detail-grid">'+checkTiles.map(([title,value,note])=>'<div class="detail-tile"><small>'+title+'</small><strong>'+esc(value)+'</strong><p>'+esc(note)+'</p></div>').join('')+'</div></details>'+
+        '<details class="detail-section technical" data-fold="technical"><summary>Video gốc & thông tin kỹ thuật</summary>'+
           '<p class="muted">'+(C.archived(j)?'Đang lưu trữ. Khôi phục sẽ trả video gốc về input để xuất lại.':C.cleaned(j)?'Đã vào Thùng rác. Khôi phục đúng tên, đường dẫn và SHA-256 trước khi xử lý lại.':j.source_present===false?'Không còn video gốc trong input'+(j.delete?.eligible&&!j.protected?' · bấm “Xóa video” để xóa video này khỏi BiliFlow (output giữ nguyên).':''):'Có trong input · report và quyết định duyệt được giữ.')+'</p>'+(j.protected?'<p class="muted">'+esc(j.protected)+'</p>':'')+
           '<div class="key-value"><span>Job key</span><span class="mono">'+esc(j.job_key)+'</span></div>'+
           '<div class="key-value"><span>Nguồn</span><span class="mono">'+esc(j.source_path)+'</span></div>'+
@@ -603,33 +642,36 @@ window.addEventListener('hashchange',route);
 /* A new snapshot (polling or after an action) re-renders without losing the user's place. */
 function liveChrome(){
   if(!LIVE)return;const d=state.resources&&state.resources.disk||{},strong=$('.storage-mini strong'),bar=$('.storage-mini .meter i');
-  if(strong)strong.textContent=Number.isFinite(d.free_bytes)?bytes(d.free_bytes)+' trống':'—';
-  if(bar)bar.style.width=(Number(d.percent)||0)+'%';
+  const free=Number.isFinite(d.free_bytes)?bytes(d.free_bytes)+' trống':'—',width=(Number(d.percent)||0)+'%';
+  if(strong&&strong.textContent!==free)strong.textContent=free;
+  if(bar&&bar.style.width!==width)bar.style.width=width;
 }
 function onSnapshot(){
   state=store.snapshot();liveChrome();review.updateJob();
-  if(view==='downloads'&&DL){if(topNotice()!==shownNotice||!DL.refresh())render();else{nav();const mode=$('#dl-mode');if(mode)mode.textContent=state.remote?'Qua điện thoại':'Control Center';}return;}
+  if(view==='downloads'&&DL){if(topNotice()!==shownNotice||!DL.refresh())render();else{nav();const mode=$('#dl-mode'),text=state.remote?'Qua điện thoại':'Control Center';if(mode&&mode.textContent!==text)mode.textContent=text;}return;}
   if(view==='downloads'||view==='settings'&&(aiDirty||$('#main').contains(document.activeElement))){nav();return;}
-  const focus=document.activeElement,id=focus&&focus.id,range=id==='search'?[focus.selectionStart,focus.selectionEnd]:null,y=window.scrollY;
+  const focus=document.activeElement,id=focus&&focus.id,range=id==='search'?[focus.selectionStart,focus.selectionEnd]:null;
   const inMain=focus&&$('#main').contains(focus)?[focus.dataset.action,focus.dataset.id,focus.dataset.op,focus.dataset.filter]:null;
   // U1: an open <select> (e.g. sort) in #main would be closed by a rebuild: keep #main until it loses focus.
   if(focus&&focus.tagName==='SELECT'&&$('#main').contains(focus)){nav();if(currentJob)refreshDrawer();return;}
   // U1: nothing changed on screen: keep the same nodes (open sections, scroll, selection stay as they are).
   const html=mainHtml();
-  if(html===lastMainHtml&&$('#main').innerHTML!==''){nav();if(currentJob)refreshDrawer();return;}
-  render();
+  if(html===lastMainHtml&&$('#main').hasChildNodes()){nav();if(currentJob)refreshDrawer();return;}
+  // U4: patched in place, so the page keeps its scroll (no scrollTo: it would stop a swipe on the phone) and the
+  // focused node; focus is set again only when its node was replaced.
+  patchMain(html);
   if(currentJob)refreshDrawer();
+  if(document.activeElement===focus)return;
   if(id&&$('#main').contains(document.getElementById(id))){const el=document.getElementById(id);el.focus({preventScroll:true});if(range)el.setSelectionRange(range[0],range[1]);}
   else if(inMain){const el=[...$('#main').querySelectorAll('[data-action]')].find(x=>x.dataset.action===inMain[0]&&x.dataset.id===inMain[1]&&x.dataset.op===inMain[2]&&x.dataset.filter===inMain[3]);if(el)el.focus({preventScroll:true});}
-  window.scrollTo(0,y);
 }
 store.subscribe(onSnapshot);
 if(LIVE){
   const pill=$('.demo-pill');if(pill)pill.textContent='CONTROL CENTER';
   const reset=$('[data-action="reset"]');if(reset)reset.remove();
   const mini=$('.storage-mini small');if(mini)mini.textContent='Xem dung lượng thật ở Tổng quan';
-  const footer=$('.page-footer span:last-child');if(footer)footer.textContent='Dashboard V2 · route xem thử /dashboard-v2';
-  const profile=$('.profile small');if(profile)profile.textContent='Dashboard V2 · xem thử';
+  const footer=$('.page-footer span:last-child');if(footer)footer.textContent='Dashboard V2 · chạy cục bộ';
+  const profile=$('.profile small');if(profile)profile.textContent='Dashboard V2';
   window.addEventListener('hashchange',()=>{if(view==='logos')store.loadMemory().catch(e=>toast(e.message,true));if(view==='settings'){store.loadAI();store.loadPhone();}});
   store.start(3000);
 }

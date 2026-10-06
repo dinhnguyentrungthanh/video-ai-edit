@@ -983,3 +983,39 @@ khởi động lại Control Center; người dùng tải lại trang và test.
 cần một phase bảo mật riêng, có plan và người dùng duyệt trước khi làm: HTTPS, đăng nhập mạnh, giới hạn truy cập, không mở
 cổng trần ra Internet (ví dụ đi qua VPN). Trong đợt test này người dùng bỏ qua bước Firewall ở
 `docs/DASHBOARD_V2_PHONE.md` mục 2 (2026-10-04).
+
+## 18. U4 (2026-10-06, máy thật, sau khi V2 vào `main`): danh sách nhấp nháy trên điện thoại
+
+- **Người dùng thấy:** trên điện thoại, danh sách phim nhấp nháy vài giây một lần ở mọi tab ("Tất cả", "Chờ xử lý"…). Người dùng hỏi thêm: làm mới liên tục như vậy có tốn tài nguyên không.
+- **Nguyên nhân:**
+  - V2 hỏi `/api/status` mỗi 3 s. Ở Tổng quan, số CPU/RAM đổi ở mọi lần hỏi; lúc quét, tiến độ cũng đổi.
+  - Chỉ cần markup khác là `onSnapshot()` thay cả `#main` bằng `innerHTML`: mọi dòng bị dựng lại, ảnh poster (`loading="lazy"`) bị tạo lại và trống cho đến khi được tải lười lại.
+  - "Chi tiết" (drawer) cũng bị dựng lại như vậy khi video của nó đổi.
+  - Vòng hỏi không chặn yêu cầu chồng nhau (mạng điện thoại chậm) và vẫn chạy khi tắt màn hình.
+- **Sửa** (chỉ file tĩnh: `dashboard_v2/app.js`, `adapter.js`, `download-live.js`; tải lại trang là đủ, không khởi động lại Control Center):
+  - một lần hỏi chỉ vá tại chỗ những thuộc tính và chữ đã đổi, dòng khớp theo mã video. Đây là hàm vá của "Tải video", nay dùng chung từ `app.js`. Khi người dùng mở trang khác hoặc chọn tab lọc, `render()` vẫn dựng trang mới;
+  - drawer cũng được vá tại chỗ; thanh menu và dòng dung lượng chỉ ghi khi đổi; poster của dòng tải ngay; lần hỏi không còn kéo trang về chỗ cũ (`window.scrollTo`), vì việc này làm khựng thao tác vuốt trên điện thoại;
+  - `adapter.js`: mỗi lúc chỉ một lần hỏi `/api/status`; tab bị ẩn thì không hỏi, hiện lại thì gửi ngay một yêu cầu mới (không chờ yêu cầu cũ có thể đang treo); một GET quá 15 s không có trả lời bị cắt như mất kết nối (POST không bao giờ bị cắt);
+  - khóa cho bản vá: `id` cho thông báo mất kết nối/đang bận và thông báo mất video gốc, `data-fold` cho ba mục gập của drawer, nên khối xuất hiện hoặc biến mất không làm lệch các khối sau.
+- **Test:** `verify-adapter.cjs` thêm ba test (vòng hỏi, giới hạn 15 s của GET, yêu cầu mới khi tab hiện lại); `browser-check.cjs` U1/U2 nay kiểm giữ nguyên nút (chưa chạy được: máy chưa cài Playwright). Đo trên Control Center thử (thư mục tạm, cổng riêng, Chrome 390×844) và 17 kiểm tra hành vi, số liệu trong CHANGELOG. Review của agent: không có CRITICAL, các mục HIGH/MEDIUM/LOW đã sửa.
+
+| ID | Hạng mục | Máy thật | Bằng chứng |
+| --- | --- | --- | --- |
+| U4 | Làm mới không dựng lại danh sách và drawer, không tạo lại poster, không kéo trang; một yêu cầu `/api/status` mỗi lúc, không hỏi khi tab ẩn | [x] | Nhánh `fix/v2-list-flicker`, đã vào `main` và push (2026-10-06). Trước: mỗi 5 lần hỏi ở Tổng quan, 25 nút bị gỡ rồi thêm lại, 8/8 poster tạo lại. Sau: 0 nút, 0 poster, chỉ các thuộc tính và chữ đổi. **Người dùng** kiểm trên điện thoại với Control Center thật (2026-10-06): đạt. |
+
+## 19. V2 thành dashboard chính, dashboard cũ tạm tắt (2026-10-06)
+
+- **Người dùng:** sau khi kiểm U4 trên điện thoại, yêu cầu dùng hẳn V2, tạm tắt dashboard cũ, sửa xong thì commit và push thẳng vào `main`.
+- **Sửa** (`control_center.py`):
+  - `/` trên PC trả `303` sang `/dashboard-v2/` (`Cache-Control: no-store`), giống listener điện thoại;
+  - trang cũ vẫn còn trong code, sau công tắc `CLASSIC_DASHBOARD = False`: đặt `True` rồi khởi động lại Control Center thì `/` lại là trang cũ, trùng byte fixture f6996bb (test D2 vẫn kiểm);
+  - `/review/<id>` và `/logo-memory` không đổi; nút "← Quay lại Dashboard" của trang duyệt cũ về `/`, tức là về V2.
+- **Kiểm trước khi tắt:** mọi API trang cũ gọi đều có trong V2 (thao tác job, dọn, xóa, lưu trữ, khôi phục, kiểm tra Thùng rác, scheduler, tắt máy chủ, AI, Visual AI Audit, ẩn/hiện).
+- V2 bỏ chữ "xem thử": tiêu đề "BiliFlow Control Center", chân trang "Dashboard V2 · chạy cục bộ", dòng hồ sơ "Dashboard V2".
+- Dòng báo chế độ điện thoại (H3) trước chỉ có ở trang cũ. Nay khi chế độ bật, V2 trên PC hiện "Đang mở cho điện thoại: <link> · tắt trong Cài đặt" ở đầu mọi trang trừ Cài đặt; không bao giờ có mã, không hiện trên điện thoại (`C.phoneNotice` trong `contracts.js`).
+- Review (agent): không có CRITICAL/HIGH; đã sửa MEDIUM (dòng báo H3) và ba LOW (test không phụ thuộc công tắc, `dashboard_v2/README.md` và `docs/DASHBOARD_V2_PHONE.md`, chữ "chạy trên máy này" sai khi xem trên điện thoại).
+- **Máy thật** (2026-10-06): lần đầu người dùng chỉ bấm `Start-BiliFlow.cmd` nên vẫn thấy trang cũ, vì launcher dùng lại Control Center đang chạy (mở lúc 16:48, trước bản sửa). Sau đó Control Center được tắt bằng `Stop-BiliFlow` và mở lại bằng `Start-BiliFlow` lúc 20:37:51, khi không có việc gì chạy. Từ đó `/` chuyển sang V2, đủ 10 video, không job nào bị gián đoạn. Chế độ điện thoại tắt theo lần khởi động lại. **Người dùng** xác nhận đạt. Cache quét không bị ảnh hưởng.
+
+| ID | Hạng mục | Máy thật | Bằng chứng |
+| --- | --- | --- | --- |
+| V2-MAIN | `/` mở V2; trang cũ tắt nhưng bật lại được; dòng báo H3 trên V2 (PC) | [x] | 8 test tập trung đỏ trước khi sửa, xanh sau; chỉ một test ghim công tắc; node 36 / 33 / 21 / 31; Chrome headless trên Control Center thử 6/6; full suite 1589 OK (26 bỏ qua). Máy thật (2026-10-06 20:37:51, sau khi khởi động lại): `/` → 303 `/dashboard-v2/`; **người dùng** xác nhận đạt. |
