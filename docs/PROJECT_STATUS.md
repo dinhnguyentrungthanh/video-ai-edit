@@ -1,3 +1,19 @@
+## Dashboard V2 list no longer blinks on every refresh, U4 (2026-10-06) — in `main`, pushed
+
+- The user saw the video list blink on the phone every few seconds in every tab, and asked for a check of the look and of the refresh cost.
+- Cause: every 3 s poll that changed anything rebuilt all of `#main` (on the overview the CPU/RAM numbers always change), so each row and its lazy-loaded poster were re-created. The drawer was rebuilt the same way, and the poll had no guard.
+- Fix, static files only (`dashboard_v2/app.js`, `adapter.js`, `download-live.js`):
+  - a poll patches the page in place, using the patch of "Tải video", now shared;
+  - the drawer is patched too; the menu is written only on change; row posters load at once; a poll no longer scrolls the page;
+  - one `/api/status` poll at a time, none while the tab is hidden, a fresh one when it shows again;
+  - a GET with no answer after 15 s is cut (offline banner, next poll retries); a POST never is.
+- Checks on a test Control Center at 390×844 (details in CHANGELOG):
+  - per 5 polls on the overview: 25 nodes and 8 posters re-created before, none after; layout + style 48 ms before, 4–7 ms after;
+  - 17 of 17 behaviour checks passed (drawer, search box, selection boxes, download link box, hidden tab, offline banner, drawer actions changing, no JS error).
+- Code review (agent): no CRITICAL; the HIGH (a hung poll could stop polling) and the MEDIUM (`browser-check.cjs` still asserted rebuilds) are fixed, and so are the LOW notes.
+- Tests: node gates 35 / 33 / 21 / 31; `tests.test_dashboard_v2_*` and `tests.test_download_*` 277 OK.
+- The user checked the phone against the real Control Center: OK. At their request `fix/v2-list-flicker` was committed, `main` was fast-forwarded to it, and `main` was pushed to `origin`. That push also published the 98 earlier local commits of `main`.
+
 ## `main` has Dashboard V2, "Tải video", the permanent delete and the phone deletes (2026-10-06) — local, not pushed
 
 - The user could not test the phone yet. At their request, the phone deletes were checked, then `main` was fast-forwarded from `f6996bb` to the tip of `test/download-delete`. The main folder runs `main`. `origin/main` is still `f6996bb`.

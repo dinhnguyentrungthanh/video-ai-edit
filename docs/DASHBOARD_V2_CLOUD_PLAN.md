@@ -983,3 +983,22 @@ khởi động lại Control Center; người dùng tải lại trang và test.
 cần một phase bảo mật riêng, có plan và người dùng duyệt trước khi làm: HTTPS, đăng nhập mạnh, giới hạn truy cập, không mở
 cổng trần ra Internet (ví dụ đi qua VPN). Trong đợt test này người dùng bỏ qua bước Firewall ở
 `docs/DASHBOARD_V2_PHONE.md` mục 2 (2026-10-04).
+
+## 18. U4 (2026-10-06, máy thật, sau khi V2 vào `main`): danh sách nhấp nháy trên điện thoại
+
+- **Người dùng thấy:** trên điện thoại, danh sách phim nhấp nháy vài giây một lần ở mọi tab ("Tất cả", "Chờ xử lý"…). Người dùng hỏi thêm: làm mới liên tục như vậy có tốn tài nguyên không.
+- **Nguyên nhân:**
+  - V2 hỏi `/api/status` mỗi 3 s. Ở Tổng quan, số CPU/RAM đổi ở mọi lần hỏi; lúc quét, tiến độ cũng đổi.
+  - Chỉ cần markup khác là `onSnapshot()` thay cả `#main` bằng `innerHTML`: mọi dòng bị dựng lại, ảnh poster (`loading="lazy"`) bị tạo lại và trống cho đến khi được tải lười lại.
+  - "Chi tiết" (drawer) cũng bị dựng lại như vậy khi video của nó đổi.
+  - Vòng hỏi không chặn yêu cầu chồng nhau (mạng điện thoại chậm) và vẫn chạy khi tắt màn hình.
+- **Sửa** (chỉ file tĩnh: `dashboard_v2/app.js`, `adapter.js`, `download-live.js`; tải lại trang là đủ, không khởi động lại Control Center):
+  - một lần hỏi chỉ vá tại chỗ những thuộc tính và chữ đã đổi, dòng khớp theo mã video. Đây là hàm vá của "Tải video", nay dùng chung từ `app.js`. Khi người dùng mở trang khác hoặc chọn tab lọc, `render()` vẫn dựng trang mới;
+  - drawer cũng được vá tại chỗ; thanh menu và dòng dung lượng chỉ ghi khi đổi; poster của dòng tải ngay; lần hỏi không còn kéo trang về chỗ cũ (`window.scrollTo`), vì việc này làm khựng thao tác vuốt trên điện thoại;
+  - `adapter.js`: mỗi lúc chỉ một lần hỏi `/api/status`; tab bị ẩn thì không hỏi, hiện lại thì gửi ngay một yêu cầu mới (không chờ yêu cầu cũ có thể đang treo); một GET quá 15 s không có trả lời bị cắt như mất kết nối (POST không bao giờ bị cắt);
+  - khóa cho bản vá: `id` cho thông báo mất kết nối/đang bận và thông báo mất video gốc, `data-fold` cho ba mục gập của drawer, nên khối xuất hiện hoặc biến mất không làm lệch các khối sau.
+- **Test:** `verify-adapter.cjs` thêm ba test (vòng hỏi, giới hạn 15 s của GET, yêu cầu mới khi tab hiện lại); `browser-check.cjs` U1/U2 nay kiểm giữ nguyên nút (chưa chạy được: máy chưa cài Playwright). Đo trên Control Center thử (thư mục tạm, cổng riêng, Chrome 390×844) và 17 kiểm tra hành vi, số liệu trong CHANGELOG. Review của agent: không có CRITICAL, các mục HIGH/MEDIUM/LOW đã sửa.
+
+| ID | Hạng mục | Máy thật | Bằng chứng |
+| --- | --- | --- | --- |
+| U4 | Làm mới không dựng lại danh sách và drawer, không tạo lại poster, không kéo trang; một yêu cầu `/api/status` mỗi lúc, không hỏi khi tab ẩn | [x] | Nhánh `fix/v2-list-flicker`, đã vào `main` và push (2026-10-06). Trước: mỗi 5 lần hỏi ở Tổng quan, 25 nút bị gỡ rồi thêm lại, 8/8 poster tạo lại. Sau: 0 nút, 0 poster, chỉ các thuộc tính và chữ đổi. **Người dùng** kiểm trên điện thoại với Control Center thật (2026-10-06): đạt. |
