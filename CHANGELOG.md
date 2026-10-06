@@ -1,6 +1,6 @@
 ## Source providers in `main`; real Control Center restarted; the user's real test passed — 2026-10-06
 
-- At the user's request, `main` was fast-forwarded `84a5db1` → `a3b69f0` (`5056d94` source providers, `a3b69f0` merge of `main`). Not pushed. The sections below marked "(uncommitted)" are in `main` now.
+- At the user's request, `main` was fast-forwarded `84a5db1` → `a3b69f0` (`5056d94` source providers, `a3b69f0` merge of `main`). Pushed at the user's request (`84a5db1..bd4d019`). The sections below marked "(uncommitted)" are in `main` now.
 - The main folder's uncommitted draft of the downloader scope update (5 documents) was backed up with its diff in `temp\main-folder-backup-20261006-214658` and restored to `HEAD`. The branch already had all of it, with three statements updated. The backup also keeps copies of both `state\*.sqlite3` from before the restart.
 - `config\download_providers.local.json` was copied into the install (Git-ignored). Registry: `player-hls`, `article-mp4`, `embedded-media` (2 exact hosts each) and `direct`, no config problems. Playwright 1.63.0, Edge headless.
 - Checks on `a3b69f0`: `test_download*` 453 OK; `test_dashboard_v2*` 95 OK (1 skipped); `test_control_center*` 55 OK; Node gates 36/36, 33/33, 22/22, 31/31; tool audit 0 blocked; model license audit 9 allowed, 0 blocked. Full suite of the same tree before the fast-forward: 1858 OK (26 skipped) with a synthetic clip.
