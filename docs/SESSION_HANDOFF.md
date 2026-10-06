@@ -47,8 +47,9 @@ Always confirm this section with `git status` and `git log` because it becomes s
   - Ask before downloading any tool or package.
 - The scan cache key files are untouched (`pyproject.toml`, `config/license_policy.json`, `scripts/env.ps1`, `cli.py`); tool pins live in `config/download_tools.json`.
 - Next:
-  1. The user's test on the real machine. Move the main folder to this branch and restart the Control Center only with the user's consent and with no job running. The user had `feat/dashboard-v2` up to `55c6e62` (R4-B4, R4-U1, R4-U2) merged into this branch; no conflict. `feat/delete-flow` also needs the main folder for its own user test, so agree the order with the user. A later merge with `feat/delete-flow` has one conflict, in `src/biliflow/control_center.py`.
-  2. Merge into `main` only when the user asks.
+  1. Done 2026-10-06: the user's test on the real machine passed (main folder detached at `9781c70`, Control Center started 2026-10-05 23:43:59; one public YouTube video downloaded into `input`; a movie-site link read "Chưa hỗ trợ"; "Xóa khỏi danh sách" removes only the download row). The branch includes `feat/dashboard-v2` up to `55c6e62`.
+  2. Next: combine with `feat/delete-flow` (D5 `0ed2f96`) on a test branch so the user tests both at once. Six files conflict: `CHANGELOG.md`, `dashboard_v2/app.js`, `docs/PROJECT_STATUS.md`, `docs/SESSION_HANDOFF.md`, `src/biliflow/control_center.py`, `tests/test_dashboard_v2_review.py`.
+  3. Merge into `main` only when the user asks.
 
 ## Current work — 2026-10-05 Dashboard V2 review dialog R4 and the stronger logo cover (branch `feat/dashboard-v2`, pushed; not merged)
 
