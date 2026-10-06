@@ -197,7 +197,7 @@ test('"Dung lượng": computing, one error per part, phone wording, nothing to 
   assert.match(pc, /2 video đã xuất xong/); assert.match(pc, /Xóa video gốc \/ Lưu trữ/);
   assert.match(pc, /Không đọc được Thùng rác: x/); assert.match(pc, /<span>—<\/span>/);
   assert.ok(!/data-action="(dl-cleanup|cleanup|archive)"/.test(pc), 'the panel only links to the existing actions');
-  assert.match(V.storage({computing: false, summary}, ctx({remote: true})), /xóa chỉ làm trên PC/);
+  assert.match(V.storage({computing: false, summary}, ctx({remote: true})), /Xóa video gốc \(Lưu trữ chỉ làm trên PC\)/);
   assert.match(V.storage(null, ctx({storageError: 'HTTP 503'})), /HTTP 503/);
 });
 

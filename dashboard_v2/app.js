@@ -95,24 +95,23 @@ function hero(){
 function scope(j){return '<div class="scope-chips">'+Object.entries(C.detectors).map(([id,label])=>'<span class="scope-chip '+(j.detector_groups.includes(id)?'':'off')+'" title="'+esc(j.detector_groups.includes(id)?label+' đã chọn':label+' chưa kiểm tra')+'">'+({advertising:'Logo',adult:'18+',gore:'Máu me',violence:'Bạo lực'})[id]+'</span>').join('')+'</div>';}
 /* U3: in "Hoàn tất" every row has a selection box. Only a video the server lets clean or archive (C.eligible) can be
    ticked; any other box is disabled with the server's reason (cleanup.reason, plus archive.reason when it differs).
-   Through the phone every box and the clean/archive buttons are disabled with C.PC_ONLY_REASON. */
-const SELECT_NONE='Không có video nào xóa video gốc hoặc lưu trữ được',SELECT_PC_ONLY='Xóa video gốc và lưu trữ chỉ làm trên PC';
+   Through the phone (2026-10-06) only "Xóa video gốc" picks: "Lưu trữ" stays disabled with C.PC_ONLY_REASON. */
+const SELECT_NONE='Không có video nào xóa video gốc hoặc lưu trữ được',SELECT_NONE_PHONE='Không có video nào xóa video gốc được',SELECT_PC_ONLY='Lưu trữ chỉ làm trên PC';
 /* A golden-set video (j.protected) is never deleted: it can only be picked for "Lưu trữ". */
 function cleanable(j){return C.eligible(j,'cleanup')&&!j.protected;}
-function selectable(j){return !state.remote&&(cleanable(j)||C.eligible(j,'archive'));}
+function selectable(j){return cleanable(j)||!state.remote&&C.eligible(j,'archive');}
 function selectReasons(j){
   const local=C.archived(j)?'Video gốc đã được lưu trữ':C.cleaned(j)?'Video gốc đã được dọn trước đó':j.source_present===false?'Video gốc không còn trong thư mục input':C.inFlight(j)?'Còn lệnh xuất video chưa xong':'Chưa xóa video gốc hay lưu trữ được video này';
   const c=String(j.protected||j.cleanup?.reason||''),a=String(j.archive?.reason||''),first=c||a||local;
   return [first,a&&a!==first?a:''];
 }
-function selectReason(j){const [c,a]=selectReasons(j);return a?'Xóa video gốc: '+c+' · Lưu trữ: '+a:c;}
+function selectReason(j){const [c,a]=selectReasons(j),why=a?'Xóa video gốc: '+c+' · Lưu trữ: '+a:c;return state.remote&&C.eligible(j,'archive')?why+' · '+SELECT_PC_ONLY:why;}
 function reasonShort(r){return r==='Video gốc đã được dọn trước đó'?'đã dọn':r.startsWith('Không thấy bản xuất')?'thiếu bản xuất':r==='Video gốc không còn trong thư mục input'?'không còn video gốc':r==='Video gốc đã được lưu trữ'?'đã lưu trữ':r;}
 function reasonCounts(jobs){
   const counts=new Map();jobs.forEach(j=>{const k=reasonShort(selectReasons(j)[0]);counts.set(k,(counts.get(k)||0)+1);});
   return [...counts].sort((x,y)=>y[1]-x[1]).map(([k,n])=>n+' '+k).join(' · ');
 }
 function selectBox(j){
-  if(state.remote)return '<input class="select-job" type="checkbox" disabled title="'+esc(C.PC_ONLY_REASON)+'" aria-label="'+esc('Chọn video '+j.id+': '+C.PC_ONLY_REASON)+'">';
   if(!selectable(j)){const r=selectReason(j);return '<input class="select-job" type="checkbox" disabled title="'+esc(r)+'" aria-label="'+esc('Không chọn được video '+j.id+': '+r)+'">';}
   return '<input class="select-job" type="checkbox" aria-label="Chọn video '+j.id+'" data-select="'+j.id+'" '+(selected.has(j.id)?'checked':'')+(state.source_cleanup_running||state.offline?' disabled':'')+'>';
 }
@@ -122,7 +121,7 @@ function row(j){
   const progText=j.state==='VERIFYING'||j.render_progress?.state==='VERIFYING'?'Kiểm tra':isExport&&j.state==='QUEUED'?'Chờ xuất':p+'%';
   const src=C.sourceLine(j);
   const note=src&&src[1]==='error'?src[0]:C.archived(j)?'Đã lưu trữ video gốc':C.cleaned(j)?'Video gốc trong Thùng rác':j.state==='WAITING_REVIEW'?remaining+' cảnh cần duyệt':j.queue_position?'Lượt #'+j.queue_position:'Revision '+j.active_revision;
-  const why=filter==='completed'&&!state.remote&&!selectable(j)?selectReason(j):'';
+  const why=filter==='completed'&&!selectable(j)?selectReason(j):'';
   const whyLine=why&&!note.includes(why)?'<span class="cell-sub select-reason">Không chọn được: '+esc(why)+'</span>':'';
   return '<article class="job-row" data-job="'+j.id+'"><div class="video-cell">'+(filter==='completed'?selectBox(j):'')+'<img class="poster" src="assets/poster-'+j.palette+'.svg" alt="" loading="lazy"><div class="video-text"><button class="video-title" data-action="detail" data-id="'+j.id+'" title="'+esc(j.name)+'">'+esc(j.name)+'</button><div class="video-meta"><span>#'+j.id+'</span><span>·</span><span>'+j.duration+'</span><span>·</span><span>'+bytes(j.source_size_bytes)+'</span></div></div></div><div class="status-cell">'+badge(j)+'<span class="cell-sub'+(src&&src[1]==='error'?' tone-error':'')+'">'+esc(note)+'</span>'+whyLine+'</div><div class="scope-cell">'+scope(j)+'</div><div class="progress-cell"><div class="row-progress"><span>'+progText+'</span><div class="meter"><i style="width:'+p+'%"></i></div></div></div><div class="row-actions">'+(isExport?'':main?btn(j,{...main,label:main.id==='start'?'Thiết lập':main.id==='restore'?'Khôi phục':main.label},''): '<button class="secondary small" data-action="detail" data-id="'+j.id+'">Chi tiết</button>')+'<button class="icon-button" data-action="detail" data-id="'+j.id+'" aria-label="Thao tác video '+j.id+'" title="Thao tác video">⋯</button></div></article>';
 }
@@ -134,9 +133,9 @@ function bulkToolbar(all,ids){
   if(filter!=='completed')return '';
   const n=all.filter(selectable).length,busy=state.source_cleanup_running||state.offline,off=t=>' disabled title="'+esc(t)+'"';
   let label,pick='',clear='',clean,archive;
-  if(state.remote){label=SELECT_PC_ONLY;pick=clear=clean=archive=off(C.PC_ONLY_REASON);}
-  else if(!n){const counts=reasonCounts(all);label=SELECT_NONE+(counts?'<small class="bulk-reasons"> · '+esc(counts)+'</small>':'');pick=clear=off(SELECT_NONE);clean=archive=' disabled';}
+  if(!n){const counts=reasonCounts(all),none=state.remote?SELECT_NONE_PHONE:SELECT_NONE;label=none+(counts?'<small class="bulk-reasons"> · '+esc(counts)+'</small>':'');pick=clear=off(none);clean=archive=' disabled';}
   else{label=selected.size+' video đã chọn · '+n+' video chọn được';clean=!ids.some(id=>cleanable(getJob(id)))||busy?' disabled':'';archive=!ids.some(id=>C.eligible(getJob(id),'archive'))||busy?' disabled':'';}
+  if(state.remote)archive=off(C.PC_ONLY_REASON);
   return '<div class="bulk-toolbar"><span class="bulk-label">'+label+'</span><button class="small secondary" data-action="select-all"'+pick+'>Chọn tối đa 50</button><button class="small secondary" data-action="deselect"'+clear+'>Bỏ chọn</button><button class="small" data-action="bulk-cleanup"'+clean+'>Xóa video gốc</button><button class="small" data-action="bulk-archive"'+archive+'>Lưu trữ</button></div>';
 }
 function listBody(){
@@ -148,8 +147,7 @@ function listBody(){
 /* "Dọn video mất gốc": every video whose source is gone (not archived) leaves BiliFlow in one dialog; output stays. */
 function lostNotice(){
   const ids=C.lostIds(state.jobs);if(!ids.length)return '';
-  // Live: off until /api/phone-mode has said whether this page is the phone.
-  const off=state.remote?' disabled title="'+esc(C.PC_ONLY_REASON)+'"':state.source_cleanup_running||state.offline||LIVE&&!state.phone?' disabled':'';
+  const off=state.source_cleanup_running||state.offline?' disabled':'';
   return '<div class="notice lost-notice">Có '+ids.length+' video không còn video gốc · <button class="small" data-action="purge-lost"'+off+'>Dọn video mất gốc</button>'+(ids.length>50?' <small>Mỗi lần tối đa 50 video.</small>':'')+'</div>';
 }
 function list(){
@@ -212,10 +210,10 @@ function startDownload(){
 }
 /* "Mở trên điện thoại": status, link, code and the switch, on the PC only (plan §12.3). */
 function phonePanel(){
-  const warn='<p class="muted">Chỉ dùng trong Wi-Fi nhà: kết nối là HTTP, không mã hóa; không dùng Wi-Fi công cộng. Lần đầu Windows hỏi cho Python qua tường lửa, chọn <strong>Private networks</strong>.</p>';
+  const warn='<p class="muted">Chỉ dùng trong Wi-Fi nhà: kết nối là HTTP, không mã hóa; không dùng Wi-Fi công cộng. Khi chế độ này bật, người có mã (hoặc lấy được phiên trong cùng Wi-Fi) có thể xóa vĩnh viễn video gốc đủ điều kiện; tắt khi không dùng. Lần đầu Windows hỏi cho Python qua tường lửa, chọn <strong>Private networks</strong>.</p>';
   if(!LIVE)return '<section class="panel phone-panel" style="margin-bottom:18px"><h2>Mở trên điện thoại</h2><p class="muted">Chỉ có ở bản live (/dashboard-v2/) trên PC.</p></section>';
   const p=state.phone;
-  if(state.remote)return '<section class="panel phone-panel" style="margin-bottom:18px"><h2>Đang mở qua điện thoại / laptop</h2><p class="pc-only-note">Các thao tác sau chỉ làm trên PC: xóa video và video gốc, lưu trữ, khôi phục, kiểm tra lại Thùng rác; tắt Control Center; cấu hình và đăng nhập AI; Visual AI Audit (gửi ảnh ra ngoài máy); sửa hoặc xóa bộ nhớ logo; bật/tắt chế độ điện thoại. Duyệt cảnh ở đây vẫn có thể thêm hoặc bỏ logo đã nhớ.</p>'+warn+'</section>';
+  if(state.remote)return '<section class="panel phone-panel" style="margin-bottom:18px"><h2>Đang mở qua điện thoại / laptop</h2><p class="pc-only-note">Xóa video gốc, Xóa video và Dọn video mất gốc làm được ở đây: video gốc bị xóa vĩnh viễn, không qua Thùng rác. Các thao tác sau chỉ làm trên PC: lưu trữ, khôi phục bản xuất, kiểm tra lại Thùng rác; tắt Control Center; cấu hình và đăng nhập AI; Visual AI Audit (gửi ảnh ra ngoài máy); sửa hoặc xóa bộ nhớ logo; bật/tắt chế độ điện thoại. Duyệt cảnh ở đây vẫn có thể thêm hoặc bỏ logo đã nhớ.</p>'+warn+'</section>';
   if(!p)return '<section class="panel phone-panel" style="margin-bottom:18px"><h2>Mở trên điện thoại</h2><p class="muted">Đang tải trạng thái…</p></section>';
   if(p.unavailable)return '<section class="panel phone-panel" style="margin-bottom:18px"><h2>Mở trên điện thoại</h2><p class="notice">Control Center đang chạy chưa có chế độ điện thoại. Tắt bằng Stop-BiliFlow.cmd rồi mở lại bằng Start-BiliFlow-Phone.cmd.</p></section>';
   const body=p.enabled?
@@ -517,10 +515,10 @@ document.addEventListener('click',async event=>{
   else if(action==='next'){page++;refreshList();}
   else if(action==='job')jobAction(el.dataset.id,el.dataset.op);
   else if(action==='scheduler')showModal(state.scheduler_paused?'Tiếp tục hàng đợi':'Tạm dừng hàng đợi','<p>Giữ nguyên thứ tự quét và xuất. Bước đang chạy được giữ riêng; bạn có thể dừng nó trong Chi tiết video.</p>',async()=>{await mutate('scheduler',null,{paused:!state.scheduler_paused});toast(LIVE?'Đã gửi lệnh hàng đợi.':'Đã thay đổi hàng đợi mẫu.');return true;});
-  else if(action==='select-all'){if(state.remote)return;selected=new Set(allFiltered().filter(selectable).slice(0,50).map(j=>j.id));refreshList();}
+  else if(action==='select-all'){selected=new Set(allFiltered().filter(selectable).slice(0,50).map(j=>j.id));refreshList();}
   else if(action==='deselect'){selected.clear();refreshList();}
-  else if((action==='bulk-cleanup'||action==='bulk-archive')&&!state.remote)filePreview(action==='bulk-cleanup'?'cleanup':'archive',[...selected]);
-  else if(action==='purge-lost'&&!state.remote&&!state.source_cleanup_running&&!state.offline&&!(LIVE&&!state.phone))filePreview('delete',C.lostIds(state.jobs).slice(0,50));
+  else if(action==='bulk-cleanup'||(action==='bulk-archive'&&!state.remote))filePreview(action==='bulk-cleanup'?'cleanup':'archive',[...selected]);
+  else if(action==='purge-lost'&&!state.source_cleanup_running&&!state.offline)filePreview('delete',C.lostIds(state.jobs).slice(0,50));
   else if(action==='logo-class'||action==='logo-delete')logoAction(el.dataset.key,action==='logo-delete');
   else if(action==='shutdown')showModal('Tắt BiliFlow','<p>'+ (el.dataset.mode==='immediate'?'Dừng bước hiện tại và tắt Control Center?':'Tắt Control Center sau khi bước hiện tại hoàn tất?')+'</p><p>Đóng tab không dừng backend. '+(LIVE?'Control Center nhận lệnh rồi mới tắt; trang sẽ mất kết nối.':'Ở demo, thao tác này mô phỏng mất kết nối.')+'</p>',async()=>{await mutate('shutdown',null,{mode:el.dataset.mode});toast(LIVE?'Control Center nhận lệnh tắt (202). Chưa chứng minh đã tắt; kiểm tra lại sau.':'Đã mô phỏng lệnh tắt; backend thật vẫn hoạt động.');return true;},'Xác nhận tắt');
   else if(action==='ai-save'){const data={enabled:$('#ai-enabled').checked,model:$('#ai-model').value,reasoning_effort:$('#ai-effort').value};if(el.dataset.busy)return;el.dataset.busy='1';try{await mutate('aiConfig',null,data);aiDirty=false;toast(LIVE?'Đã lưu cấu hình AI.':'Đã lưu cấu hình AI mẫu.');render();}catch(e){toast(e.message,true);}finally{delete el.dataset.busy;}}

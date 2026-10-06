@@ -26,11 +26,12 @@ from unittest.mock import Mock, patch
 from biliflow import brand_memory
 from biliflow import control_center as cc
 from biliflow import job_delete, job_purge, recycle_bin, source_cleanup
-from biliflow.control_center import ControlCenter, _handler_class
+from biliflow.control_center import ControlCenter, _handler_class, _phone_access, _phone_handler_class
 from biliflow.job_store import JobStore
 from biliflow.review_evidence import ReviewFrameCache
 from biliflow.scheduler import JobScheduler
 from biliflow.source_cleanup import SOURCE_FILE_LOCK
+from tests.test_dashboard_v2_phone_hardening import FAKE_LAN, http as phone_http
 
 
 TEMP_PARENT = recycle_bin.INSTALL_ROOT / "temp"
@@ -94,6 +95,37 @@ class RecordingDeleter:
     def __call__(self, path, *, allowed_root, expected_size):
         self.calls.append({"path": path, "allowed_root": allowed_root, "expected_size": expected_size})
         job_purge.delete_input_file(path, allowed_root=allowed_root, expected_size=expected_size)
+
+
+class PhoneClient:
+    """Mixin: the real phone listener of the stub Control Center, on 127.0.0.1 (never the Wi-Fi address).
+
+    The access code gives the cookie; ``via_phone`` sends it with the session token and the listener's Origin.
+    """
+
+    def open_phone(self):
+        access = _phone_access(self.center)
+        access._lan = lambda: FAKE_LAN  # never the real Wi-Fi
+        self.addCleanup(access.disable)
+        status = access.enable(lambda value: _phone_handler_class(self.center, value), address=FAKE_LAN,
+                               check_address=lambda _a: None, check_port=lambda _p: None, port=0)
+        self.phone_port, self.phone_host = status["port"], f"127.0.0.1:{status['port']}"
+        answer, headers, _ = phone_http(self.phone_port, "POST", "/phone-login", host=self.phone_host,
+                                  headers={"Content-Type": "application/x-www-form-urlencoded"},
+                                  body=f"code={status['code']}".encode())
+        self.assertEqual(answer, 200)
+        self.phone_cookie = headers["set-cookie"][0].split(";", 1)[0]
+
+    def via_phone(self, method, path, body=None, *, cookie=True, token="test-token", origin=None, host=None):
+        headers = {"Content-Type": "application/json", "Origin": origin or f"http://{self.phone_host}"}
+        if cookie:
+            headers["Cookie"] = self.phone_cookie
+        if token:
+            headers["X-BiliFlow-Token"] = token
+        payload = json.dumps(body or {}).encode() if method == "POST" else b""
+        status, _, reply = phone_http(self.phone_port, method, path, host=host or self.phone_host, headers=headers,
+                                      body=payload)
+        return status, json.loads(reply or b"null")
 
 
 class DeleteHttpFixture(unittest.TestCase):
@@ -507,6 +539,69 @@ class AuditStartTests(DeleteHttpFixture):
         self.assertIsInstance(outcome["audit"], KeyError)  # ... then finds the job gone
         self.assertEqual(self.center._audit_jobs, {})
         self.assertFalse((self.root / "reports" / "jobs" / "tap1").exists())
+
+
+class PhoneListenerTests(PhoneClient, DeleteHttpFixture):
+    """"Hủy" then "Xóa video", and "Dọn video mất gốc", from the phone (the user's choice, 2026-10-06)."""
+
+    def setUp(self):
+        super().setUp()
+        self.open_phone()
+
+    def confirm(self, ids):
+        status, preview = self.via_phone("GET", "/api/job-delete/preview?ids=" + ",".join(str(x) for x in ids))
+        self.assertEqual(status, 200, preview)
+        return {"job_ids": list(ids), "preview_id": preview["preview_id"], "confirm_permanent": True}
+
+    def test_a_video_waiting_for_setup_is_cancelled_then_deleted_from_the_phone(self):
+        waiting = self.make_job("tap69", state="NEEDS_METADATA")
+        other = self.make_job("tap70", state="NEEDS_METADATA")
+        source = self.source_of(waiting)
+        outputs = tree_digest(self.root / "output")
+        self.assertEqual(self.via_phone("POST", f"/api/jobs/{waiting}/cancel")[0], 200)
+        self.assertEqual(self.store.get_job(waiting)["state"], "CANCELLED")
+        self.assertTrue(source.is_file(), "Hủy keeps the source")
+        body = self.confirm([waiting])
+        status, result = self.via_phone("POST", "/api/job-delete", body)
+        self.assertEqual(status, 200, result)
+        self.assertEqual([(entry["job_id"], entry["status"], entry["message"]) for entry in result["results"]],
+                         [(waiting, "DELETED", DELETED_CANCELLED)])
+        self.assertEqual(len(self.deleter.calls), 1)
+        self.assertFalse(source.exists())
+        self.assertFalse(self.job_exists(waiting))
+        self.assertEqual(self.store.get_job(other)["state"], "NEEDS_METADATA")
+        self.assertTrue(self.source_of(other).is_file())
+        self.assertEqual(tree_digest(self.root / "output"), outputs)
+
+    def test_lost_videos_leave_from_the_phone_and_output_stays(self):
+        lost = [self.make_lost("tap1"), self.make_lost("tap2")]
+        (self.root / "output" / "tap1-reviewed.mp4").write_bytes(b"OUTPUT")
+        outputs = tree_digest(self.root / "output")
+        status, result = self.via_phone("POST", "/api/job-delete", self.confirm(lost))
+        self.assertEqual(status, 200, result)
+        self.assertEqual([(entry["job_id"], entry["status"], entry["message"]) for entry in result["results"]],
+                         [(lost[0], "DELETED", DELETED_LOST), (lost[1], "DELETED", DELETED_LOST)])
+        self.assertFalse(any(self.job_exists(job_id) for job_id in lost))
+        self.assertEqual(self.deleter.calls, [])
+        self.assertEqual(tree_digest(self.root / "output"), outputs)
+
+    def test_the_phone_still_needs_the_cookie_the_token_its_origin_and_the_confirmation(self):
+        cancelled = self.make_job("tap1", state="CANCELLED")
+        body = self.confirm([cancelled])
+        dump = self.db_dump()
+        self.assertEqual(self.via_phone("GET", f"/api/job-delete/preview?ids={cancelled}", cookie=False)[0], 401)
+        self.assertEqual(self.via_phone("POST", "/api/job-delete", body, cookie=False)[0], 401)
+        self.assertEqual(self.via_phone("POST", "/api/job-delete", body, token=None), (403, {"error": TOKEN_REFUSAL}))
+        self.assertEqual(self.via_phone("POST", "/api/job-delete", body, origin="http://evil.example")[0], 403)
+        self.assertEqual(self.via_phone("POST", "/api/job-delete", body, host=f"evil.example:{self.phone_port}"),
+                         (403, {"error": HOST_REFUSAL}))
+        for flag in ({"confirm_permanent": False}, {"confirm_permanent": "true"}):
+            with self.subTest(flag=flag):
+                self.assertEqual(self.via_phone("POST", "/api/job-delete", {**body, **flag}),
+                                 (400, {"error": CONFIRM_PERMANENT}))
+        self.assertEqual(self.db_dump(), dump)
+        self.assertEqual(self.deleter.calls, [])
+        self.assertTrue(self.source_of(cancelled).is_file())
 
 
 if __name__ == "__main__":

@@ -300,8 +300,6 @@ class PhoneModeTests(unittest.TestCase):
                                    "Origin": f"http://127.0.0.1:{self.port}"})
         self.assertEqual((code, json.loads(body)), (200, {"paused": True}))
         pc_only = {
-            "/api/source-cleanup": {"job_ids": [1], "preview_id": "a" * 64},
-            "/api/job-delete": {"job_ids": [1], "preview_id": "a" * 64},
             "/api/source-archive": {"job_ids": [1], "preview_id": "a" * 64},
             "/api/source-archive/restore": {"job_id": 1},
             "/api/source-recycle-check": {"kind": "source_cleanup", "id": 1},
@@ -321,6 +319,14 @@ class PhoneModeTests(unittest.TestCase):
                 self.assertTrue(answer["error"].startswith("Chỉ làm trên PC"))
         self.assertFalse(self.center._stopping.is_set(), "shutdown never ran")
         self.assertTrue(self.phone.enabled, "the phone cannot turn the phone mode off")
+        # "Xóa video gốc" and "Xóa video" reach their handlers from the phone (the user's choice, 2026-10-06):
+        # without confirm_permanent each is a 400 and the deleter (it fails the test) is never called.
+        for path in ("/api/source-cleanup", "/api/job-delete"):
+            with self.subTest(phone=path):
+                code, _, body = self.post(self.port, path, {"job_ids": [1], "preview_id": "a" * 64},
+                                          {"Cookie": cookie, "X-BiliFlow-Token": "test-token"})
+                self.assertEqual(code, 400, body)
+                self.assertTrue(json.loads(body)["error"].startswith("Thiếu xác nhận xóa vĩnh viễn"))
         # The same PC-only actions still reach their handlers over 127.0.0.1 (no pc_only refusal).
         for path, payload in pc_only.items():
             if path in ("/api/shutdown", "/api/ai/login", "/api/phone-mode"):

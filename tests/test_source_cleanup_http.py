@@ -29,13 +29,14 @@ from unittest.mock import Mock, call, patch
 
 from biliflow import brand_memory
 from biliflow import control_center as cc
-from biliflow import job_purge, recycle_bin, source_cleanup
+from biliflow import job_purge, phone_access, recycle_bin, source_cleanup
 from biliflow.control_center import ControlCenter, _handler_class
 from biliflow.job_store import JobStore
 from biliflow.recycle_bin import BinInfo, RecycleRefused
 from biliflow.review_evidence import ReviewFrameCache
 from biliflow.review_workflow import approved_operations, review_export_paths
 from biliflow.scheduler import JobScheduler
+from tests.test_job_delete_http import PhoneClient
 
 
 TEMP_PARENT = recycle_bin.INSTALL_ROOT / "temp"
@@ -711,6 +712,76 @@ class CleanupRouteTests(CleanupHttpFixture):
                          ("NOT_RUN", STOPPING_MESSAGE, 0))
         self.assertEqual(self.deleter.calls, [])
         self.assertTrue(self.job_exists(exported))
+
+
+class PhoneListenerTests(PhoneClient, CleanupHttpFixture):
+    """"Xóa video gốc" from the phone (the user's choice, 2026-10-06); "Lưu trữ" stays PC only."""
+
+    def setUp(self):
+        super().setUp()
+        self.open_phone()
+
+    def confirm(self, ids):
+        status, preview = self.via_phone("GET", "/api/source-cleanup/preview?ids=" + ",".join(str(x) for x in ids))
+        self.assertEqual(status, 200, preview)
+        return {"job_ids": list(ids), "preview_id": preview["preview_id"], "confirm_permanent": True}
+
+    def test_a_confirmed_deletion_from_the_phone_removes_the_source_and_keeps_the_export(self):
+        exported = self.make_exported_job("tap12")
+        kept = self.make_exported_job("tap13")
+        source, output, manifest = self.source_of(exported), self.output_of(exported), self.manifest_path(exported)
+        files = self.kept_files(removed={"tap12"})
+        status, result = self.via_phone("POST", "/api/source-cleanup", self.confirm([exported]))
+        self.assertEqual(status, 200, result)
+        self.assertEqual([(entry["job_id"], entry["status"], entry["message"]) for entry in result["results"]],
+                         [(exported, "DELETED", DELETED_MESSAGE)])
+        self.assertEqual(len(self.deleter.calls), 1)
+        self.assertFalse(os.path.lexists(source))
+        self.assertFalse(os.path.lexists(manifest))
+        self.assertTrue(output.is_file())
+        self.assertFalse(self.job_exists(exported))
+        self.assertTrue(self.source_of(kept).is_file())
+        self.assertEqual(self.kept_files(removed={"tap12"}), files)
+        self.assertEqual(self.bin.calls, [])
+
+    def test_the_phone_still_needs_the_cookie_the_token_and_the_confirmation(self):
+        exported = self.make_exported_job("tap12")
+        body = self.confirm([exported])
+        dump = self.db_dump()
+        self.assertEqual(self.via_phone("POST", "/api/source-cleanup", body, cookie=False)[0], 401)
+        self.assertEqual(self.via_phone("POST", "/api/source-cleanup", body, token=None),
+                         (403, {"error": TOKEN_REFUSAL}))
+        self.assertEqual(self.via_phone("POST", "/api/source-cleanup", body, origin="http://evil.example")[0], 403)
+        self.assertEqual(self.via_phone("POST", "/api/source-cleanup", body, host=f"evil.example:{self.phone_port}"),
+                         (403, {"error": HOST_REFUSAL}))
+        self.assertEqual(self.via_phone("POST", "/api/source-cleanup", {**body, "confirm_permanent": False}),
+                         (400, {"error": CONFIRM_PERMANENT_MESSAGE}))
+        self.assertEqual(self.db_dump(), dump)
+        self.assertEqual(self.deleter.calls, [])
+        self.assertTrue(self.source_of(exported).is_file())
+
+    def test_only_the_exact_delete_routes_are_phone_routes(self):
+        # PHONE_ALLOWED_POSTS is a full match: a neighbour of either route is refused before its body is used.
+        exported = self.make_exported_job("tap12")
+        body = {"job_ids": [exported], "preview_id": "a" * 64, "confirm_permanent": True}
+        for path in ("/api/source-cleanup/", "/api/source-cleanup/preview", "/api/SOURCE-CLEANUP",
+                     "/api/job-delete/", "/api/job-delete/preview", "/api/job-delete/run"):
+            with self.subTest(path=path):
+                status, answer = self.via_phone("POST", path, body)
+                self.assertEqual((status, answer["code"]), (403, "pc_only"))
+        self.assertEqual(self.deleter.calls, [])
+        self.assertTrue(self.source_of(exported).is_file())
+
+    def test_archive_restore_and_the_bin_check_stay_pc_only(self):
+        exported = self.make_exported_job("tap12")
+        for path, body in (("/api/source-archive", {"job_ids": [exported], "preview_id": "a" * 64}),
+                           ("/api/source-archive/restore", {"job_id": exported}),
+                           ("/api/source-recycle-check", {"kind": "source_cleanup", "id": 1})):
+            with self.subTest(path=path):
+                self.assertEqual(self.via_phone("POST", path, body),
+                                 (403, {"error": phone_access.PC_ONLY_SOURCE, "code": "pc_only"}))
+        self.assertTrue(self.source_of(exported).is_file())
+        self.assertEqual(self.bin.calls, [])
 
 
 class LockOrderTests(CleanupHttpFixture):

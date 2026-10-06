@@ -3,8 +3,9 @@
 The new files are whitelisted and served on the PC listener and, with the access cookie, on the phone
 listener; the CSP is unchanged, the new files have no blob:, inline script or fetch; the classic pages
 stay byte-identical (D2); the R0 entries of PHONE_ALLOWED_POSTS and of the contract endpoints are unchanged (the
-video download plan added its "Tải video" routes and endpoints, the delete flow its two PC-only endpoints); review-core.js
-matches the classic page (verify-review.cjs) and, for S1, counts bulk actions like the real server.
+video download plan added its "Tải video" routes and endpoints, the delete flow its two endpoints, allowed on the
+phone since 2026-10-06); review-core.js matches the classic page (verify-review.cjs) and, for S1, counts bulk
+actions like the real server.
 R2: the bodies the dialog sends (review-core.js decisionBody / undoPlan, equal to the classic page's) are
 POSTed to the real /api/jobs/<id>/review/decision|clear route on a temporary root with a synthetic queue,
 and the queue it returns matches what the dialog shows after its optimistic change.
@@ -66,6 +67,9 @@ PHONE_POSTS_LITERAL = (
     r"/api/downloads/\d+/(?:rename|choose|stop|resume|cancel|retry|remove)",
     r"/api/downloads/settings",
     r"/api/downloads/cleanup-temp",
+    # "Xóa video gốc", "Xóa video" and "Dọn video mất gốc" from the phone too (the user's choice, 2026-10-06).
+    r"/api/source-cleanup",
+    r"/api/job-delete",
 )
 # SHA-256 of JSON.stringify(contracts.js endpoints, keys sorted): 50 endpoints at the start of R0 (06c1dd42…),
 # 63 with the 13 "Tải video" endpoints of the video download plan (D3, a28b19df…), 52 with deletePreview and delete
@@ -541,7 +545,7 @@ class ReviewR4PhoneListener(_TempJobFixture):
             self.assertIsNone(phone_access.pc_only_reason(r["path"]))
         queue = json.loads(self.queue_file.read_text(encoding="utf-8"))
         self.assertTrue(all(x.get("decision") for x in queue["items"]), "Giữ tất cả kept every undecided item")
-        # Report previews through /media; nothing reaches a PC-only route; no error answer.
+        # Report previews through /media; nothing reaches a delete, archive or PC-only route; no error answer.
         self.assertTrue(any(urllib.parse.unquote(r["path"]).startswith("/media/reports/") and r["status"] == 200 for r in after))
         self.assertEqual([r for r in after if re.search(r"source-(cleanup|archive|recycle)|job-delete|/shutdown|logo-memory", r["path"])], [])
         self.assertEqual([r for r in after if r["status"] is None or r["status"] >= 400], [])

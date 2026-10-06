@@ -170,7 +170,7 @@
       const line = (label, value) => '<div class="key-value"><span>' + label + '</span><span>' + value + '</span></div>';
       const size = n => n == null ? '—' : esc(K.formatBytes(n) || '0 KB');
       const link = '<a href="#videos" data-action="storage-cleanable">' +
-        (ctx.remote ? 'xem danh sách (xóa chỉ làm trên PC)' : 'mở danh sách để Xóa video gốc / Lưu trữ') + '</a>';
+        (ctx.remote ? 'mở danh sách để Xóa video gốc (Lưu trữ chỉ làm trên PC)' : 'mở danh sách để Xóa video gốc / Lưu trữ') + '</a>';
       body = line('Ổ chứa BiliFlow', size(d.free_bytes) + ' trống / ' + size(d.total_bytes) + ' · giữ lại ' + size(d.reserve_bytes)) +
         ['input', 'output', 'reports', 'cache', 'temp'].map(name => line('<span class="mono">' + name + '</span>', size(f[name]))).join('') +
         line('Video gốc xóa được', c.error ? esc(c.error) : c.jobs ? Number(c.jobs) + ' video đã xuất xong · ' + size(c.bytes) + ' · ' + link :

@@ -14,7 +14,7 @@ This is the short, authoritative starting point for a new Codex account or chat.
   - `main` does not have V2. The Control Center runs V2 only while the main folder is on this branch.
 - Branch `feat/delete-flow` (from `55c6e62` of `feat/dashboard-v2`, worktree `temp/wt-delete-flow`, local commits only) holds the permanent delete flow. See "Current work — 2026-10-05 permanent delete flow" below.
 - Branch `feat/video-download` (from `feat/dashboard-v2` a7d8f18, worktree `temp\wt-video-download`, 2026-10-05) holds the real video download feature, D0–D5 done (see "Current work — 2026-10-05 real video download" below). A session on this branch starts at `docs/VIDEO_DOWNLOAD_PLAN.md` and asks the user before downloading any tool or package. Dashboard V2 merges into `main` on its own.
-- Branch `test/download-delete` (worktree `temp\wt-download-delete`, 2026-10-06) is `feat/delete-flow` with `feat/video-download` merged in, for the user's real-machine test of both. See "Current work — 2026-10-06 test branch" below.
+- Branch `test/download-delete` (worktree `temp\wt-download-delete`, 2026-10-06) is `feat/delete-flow` with `feat/video-download` merged in, for the user's real-machine test of both (passed), plus the phone deletes the user asked for next. See "Current work — 2026-10-06 test branch" below.
 - Active branch: `main`. On 2026-10-03 the user asked to merge `improve/scan-performance-metrics` (everything since `7f5a9fb`: the scan-performance work, detector/review fixes and dashboard batches 1-4) into `main` and run it there. `main` was fast-forwarded to the branch tip (the commit that carries this note) and the working tree, which the Control Center runs from, was switched to `main` with no file change. The branch is kept.
 - Pushed at the user's request on 2026-10-03: `origin/main` (GitHub `dinhnguyentrungthanh/video-ai-edit`) moved `9155cd7..23aa1e4`. Local `main` has moved on since (the merge below); push again only when the user asks.
 - Merged at the user's request on 2026-10-03 at about 21:40, with no job running: branch `fix/export-identity-http` (worktree `temp/wt-export-fix`) was fast-forwarded into `main`. It brings export identity from the render, reuse of only a proven export, HTTP request limits and the short-export rate cap (see Current work). `origin/main` was pushed later and is at f6996bb (checked 2026-10-04). The running Control Center keeps the code it started with until it is restarted (ask the user first).
@@ -39,7 +39,16 @@ Always confirm this section with `git status` and `git log` because it becomes s
 - Made at the user's request: `git worktree add temp\wt-download-delete -b test/download-delete feat/delete-flow`, then a merge of `feat/video-download` (`caedb8b`). Neither feature branch was changed; their own sections below still describe them.
 - Six files conflicted (`CHANGELOG.md`, `dashboard_v2/app.js`, `docs/PROJECT_STATUS.md`, `docs/SESSION_HANDOFF.md`, `src/biliflow/control_center.py`, `tests/test_dashboard_v2_review.py`); both sides were kept. See CHANGELOG for the details and the checks.
 - The rules of both sections below apply: agents never POST to `/api/downloads*` or to the delete, cleanup, archive or restore routes on the real Control Center.
-- Next: the user tests both features on the real machine with the main folder detached at this branch's merge commit (moved only with the user's consent and no job running), then decides about push and merge.
+- 2026-10-06 07:36: with the user's consent and no job running, the main folder was detached at the merge `a6c8b8b` and the real Control Center restarted (Stop/Start-BiliFlow.ps1; 39 jobs intact; phone mode off after the restart). The user then tested both features on the real machine and said everything passed.
+- 2026-10-06, the user's next request: "Dọn video mất gốc", "Xóa video gốc", and "Hủy" plus "Xóa video" for a video waiting for setup must also work on the phone.
+  - Done in the commit after `a6c8b8b`: `/api/source-cleanup` and `/api/job-delete` are in `PHONE_ALLOWED_POSTS`, V2 `pcOnlyOps` is archive/restore/recheck, and the phone tests use the real listener on temporary roots. Details in CHANGELOG and `docs/DELETE_FLOW_PLAN.md` section 10.
+  - Archive, restore and the bin check stay PC only.
+  - Reviews: the security review found no CRITICAL or HIGH issue. Its MEDIUM risk went to the user: a stolen phone session could "Hủy" any unfinished video and then "Xóa video" it. The user chose to keep the PC behaviour on the phone (option 1) and accepts the risk. The code review approved; its LOW notes are fixed.
+- Next:
+  1. The user approved restarting the Control Center on this commit. Check with GETs that no job or download runs, then move the main folder and restart.
+  2. The user turns the phone mode on (V2 > Cài đặt) and tests the deletes from the phone.
+  3. Push or merge only when the user asks.
+  4. Possible later hardening, suggested by the security review, not requested: bind the cookie to the IP with an event for a new IP, a delete PIN, a firewall rule for the phone's IP only.
 
 ## Current work — 2026-10-05 permanent delete flow (branch `feat/delete-flow`, worktree `temp/wt-delete-flow`; local commits, not pushed)
 
@@ -692,7 +701,7 @@ Status: items 4-7 and 7c-7d are done, in batches 1-2 (commits 27dc000, 1b6ad90, 
 
 ## Safety and product constraints
 
-- Source videos are immutable. Exceptions, all user-triggered on the PC after the user confirms them: “Xóa video gốc” deletes an exported or skipped input video for good (from `feat/delete-flow`; before it, “Dọn video gốc” moved it to the Windows Recycle Bin), “Xóa video” deletes a cancelled job's input video, and “Lưu trữ” / “Khôi phục bản xuất” rename it into `archive\` and back. Agents never run them (see AGENTS.md).
+- Source videos are immutable. Exceptions, all user-triggered after the user confirms them (the deletes on the PC or, since 2026-10-06 on `test/download-delete`, from the phone mode; archive and restore on the PC only): “Xóa video gốc” deletes an exported or skipped input video for good (from `feat/delete-flow`; before it, “Dọn video gốc” moved it to the Windows Recycle Bin), “Xóa video” deletes a cancelled job's input video, and “Lưu trữ” / “Khôi phục bản xuất” rename it into `archive\` and back. Agents never run them (see AGENTS.md).
 - No automatic KEEP, BLUR, CUT, upload, or publish.
 - All models must be free to run locally and commercially usable under the recorded policy.
 - AI Supervisor is optional. Deterministic local Structure Audit uses no ChatGPT quota. Visual AI Audit sends only explicitly approved thumbnails and never source video/audio.

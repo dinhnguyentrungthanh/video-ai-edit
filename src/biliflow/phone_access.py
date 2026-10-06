@@ -84,12 +84,9 @@ UNLOCKED_MESSAGE = "Đã gỡ khóa. Nhập mã truy cập 8 ký tự hiện tr�
 WRONG_UNLOCK_MESSAGE = "Khóa mở không đúng. Nhập mã vẫn đang bị khóa."
 
 PC_ONLY_SOURCE = (
-    "Chỉ làm trên PC: xóa video và video gốc, lưu trữ, khôi phục và kiểm tra lại Thùng rác "
-    "không làm qua điện thoại."
+    "Chỉ làm trên PC: lưu trữ, khôi phục bản xuất và kiểm tra lại Thùng rác không làm qua điện thoại."
 )
 PC_ONLY_POSTS = {
-    "/api/source-cleanup": PC_ONLY_SOURCE,
-    "/api/job-delete": PC_ONLY_SOURCE,
     "/api/source-archive": PC_ONLY_SOURCE,
     "/api/source-archive/restore": PC_ONLY_SOURCE,
     "/api/source-recycle-check": PC_ONLY_SOURCE,
@@ -118,6 +115,10 @@ PHONE_ALLOWED_POSTS = tuple(re.compile(pattern) for pattern in (
     r"/api/downloads/\d+/(?:rename|choose|stop|resume|cancel|retry|remove)",
     r"/api/downloads/settings",
     r"/api/downloads/cleanup-temp",
+    # "Xóa video gốc", "Xóa video" and "Dọn video mất gốc" (the user's choice, 2026-10-06): the same
+    # preview_id + confirm_permanent request as on the PC; archive, restore and the bin check stay PC only.
+    r"/api/source-cleanup",
+    r"/api/job-delete",
 ))
 AI_AUDIT_ROUTE = re.compile(r"/api/jobs/\d+/ai-audit")
 

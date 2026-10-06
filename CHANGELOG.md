@@ -1,3 +1,43 @@
+# Unreleased — the delete actions also work from the phone — 2026-10-06
+
+Status: branch `test/download-delete` (worktree `temp\wt-download-delete`), on top of the merge `a6c8b8b`. Not pushed, not merged; the feature branches are unchanged. The user's real-machine test of the merge passed (download, cancel and "Xóa video", "Dọn video mất gốc", "Xóa video gốc"). They then asked that four actions also work through the Dashboard V2 phone mode:
+- "Dọn video mất gốc";
+- "Xóa video gốc";
+- "Hủy" for a video waiting for setup;
+- "Xóa video" for that video once cancelled.
+
+- Server (`phone_access.py`):
+  - `/api/source-cleanup` and `/api/job-delete` move from `PC_ONLY_POSTS` to `PHONE_ALLOWED_POSTS`. "Hủy" (`/api/jobs/<id>/cancel`) already worked on the phone.
+  - The phone still needs the access-code cookie, the session token and the listener's Origin. Each delete still needs the preview's `preview_id` and `confirm_permanent: true`, and the server-side eligibility, golden-set and SHA-256 checks are unchanged.
+  - Archive, restore and the Recycle Bin check stay PC only. `PC_ONLY_SOURCE` (= V2 `C.PC_ONLY_REASON`) now reads "Chỉ làm trên PC: lưu trữ, khôi phục bản xuất và kiểm tra lại Thùng rác không làm qua điện thoại."
+- Dashboard V2:
+  - `pcOnlyOps` is now archive, restore, recheck.
+  - On the phone, "Hoàn tất" lets you pick videos for "Xóa video gốc". "Lưu trữ" stays off with the PC-only reason, and a row that could only be archived says so.
+  - "Xóa video" and "Dọn video mất gốc" are on, as on the PC. The lost-video notice no longer waits for `/api/phone-mode`.
+  - The "Đang mở qua điện thoại" panel says these three actions delete for good. The "Dung lượng" link on the phone reads "mở danh sách để Xóa video gốc (Lưu trữ chỉ làm trên PC)".
+  - The classic page is never served to the phone; it and its pin are unchanged.
+- Risk, as told to the user: the phone connection is plain HTTP on the home Wi-Fi. Someone who can capture that traffic could take the cookie and token and send a permanent delete.
+  - Because "Hủy" also works from the phone, that person could cancel any unfinished video, even one in review, and then delete it with "Xóa video".
+  - Mitigations: the phone mode is off by default and turns itself off after 8 hours; the golden set stays locked; `output\` exports are never deleted.
+- Reviews:
+  - Security review: no CRITICAL or HIGH finding. The phone gates (Host, cookie, token, Origin, full-match allowlist, `preview_id`, `confirm_permanent`) are a superset of the PC's.
+  - The MEDIUM risk above went to the user with two choices: keep the PC behaviour, or allow the phone to delete only cancelled videos that never had a review queue. **The user chose to keep the PC behaviour and accepts the risk.**
+  - Suggested for later, not done: bind the cookie to the IP with an event for a new IP, a delete PIN, a firewall rule for the phone's IP only.
+  - Code review: approved. Its four LOW notes are fixed:
+    - the PC phone-mode panel now warns that deletes work from the phone;
+    - the phone's "nothing selectable" text no longer mentions archiving;
+    - stale "PC only" lines in `docs/PROJECT_STATUS.md` and `docs/VIDEO_DOWNLOAD_PLAN.md` are corrected;
+    - the phone step of `browser-check.cjs` waits for the jobs and keeps archive-only rows, so their "Lưu trữ chỉ làm trên PC" reason is checked.
+- Docs: `AGENTS.md` (group (1) of the source-video rule may run from the phone), `README.md`, `docs/DASHBOARD_V2_PHONE.md`, `docs/DELETE_FLOW_PLAN.md` (section 10), `docs/DASHBOARD_V2_UPDATE_GUIDE.md` and `docs/VIDEO_DOWNLOAD_PLAN.md`.
+- Tests, all through the real phone listener on 127.0.0.1 with a temporary root under `temp`:
+  - `PhoneListenerTests` in `tests/test_job_delete_http.py`: cancel then delete a video waiting for setup; the lost-video purge, with output untouched; cookie, token, Origin and confirmation still required.
+  - `PhoneListenerTests` in `tests/test_source_cleanup_http.py`: "Xóa video gốc" from the phone; a wrong Host or Origin is refused; neighbours of the two routes (trailing `/`, `/preview`, upper case) stay 403 `pc_only`; archive, restore and the bin check stay 403 `pc_only`.
+  - Updated to match: the pinned phone route lists, `test_dashboard_v2_contract.py` (PC-only ops equal the server's `PC_ONLY_SOURCE` routes; the delete ops work alike on PC and phone), `verify.cjs`, `verify-adapter.cjs`, `verify-download.cjs`, and the Playwright checks `browser-check.cjs` and `browser-check-review-phone.cjs` (not run here: Playwright is not installed).
+- Checks on the worktree:
+  - full suite (after the review fixes): 1587 tests, no failure, 26 skipped. The only errors are the 28 known ones of `test_job_pipeline` and `test_job_ocr_option`, which need an `input\*.mp4` (35 OK with a temporary synthetic clip). An earlier run also had a Windows file lock while `test_adult_verification` removed its temp folder (17 OK when rerun).
+  - node gates: `verify.cjs` 35, `verify-adapter.cjs` 30, `verify-download.cjs` 21, `verify-review.cjs` 31.
+  - the V2 page at 375 px against a scratch fake API that answers like the phone listener: "Dọn video mất gốc", "Hủy" then "Xóa video", and "Xóa video gốc" each sent their POST with `confirm_permanent: true` after "Tôi hiểu"; "Lưu trữ" stayed off; no horizontal overflow.
+
 # Unreleased — test branch `test/download-delete`: "Tải video" and the permanent delete together — 2026-10-06
 
 Status: branch `test/download-delete` (worktree `temp\wt-download-delete`) is `feat/delete-flow` (`0ed2f96`) with `feat/video-download` (`caedb8b`) merged in, made at the user's request so that both are tested on the real machine at once. Neither feature branch was changed. Not pushed, not merged into `main`.

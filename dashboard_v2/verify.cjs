@@ -234,12 +234,18 @@ check('Demo store review writes (R2, R3): decision / clear / bulk change the syn
   assert.equal(r.pendingWrites(),0);
   assert.ok(!/fetch\(|XMLHttpRequest/.test(fs.readFileSync(path.join(__dirname,'demo-store.js'),'utf8')));
 });
-check('Delete flow: "Xóa video" follows the server hint, the golden set, the file lock and the phone',()=>{
+check('Delete flow: "Xóa video" follows the server hint, the golden set and the file lock, on the PC and the phone',()=>{
   const cancelled=job('CANCELLED',{delete:{eligible:true,kind:'CANCELLED',reason:null,size_bytes:5}});
   assert.deepEqual([has(cancelled,'delete').label,has(cancelled,'delete').enabled],['Xóa video',true]);
   assert.equal(has(cancelled,'delete',{aiReady:true,fileBusy:true}).enabled,false);
+  // The phone too (2026-10-06): "Xóa video" and "Xóa video gốc" follow the same rules there; "Lưu trữ" stays PC only.
   const phone=has(cancelled,'delete',{aiReady:true,remote:true});
-  assert.deepEqual([phone.enabled,phone.reason],[false,C.PC_ONLY_REASON]);
+  assert.deepEqual([phone.enabled,phone.reason],[true,'']);
+  assert.equal(has(cancelled,'delete',{aiReady:true,remote:true,fileBusy:true}).enabled,false);
+  const phoneClean=has(job('COMPLETED',{cleanup:{eligible:true},archive:{eligible:true}}),'cleanup',{aiReady:true,remote:true});
+  assert.deepEqual([phoneClean.enabled,phoneClean.reason],[true,'']);
+  const phoneArchive=has(job('COMPLETED',{cleanup:{eligible:true},archive:{eligible:true}}),'archive',{aiReady:true,remote:true});
+  assert.deepEqual([phoneArchive.enabled,phoneArchive.reason],[false,C.PC_ONLY_REASON]);
   const golden=has({...cancelled,protected:'Video thuộc bộ golden'},'delete');
   assert.deepEqual([golden.enabled,golden.reason],[false,'Video thuộc bộ golden']);
   const refused=has(job('COMPLETED',{source_present:false,delete:{eligible:false,kind:'LOST',reason:'Video gốc còn trong Thùng rác'}}),'delete');
@@ -248,7 +254,7 @@ check('Delete flow: "Xóa video" follows the server hint, the golden set, the fi
   const clean=has(job('COMPLETED',{cleanup:{eligible:true},protected:'Video thuộc bộ golden'}),'cleanup');
   assert.deepEqual([clean.label,clean.enabled,clean.reason],['Xóa video gốc',false,'Video thuộc bộ golden']);
   assert.deepEqual(C.permanentOps,['cleanup','delete']);
-  assert.ok(C.pcOnlyOps.includes('delete'));
+  assert.deepEqual(C.pcOnlyOps,['archive','restore','recheck']);
   assert.deepEqual(C.endpoints.delete,['POST','/api/job-delete']);
   assert.deepEqual(C.endpoints.deletePreview,['GET','/api/job-delete/preview']);
 });

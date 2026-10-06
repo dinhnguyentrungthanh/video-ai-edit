@@ -1,3 +1,16 @@
+## Phone deletes (2026-10-06) — branch `test/download-delete`, local, not pushed
+
+- The user's real-machine test of the merge `a6c8b8b` passed. They then asked that four actions also work from the Dashboard V2 phone mode:
+  - "Dọn video mất gốc";
+  - "Xóa video gốc";
+  - "Hủy" then "Xóa video" for a video waiting for setup.
+- `/api/source-cleanup` and `/api/job-delete` are now phone routes. Cookie, token, Origin, `preview_id` and `confirm_permanent` are still required; archive, restore and the bin check stay PC only. See CHANGELOG and `docs/DELETE_FLOW_PLAN.md` section 10.
+- Risk: plain HTTP on the home Wi-Fi. A stolen phone session could "Hủy" any unfinished video and then "Xóa video" it.
+  - The security review found no CRITICAL or HIGH issue. The user was given the choice to limit phone deletes to cancelled videos without a review queue, and chose to keep the PC behaviour.
+  - The risk is written in `docs/DASHBOARD_V2_PHONE.md`. Code review approved; its LOW notes are fixed.
+- Checks: full suite 1587 tests, no failure. The only errors are the 28 known `input\*.mp4` errors, which pass with a synthetic clip. Node gates: 35 / 30 / 21 / 31.
+- Next: the user approved restarting the Control Center on this commit, which the phone change needs (only with no job or download running). Then the user tests the deletes from the phone. Push or merge only when the user asks.
+
 ## Test branch `test/download-delete` (2026-10-06): "Tải video" and the permanent delete, for one real-machine test
 
 - `feat/delete-flow` (`0ed2f96`) with `feat/video-download` (`caedb8b`) merged in; neither feature branch was changed. Six files conflicted and keep both sides: routes, phone rules, the V2 page, the endpoints pin and these docs. See CHANGELOG.
@@ -17,7 +30,7 @@
   - D3 (Dashboard V2) and D4 (classic page `/`) committed together;
   - D5: these docs and the full suite (1383 tests OK, 26 skipped; Playwright browser checks not run on this machine).
 - Known gap: on the classic page a hidden cancelled video has no "Xóa video" button (show it again first, or use V2).
-- Protections: the golden set (#37–#39 today), benchmark folders, links and junctions, busy jobs, legacy bin-held sources, and an install-root guard (a worktree cannot delete the main folder's files). Both POSTs are PC only and need `confirm_permanent: true`.
+- Protections: the golden set (#37–#39 today), benchmark folders, links and junctions, busy jobs, legacy bin-held sources, and an install-root guard (a worktree cannot delete the main folder's files). Both POSTs need `confirm_permanent: true`; they were PC only until the phone change of 2026-10-06 (top section).
 - Real machine (read only): 27 jobs have lost their source and can be removed by "Dọn video mất gốc"; the only cancelled job that still has its source is #39 (about 7.1 GB), which stays locked in the golden set.
 - Next: the user's test (plan section 8). It needs the user's consent to move the main folder to this branch and restart the Control Center, with no job running.
 

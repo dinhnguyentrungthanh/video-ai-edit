@@ -215,9 +215,9 @@ class PhoneRouteTests(RouteCase):
         self.assertEqual(http(self.port, "GET", "/api/downloads", host=self.host)[0], 401)
         self.assertEqual(self.store.list_tasks(), [])
 
-    def test_source_cleanup_and_archive_stay_pc_only(self):
-        for path in ("/api/source-cleanup", "/api/source-archive", "/api/source-archive/restore",
-                     "/api/source-recycle-check"):
+    def test_archive_restore_and_the_bin_check_stay_pc_only(self):
+        # "Xóa video gốc" and "Xóa video" work from the phone since 2026-10-06 (tests/test_source_cleanup_http.py).
+        for path in ("/api/source-archive", "/api/source-archive/restore", "/api/source-recycle-check"):
             with self.subTest(path=path):
                 status, body = self.phone_post(path, {"job_ids": [1], "preview_id": "x"})
                 self.assertEqual((status, body["code"]), (403, "pc_only"))

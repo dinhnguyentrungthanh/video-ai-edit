@@ -112,8 +112,15 @@ Remove-NetFirewallRule -DisplayName "BiliFlow phone mode (Python, TCP 8767)"
 
   Trang duyệt cũ trên PC không đổi.
 
+**Xóa trên điện thoại (từ 2026-10-06).** Các thao tác sau làm được trên điện thoại giống hệt trên PC:
+- **Xóa video gốc**: trong tab Hoàn tất, xóa từng video hoặc nhiều video đã chọn;
+- **Xóa video**: cho video đã hủy (kể cả video chờ thiết lập vừa bấm **Hủy xử lý**) và video mất gốc;
+- **Dọn video mất gốc**.
+
+Hộp thoại vẫn liệt kê từng video, vẫn có ô "Tôi hiểu", và server vẫn kiểm SHA-256 như trên PC. Đây là **xóa vĩnh viễn**, không qua Thùng rác. Kết nối điện thoại là HTTP không mã hóa: ai bắt được gói tin trong cùng Wi-Fi có thể lấy cookie và token phiên rồi gửi lệnh xóa. Vì "Hủy" cũng làm được trên điện thoại, người đó còn có thể hủy bất kỳ video nào chưa xong rồi "Xóa video". Bạn đã chọn chấp nhận rủi ro này (2026-10-06). Vì vậy chỉ bật chế độ điện thoại khi cần và tắt khi xong.
+
 **Chỉ làm trên PC.** Trên điện thoại các nút này bị khóa, và nếu vẫn gửi lệnh thì server trả 403 kèm lý do:
-- dọn, lưu trữ, khôi phục video gốc và kiểm tra lại Thùng rác;
+- lưu trữ, khôi phục bản xuất và kiểm tra lại Thùng rác;
 - tắt Control Center;
 - cấu hình và đăng nhập AI Supervisor;
 - **Visual AI Audit** (gửi tối đa 36 ảnh thumbnail ra ngoài máy cho Codex);

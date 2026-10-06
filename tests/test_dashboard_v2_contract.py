@@ -203,11 +203,34 @@ class StateGroupTests(unittest.TestCase):
         endpoints = json.loads(_node("console.log(JSON.stringify(require('./dashboard_v2/contracts.js').endpoints))"))
         for op in out["ops"]:
             self.assertIn(endpoints[op][1], phone_access.PC_ONLY_POSTS, op)
+        self.assertEqual(sorted(endpoints[op][1] for op in out["ops"]),
+                         sorted(path for path, reason in phone_access.PC_ONLY_POSTS.items()
+                                if reason == phone_access.PC_ONLY_SOURCE))
         self.assertTrue(all(enabled for _, enabled in out["pc"]))
         self.assertTrue(out["remote"])
         for _, enabled, reason in out["remote"]:
             self.assertFalse(enabled)
             self.assertEqual(reason, phone_access.PC_ONLY_SOURCE)
+
+    def test_the_phone_deletes_like_the_pc(self) -> None:
+        # "Xóa video gốc" and "Xóa video" (the user's choice, 2026-10-06): the same buttons and rules on the phone,
+        # and their POSTs are phone routes.
+        from biliflow import phone_access
+        out = json.loads(_node("const C=require('./dashboard_v2/contracts.js');"
+                               "const done={id:3,state:'COMPLETED',source_present:true,cleanup:{eligible:true},archive:{eligible:true}};"
+                               "const cancelled={id:4,state:'CANCELLED',source_present:true,delete:{eligible:true,kind:'CANCELLED'}};"
+                               "const pick=(j,c)=>C.operations(j,c).filter(a=>C.permanentOps.includes(a.id)).map(a=>[a.id,a.enabled,a.reason]);"
+                               "console.log(JSON.stringify({ops:C.permanentOps,pcOnly:C.pcOnlyOps,"
+                               "paths:C.permanentOps.map(op=>C.endpoints[op][1]),"
+                               "pc:[...pick(done,{}),...pick(cancelled,{})],"
+                               "phone:[...pick(done,{remote:true}),...pick(cancelled,{remote:true})]}))"))
+        self.assertEqual(out["ops"], ["cleanup", "delete"])
+        self.assertFalse(set(out["ops"]) & set(out["pcOnly"]))
+        for path in out["paths"]:
+            self.assertIsNone(phone_access.pc_only_reason(path), path)
+            self.assertNotIn(path, phone_access.PC_ONLY_POSTS)
+        self.assertEqual(out["phone"], [["cleanup", True, ""], ["delete", True, ""]])
+        self.assertEqual(out["phone"], out["pc"])
 
     def test_the_presenter_no_longer_claims_a_missing_source_is_in_input(self) -> None:
         app = (ROOT / "dashboard_v2" / "app.js").read_text(encoding="utf-8")

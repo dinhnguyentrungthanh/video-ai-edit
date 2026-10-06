@@ -46,7 +46,7 @@ const phoneStatus = () => remoteMode ? {remote: true, enabled: true} : {remote: 
   locked: false, failed_attempts: 0, max_failed_attempts: 10, expires_at: phoneOn ? (phoneExtended ? 1790028800 : 1790000000) : null,
   last_disabled_reason_text: phoneOn ? null : 'hết 8 giờ',
   events: phoneOn ? [{type: 'PHONE_CODE_WRONG', message: 'Thiết bị 192.168.1.50 nhập sai mã', at: 1789990000, ip: '192.168.1.50'}] : []};
-const PC_ONLY = ['/api/source-cleanup', '/api/job-delete', '/api/source-archive', '/api/source-archive/restore', '/api/source-recycle-check',
+const PC_ONLY = ['/api/source-archive', '/api/source-archive/restore', '/api/source-recycle-check',
   '/api/shutdown', '/api/ai/config', '/api/ai/login', '/api/logo-memory/class', '/api/logo-memory/delete', '/api/phone-mode'];
 const status = () => ({version: '0.7.24', started: true, scheduler_paused: false, queue: {length: 2, paused: false},
   active: {job_id: 102, stage: 'visual_logo', pid: 1}, jobs, source_cleanup_running: false, detector_options: [],
@@ -360,9 +360,10 @@ async function check(name, fn) { await fn(); passed++; results.push(name); proce
       await page.goto(base + '/dashboard-v2/?remote2#videos');
       await page.waitForSelector('#search');
       await openJob(105);
-      const cleanup = page.locator('.drawer [data-op="cleanup"]');
-      assert.equal(await cleanup.isDisabled(), true);
-      assert.match(await cleanup.getAttribute('title'), /Chỉ làm trên PC/);
+      // 2026-10-06: "Xóa video gốc" works on the phone; "Lưu trữ" stays PC only.
+      await page.waitForFunction(() => /^Chỉ làm trên PC: lưu trữ/.test(document.querySelector('.drawer [data-op="archive"]')?.title || ''));
+      assert.equal(await page.locator('.drawer [data-op="archive"]').isDisabled(), true);
+      assert.equal(await page.locator('.drawer [data-op="cleanup"]').isDisabled(), false);
       const [sw2, iw2] = await page.evaluate(() => [document.documentElement.scrollWidth, window.innerWidth]);
       assert.ok(sw2 <= iw2, 'drawer 375: ' + sw2);
       await page.keyboard.press('Escape');
@@ -480,7 +481,7 @@ async function check(name, fn) { await fn(); passed++; results.push(name); proce
       await page.setViewportSize({width: 1280, height: 900});
     });
 
-    await check('U3: "Hoàn tất" shows a box on every row, the reason when it cannot be ticked, and PC-only on the phone', async () => {
+    await check('U3: "Hoàn tất" shows a box on every row, the reason when it cannot be ticked, and only "Xóa video gốc" on the phone', async () => {
       const NONE = 'Không có video nào xóa video gốc hoặc lưu trữ được';
       const MOVED = 'Không thấy bản xuất trong thư mục output (đã bị dời hoặc đổi tên?)';
       const MISSING = 'Video gốc không còn trong thư mục input';
@@ -494,6 +495,7 @@ async function check(name, fn) { await fn(); passed++; results.push(name); proce
         await page.waitForSelector('#search');
         await page.locator('[data-action="filter"][data-filter="completed"]').first().click();
         await page.waitForSelector('.bulk-toolbar');
+        await page.waitForSelector('#list-body .job-row[data-job="105"]'); // the jobs are in, not only the phone status
       };
       const boxes = () => page.evaluate(() => [...document.querySelectorAll('#list-body .job-row')].map(r => {
         const box = r.querySelector('.video-cell input.select-job');
@@ -564,31 +566,42 @@ async function check(name, fn) { await fn(); passed++; results.push(name); proce
         }
         await page.locator('[data-action="deselect"]').click();
         assert.equal((await toolbar()).label, '0 video đã chọn · ' + total + ' video chọn được');
-        jobs.splice(jobs.findIndex(j => j.id === 300), 55);
+        // The 55 archive-only videos stay for step 3 (the finally block removes them).
 
-        // 3. Through the phone, even with selectable videos: PC-only, no preview.
+        // 3. Through the phone (2026-10-06): "Xóa video gốc" picks and opens its preview; "Lưu trữ" stays PC only.
         remoteMode = true;
         await openCompleted('remote', 390);
-        await page.waitForFunction(() => document.querySelector('.bulk-toolbar .bulk-label').textContent === 'Xóa video gốc và lưu trữ chỉ làm trên PC');
+        await page.waitForFunction(() => /^Chỉ làm trên PC: lưu trữ/.test(document.querySelector('.bulk-toolbar [data-action="bulk-archive"]').title));
+        const cleanable = done().filter(j => j.cleanup?.eligible && !j.protected && !j.source_cleaned && !j.source_archived && j.source_present !== false
+          && !['PENDING', 'RECYCLED'].includes(j.source_cleanup?.state)).map(j => j.id);
+        assert.ok(cleanable.includes(105), JSON.stringify(cleanable));
         const bar3 = await toolbar();
-        assert.deepEqual([bar3.pick, bar3.clear, bar3.clean, bar3.archive], [true, true, true, true], JSON.stringify(bar3));
-        assert.match(bar3.cleanTitle, /^Chỉ làm trên PC: xóa video và video gốc, lưu trữ/);
-        assert.equal(bar3.archiveTitle, bar3.cleanTitle);
-        for (const r of await boxes()) {
-          assert.ok(r.box && r.disabled && !r.checked, 'phone row ' + r.id);
-          assert.equal(r.title, bar3.cleanTitle);
-          assert.equal(r.why, '', 'no per-row reason on the phone: the toolbar says PC only');
+        assert.equal(bar3.label, '0 video đã chọn · ' + cleanable.length + ' video chọn được');
+        assert.deepEqual([bar3.pick, bar3.clear, bar3.clean, bar3.archive], [false, false, true, true], JSON.stringify(bar3));
+        const phoneRows = await boxes();
+        for (const r of phoneRows) {
+          assert.equal(r.disabled, !cleanable.includes(r.id), 'phone row ' + r.id + ': only "Xóa video gốc" picks');
+          if (r.disabled && jobs.find(j => j.id === r.id).archive?.eligible) assert.match(r.title, /Lưu trữ chỉ làm trên PC$/);
+        }
+        const archiveOnly = phoneRows.filter(r => r.id >= 300);
+        assert.ok(archiveOnly.length > 0, 'an archive-only video is on the first page');
+        for (const r of archiveOnly) {
+          assert.ok(r.disabled && r.title.endsWith('· Lưu trữ chỉ làm trên PC'), JSON.stringify(r));
+          assert.ok(r.why.endsWith('· Lưu trữ chỉ làm trên PC'), 'the reason shows without a tooltip: ' + r.why);
         }
         const previews = [];
-        const onRequest = r => { if (/source-(cleanup|archive)|job-delete/.test(r.url())) previews.push(r.url()); };
+        const onRequest = r => { if (/source-(cleanup|archive)|job-delete/.test(r.url())) previews.push(r.method() + ' ' + new URL(r.url()).pathname); };
         page.on('request', onRequest);
-        await page.locator('[data-action="bulk-cleanup"]').click({force: true});
+        await page.locator('#list-body .job-row[data-job="105"] input.select-job').click();
+        assert.equal((await toolbar()).clean, false);
         await page.locator('[data-action="bulk-archive"]').click({force: true});
-        await page.locator('#list-body .job-row[data-job="105"] input.select-job').click({force: true});
-        await page.waitForTimeout(300);
+        await page.locator('[data-action="bulk-cleanup"]').click();
+        await page.waitForSelector('#modal[open]');
+        assert.match(await page.locator('#modal').textContent(), /Xóa video gốc/);
+        await page.locator('#modal .modal-foot [data-action="close-modal"]').click();
+        await page.waitForFunction(() => !document.getElementById('modal').open);
         page.off('request', onRequest);
-        assert.deepEqual(previews, [], 'no preview is opened from the phone');
-        assert.equal(await page.evaluate(() => document.getElementById('modal').open), false);
+        assert.deepEqual(previews, ['GET /api/source-cleanup/preview'], 'the cleanup preview only: no archive, nothing sent');
         await noOverflow('U3 remote 390');
       } finally {
         remoteMode = false;

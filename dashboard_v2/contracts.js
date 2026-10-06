@@ -49,15 +49,16 @@
   const sourceLine = sourceLineInfo;
   /* Same text as export_guards.SOURCE_MISSING_MESSAGE (checked by tests/test_dashboard_v2_contract.py). */
   const SOURCE_MISSING_MESSAGE = 'Video gốc không còn trong input; không thể xuất.';
-  /* Phone mode (batch 2): these actions are refused by the phone listener (403 pc_only). */
-  const pcOnlyOps = ['cleanup','delete','archive','restore','recheck'];
+  /* Phone mode (batch 2): these actions are refused by the phone listener (403 pc_only).
+     "Xóa video gốc" and "Xóa video" work on the phone too (the user's choice, 2026-10-06). */
+  const pcOnlyOps = ['archive','restore','recheck'];
   /* "Xóa video gốc" and "Xóa video" delete for good (2026-10-05): the POST must carry confirm_permanent:true. */
   const permanentOps = ['cleanup','delete'];
   /* A DELETED "Xóa video gốc" that left the export's manifest says so after this marker (source_cleanup.MANIFEST_WARNING). */
   const DELETE_NOTE = '. Lưu ý: ';
   /* "Dọn video mất gốc": every video the server marks as lost and deletable (status delete hint), never a golden one. */
   function lostIds(jobs){return (jobs||[]).filter(j=>!!j&&!!j.delete&&j.delete.kind==='LOST'&&j.delete.eligible===true&&!j.protected).map(j=>j.id).sort((a,b)=>a-b);}
-  const PC_ONLY_REASON = 'Chỉ làm trên PC: xóa video và video gốc, lưu trữ, khôi phục và kiểm tra lại Thùng rác không làm qua điện thoại.';
+  const PC_ONLY_REASON = 'Chỉ làm trên PC: lưu trữ, khôi phục bản xuất và kiểm tra lại Thùng rác không làm qua điện thoại.';
   function reviewStats(j) {
     const r=j.review_summary||{},d=r.decisions||{};
     const total=Number(r.main_items)||0,resolved=['KEEP','BLUR','CUT'].reduce((n,k)=>n+(Number(d[k])||0),0);

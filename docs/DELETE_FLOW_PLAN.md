@@ -17,7 +17,8 @@ này và đã trả lời 4 câu hỏi (mục 1). Chưa merge, chưa push; ngư�
   - bộ nhớ logo/studio;
   - bộ nhãn vàng: 3 video #37, #38, #39 bị khóa, không xóa được;
   - thư mục benchmark/regression, kho lưu trữ, model, cache.
-- Chỉ làm trên PC. Mỗi lần xóa đều có hộp xác nhận liệt kê từng video, cảnh báo xóa vĩnh viễn và ô "Tôi hiểu".
+- Làm trên PC và, từ 2026-10-06, cả qua chế độ điện thoại (mục 10). Mỗi lần xóa đều có hộp xác nhận liệt kê từng
+  video, cảnh báo xóa vĩnh viễn và ô "Tôi hiểu".
 
 ## 1. Quyết định của người dùng (2026-10-05)
 
@@ -120,7 +121,7 @@ Mỗi video chạy lần lượt các bước sau:
 4. Một lần chỉ một thao tác với file gốc (`SOURCE_FILE_LOCK`, chung với Lưu trữ / Khôi phục / Kiểm tra lại Thùng rác).
    Lúc tắt, BiliFlow chờ thao tác đang chạy xong (`wait_idle`).
 
-## 5. API (chỉ PC)
+## 5. API (PC; điện thoại từ 2026-10-06)
 
 - **`GET /api/source-cleanup/preview?ids=…`** (giữ tên):
   - liệt kê video xóa được và không xóa được, kèm lý do;
@@ -137,7 +138,8 @@ Mỗi video chạy lần lượt các bước sau:
   - `protected`: lý do khóa vì bộ nhãn vàng, hoặc null;
   - `delete`: gợi ý "Xóa video" gồm `{eligible, kind: CANCELLED|LOST, reason, size_bytes}`, chỉ có với video đã hủy
     hoặc mất gốc.
-- Hai route POST mới nằm trong `PC_ONLY_POSTS`; điện thoại bị từ chối với lời nhắn "Chỉ làm trên PC".
+- Hai route POST mới lúc đầu nằm trong `PC_ONLY_POSTS`. Từ 2026-10-06 (mục 10) chúng nằm trong
+  `PHONE_ALLOWED_POSTS`: điện thoại gửi đúng yêu cầu như PC.
 
 ## 6. Giao diện
 
@@ -200,3 +202,53 @@ Mỗi video chạy lần lượt các bước sau:
 - **Chỉ ở `reports\jobs`:** 23 thư mục không thuộc video nào, đều có dấu `.biliflow-benchmark`. Giữ nguyên.
 - **Cache quét (`cache\stage-results`):** không bị mất. Các file sửa không nằm trong vân tay cache của bước quét nào;
   đã kiểm bằng `stage_source_paths`.
+
+## 10. Xóa qua điện thoại (quyết định của người dùng, 2026-10-06)
+
+- **Yêu cầu:** người dùng đã test xong trên PC. Họ muốn làm được trên điện thoại bốn thao tác:
+  - "Dọn video mất gốc";
+  - "Xóa video gốc";
+  - "Hủy" cho video đang chờ thiết lập;
+  - "Xóa video" cho video vừa hủy đó.
+- **Server** (`phone_access.py`):
+  - `/api/source-cleanup` và `/api/job-delete` chuyển từ `PC_ONLY_POSTS` sang `PHONE_ALLOWED_POSTS`. Nút "Hủy"
+    (`/api/jobs/<id>/cancel`) vốn đã làm được trên điện thoại.
+  - Điện thoại vẫn cần cookie mã, token phiên và Origin của listener. Mỗi lệnh xóa vẫn cần `preview_id` của hộp
+    xem trước và `confirm_permanent: true`.
+  - Lưu trữ, khôi phục bản xuất và kiểm tra lại Thùng rác vẫn chỉ làm trên PC. Lời nhắn chung `PC_ONLY_SOURCE`
+    nay là "Chỉ làm trên PC: lưu trữ, khôi phục bản xuất và kiểm tra lại Thùng rác không làm qua điện thoại."
+- **Dashboard V2:**
+  - `pcOnlyOps` = archive, restore, recheck.
+  - Trên điện thoại, tab Hoàn tất cho chọn video để "Xóa video gốc"; nút "Lưu trữ" bị khóa và nói lý do.
+  - "Dọn video mất gốc" và "Xóa video" bật như trên PC.
+  - Khung "Đang mở qua điện thoại" nói rõ ba thao tác xóa làm được ở đó và là xóa vĩnh viễn.
+  - Trang Control Center cũ không mở trên điện thoại nên không đổi.
+- **Rủi ro, đã báo người dùng:** kết nối điện thoại là HTTP không mã hóa trong Wi-Fi nhà. Ai bắt được gói tin trong
+  cùng Wi-Fi có thể lấy cookie và token phiên rồi gửi lệnh xóa vĩnh viễn.
+  - Vì "Hủy" cũng làm được trên điện thoại, người đó có thể hủy **bất kỳ** video nào chưa xong (kể cả video đang
+    duyệt dở) rồi "Xóa video". Video gốc, quyết định duyệt và báo cáo của video đó sẽ mất.
+  - Giảm thiểu:
+    - chế độ điện thoại mặc định tắt và tự tắt sau 8 giờ;
+    - bộ nhãn vàng luôn bị khóa;
+    - bản xuất `.mp4` trong `output` không bao giờ bị xóa.
+- **Review (2026-10-06):**
+  - Review bảo mật: không có lỗi CRITICAL hay HIGH. Mọi lớp chặn của điện thoại (Host, cookie, token, Origin,
+    allowlist khớp đúng, `preview_id`, `confirm_permanent`) chặt hơn trên PC.
+  - Rủi ro MEDIUM ở trên được đưa cho người dùng chọn: (1) giữ như PC, hoặc (2) trên điện thoại chỉ xóa video đã hủy
+    chưa có hàng duyệt.
+  - **Người dùng chọn (1)**, chấp nhận rủi ro.
+  - Các đề xuất chưa làm, để sau nếu người dùng muốn:
+    - gắn cookie với IP và ghi sự kiện khi một IP mới dùng cookie;
+    - mã PIN riêng cho lệnh xóa;
+    - tường lửa chỉ mở cho IP của điện thoại.
+  - Review code: APPROVE. Bốn ghi chú LOW đã sửa: câu cảnh báo trong khung bật chế độ điện thoại, chữ trên điện
+    thoại, các dòng tài liệu cũ, và bước điện thoại của `browser-check.cjs`.
+- **Test** (thư mục tạm trong `temp`, listener điện thoại thật trên 127.0.0.1):
+  - `tests/test_job_delete_http.py` `PhoneListenerTests`: Hủy rồi Xóa video một video chờ thiết lập; Dọn video
+    mất gốc (output giữ nguyên); thiếu cookie, token, Origin hay xác nhận thì không xóa gì.
+  - `tests/test_source_cleanup_http.py` `PhoneListenerTests`:
+    - Xóa video gốc từ điện thoại;
+    - Host hoặc Origin sai bị từ chối;
+    - route gần giống (thêm `/`, `/preview`, chữ hoa) bị 403 `pc_only`;
+    - lưu trữ, khôi phục và kiểm tra lại Thùng rác vẫn bị 403 `pc_only`.
+  - Cập nhật các test ghim danh sách route điện thoại và `verify*.cjs`.

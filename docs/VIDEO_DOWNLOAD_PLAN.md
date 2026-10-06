@@ -244,7 +244,7 @@ Mọi POST dùng `X-BiliFlow-Token` và kiểm tra Host như các route hiện c
 
 Điện thoại:
 - Thêm các route POST của `/api/downloads…` vào `phone_access.PHONE_ALLOWED_POSTS`, có test.
-- `source-cleanup`, `source-archive*` và `source-recycle-check` vẫn chỉ cho PC.
+- `source-cleanup`, `source-archive*` và `source-recycle-check` vẫn chỉ cho PC. (Từ 2026-10-06, trên nhánh `test/download-delete`, `source-cleanup` và `job-delete` làm được cả qua điện thoại theo yêu cầu của người dùng: `docs/DELETE_FLOW_PLAN.md` mục 10.)
 
 Đã làm ở D2 (2026-10-05):
 - `download_api.py` (`DownloadService`): route, `public_task` chỉ trả tên file trong `input` (không trả đường dẫn đầy đủ hay thư mục tạm). Lô sai: 400 `BATCH_REJECTED` kèm lỗi từng dòng. Thao tác sai trạng thái: 409. Không thấy lượt: 404.
@@ -278,7 +278,7 @@ Mọi POST dùng `X-BiliFlow-Token` và kiểm tra Host như các route hiện c
   - phần `input` thuộc video đã xuất xong và dọn được;
   - Thùng rác ổ E (`SHQueryRecycleBinW`, chỉ đọc);
   - ổ còn trống và mức giữ lại;
-  - liên kết tới danh sách video dọn được (dùng các nút "Dọn video gốc" / "Lưu trữ" sẵn có, chỉ PC).
+  - liên kết tới danh sách video dọn được (dùng các nút "Dọn video gốc" / "Lưu trữ" sẵn có, chỉ PC; từ 2026-10-06 nút là "Xóa video gốc" và làm được cả qua điện thoại, "Lưu trữ" vẫn chỉ PC).
 - 375 px không tràn ngang, hai theme. Không dùng `backdrop-filter` (R4-B3).
 
 Đã làm ở D3 (2026-10-05):
@@ -294,7 +294,7 @@ Mọi POST dùng `X-BiliFlow-Token` và kiểm tra Host như các route hiện c
 - Lô bị từ chối: hiện lỗi từng dòng, giữ nguyên link và ô xác nhận để sửa. Thêm được: xóa ô link, bỏ tick xác nhận, cuộn tới lượt mới (danh sách xếp cũ trước, mới sau).
 - Xác nhận trước khi: hủy (nút "Hủy lượt tải", vì nút đóng hộp thoại đã là "Hủy"), thử lại hoặc xóa lượt còn phần đã tải, dọn file tạm (ghi số lượt và dung lượng).
 - Ghi (POST) qua `BFContracts.request` và adapter (token, 403 lấy phiên mới một lần, mỗi nút một yêu cầu). Sau mỗi thao tác chỉ tải lại danh sách tải, không gọi `/api/status`.
-- "Dung lượng": chỉ đọc; "Tính lại" hỏi server tính lại. Liên kết mở danh sách "Video của bạn" → "Hoàn tất" để dùng "Dọn video gốc"/"Lưu trữ" sẵn có. Trên điện thoại ghi "dọn chỉ làm trên PC".
+- "Dung lượng": chỉ đọc; "Tính lại" hỏi server tính lại. Liên kết mở danh sách "Video của bạn" → "Hoàn tất" để dùng "Dọn video gốc"/"Lưu trữ" sẵn có. Trên điện thoại ghi "dọn chỉ làm trên PC" (từ 2026-10-06: "mở danh sách để Xóa video gốc (Lưu trữ chỉ làm trên PC)").
 - Kiểm tra:
   - `verify-download.cjs` (Node, không mạng);
   - `download-fake-server.cjs`: server giả trong bộ nhớ, đủ mọi trạng thái, có chế độ `--phone`; Control Center không phục vụ file này;

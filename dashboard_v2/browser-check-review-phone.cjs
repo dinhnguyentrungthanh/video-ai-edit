@@ -5,7 +5,7 @@
  * - frames load through the listener (the dialog counts at most 2 at once; the test counts on the server too);
  *   the clip plays (the test checks the Range requests and the 206 answers on the server);
  * - a decision, its undo and "Giữ tất cả" are sent, each POST path is one of PHONE_ALLOWED_POSTS (given by the test);
- *   "Xuất video" is never pressed; the dialog shows no PC-only action and keeps its 44 px targets;
+ *   "Xuất video" is never pressed; the dialog shows no file action (delete, archive, bin) and keeps its 44 px targets;
  * - no blob:, no console or CSP error, no request outside the listener.
  * Prints one JSON line for the test. Alone (without the test's environment) it prints SKIP.
  */
@@ -24,7 +24,7 @@ const pw = loadPlaywright();
 if (!pw) { process.stdout.write('SKIP browser-check-review-phone: Playwright is not installed\n'); process.exit(0); }
 const allowed = JSON.parse(process.env.BILIFLOW_PHONE_POSTS || '[]').map(p => new RegExp('^' + p + '$'));
 const {audit} = require('./review-layout-audit.cjs');
-const PC_ONLY_WORDS = ['Xóa video gốc', 'Xóa video', 'Dọn video mất gốc', 'Dọn video gốc', 'Lưu trữ', 'Khôi phục bản xuất', 'Kiểm tra lại Thùng rác', 'Thùng rác'];
+const FILE_ACTION_WORDS = ['Xóa video gốc', 'Xóa video', 'Dọn video mất gốc', 'Dọn video gốc', 'Lưu trữ', 'Khôi phục bản xuất', 'Kiểm tra lại Thùng rác', 'Thùng rác'];
 
 let passed = 0;
 async function check(name, fn) { await fn(); passed++; process.stderr.write('OK ' + name + '\n'); }
@@ -75,10 +75,10 @@ async function check(name, fn) { await fn(); passed++; process.stderr.write('OK 
       assert.ok(media.filter(x => x === 'frame').length >= 3, 'frames through the listener');
     });
 
-    await check('The dialog shows no PC-only action, keeps 44 px targets and text ≥ 12 px, and links the classic page of the listener', async () => {
+    await check('The dialog shows no file action, keeps 44 px targets and text ≥ 12 px, and links the classic page of the listener', async () => {
       await page.evaluate(() => { const b = document.querySelector('#review-dialog .rv-body'); b.scrollTop = 0; });
       const text = await dialog().textContent();
-      for (const word of PC_ONLY_WORDS) assert.ok(!text.includes(word), 'no PC-only action: ' + word);
+      for (const word of FILE_ACTION_WORDS) assert.ok(!text.includes(word), 'no file action: ' + word);
       assert.equal(await dialog().locator('[data-op]').count(), 0);
       const result = await page.evaluate(audit, {touch: true});
       assert.deepEqual([result.outside, result.small, result.tiny, result.clipped, result.overlap, result.page], [[], [], [], [], [], false], JSON.stringify(result));

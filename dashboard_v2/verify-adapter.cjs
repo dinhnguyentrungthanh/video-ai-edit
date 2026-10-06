@@ -269,9 +269,9 @@ test('Phone mode: the PC store keeps the status with its code; the phone store o
 });
 
 test('Phone mode: a 403 pc_only refusal is shown, without token refresh or resend', async () => {
-  const f = fake({'POST /api/source-cleanup': {status: 403, body: {error: 'Chỉ làm trên PC: xóa video…', code: 'pc_only'}}});
+  const f = fake({'POST /api/source-archive': {status: 403, body: {error: 'Chỉ làm trên PC: lưu trữ…', code: 'pc_only'}}});
   const a = adapterWith(f);
-  await assert.rejects(() => a.dispatch('cleanup', null, {job_ids: [1], preview_id: 'p'}),
+  await assert.rejects(() => a.dispatch('archive', null, {job_ids: [1], preview_id: 'p'}),
     e => e.status === 403 && /Chỉ làm trên PC/.test(e.message));
   assert.equal(f.posts().length, 1, 'pc_only is not a token problem: one POST, no token refresh');
   assert.equal(f.sessions().length, 1);
