@@ -354,7 +354,9 @@ class H3Lifecycle(HardeningBase):
         self.assertEqual(self.phone.status(include_secret=True)["code"], second["code"])
 
     def self_check_banner(self, on: bool):
-        _, _, page = http(self.pc_port, "GET", "/", host=f"127.0.0.1:{self.pc_port}")
+        # The notice belongs to the classic page, which is off by default since 2026-10-06 (CLASSIC_DASHBOARD).
+        with mock.patch.object(control_center, "CLASSIC_DASHBOARD", True):
+            _, _, page = http(self.pc_port, "GET", "/", host=f"127.0.0.1:{self.pc_port}")
         self.assertEqual(b'id="phone-mode-notice"' in page, on)
         if on:
             self.assertIn(f"Đang mở cho điện thoại: http://127.0.0.1:{self.port}/".encode(), page)

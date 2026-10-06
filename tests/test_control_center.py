@@ -1777,7 +1777,8 @@ class ControlCenterHttpTests(unittest.TestCase):
             for host in (f"127.0.0.1:{self.port}", f"localhost:{self.port}", "localhost",
                          f"[::1]:{self.port}", "LOCALHOST"):
                 with self.subTest(route=route, host=host):
-                    self.assertIn(self.request(route, host=host)[0], {200})
+                    # "/" sends the browser to Dashboard V2 (classic page off since 2026-10-06).
+                    self.assertIn(self.request(route, host=host)[0], {303} if route == "/" else {200})
         status, _, body = self.request(
             "/api/scheduler", host="evil.example", method="POST",
             headers={"X-BiliFlow-Token": "test-token", "Content-Type": "application/json"},
@@ -1822,7 +1823,7 @@ class ControlCenterHttpTests(unittest.TestCase):
         # Security review (L4): pages, JSON, streamed media, refusals and the server's own errors
         # all say SAMEORIGIN (a page of this Control Center may still frame another one).
         cases = [
-            ("GET", "/", None, 200),
+            ("GET", "/", None, 303),  # "/" sends the browser to Dashboard V2 (classic page off since 2026-10-06)
             ("GET", f"/review/{self.job_id}", None, 200),
             ("GET", "/logo-memory", None, 200),
             ("GET", "/healthz", None, 200),

@@ -116,9 +116,12 @@ CONFIRM_PERMANENT_MESSAGE = (
 # serve_forever returned: stop() waits up to 90 s for a running cleanup.
 STOP_WAIT_SECONDS = 120.0
 
-# Dashboard V2 preview (opt-in route /dashboard-v2/). The classic dashboard at "/" is
-# unchanged. Only these files of <code>/dashboard_v2 are served: never the demo page,
-# fixtures, scripts, a directory listing or anything outside the folder.
+# Dashboard V2 (route /dashboard-v2/) is the dashboard since 2026-10-06, at the user's request:
+# "/" sends the browser there. The classic dashboard (_dashboard_html) is off for now but kept:
+# CLASSIC_DASHBOARD = True serves it at "/" again, byte for byte as before (restart to apply).
+CLASSIC_DASHBOARD = False
+# Only these files of <code>/dashboard_v2 are served: never the demo page, fixtures, scripts,
+# a directory listing or anything outside the folder.
 DASHBOARD_V2_DIR = Path(__file__).resolve().parents[2] / "dashboard_v2"
 DASHBOARD_V2_PAGE = "live.html"
 DASHBOARD_V2_FILES = frozenset({
@@ -1892,6 +1895,13 @@ def _handler_class(center: ControlCenter) -> type[BaseHTTPRequestHandler]:
             self.send_bytes(status, json.dumps(payload, ensure_ascii=False).encode("utf-8"),
                             "application/json; charset=utf-8")
 
+        def redirect(self, location: str, status: int = 303) -> None:
+            self.send_response(status)
+            self.send_header("Location", location)
+            self.send_header("Content-Length", "0")
+            self.send_header("Cache-Control", "no-store")
+            self.end_headers()
+
         def body(self) -> dict[str, Any]:
             length = content_length(self.headers)
             if length > 65536:
@@ -1987,11 +1997,7 @@ def _handler_class(center: ControlCenter) -> type[BaseHTTPRequestHandler]:
             """GET /dashboard-v2/ (live.html) and its whitelisted assets; read-only."""
             if path == "/dashboard-v2":
                 # Relative asset URLs need the trailing slash (base-uri 'none' forbids <base>).
-                self.send_response(301)
-                self.send_header("Location", "/dashboard-v2/")
-                self.send_header("Content-Length", "0")
-                self.send_header("Cache-Control", "no-store")
-                self.end_headers()
+                self.redirect("/dashboard-v2/", 301)
                 return
             name = path.removeprefix("/dashboard-v2/") or DASHBOARD_V2_PAGE
             if name != DASHBOARD_V2_PAGE and name not in DASHBOARD_V2_FILES:
@@ -2023,6 +2029,8 @@ def _handler_class(center: ControlCenter) -> type[BaseHTTPRequestHandler]:
             try:
                 if match := re.fullmatch(r"/api/jobs/(\d+)/review/(evidence|frame|video)", path):
                     self.review_media(int(match.group(1)), match.group(2), parsed.query)
+                elif path == "/" and not CLASSIC_DASHBOARD:
+                    self.redirect("/dashboard-v2/")
                 elif path == "/":
                     # Byte for byte the classic page, plus one notice line while the phone mode is on (H3).
                     self.send_bytes(200, _with_phone_notice(_dashboard_html(), center).encode(),
@@ -2493,12 +2501,8 @@ def _phone_handler_class(center: ControlCenter, phone: phone_access.PhoneAccess)
                 return
             self.opened()
             if parsed.path in ("/", "/phone-login"):
-                # V2 is the phone page; the classic dashboard stays on the PC.
-                self.send_response(303)
-                self.send_header("Location", V2)
-                self.send_header("Content-Length", "0")
-                self.send_header("Cache-Control", "no-store")
-                self.end_headers()
+                # V2 is the phone page; the classic dashboard (when CLASSIC_DASHBOARD is on) is PC only.
+                self.redirect(V2)
                 return
             if match := re.fullmatch(r"/review/(\d+)", parsed.path):
                 # Same page as the PC (same token, same API prefix), plus the phone layout fixes.

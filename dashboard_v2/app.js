@@ -668,8 +668,8 @@ if(LIVE){
   const pill=$('.demo-pill');if(pill)pill.textContent='CONTROL CENTER';
   const reset=$('[data-action="reset"]');if(reset)reset.remove();
   const mini=$('.storage-mini small');if(mini)mini.textContent='Xem dung lượng thật ở Tổng quan';
-  const footer=$('.page-footer span:last-child');if(footer)footer.textContent='Dashboard V2 · route xem thử /dashboard-v2';
-  const profile=$('.profile small');if(profile)profile.textContent='Dashboard V2 · xem thử';
+  const footer=$('.page-footer span:last-child');if(footer)footer.textContent='Dashboard V2 · chạy trên máy này';
+  const profile=$('.profile small');if(profile)profile.textContent='Dashboard V2';
   window.addEventListener('hashchange',()=>{if(view==='logos')store.loadMemory().catch(e=>toast(e.message,true));if(view==='settings'){store.loadAI();store.loadPhone();}});
   store.start(3000);
 }
