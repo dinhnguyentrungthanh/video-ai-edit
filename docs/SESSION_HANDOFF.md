@@ -1,13 +1,20 @@
 # BiliFlow session handoff
 
-## Anime gore evidence and card hint re-merged on a branch — 2026-10-07 (not in `main`)
+## Anime gore evidence and card hint in `main` (C1 off) — 2026-10-07
+
+- **In `main` since 2026-10-07**, at the user's request: "nếu mọi thứ đã tốt hết rồi thì đưa vào main đi bạn".
+  - `main` was fast-forwarded `d1296a7` → `927006c` (`8d709d0` code, `927006c` check-sheet results), plus this record. Not pushed.
+  - Before the merge: full suite 1947 OK (35 skipped) on `927006c` (log `temp\gore-c1\fullsuite-927006c.log`); node gates 32/38/37/22.
+  - The real Control Center was not running at merge time: it had stopped cleanly after its 19:21 start, and its error log was empty. Nothing was restarted. Its next start serves the new code.
+  - The first scan of an animation video with a safety group, or of a live-action video with only one of gore and violence, recomputes the `animation_safety`, `gore` or `violence` stage once.
+  - Branch `feat/gore-c1-hints` and worktree `temp\wt-gore-c1` are still there. Remove them, and the old `temp\wt-gore`, only when the user asks.
 
 - **Request:** after a status check the user asked to do part 1 of the remaining Gore C1 work, but not to bring it into the main folder while their jobs run ("Làm tiếp mục 1 đi bạn nhưng khoan đưa vào mục chính do tôi đang chạy job").
   - The real Control Center was busy at the time: job 81 in `localize_logo`, 9 jobs queued, all live action with advertising only.
   - Part 1 = the 2026-10-02 patch brought onto today's `main`, with C1 kept off. Part 2 (turning C1 on) needs the user: plan gates 4.6 and 4.7.
 - **Where:** worktree `temp\wt-gore-c1`, branch `feat/gore-c1-hints` from `main` `d1296a7`.
   - The code was committed at the user's request ("Thôi cứ commit đi bạn") as `8d709d0`. The check-sheet results below were recorded after that commit.
-  - Not merged into `main`; Control Center not restarted.
+  - Merged into `main` later the same day (see the top of this section).
   - The old worktree `temp\wt-gore` (detached `68a5a7e`) and `temp\gore-c1.patch` are unchanged. Remove that worktree only when the user asks.
 - **What changed against the 2026-10-02 patch:**
   - `cli.py` and `intervals.py` are identical to `main`, so scan caches are kept:
@@ -26,9 +33,8 @@
     - S10 added to the docs;
     - the C1 calibration now requires `runtime.precision == "fp16"`. The thresholds were measured on a CUDA fp16 re-score (`temp/next/anime-gore/g1_fullfilm.py`), and the default fast scan is fp16.
   - after the fixes: 229 related tests OK, and the offline gates passed again with the same numbers.
-- **To merge later:** only when the user says so and no job runs.
-  - Commit on the branch and fast-forward `main` (or merge it if `main` moved).
-  - Then Stop-BiliFlow and Start-BiliFlow. A restart turns the phone mode off.
+- **Merge notes** (done 2026-10-07; see the top of this section):
+  - A running Control Center needs Stop-BiliFlow then Start-BiliFlow to serve new code. A restart turns the phone mode off.
   - The next scan that runs `animation_safety`, `gore` or `violence` recomputes that stage once. That covers animation videos with a safety group and live-action videos that select only one of gore and violence. Live action with both groups uses `live_safety`, which keeps its cache.
 - **Running the full suite in this worktree** needs a video in its git-ignored `input\` (a 1 s synthetic clip `input\zz-synthetic-test.mp4` made with the project FFmpeg); remove the clip afterwards.
 - **Prepared for part 2** (the user asked to keep going: "Commit nhanh vậy à bạn không làm tiếp thêm mục nào à"). These are local tools in the git-ignored `temp\gore-c1`; nothing has run on the GPU.

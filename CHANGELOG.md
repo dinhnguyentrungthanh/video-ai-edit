@@ -1,4 +1,8 @@
-# Unreleased — anime gore evidence and card hint; rule C1 re-merged, still off — 2026-10-07 (branch `feat/gore-c1-hints`, not in `main`)
+# Unreleased — anime gore evidence and card hint; rule C1 re-merged, still off — 2026-10-07 (in `main` since 2026-10-07, not pushed)
+
+- Brought into `main` at the user's request: "nếu mọi thứ đã tốt hết rồi thì đưa vào main đi bạn".
+  - Fast-forward `d1296a7` → `927006c`, after the full suite (1947 OK, 35 skipped) and the node gates passed on `927006c`.
+  - The Control Center was not running, so nothing was restarted; its next start serves this code.
 
 The user asked to finish part 1 of the anime gore work and to keep it out of the main folder while their jobs run ("Làm tiếp mục 1 đi bạn nhưng khoan đưa vào mục chính do tôi đang chạy job"). The 2026-10-02 patch (`temp\wt-gore`, saved as `temp\gore-c1.patch`, base `68a5a7e`) was re-applied on `main` `d1296a7` in the worktree `temp\wt-gore-c1`. Nothing was merged into `main` and the real Control Center was not restarted.
 

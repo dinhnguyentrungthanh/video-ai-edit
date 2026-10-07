@@ -1,4 +1,4 @@
-## Anime gore evidence and card hint (2026-10-07) — branch `feat/gore-c1-hints`, not in `main`
+## Anime gore evidence and card hint (2026-10-07) — in `main` (`927006c`, not pushed), C1 off
 
 - The 2026-10-02 Gore C1 patch (`docs/ANIME_GORE_PLAN.md` steps 1 and 3) is re-merged on `main` `d1296a7` in the worktree `temp\wt-gore-c1`. Animation gore intervals record tag evidence, and gore cards carry it with a one-line hint. The hint is shown on Dashboard V2 only; the classic page stays byte-identical. Rule C1 is in the code but off.
 - Scan caches: `cli.py` and `intervals.py` are not touched, so only the `animation_safety`, `gore` and `violence` stages get a new cache key. Those stages run for animation videos with a safety group and for live-action videos that select only one of gore and violence. OCR, logo, 18+ and `live_safety` (live action with both groups) caches stay valid.
