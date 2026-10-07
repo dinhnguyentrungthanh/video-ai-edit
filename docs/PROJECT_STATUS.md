@@ -1,3 +1,12 @@
+## Anime gore evidence and card hint (2026-10-07) — branch `feat/gore-c1-hints`, not in `main`
+
+- The 2026-10-02 Gore C1 patch (`docs/ANIME_GORE_PLAN.md` steps 1 and 3) is re-merged on `main` `d1296a7` in the worktree `temp\wt-gore-c1`. Animation gore intervals record tag evidence, and gore cards carry it with a one-line hint. The hint is shown on Dashboard V2 only; the classic page stays byte-identical. Rule C1 is in the code but off.
+- Scan caches: `cli.py` and `intervals.py` are not touched, so only the `animation_safety`, `gore` and `violence` stages get a new cache key. Those stages run for animation videos with a safety group and for live-action videos that select only one of gore and violence. OCR, logo, 18+ and `live_safety` (live action with both groups) caches stay valid.
+- Checks: gore tests 19 OK; focused tests 236 OK; node gates 32/38/37/22; offline C1 gates passed with the same numbers as on 2026-10-02 (`temp\gore-c1\gates-d1296a7`). Full suite 1947 OK (35 skipped). Details in CHANGELOG.
+- GPU rescan of both Golden animation films, 2026-10-07: `reports\benchmarks\gore-triage-20261007-gpu`. Gates 4.4 and 4.5 passed: every interval is unchanged, and the real fp16 evidence is within 1.9e-4 of the re-score. At the C1 thresholds the results equal the offline run.
+- Open, all waiting for the user: the gate 4.6 answers, a third animation film (gate 4.7), and the decision to turn C1 on.
+- At the user's request it stays out of the main folder while jobs run. Merging, committing and the Control Center restart (Stop, then Start) wait for the user. Turning C1 on needs plan gates 4.6 and 4.7.
+
 ## Tailscale managed by BiliFlow (2026-10-07) — in `main` and pushed; the user's real tests passed
 
 - The user's choice: BiliFlow downloads, checks, installs (into `C:\Program Files\Tailscale` since the security review of 2026-10-07; auto-update, unattended), signs in and drives Tailscale from Dashboard V2 → Cài đặt → Tailscale; it starts the service when needed; the phone may extend the 8 hours while open over Tailscale. Plan `docs/TAILSCALE_PLAN.md` (T1–T5 done), details in CHANGELOG.
@@ -196,7 +205,7 @@
 
 - The V2 review dialog replaces the prototype's review box (plan: `docs/DASHBOARD_V2_REVIEW_PLAN.md`).
   - Since R4, "Duyệt cảnh" in the detail drawer opens it over the current screen at `#review/<id>/<view>`, on the live page and the demo.
-  - It covers the classic review page (P1–P17): cards, frames and the video of each card, timeline, zoom, technical details, decisions with the classic confirms, region buttons, logo memory, keys, undo, auto-next, "Giữ tất cả" / "Dùng đề xuất", and "Xuất video" through the V2 export dialog. The deliberate differences S1–S9 are listed in section 5 of the plan.
+  - It covers the classic review page (P1–P17): cards, frames and the video of each card, timeline, zoom, technical details, decisions with the classic confirms, region buttons, logo memory, keys, undo, auto-next, "Giữ tất cả" / "Dùng đề xuất", and "Xuất video" through the V2 export dialog. The deliberate differences S1–S10 are listed in section 5 of the plan (S10, the gore hint on V2 cards only, since 2026-10-07).
   - The classic page `/review/<id>` is byte-identical (D2) and one link away ("Mở trang duyệt cũ").
 - Batches and checks:
   - R0 view-only dialog `b853963` (M4), `0e43fa1`; R1 media `1191690` (R1-B1 `b8b458f`); R2 decisions `539e6a6`; R2-B1 and R2-B2 `108f27b`; R3 bulk actions and export `bb763ad`. The local machine checked each batch (section 8.2); the last check, on `03666a6`, passed.

@@ -156,13 +156,14 @@ class RepositoryCacheScopeTests(unittest.TestCase):
     # Control-plane modules edited by the dashboard/queue work (2026-10-02, batch 1;
     # 2026-10-03, batch 2 adds the shared export dialog; 2026-10-03, batch 3 adds
     # source cleanup; 2026-10-03, batch 4 adds source archive; 2026-10-05, the
-    # permanent delete flow adds job removal).
+    # permanent delete flow adds job removal; 2026-10-07, the anime gore triage
+    # settings, read only when a queue is built).
     CONTROL_PLANE = (
         "control_center.py", "scheduler.py", "job_store.py", "job_import.py",
         "review_workflow.py", "export_dialog.py",
         "export_guards.py", "recycle_bin.py", "source_cleanup.py",
         "source_archive.py", "source_archive_files.py", "source_archive_restore.py",
-        "job_purge.py", "job_delete.py",
+        "job_purge.py", "job_delete.py", "gore_triage.py",
     )
 
     def test_control_plane_modules_are_in_no_scan_stage_key(self):

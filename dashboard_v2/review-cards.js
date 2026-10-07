@@ -30,11 +30,15 @@
     if (R.isScene(x)) return R.momentsOf(x).length + ' khoảnh khắc';
     return R.isSafety(x) ? 'Cả khung hình' : 'Chưa khoanh vùng (cả khung)';
   }
+  /* The card's hint line: the suggestion, then (gore cards, docs/ANIME_GORE_PLAN.md step 1) what the tagger saw
+   * (S10: V2 only, the classic page stays byte-identical). The tagger line never decides or moves a card. */
   function suggestion(x) {
+    const parts = [];
     if (x.ai_visual_audit && x.ai_visual_audit.suggested_decision) {
-      return 'Visual AI ' + Math.round(100 * Number(x.ai_visual_audit.confidence || 0)) + '%: ' + R.actionName(x, x.ai_visual_audit.suggested_decision);
-    }
-    return x.suggested_decision ? 'Đề xuất: ' + R.actionName(x, x.suggested_decision) : '';
+      parts.push('Visual AI ' + Math.round(100 * Number(x.ai_visual_audit.confidence || 0)) + '%: ' + R.actionName(x, x.ai_visual_audit.suggested_decision));
+    } else if (x.suggested_decision) parts.push('Đề xuất: ' + R.actionName(x, x.suggested_decision));
+    if (x.category === 'gore' && x.gore_hint) parts.push(String(x.gore_hint));
+    return parts.join(' · ');
   }
   const mmssTenth = s => { const v = Math.max(0, Number(s) || 0), m = Math.floor(v / 60); return `${m}:${(v - m * 60).toFixed(1).padStart(4, '0')}`; };
 

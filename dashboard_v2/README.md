@@ -53,7 +53,7 @@ Mọi trạng thái thử nghiệm được giữ trong bộ nhớ của tab; t�
 | `serve.py` | Server static hạn chế phạm vi, cổng riêng |
 | `verify.cjs` | Kiểm tra hợp đồng, điều kiện khóa, demo không có transport |
 | `verify-adapter.cjs` | Test adapter bằng transport giả (endpoint/body, 403/408/409/400/500, double click, response cũ) |
-| `verify-review.cjs` | Hộp duyệt so với hàm của trang duyệt cũ (lọc, dải khung, quyết định, hoàn tác, hàng loạt; chỗ khác có chủ ý S1–S9) |
+| `verify-review.cjs` | Hộp duyệt so với hàm của trang duyệt cũ (lọc, dải khung, quyết định, hoàn tác, hàng loạt; chỗ khác có chủ ý S1–S10) |
 | `verify-download.cjs` | Tải video: nút theo trạng thái, tiến độ, lô link, chữ từ trang web được escape, adapter và live store với transport giả |
 | `download-fake-server.cjs` | Server giả trong bộ nhớ cho trang Tải video (đủ mọi trạng thái, `--phone` giả listener điện thoại), để xem bố cục bằng tay; không tải gì |
 | `browser-check.cjs` | Tùy chọn: Chromium headless qua Playwright, với API giả lập trong tiến trình (draft, khóa, Tab/Escape, 1280/375) |

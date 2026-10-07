@@ -123,7 +123,7 @@ Các ô tổng quan **đếm video**, riêng ghi chú “cảnh cần quyết đ
 
 ### Trang review
 
-Cập nhật 2026-10-05 (R4): hộp mẫu cũ đã được thay bằng hộp duyệt V2 (`review*.js`), làm theo `docs/DASHBOARD_V2_REVIEW_PLAN.md` (tương đương trang cũ P1–P17, chỗ khác có chủ ý S1–S9).
+Cập nhật 2026-10-05 (R4): hộp mẫu cũ đã được thay bằng hộp duyệt V2 (`review*.js`), làm theo `docs/DASHBOARD_V2_REVIEW_PLAN.md` (tương đương trang cũ P1–P17, chỗ khác có chủ ý S1–S9). Từ 2026-10-07 có thêm S10: gợi ý của tagger trên thẻ máu me chỉ có ở V2 (nhánh `feat/gore-c1-hints`).
 Hộp dùng đúng các route review hiện có (queue, session, evidence, frame, video, decision, clear, bulk-keep, bulk-accept, finalize) với payload như trang cũ; không thêm route.
 Trang review hiện có `/review/{id}` giữ nguyên (trùng byte) và mở bằng link trong hộp.
 

@@ -178,6 +178,10 @@ Các điểm dưới đây là chỗ trang cũ hiển thị chưa đúng (A7). S
   "Đi tới thẻ logo"; khung đỏ trên ảnh của thẻ mượn vẽ nét đứt kèm thời gian áp dụng. Chỉ thẻ sở hữu vùng còn nút vùng.
   Trang cũ hiện nút vùng trên cả thẻ mượn; khi hai thẻ nằm cạnh nhau, nút của hai thẻ đổi cùng một quyết định nên
   trông như bị "nhảy chung" (R2-B2). Payload không đổi; chỉ bớt nút trên thẻ mượn.
+- **S10 (2026-10-07, nhánh `feat/gore-c1-hints`).** Trên thẻ máu me, dòng gợi ý có thêm điều tagger thấy (`gore_hint`, `docs/ANIME_GORE_PLAN.md` bước 1), đặt sau đề xuất. Ví dụ: "Đề xuất: Làm mờ · Tagger: chỉ vết thương, không thấy máu".
+  - Gợi ý không quyết định gì và không chuyển thẻ.
+  - Trang cũ không có dòng này, vì trang cũ phải giữ nguyên từng byte để dự phòng (D2).
+  - `verify-review.cjs` kiểm S10: dòng gợi ý được escape, chỉ hiện trên thẻ máu me, và trang cũ không đổi.
 
 ## 6. Thiết kế
 

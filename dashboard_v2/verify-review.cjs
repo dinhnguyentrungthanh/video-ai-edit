@@ -352,7 +352,8 @@ const DECIDE_CONSTS = ['esc', 'clock', 'mmss', 'mmssTenth', 'span', 'SAFETY', 'K
 const DECIDE_FUNCS = ['isSafety', 'momentsOf', 'isScene', 'momentTotal', 'studioEligible', 'catName', 'sceneLogo', 'isLogoItem', 'actionName', 'platformEligible', 'countsFrom',
   'statusFrom', 'isAdvisoryItem', 'pushUndo', 'syncLocalCounts', 'applyLocalDecision', 'applyLocalClear', 'writeFailureMessage', 'sceneBlurMessage', 'decisionsLocked',
   'refuseWhileExporting', 'decide', 'clearDecision', 'undo', 'advisoryUndoMessage', 'decisionLabel', 'keyDecision', 'thumbTime', 'readingLabel', 'regionOwner',
-  'studioCompareLine', 'studioTextsNote', 'studioFramesNote', 'studioMaskNote', 'studioRemembered', 'platformRemembered', 'platformNote', 'regionControlsHtml', 'studioHtml', 'platformHtml'];
+  'studioCompareLine', 'studioTextsNote', 'studioFramesNote', 'studioMaskNote', 'studioRemembered', 'platformRemembered', 'platformNote', 'regionControlsHtml', 'studioHtml', 'platformHtml',
+  'studioWithheldLine', 'studioBlockedLine', 'suggestionLine'];
 const decideSource = DECIDE_CONSTS.map(n => line(new RegExp('^const ' + n + '='))).concat(DECIDE_FUNCS.map(n => line(new RegExp('^(async )?function ' + n + '\\(')))).join('\n');
 const decideBox = {};
 vm.createContext(decideBox);
@@ -369,7 +370,7 @@ globalThis.classic={
   run(fn,script){answers=(script||[]).slice();asked=[];alerts=[];writes=[];fn();return {asked:asked.slice(),alerts:alerts.slice(),writes:writes.slice()};},
   decide:(id,d,full,note,studio,platform)=>decide(id,d,full,note,studio,platform), clear:id=>clearDecision(id), undo:()=>undo(), key(id,n){focusId=id;keyDecision(n);},
   undoStack:()=>JSON.parse(JSON.stringify(undoStack)), item:id=>itemMap.get(id), drop:id=>itemMap.delete(id), lock(value){exportJob=value;},
-  fn:{writeFailureMessage,decisionLabel,advisoryUndoMessage,sceneBlurMessage,studioCompareLine,studioTextsNote,studioFramesNote,studioMaskNote,studioRemembered,platformRemembered,platformNote,regionControlsHtml,regionOwner,studioHtml,platformHtml},
+  fn:{writeFailureMessage,decisionLabel,advisoryUndoMessage,sceneBlurMessage,studioCompareLine,studioTextsNote,studioFramesNote,studioMaskNote,studioRemembered,platformRemembered,platformNote,regionControlsHtml,regionOwner,studioHtml,platformHtml,suggestionLine},
   consts:{WRITE_RETRY_MS}
 };`, decideBox);
 const cl = decideBox.classic, esc = D.esc;
@@ -632,6 +633,30 @@ check('R3 S9 (R2-B2): a card borrowing another logo card\'s red box has no regio
   const header = fs.readFileSync(path.join(__dirname, 'review-core.js'), 'utf8').slice(0, 3200);
   assert.ok(header.includes('S9'), 'review-core.js lists S9');
   process.stdout.write('   S9: borrowing cards link to the owner card; the classic page shows region buttons on both\n');
+});
+/* S10, anime gore hint (docs/ANIME_GORE_PLAN.md step 1): the tagger line follows the suggestion on V2 cards only;
+ * the classic suggestionLine is unchanged (D2). */
+check('S10 gore hint: a gore card shows the tagger line (gore_hint) after the suggestion, escaped; no other category shows it; the classic page does not (D2)', () => {
+  const Cards = cardsModule(), q = Mock.reviewQueue(job101, {count: 30}), map = R.itemMap(q);
+  const ctx = {queue: q, map, focusId: null, zoomId: null, readonly: false, techOpen: new Set(), media: () => ({ev: null, hasKey: false, playable: false, reason: '', frameUrl: () => '', mediaUrl: p => '/media/' + p})};
+  const gore = q.items.find(x => x.category === 'gore'), other = q.items.find(x => x.category === 'violence' || x.category === 'adult');
+  assert.ok(gore && other, 'the mock queue has a gore card and another safety card');
+  const hint = 'Tagger: không thấy máu · có dấu hiệu xác (yếu), nên xem kỹ <b>';
+  const hintLine = h => (/<p class="rv-hint">([^<]*)<\/p>/.exec(h) || [])[1] ?? null;
+  for (const suggested of ['BLUR', null]) {
+    Object.assign(gore, {gore_hint: hint, suggested_decision: suggested, decision: null, ai_visual_audit: null, advisory: false});
+    const tip = (suggested ? 'Đề xuất: ' + R.actionName(gore, suggested) + ' · ' : '') + hint;
+    assert.equal(hintLine(Cards.card(ctx, gore)), esc(tip), 'V2 card, suggestion ' + suggested);
+    // S10: the classic line keeps only its suggestion.
+    assert.equal(cl.fn.suggestionLine(gore), suggested ? '<div class="hint">' + esc('Đề xuất: ' + R.actionName(gore, suggested)) + '</div>' : '', 'classic suggestionLine, suggestion ' + suggested);
+  }
+  Object.assign(other, {gore_hint: hint, suggested_decision: 'BLUR', decision: null, ai_visual_audit: null, advisory: false});
+  assert.equal(hintLine(Cards.card(ctx, other)), esc('Đề xuất: ' + R.actionName(other, 'BLUR')), 'no tagger line outside gore');
+  delete gore.gore_hint;
+  assert.equal(hintLine(Cards.card(ctx, gore)), null, 'a gore card without a hint or suggestion has no hint line');
+  assert.ok(!script.includes('gore_hint'), 'D2: the classic page has no tagger line');
+  assert.ok(fs.readFileSync(path.join(__dirname, 'review-core.js'), 'utf8').slice(0, 3200).includes('S10'), 'review-core.js lists S10');
+  process.stdout.write('   S10: the tagger line on V2 gore cards only; escaped; the classic page unchanged\n');
 });
 check('R4-B2: a zoomed card borrowing a logo card\'s red box has one label on that box ("áp dụng …"); the approved red box of the same logo card adds none', () => {
   const Cards = cardsModule(), {q, logo, end} = s9Queue(), map = R.itemMap(q);

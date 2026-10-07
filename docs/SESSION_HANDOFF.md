@@ -1,5 +1,64 @@
 # BiliFlow session handoff
 
+## Anime gore evidence and card hint re-merged on a branch — 2026-10-07 (not in `main`)
+
+- **Request:** after a status check the user asked to do part 1 of the remaining Gore C1 work, but not to bring it into the main folder while their jobs run ("Làm tiếp mục 1 đi bạn nhưng khoan đưa vào mục chính do tôi đang chạy job").
+  - The real Control Center was busy at the time: job 81 in `localize_logo`, 9 jobs queued, all live action with advertising only.
+  - Part 1 = the 2026-10-02 patch brought onto today's `main`, with C1 kept off. Part 2 (turning C1 on) needs the user: plan gates 4.6 and 4.7.
+- **Where:** worktree `temp\wt-gore-c1`, branch `feat/gore-c1-hints` from `main` `d1296a7`. Not committed (commit only when the user says so), not merged into `main`, Control Center not restarted.
+  - The old worktree `temp\wt-gore` (detached `68a5a7e`) and `temp\gore-c1.patch` are unchanged. Remove that worktree only when the user asks.
+- **What changed against the 2026-10-02 patch:**
+  - `cli.py` and `intervals.py` are identical to `main`, so scan caches are kept:
+    - there is no `--gore-triage-level` flag;
+    - `animation_policy._gore_hit_groups` regroups the hits itself and checks group sizes and strongest scores against the intervals;
+    - only the `animation_safety`, `gore` and `violence` stage keys change (computed with `cache_dependencies.stage_source_paths` against `main`).
+  - The card hint is shown on V2 (`review-cards.js`, S10). The classic review page stays byte-identical (D2).
+  - Film names in comments were made neutral.
+- **Checks:**
+  - gore tests 19 OK; focused tests 236 OK; node gates 32/38/37/22;
+  - offline C1 gates passed with the 2026-10-02 numbers. Script and results: `temp\gore-c1\gates-d1296a7\run_gates.py` (the 2026-10-02 script with `WT_SRC` = `temp\wt-gore-c1\src` and `OUT` = that folder) and its `summary.json`;
+  - full suite 1947 OK (35 skipped), no failure or error;
+  - code review (agent, read-only): APPROVE, no CRITICAL, HIGH or MEDIUM. All four LOW findings were handled:
+    - `gore_triage.py` added to the cache-scope test;
+    - two test checks loosened;
+    - S10 added to the docs;
+    - the C1 calibration now requires `runtime.precision == "fp16"`. The thresholds were measured on a CUDA fp16 re-score (`temp/next/anime-gore/g1_fullfilm.py`), and the default fast scan is fp16.
+  - after the fixes: 229 related tests OK, and the offline gates passed again with the same numbers.
+- **To merge later:** only when the user says so and no job runs.
+  - Commit on the branch and fast-forward `main` (or merge it if `main` moved).
+  - Then Stop-BiliFlow and Start-BiliFlow. A restart turns the phone mode off.
+  - The next scan that runs `animation_safety`, `gore` or `violence` recomputes that stage once. That covers animation videos with a safety group and live-action videos that select only one of gore and violence. Live action with both groups uses `live_safety`, which keeps its cache.
+- **Running the full suite in this worktree** needs a video in its git-ignored `input\` (a 1 s synthetic clip `input\zz-synthetic-test.mp4` made with the project FFmpeg); remove the clip afterwards.
+- **Prepared for part 2** (the user asked to keep going: "Commit nhanh vậy à bạn không làm tiếp thêm mục nào à"). These are local tools in the git-ignored `temp\gore-c1`; nothing has run on the GPU.
+  - **Gate 4.6 check sheet** `temp\gore-c1\gate46`:
+    - `build.py` cut 11 short clips (480p, no audio, read-only on the sources). Nine are the cards C1 would move that have no Golden verdict (C20 6, C21 3); two are the plan's "corpse?" items (§7 question 3).
+    - `server.py` serves the page on 127.0.0.1:8799 only and stores answers in `answers.json`. The page hides the tagger hint and scores.
+    - Gate 4.6 fails if any of the nine is "blood" or "corpse". The five other moved cards already have Golden `false_positive` verdicts.
+  - **GPU rescan** `temp\gore-c1\gpu-rescan\rescan.ps1`:
+    - runs the branch scanner on both films with the fast-job settings (2 fps, CUDA fp16), each film inside the GPU slot `Local\BiliFlowGpuInference`, into `reports\benchmarks\gore-triage-<stamp>`;
+    - `-DryRun` only checks the production reports and the source SHA-256. It passed on 2026-10-07.
+    - Run it only after the user agrees on the GPU time.
+  - **Gates on the rescan:** `run_gates_real.py <benchmark folder>` runs the offline gates with two additions:
+    - gate 4.5: every adult/gore/violence interval and the scan counts are unchanged;
+    - gate 4.4: the real evidence matches the re-score within 0.001, with the same confirmed frames.
+
+    A–F then run on the real evidence. Self-tests (`make_selftest.py`):
+    - the offline layout passes with the offline numbers;
+    - one changed violence interval fails 4.5;
+    - +0.002 on one blood value fails 4.4.
+  - **The user's answers on 2026-10-07:**
+    - GPU rescan: "Để sau, tôi sẽ báo". Do not run `rescan.ps1` until the user says so.
+    - Third animation film (gate 4.7): "Chưa có, để sau". C1 stays off.
+  - Plan §7 question 2 is settled: Golden v1.1 r121 lists `gs-C20F-0009` and `gs-C20F-0010` in `retired_event_ids`.
+  - **GPU rescan done** later on 2026-10-07. The user said: "Tôi thấy job đã dừng rồi bạn có thể tiếp tục việc cần phải làm nhé". Read-only GETs showed no active job, an empty queue and no download.
+    - Output: `reports\benchmarks\gore-triage-20261007-gpu`; gate output in `temp\gore-c1\gpu-rescan\gates-gore-triage-20261007-gpu`.
+    - Gates 4.4 and 4.5 passed: intervals identical; real fp16 evidence within 1.9e-4 of the re-score.
+    - At the C1 thresholds everything equals the offline run (details in CHANGELOG).
+  - Still open:
+    - the gate 4.6 answers. The user stopped the sheet's server to save resources ("Tạm thời tắt đi..."); start it again only when the user asks.
+    - gate 4.7;
+    - the decision to turn C1 on.
+
 ## Source providers in `main`; real Control Center restarted; the user's real test passed — 2026-10-06
 
 - **Merged at the user's request.** `main` was fast-forwarded `84a5db1` → `a3b69f0`: `5056d94` (source providers) and `a3b69f0` (merge of `main` into `feat/download-source-providers`). Pushed at the user's request with this record (`origin/main` `84a5db1..bd4d019`). The two sections below marked "(uncommitted)" are in `main` now; their "no merge, push or production Control Center restart" lines are historical.
@@ -124,6 +183,7 @@ This is the short, authoritative starting point for a new Codex account or chat.
   - 2026-10-06: at the user's request `main` was pushed to `origin` (with the U4 fix below). Push again only when the user asks.
   - 2026-10-07: `main` fast-forwarded to `feat/phone-tailscale` (Tailscale managed by BiliFlow, extend up to 24 hours, no code for the PC's own Tailscale account) and pushed, at the user's request after their tests passed. The main folder is on `main` again; the Control Center runs it since 09:58.
   - The user asked on 2026-10-06 to use `main` as the working line from now on. The feature branches and the test branch are kept.
+- 2026-10-07: branch `feat/gore-c1-hints` (worktree `temp\wt-gore-c1`, from `main` `d1296a7`, uncommitted) re-merges the anime gore evidence, card hint and rule C1 (off). It stays out of the main folder until the user asks. See the top section.
 - 2026-10-06/07: branch `feat/phone-tailscale` (worktree `temp\wt-phone-tailscale`; in `main` and pushed since 2026-10-07) opens the phone mode over Tailscale too, and BiliFlow installs and manages Tailscale from Cài đặt. On 2026-10-07 the user asked to run the real test right away. See "Current work — 2026-10-06 phone mode over Tailscale" below.
 - 2026-10-06, about 21:50, at the user's request: `main` was fast-forwarded `84a5db1` → `a3b69f0` (the video downloader's source providers; see "Source providers in `main`" above), and the real Control Center was restarted on it. Pushed at the user's request: `origin/main` `84a5db1..bd4d019`.
 - 2026-10-06: **Dashboard V2 is the dashboard.** `/` on the PC redirects to `/dashboard-v2/` (the phone already did). The classic page is off behind `CLASSIC_DASHBOARD = False` in `src/biliflow/control_center.py`; set it to `True` and restart the Control Center to bring it back (then `test_the_classic_dashboard_is_off_by_default` must change too). While the phone mode is on, V2 on the PC shows "Đang mở cho điện thoại" (H3), as the classic page did. Made on the short branch `feat/v2-default-dashboard` (worktree `temp\wt-v2-flicker`), then fast-forwarded into `main` and pushed. The real Control Center was restarted at 20:37:51 (`Stop-BiliFlow` + `Start-BiliFlow`) and `/` opens V2; the user confirmed. Its phone mode is off until the user turns it on. `Start-BiliFlow.cmd` alone reuses a running Control Center, so after a code change stop it first.
@@ -835,6 +895,7 @@ Status: items 4-7 and 7c-7d are done, in batches 1-2 (commits 27dc000, 1b6ad90, 
    - Measure together with item 8, since more windows mean more chances of such false alarms.
    - Options: a second-opinion prompt, or advisory routing (the user must approve).
 10. **Gore C1** (temp/wt-gore, off by default). Checked on 2026-10-03, after the `fix/export-identity-http` merge; the user said to handle it later.
+    - 2026-10-07: re-merged on `main` `d1296a7` in `temp\wt-gore-c1` (branch `feat/gore-c1-hints`), without touching `cli.py` or `intervals.py`. See the top section. The notes below describe the 2026-10-03 state.
     - What it is: steps 1-3 of `docs/ANIME_GORE_PLAN.md`.
       - The animation safety scanner records tag evidence for each gore interval.
       - Every gore card shows a hint: blood, injury only, or corpse.

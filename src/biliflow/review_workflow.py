@@ -51,6 +51,19 @@ from biliflow.brand_memory import (
     studio_logo_signatures,
     studio_logo_window_frames,
 )
+from biliflow.gore_triage import (
+    GORE_TRIAGE_EVIDENCE,
+    GORE_TRIAGE_LEVELS,
+    GORE_TRIAGE_MODEL_REPO,
+    GORE_TRIAGE_MODEL_REVISION,
+    GORE_TRIAGE_SCAN_PRECISION,
+    GORE_TRIAGE_SCAN_SAMPLE_FPS,
+    gore_evidence_hint,
+    gore_rule_matches,
+    gore_scan_is_calibrated,
+    normalize_gore_triage_level,
+    valid_gore_tag_evidence,
+)
 from biliflow.job_pipeline import DEFAULT_DETECTOR_GROUPS
 from biliflow.platform_cards import (
     ENDING_LABEL,
@@ -1208,6 +1221,222 @@ def triage_adult_items(
             audit["moved_seconds"] += max(0.0, item_end - item_start)
         advisory.append(item)
     audit["moved_seconds"] = round(audit["moved_seconds"], 3)
+    audit["kept_by_reason"] = dict(sorted(kept_by_reason.items()))
+    return required, advisory, audit
+
+
+def _resolve_gore_intervals(
+    item: dict, scan_payloads: dict[str, dict],
+) -> tuple[list[tuple[dict, dict]], str | None]:
+    """The gore scan intervals an item cites, or the reason they cannot be used.
+
+    Every source reference must resolve to an interval of an animation gore
+    report that still overlaps the item; a reference listed twice (a report and
+    its alias) counts once.
+    """
+    try:
+        item_start = float(item.get("start_seconds"))
+        item_end = float(item.get("end_seconds"))
+    except (TypeError, ValueError):
+        return [], "stale_source_refs"
+    references = list(dict.fromkeys(str(value) for value in item.get("source_candidate_refs") or []))
+    if not references:
+        return [], "no_source_refs"
+    resolved: list[tuple[dict, dict]] = []
+    seen: set[tuple[int, int]] = set()
+    for reference in references:
+        parsed = _candidate_reference(reference)
+        payload = scan_payloads.get(parsed[0]) if parsed else None
+        intervals = payload.get("intervals") if isinstance(payload, dict) else None
+        if (
+            parsed is None or not isinstance(intervals, list)
+            or parsed[1] >= len(intervals) or not isinstance(intervals[parsed[1]], dict)
+        ):
+            return [], "unresolved_source_refs"
+        if payload.get("scan_type") != "gore" or payload.get("content_style") != "animation":
+            return [], "not_animation_gore_scan"
+        interval = intervals[parsed[1]]
+        try:
+            overlaps = (
+                float(interval["start_seconds"]) <= item_end + _ADULT_REF_OVERLAP_TOLERANCE
+                and float(interval["end_seconds"]) >= item_start - _ADULT_REF_OVERLAP_TOLERANCE
+            )
+        except (KeyError, TypeError, ValueError):
+            overlaps = False
+        if not overlaps:
+            return [], "stale_source_refs"
+        if (id(payload), parsed[1]) not in seen:
+            seen.add((id(payload), parsed[1]))
+            resolved.append((payload, interval))
+    return resolved, None
+
+
+def _combined_gore_evidence(intervals: list[dict]) -> dict:
+    evidence = [interval["gore_tag_evidence"] for interval in intervals]
+    strongest = max(evidence, key=lambda value: float(value.get("strongest_blood_label_score") or 0.0))
+    return {
+        "blood_family_max": max(float(value["blood_family_max"]) for value in evidence),
+        "injury_max": max(float(value["injury_max"]) for value in evidence),
+        "corpse_max": max(float(value["corpse_max"]) for value in evidence),
+        "confirmed_frames": sum(int(value.get("confirmed_frames") or 0) for value in evidence),
+        "intervals": len(evidence),
+        "strongest_blood_label": strongest.get("strongest_blood_label"),
+    }
+
+
+def annotate_gore_tag_evidence(items: list[dict], scan_payloads: dict[str, dict]) -> list[dict]:
+    """Carry the scanner's gore tag evidence and a one-line hint onto gore cards.
+
+    docs/ANIME_GORE_PLAN.md step 1: the card shows what the tagger saw (blood,
+    only an injury, maybe a corpse). Values are maxima over every interval the
+    card cites (confirmed frames are summed). A card gets them only when every
+    one of its intervals carries evidence; nothing is moved, reordered or
+    suggested here.
+    """
+    output = []
+    for original in items:
+        if original.get("category") != "gore":
+            output.append(original)
+            continue
+        item = dict(original)
+        item.pop("gore_tag_evidence", None)
+        item.pop("gore_hint", None)
+        resolved, problem = _resolve_gore_intervals(item, scan_payloads)
+        intervals = [interval for _, interval in resolved]
+        if problem is None and all(
+            valid_gore_tag_evidence(interval.get("gore_tag_evidence")) for interval in intervals
+        ):
+            evidence = _combined_gore_evidence(intervals)
+            item["gore_tag_evidence"] = evidence
+            hint = gore_evidence_hint(evidence)
+            if hint:
+                item["gore_hint"] = hint
+        output.append(item)
+    return output
+
+
+def triage_anime_gore_items(
+    items: list[dict], scan_payloads: dict[str, dict],
+    job_content_style: str | None, level: str | None = None,
+) -> tuple[list[dict], list[dict], dict]:
+    """Move undecided anime gore cards where the tagger saw no blood and no corpse.
+
+    docs/ANIME_GORE_PLAN.md step 3, rule C1, in the style of
+    ``triage_adult_items``: returns ``(required, advisory, audit)``. A moved card
+    keeps every interval and source reference, appears under "Xem tất cả ứng
+    viên" and returns to the main list as soon as the reviewer decides it.
+
+    Only ``category == "gore"`` items with no decision are considered, and only
+    when the job is ``animation``. Every source reference must resolve to an
+    animation gore report scanned at the calibrated settings whose interval
+    carries ``gore_tag_evidence``; a card moves only when EVERY interval passes
+    the rule. Missing or uncalibrated evidence keeps the card in the main list.
+    """
+    level = normalize_gore_triage_level(level)
+    settings = GORE_TRIAGE_LEVELS[level]
+    audit: dict = {
+        "level": level,
+        "content_style": job_content_style,
+        "rule": dict(settings) if settings else None,
+        "scan_calibration": {
+            "model": GORE_TRIAGE_MODEL_REPO, "revision": GORE_TRIAGE_MODEL_REVISION,
+            "sample_fps": GORE_TRIAGE_SCAN_SAMPLE_FPS, "precision": GORE_TRIAGE_SCAN_PRECISION,
+        },
+        "evidence": GORE_TRIAGE_EVIDENCE,
+        "applied": False,
+        "reason": None,
+        "evaluated_items": 0,
+        "moved_items": 0,
+        "moved_intervals": 0,
+        "moved_seconds": 0.0,
+        "moved_detected_seconds": 0.0,
+        "kept_by_reason": {},
+        "note": (
+            "Moved items stay in advisory_items with every interval and source reference; "
+            "none is deleted or marked safe."
+        ),
+    }
+    if settings is None:
+        audit["reason"] = "level_off"
+        return list(items), [], audit
+    if job_content_style != "animation":
+        audit["reason"] = (
+            "content_style_missing" if not job_content_style
+            else "content_style_not_animation"
+        )
+        return list(items), [], audit
+    audit["applied"] = True
+    kept_by_reason: dict[str, int] = {}
+    required: list[dict] = []
+    advisory: list[dict] = []
+    for original in items:
+        if original.get("category") != "gore":
+            required.append(original)
+            continue
+        if original.get("decision") is not None:
+            # A human decision is never moved, whatever the tagger says.
+            kept_by_reason["decided"] = kept_by_reason.get("decided", 0) + 1
+            required.append(original)
+            continue
+        audit["evaluated_items"] += 1
+        resolved, problem = _resolve_gore_intervals(original, scan_payloads)
+        info: dict = {
+            "outcome": "kept", "rule": None, "reason": problem, "level": level,
+            "intervals": len(resolved), "blood_family_max": None, "corpse_max": None,
+            "thresholds": {
+                "blood_family_max": settings["blood_family_max"],
+                "corpse_max": settings["corpse_max"],
+            },
+        }
+        moved = False
+        if problem is None:
+            evidence = [interval.get("gore_tag_evidence") for _, interval in resolved]
+            if not all(gore_scan_is_calibrated(payload) for payload, _ in resolved):
+                info["reason"] = "uncalibrated_scan"
+            elif not all(valid_gore_tag_evidence(value) for value in evidence):
+                info["reason"] = "evidence_missing"
+            else:
+                info.update(
+                    blood_family_max=round(max(float(v["blood_family_max"]) for v in evidence), 6),
+                    corpse_max=round(max(float(v["corpse_max"]) for v in evidence), 6),
+                )
+                if all(gore_rule_matches(value, settings) for value in evidence):
+                    moved = True
+                else:
+                    info["reason"] = "blood_or_corpse_seen"
+        if not moved:
+            item = dict(original)
+            item["gore_triage"] = info
+            reason = str(info["reason"])
+            kept_by_reason[reason] = kept_by_reason.get(reason, 0) + 1
+            required.append(item)
+            continue
+        info.update(outcome="advisory", rule=settings["rule"], reason=None)
+        sentence = (
+            f"Tagger không thấy máu (cao nhất {info['blood_family_max']:.5f}, ngưỡng "
+            f"{settings['blood_family_max']:g}) và không thấy xác (cao nhất {info['corpse_max']:.5f}, "
+            f"ngưỡng {settings['corpse_max']:g}) ở mọi khoảnh khắc; vết xước/bầm không máu "
+            "không cần báo, nên chuyển sang Ứng viên phụ, không xóa và không coi là đã an toàn"
+        )
+        item = dict(original)
+        item["advisory"] = True
+        item["priority"] = "context"
+        # No blood seen is not proof of safety: no action is suggested.
+        item["suggested_decision"] = None
+        item["gore_triage"] = info
+        item["reasons"] = list(dict.fromkeys(list(item.get("reasons") or []) + [sentence]))
+        audit["moved_items"] += 1
+        audit["moved_intervals"] += len(resolved)
+        audit["moved_seconds"] += max(
+            0.0, float(item["end_seconds"]) - float(item["start_seconds"])
+        )
+        audit["moved_detected_seconds"] += sum(
+            max(0.0, value["end_seconds"] - value["start_seconds"])
+            for value in application_intervals(item)
+        )
+        advisory.append(item)
+    audit["moved_seconds"] = round(audit["moved_seconds"], 3)
+    audit["moved_detected_seconds"] = round(audit["moved_detected_seconds"], 3)
     audit["kept_by_reason"] = dict(sorted(kept_by_reason.items()))
     return required, advisory, audit
 
@@ -3060,6 +3289,7 @@ def build_review_queue(
     adult_triage_level: str | None = None,
     use_studio_logo_memory: bool = False,
     ffmpeg_path: Path | None = None,
+    gore_triage_level: str | None = None,
 ) -> dict:
     """Build one review queue from scan reports.
 
@@ -3067,6 +3297,8 @@ def build_review_queue(
     ``triage_adult_items`` move weak 18+ candidates to the optional list. Callers
     that omit it (older scripts, benchmarks) get the queue without that triage.
     ``adult_triage_level`` overrides ``ADULT_TRIAGE_LEVEL`` for measurements.
+    ``gore_triage_level`` overrides ``GORE_TRIAGE_LEVEL`` (off by default); only
+    an ``animation`` job lets ``triage_anime_gore_items`` move gore cards.
     ``use_studio_logo_memory`` routes cards repeating a user-confirmed studio
     logo (``state/studio-logo-memory.json``) to the optional list. It is off by
     default so benchmarks and Golden measurements never depend on user state;
@@ -3079,6 +3311,7 @@ def build_review_queue(
     if content_style is not None and content_style not in CONTENT_STYLES:
         raise ValueError(f"Unknown content style: {content_style}")
     adult_triage_level = normalize_adult_triage_level(adult_triage_level)
+    gore_triage_level = normalize_gore_triage_level(gore_triage_level)
     root = project_root.resolve(strict=True)
     reports_root = (root / "reports").resolve(strict=True)
     queue_path = _inside(reports_root, queue_path, "Queue path")
@@ -3248,6 +3481,14 @@ def build_review_queue(
         items, scan_payloads, content_style, adult_triage_level,
     )
     advisory_items.extend(triaged_adult_items)
+    # Anime gore (docs/ANIME_GORE_PLAN.md): every gore card shows what the tagger
+    # saw; rule C1 may then move undecided cards with neither blood nor corpse.
+    items = annotate_gore_tag_evidence(items, scan_payloads)
+    advisory_items = annotate_gore_tag_evidence(advisory_items, scan_payloads)
+    items, triaged_gore_items, gore_triage = triage_anime_gore_items(
+        items, scan_payloads, content_style, gore_triage_level,
+    )
+    advisory_items.extend(triaged_gore_items)
     items = promote_strong_adult_priorities(items)
     items = sorted(items, key=lambda item: (
         _PRIORITY_RANK.get(item["priority"], 2),
@@ -3314,6 +3555,7 @@ def build_review_queue(
         "merge_gap_seconds": merge_gap_seconds,
         "content_style": content_style,
         "adult_triage": adult_triage,
+        "gore_triage": gore_triage,
         "scene_cards": {
             "categories": dict(SCENE_CARD_KINDS),
             "maximum_gap_seconds": SCENE_CARD_MAXIMUM_GAP_SECONDS,

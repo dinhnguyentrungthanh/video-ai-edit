@@ -12,7 +12,9 @@
  *   S9 a card that only borrows another logo card's red box has no region buttons: a line about the owner card
  *      and "Đi tới thẻ logo" (the classic page shows the same buttons on both cards; the bodies are unchanged);
  *   S3 the export state reloads 1.5 s after a decision too (the classic page: only while QUEUED/RENDERING);
- *   S4 the resources line says "Ổ đĩa còn trống" (the classic page: "Ổ E còn trống", contracts.resourceItems).
+ *   S4 the resources line says "Ổ đĩa còn trống" (the classic page: "Ổ E còn trống", contracts.resourceItems);
+ *   S10 a gore card's hint line adds what the tagger saw (gore_hint, docs/ANIME_GORE_PLAN.md step 1); the classic
+ *      page stays byte-identical (D2) and has no such line.
  * R3 bulk and export follow the classic bulkKeep(), bulkAccept(), runBlocking() and finalizeExport(): same filter map,
  * same confirm words (count as the server selects, S1), the export gate and the export_dialog.py sentence.
  * R2 decisions follow the classic decide(), undo() and writeFailureMessage(): same confirms (S5 shows them in

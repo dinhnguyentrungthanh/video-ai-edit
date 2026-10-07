@@ -1,3 +1,62 @@
+# Unreleased — anime gore evidence and card hint; rule C1 re-merged, still off — 2026-10-07 (branch `feat/gore-c1-hints`, not in `main`)
+
+The user asked to finish part 1 of the anime gore work and to keep it out of the main folder while their jobs run ("Làm tiếp mục 1 đi bạn nhưng khoan đưa vào mục chính do tôi đang chạy job"). The 2026-10-02 patch (`temp\wt-gore`, saved as `temp\gore-c1.patch`, base `68a5a7e`) was re-applied on `main` `d1296a7` in the worktree `temp\wt-gore-c1`. Nothing was merged into `main` and the real Control Center was not restarted.
+
+- What it does (`docs/ANIME_GORE_PLAN.md` steps 1 and 3):
+  - The animation safety scanner records `gore_tag_evidence` on every gore interval: the blood-family, injury and corpse maxima over its confirmed frames. Intervals, scores, thresholds and exports are unchanged.
+  - Gore cards carry that evidence and a one-line `gore_hint`: "Tagger: thấy máu", "máu yếu, nên xem kỹ", "chỉ vết thương, không thấy máu" or "không thấy máu", plus "có thể là xác" or "có dấu hiệu xác (yếu), nên xem kỹ". The hint never moves a card or suggests a decision.
+  - Rule C1 (`triage_anime_gore_items`) may move an undecided animation gore card with neither blood nor corpse to "Ứng viên phụ". It stays off (`GORE_TRIAGE_LEVEL = "off"`).
+- Changes against the 2026-10-02 patch:
+  - Scan caches are kept. `cli.py` and `intervals.py` stay as in `main`: there is no `--gore-triage-level` flag, and measurements call `build_review_queue(gore_triage_level=...)`.
+    - `animation_policy._gore_hit_groups` regroups the hits with the rule of `group_hits`. `attach_gore_tag_evidence` also checks each group's strongest score and attaches nothing on any mismatch.
+    - Computed with `cache_dependencies.stage_source_paths` against `main`, only the `animation_safety`, `gore` and `violence` stages get a new cache key. `text`, `visual_logo`, `localize_logo`, `adult`, `live_safety`, `verify_adult` and `confirm_violence` keep theirs.
+    - The changed stages run for animation videos with a safety group and for live-action videos that select only one of gore and violence. Live-action videos with both use `live_safety`. Their next scan recomputes that stage once.
+    - `tests/test_cache_dependencies.py` now also keeps `gore_triage.py` out of every scan stage key.
+  - The hint is shown on Dashboard V2 cards (`review-cards.js`, deliberate difference S10 in `review-core.js`). The classic review page stays byte-identical (D2), so the patch's classic hint was dropped.
+  - `review_workflow.py` had two conflicts, both resolved by keeping both sides: `build_review_queue` takes main's `ffmpeg_path` and the patch's `gore_triage_level`.
+  - Comments naming the films were made neutral (public repository).
+  - The C1 calibration check now also requires the tagger precision of the measurement, `runtime.precision == "fp16"`, which is the default fast scan.
+    - The thresholds come from a full-film CUDA fp16 re-score with the production settings (`temp/next/anime-gore/g1_fullfilm.py`). The production reports of both films are fp16 too.
+    - An fp32 scan, or a report without `runtime.precision`, is uncalibrated and moves nothing.
+    - The queue's `gore_triage.scan_calibration` records the precision.
+  - The two LOW findings of the 2026-10-02 review were already fixed in the saved patch: 5-decimal maxima in the reason line, and "có dấu hiệu xác (yếu)" between 0.0104 and 0.05.
+- Checks:
+  - `test_gore_triage`: 19 OK. New tests: the regrouping equals `group_hits` on 300 random cases; a mismatched strongest score attaches nothing; `build-review` passes no gore level, so the code default applies.
+  - Review, scene-card, policy, cache and V2 tests: 236 OK (7 skipped).
+  - Node gates: `verify-review` 32/32 (new S10 check), `verify` 38/38, `verify-adapter` 37/37, `verify-download` 22/22.
+  - Offline gates: a copy of `temp\gore-c1\gates\run_gates.py` ran on the new code (CPU only; output `temp\gore-c1\gates-d1296a7`). All passed, with the same numbers as on 2026-10-02:
+    - intervals 60/60 and 52/52 identical;
+    - evidence within 5e-6 of `items-ff.csv`;
+    - Golden v1 r469 + v1.1 r121: main cards 26 → 21, precision 0.423 → 0.524, gore labels 15/15 in the main list, must_catch 5/5;
+    - lone shots: 0 of 13 real-blood spans moved;
+    - 7 cards moved per film, and no real-blood or corpse item moved;
+    - the read-only inputs did not change.
+  - Full suite in the worktree: 1947 tests OK (35 skipped), with no failure or error. It ran at below-normal priority, with 2 threads and no GPU, and used a 1 s synthetic clip in the git-ignored `input\`, removed afterwards.
+  - Code review (agent, read-only): APPROVE, with no CRITICAL, HIGH or MEDIUM finding.
+    - The reviewer also compared the regrouping with `group_hits` on 5,000 random cases: 0 mismatches.
+    - Four LOW findings, all handled:
+      - `gore_triage.py` was added to the cache-scope test.
+      - Two brittle test checks were loosened.
+      - S10 was added where the docs list S1–S9, and the cache note now names live-action jobs.
+      - The calibration check ignored the precision. It now requires fp16, the precision of the measurement. The reviewer had assumed the thresholds were measured on fp32.
+    - After the fixes: gore and related tests 229 OK (7 skipped); the offline gates passed again with the same numbers.
+- GPU rescan, plan step 2. The user said their jobs had stopped: "Tôi thấy job đã dừng rồi bạn có thể tiếp tục việc cần phải làm nhé". Read-only GETs confirmed no active job, an empty queue and no download.
+  - `temp\gore-c1\gpu-rescan\rescan.ps1` ran the branch scanner on both Golden animation films:
+    - production fast-job settings: 2 fps, CUDA fp16, CLI defaults;
+    - each film in the GPU slot; 214.5 s and 215.3 s; no wait;
+    - output in `reports\benchmarks\gore-triage-20261007-gpu`, with `rescan-log.json`, `gates-summary.json`, `items-ff.csv`, `lone-shots.csv` and `lone-shots-gate.csv`.
+  - `run_gates_real.py` on those reports: all gates passed.
+    - Gate 4.5: every adult, gore and violence interval is identical to the production report (3/3, 60/60, 9/9 and 2/2, 52/52, 12/12), as are the scan settings, frame counts and temporal counts.
+    - Gate 4.4: the real fp16 evidence differs from the re-score by at most 1.9e-4, with the same confirmed frames and the same strongest blood tag. Item evidence differs from `items-ff.csv` by at most 1.9e-4.
+    - At the shipped C1 thresholds, the moved cards, Golden scores and lone-shot results are identical to the offline run: 7 + 7 cards; no real-blood or corpse item moved.
+    - Only the never-shipped 5-decimal sensitivity variant changed. Golden false alarm `review-fee07d624ddb` (C21) now has blood 0.071571, under its 0.07158 line, so that variant moves 7 instead of 6 C21 cards.
+    - That card sits 2.9e-5 under the shipped 0.0716 line. It is a false alarm, so a flip would only keep it in the main list.
+  - Time: the scan stage took 207.1 s and 207.8 s, against 234.4 s and 204.9 s in production (−5.6 % for the two films together; C21 alone +1.4 %). The time is reported, not gated, because it depends on what else the PC runs.
+- Not done (needs the user, plan §4.6–4.7):
+  - the user's answers on the gate 4.6 sheet (`temp\gore-c1\gate46`: 9 moved cards without a Golden verdict and the two "corpse?" items);
+  - a third animation film ("Chưa có, để sau");
+  - then whether to turn C1 on.
+
 # Unreleased — over Tailscale, the PC's own Tailscale account needs no access code — 2026-10-07
 
 After the user's real test passed ("gia hạn oke và kết bên ngoài oke"), the user asked to drop the access code over Tailscale ("vì phải chung mail như vậy đã đủ bảo mật"). Told what that opens (every device signed in to the account, shared or invited devices, a stolen Google account), the user chose "Bỏ mã nếu cùng tài khoản".

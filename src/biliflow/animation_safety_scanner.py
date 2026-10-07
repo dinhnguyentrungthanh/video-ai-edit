@@ -21,8 +21,13 @@ from biliflow.animation_policy import (
     ADULT_EXPLICIT_LABELS,
     DANGER_LABELS,
     DIRECT_VIOLENCE_LABELS,
+    GORE_BLOOD_FAMILY_LABELS,
     GORE_CONTEXT_LABELS,
+    GORE_CORPSE_LABEL,
+    GORE_INJURY_LABEL,
     GORE_LABELS,
+    attach_gore_tag_evidence,
+    gore_tag_evidence_policy,
 )
 from biliflow.frame_prefetch import BatchPrefetch
 from biliflow.intervals import compact_interval_thumbnails, group_hits
@@ -183,6 +188,9 @@ def scan_animation_safety(
     violence_indices = _label_indices(labels, DIRECT_VIOLENCE_LABELS)
     danger_indices = _label_indices(labels, DANGER_LABELS)
     adult_indices = _label_indices(labels, ADULT_EXPLICIT_LABELS)
+    # Evidence only (docs/ANIME_GORE_PLAN.md step 1): read from the same probabilities.
+    blood_family_indices = _label_indices(labels, GORE_BLOOD_FAMILY_LABELS)
+    injury_index, corpse_index = _label_indices(labels, (GORE_INJURY_LABEL, GORE_CORPSE_LABEL))
 
     with performance.measure('model_load'):
         model = timm.create_model(
@@ -281,6 +289,11 @@ def scan_animation_safety(
         adult_cooccurrence = (
             probabilities[:, adult_indices] >= adult_cooccurrence_threshold
         ).sum(dim=1).tolist()
+        blood_family_batch = _union(probabilities, blood_family_indices).tolist()
+        blood_top_scores, blood_top = probabilities[:, blood_family_indices].max(dim=1)
+        blood_top_scores, blood_top = blood_top_scores.tolist(), blood_top.tolist()
+        injury_batch = probabilities[:, injury_index].tolist()
+        corpse_batch = probabilities[:, corpse_index].tolist()
 
         for position, (image, frame_index) in enumerate(zip(batch, batch_indices)):
             timestamp = frame_index / sample_fps
@@ -351,6 +364,13 @@ def scan_animation_safety(
                         "predicted_label": gore_label,
                         "reason": "high_score" if high_score else "context_confirmed",
                         "thumbnail": f"thumbnails/{name}",
+                        "tag_evidence": {
+                            "blood_family": float(blood_family_batch[position]),
+                            "injury": float(injury_batch[position]),
+                            "corpse": float(corpse_batch[position]),
+                            "blood_label": GORE_BLOOD_FAMILY_LABELS[blood_top[position]],
+                            "blood_label_score": float(blood_top_scores[position]),
+                        },
                     }
                 )
             if violence_score >= violence_threshold:
@@ -520,6 +540,8 @@ def scan_animation_safety(
         intervals = group_hits(
             hits, category_merge_gap, padding_seconds, video_duration
         )
+        if category == "gore":
+            attach_gore_tag_evidence(intervals, hits, category_merge_gap)
         retained = compact_interval_thumbnails(category_dir, hits, intervals)
         top_candidates = _save_top_candidates(category_dir, heap, sample_fps)
         payload = {
@@ -557,6 +579,7 @@ def scan_animation_safety(
                 "high_score_temporal_minimum_hits": temporal_minimum_hits,
                 "context_temporal_minimum_hits": gore_context_temporal_minimum_hits,
             }
+            payload["gore_tag_evidence_policy"] = gore_tag_evidence_policy()
         else:
             payload["danger_separation"] = {
                 "labels": list(DANGER_LABELS),

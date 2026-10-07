@@ -2,6 +2,29 @@
 
 - **Ngày lập:** 02/10/2026.
 - **Trạng thái:** đề xuất. **Chưa có luật nào nên bật.** Người dùng cần trả lời câu hỏi 1 (mục 7) trước khi viết code cho bước 3.
+- **Cập nhật 07/10/2026:**
+  - Bước 1 và bước 3 (C1 tắt) đã được ghép lại lên `main` `d1296a7`, trên nhánh `feat/gore-c1-hints` (worktree `temp\wt-gore-c1`). Chưa vào `main`.
+  - Khác bản ngày 02/10:
+    - không sửa `cli.py` và `intervals.py` để giữ cache quét, nên không còn cờ `--gore-triage-level`;
+    - gợi ý trên thẻ chỉ hiện ở Dashboard V2; trang duyệt cũ giữ nguyên từng byte.
+  - Các cổng đo offline 4.1–4.4 chạy lại trên code mới đều qua, số liệu như ngày 02/10 (`temp\gore-c1\gates-d1296a7`).
+  - Còn lại: bước 2 (quét lại bằng GPU), cổng 4.5–4.7, rồi người dùng quyết định có bật C1 không.
+  - Độ chính xác số (bài soát code 07/10, mức LOW): ngưỡng được đo trên bản chấm lại toàn phim bằng CUDA fp16 (`g1_fullfilm.py`, đúng thiết lập production), và job quét nhanh mặc định cũng chạy fp16.
+    - `gore_scan_is_calibrated` nay đòi `runtime.precision == "fp16"`. Report fp32, hoặc report cũ không có trường này, không chuyển thẻ nào.
+    - Cổng 4.4 (quét lại bằng GPU) vẫn phải xác nhận bằng chứng fp16 thật khớp với số đo. Một mục báo nhầm của Golden nằm dưới ngưỡng máu 1.8e-5, và điểm đo được lưu dạng float16.
+  - Câu hỏi 2 đã xong: Golden v1.1 r121 đã cho nghỉ (`retired_event_ids`) hai nhãn bầm gs-C20F-0009/0010.
+  - Đã chuẩn bị, chưa chạy GPU (công cụ cục bộ trong `temp\gore-c1`, xem `docs/SESSION_HANDOFF.md`):
+    - trang kiểm cổng 4.6 cho 9 thẻ C1 sẽ chuyển mà Golden chưa có nhãn, cùng hai câu hỏi xác (câu hỏi 3);
+    - script quét lại bằng GPU cho bước 2, và script chấm cổng 4.4/4.5 trên report thật.
+  - Người dùng trả lời ngày 07/10:
+    - quét lại bằng GPU: "Để sau, tôi sẽ báo";
+    - phim thứ ba (câu hỏi 5, cổng 4.7): "Chưa có, để sau". C1 vẫn tắt.
+  - Bước 2 đã chạy chiều 07/10, sau khi job của người dùng dừng (`reports\benchmarks\gore-triage-20261007-gpu`). Cổng 4.4 và 4.5 qua:
+    - mọi interval 18+/máu me/bạo lực trùng report production;
+    - bằng chứng fp16 thật lệch bản chấm lại tối đa 1.9e-4.
+    - Ở ngưỡng C1, số thẻ bị chuyển và điểm Golden trùng lượt offline.
+    - Thẻ báo nhầm `fee07d624ddb` nằm dưới ngưỡng máu 0.0716 đúng 2.9e-5. Nếu nó vượt ngưỡng thì chỉ ở lại danh sách chính, nên vẫn an toàn.
+  - Còn lại: cổng 4.6 (người dùng trả lời trên trang kiểm), cổng 4.7 (phim thứ ba), rồi quyết định bật C1.
 - **Mốc mã:** nhánh `improve/scan-performance-metrics`, commit `68a5a7e`. Phiên khác đã commit `177c412` và `68a5a7e` lúc 09:31, khi nghiên cứu này đang chạy. Nghiên cứu không tạo commit nào.
 - **Phạm vi:** chỉ nhóm máu me của anime tagger (`wd_vit_tagger_v3`, `src/biliflow/animation_safety_scanner.py`) trên Conan 20 và Conan 21.
   - Golden v1 r469 + v1.1 r115. Verdict máu me trùng scorecard r108.
@@ -406,6 +429,7 @@ Rủi ro còn lại chưa đo được: một phim khác có máu khô hoặc m�
     - lý do tiếng Việt: "Tagger không thấy máu và không thấy xác; chỉ có tag vết thương".
   - **Queue:** ghi khối `gore_triage` ở cấp gốc để kiểm toán (mức, số mục và số giây bị chuyển, lý do giữ lại).
 - `build_review_queue(...)` nhận thêm `gore_triage_level`. `src/biliflow/cli.py`: lệnh `build-review` thêm `--gore-triage-level` để đo. `src/biliflow/job_pipeline.py` đã truyền `content_style`; chỉ cần kiểm lại.
+  - 07/10/2026: bỏ cờ này. `cli.py` nằm trong khóa cache của mọi bước quét, nên khi đo thì gọi thẳng `build_review_queue(gore_triage_level=...)`.
 - `tests/test_review_workflow.py`, các ca cần có:
   - chỉ áp cho animation và nhóm gore;
   - mục có quyết định được giữ nguyên;
