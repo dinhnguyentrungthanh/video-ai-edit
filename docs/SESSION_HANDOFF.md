@@ -1,6 +1,6 @@
 # BiliFlow session handoff
 
-## Anime gore rule C1 turned on; temporary files removed — 2026-10-07 (`main`, not pushed)
+## Anime gore rule C1 turned on; temporary files removed — 2026-10-07 (`main`, pushed)
 
 - **Request:** "Xoá hết những gì liên quan đi bạn code cứ commit và cứ bật đi bạn để trong đó cũng vậy, vậy thì bật luôn done phần này".
 - **Code:** `GORE_TRIAGE_LEVEL = "no_blood_no_corpse"`, with its tests (`test_default_level_is_c1`, `test_level_off_still_moves_nothing`). Focused tests 218 OK; full suite 1948 OK (35 skipped).
@@ -15,12 +15,13 @@
   - branch `feat/gore-c1-hints`.
 
   Paths to `temp\gore-c1` in the sections below no longer exist. Their results are in `reports\benchmarks\gore-triage-20261007-gpu`, `…-film3-20261007` and `…-film4-20261007`. The research data `temp\next\anime-gore` is kept.
+- **Pushed:** at the user's request ("push lên đi bạn"): `origin/main` `d1296a7..47a1956`, then this record.
 - **Control Center:** it was stopped. Its next start serves C1. Only new "Quét nhanh" animation scans have the evidence C1 needs.
 
 ## Anime gore evidence and card hint in `main` (C1 off) — 2026-10-07
 
 - **In `main` since 2026-10-07**, at the user's request: "nếu mọi thứ đã tốt hết rồi thì đưa vào main đi bạn".
-  - `main` was fast-forwarded `d1296a7` → `927006c` (`8d709d0` code, `927006c` check-sheet results), plus this record. Not pushed.
+  - `main` was fast-forwarded `d1296a7` → `927006c` (`8d709d0` code, `927006c` check-sheet results), plus this record. Pushed later the same day with C1 on (see above).
   - Before the merge: full suite 1947 OK (35 skipped) on `927006c` (log `temp\gore-c1\fullsuite-927006c.log`); node gates 32/38/37/22.
   - The real Control Center was not running at merge time: it had stopped cleanly after its 19:21 start, and its error log was empty. Nothing was restarted. Its next start serves the new code.
   - The first scan of an animation video with a safety group, or of a live-action video with only one of gore and violence, recomputes the `animation_safety`, `gore` or `violence` stage once.

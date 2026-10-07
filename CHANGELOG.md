@@ -1,7 +1,8 @@
-# Unreleased — anime gore rule C1 turned on — 2026-10-07 (`main`, not pushed)
+# Unreleased — anime gore rule C1 turned on — 2026-10-07 (`main`, pushed)
 
 The user turned it on and asked to remove the temporary files: "Xoá hết những gì liên quan đi bạn code cứ commit và cứ bật đi bạn để trong đó cũng vậy, vậy thì bật luôn done phần này".
 
+- Pushed at the user's request ("push lên đi bạn"): `origin/main` `d1296a7..47a1956`, then this record.
 - `GORE_TRIAGE_LEVEL = "no_blood_no_corpse"` (`gore_triage.py`).
   - An undecided gore card of an animation job moves to "Ứng viên phụ" when the tagger saw no blood (≤ 0.0716) and no corpse (≤ 0.0104) in every interval of the card.
   - Only calibrated scans count: wd-vit-tagger-v3 at 2 fps in fp16, the "Quét nhanh" mode.
@@ -18,7 +19,7 @@ The user turned it on and asked to remove the temporary files: "Xoá hết nhữ
 - Checks: focused tests 218 OK; full suite 1948 OK (35 skipped).
 - Evidence kept: `reports\benchmarks\gore-triage-20261007-gpu` (rescan, gates, the user's answers, the offline gate summary), `…-film3-20261007` and `…-film4-20261007`, plus the plan's research data in `temp\next\anime-gore`. The temporary tools, clips and test videos were deleted at the user's request.
 
-# Anime gore evidence and card hint; rule C1 re-merged, still off — 2026-10-07 (in `main` since 2026-10-07, not pushed)
+# Anime gore evidence and card hint; rule C1 re-merged, still off — 2026-10-07 (in `main` since 2026-10-07, pushed with C1 on)
 
 - Brought into `main` at the user's request: "nếu mọi thứ đã tốt hết rồi thì đưa vào main đi bạn".
   - Fast-forward `d1296a7` → `927006c`, after the full suite (1947 OK, 35 skipped) and the node gates passed on `927006c`.
