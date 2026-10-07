@@ -391,10 +391,13 @@ class PhoneAccess:
 
     def __init__(self, *, lan: Callable[[], str] = lan_address,
                  tailscale: Callable[[], str] = tailscale_address,
+                 tailscale_device: Callable[[str], str | None] | None = None,
                  on_event: Callable[[str, str, dict[str, Any]], None] | None = None):
         self._lock = threading.Lock()
         self._lan = lan
         self._tailscale = tailscale
+        # (client ip) -> device name when it belongs to the PC's own Tailscale account, else None.
+        self._tailscale_device = tailscale_device
         self.on_event = on_event  # (event_type, message, payload) -> stored as a Control Center event
         self._server: ThreadingHTTPServer | None = None
         self._thread: threading.Thread | None = None
@@ -705,6 +708,35 @@ class PhoneAccess:
         except http.cookies.CookieError:
             return False
         return morsel is not None and hmac.compare_digest(morsel.value.encode("utf-8"), expected.encode("utf-8"))
+
+    def tailscale_cookie(self, ip: str) -> str | None:
+        """The Set-Cookie header for a device of the PC's own Tailscale account, else None.
+
+        The user's choice (2026-10-07): over Tailscale such a device opens the phone mode without the
+        code; Tailscale, not a typed secret, says who it is. A device shared in, of another user or
+        tagged, any lookup error, and every request on the home Wi-Fi still need the code.
+        """
+        with self._lock:
+            lookup = self._tailscale_device if self.network == "tailscale" and self._server is not None else None
+        if lookup is None:
+            return None
+        try:
+            device = lookup(ip)
+        except Exception:  # noqa: BLE001 - no answer means the code page, never an open door
+            device = None
+        if not device:
+            return None
+        with self._lock:
+            value = self._cookie_value() if self.network == "tailscale" else None
+            first = value is not None and ip not in self._login_ips
+            if first:
+                self._login_ips.add(ip)
+        if value is None:
+            return None
+        if first:
+            self._event("PHONE_LOGIN", f"Thiết bị {ip} ({device}) vào qua Tailscale, cùng tài khoản với PC: "
+                        "không cần mã", ip=ip, device=str(device), by="tailscale_account")
+        return self._cookie_header(value)
 
     def try_code(self, given: Any, *, ip: str | None = None) -> tuple[str, str | None]:
         """(outcome, Set-Cookie header or None), decided under one hold of the lock (H6).

@@ -276,6 +276,48 @@ class TailscaleListenerTests(ListenerBase):
         self.assertIn("IPv4 riêng", answer["error"])
         self.assertIsNone(self.pc_status()["network"])
 
+    def test_a_device_of_the_pcs_tailscale_account_opens_without_the_code(self):
+        """The user's choice (2026-10-07): over Tailscale the PC's own account needs no code."""
+        asked = []
+        self.phone._tailscale_device = lambda ip: asked.append(ip) or "zphone"
+        answer = self.enable_over_http()
+        port, host = answer["port"], f"127.0.0.1:{answer['port']}"
+        self.assertEqual(http(port, "GET", "/api/jobs", host=host)[0], 401)
+        self.assertEqual(asked, [], "an API call without the cookie never asks Tailscale")
+        status, headers, body = http(port, "GET", "/", host=host)
+        self.assertEqual(status, 200)
+        self.assertIn("Đang mở BiliFlow", body.decode())
+        self.assertNotIn(answer["code"].encode(), body)
+        self.assertEqual(asked, ["127.0.0.1"])
+        cookie = headers["set-cookie"][0].split(";", 1)[0]
+        self.assertEqual(http(port, "GET", "/api/jobs", host=host, headers={"Cookie": cookie})[0], 200)
+        http(port, "GET", "/dashboard-v2/", host=host)  # a second entry: one PHONE_LOGIN per device
+        logins = [e for e in self.store.events(None) if e["event_type"] == "PHONE_LOGIN"]
+        self.assertEqual(len(logins), 1)
+        self.assertEqual((logins[0]["payload"]["ip"], logins[0]["payload"]["device"]), ("127.0.0.1", "zphone"))
+        self.assertIn("không cần mã", logins[0]["message"])
+
+    def test_any_other_device_still_types_the_code(self):
+        def broken(_ip):
+            raise OSError("the CLI is gone")
+        for lookup in (lambda _ip: None, broken):
+            with self.subTest(lookup=lookup):
+                self.phone._tailscale_device = lookup
+                answer = self.enable_over_http()
+                status, headers, body = http(answer["port"], "GET", "/", host=f"127.0.0.1:{answer['port']}")
+                self.assertEqual(status, 401)
+                self.assertNotIn("set-cookie", headers)
+                self.assertIn("Nhập mã truy cập", body.decode())
+                self.phone.disable()
+
+    def test_on_the_home_wifi_tailscale_is_never_asked(self):
+        asked = []
+        self.phone._tailscale_device = lambda ip: asked.append(ip) or "zphone"
+        self.phone.enable(lambda access: _phone_handler_class(self.center, access), address="127.0.0.1",
+                          check_address=lambda _a: None, check_port=lambda _p: None, port=0)
+        status, _, _ = http(self.phone.port, "GET", "/", host=f"127.0.0.1:{self.phone.port}")
+        self.assertEqual((status, asked), (401, []))
+
     def test_the_phone_logs_in_and_learns_the_network_but_not_the_code(self):
         answer = self.enable_over_http()
         port, host = answer["port"], f"127.0.0.1:{answer['port']}"
@@ -395,6 +437,9 @@ class FakeTailscale:
 
     def address(self):
         return "127.0.0.1"
+
+    def same_account_device(self, _ip):
+        return None
 
 
 class TailscaleRouteTests(ListenerBase):
@@ -544,6 +589,12 @@ class TailscaleWiringTests(unittest.TestCase):
         center.tailscale = mock.Mock(address=mock.Mock(return_value=TAILNET_ADDRESS))
         self.assertEqual(_phone_access(center)._lookup("tailscale"), TAILNET_ADDRESS)
         center.tailscale.address.assert_called_once_with()
+
+    def test_the_phone_mode_asks_the_manager_who_a_device_belongs_to(self):
+        center = self.center(ROOT / "temp")
+        center.tailscale = mock.Mock(same_account_device=mock.Mock(return_value="zphone"))
+        self.assertEqual(_phone_access(center)._tailscale_device("100.64.0.9"), "zphone")
+        center.tailscale.same_account_device.assert_called_once_with("100.64.0.9")
 
     def test_open_for_the_phone_outside_turns_the_phone_mode_on_over_tailscale(self):
         center = self.center(ROOT / "temp")

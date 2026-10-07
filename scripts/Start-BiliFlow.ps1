@@ -80,7 +80,8 @@ function Enable-PhoneMode([string]$Url) {
     if ($Result.network -eq 'tailscale') {
         Write-Host '  BILIFLOW TREN DIEN THOAI / LAPTOP (qua Tailscale, o bat ky dau)'
         Write-Host "  Mo tren dien thoai:  $($Result.url)  (bat Tailscale tren dien thoai truoc)"
-        Write-Host "  Nhap ma truy cap:    $($Result.code)"
+        Write-Host '  Thiet bi cung tai khoan Tailscale voi PC vao thang, khong can ma.'
+        Write-Host "  Ma cho thiet bi khac: $($Result.code)"
         Write-Host '  Tuong lua: can them mot rule cho Tailscale (docs\DASHBOARD_V2_PHONE.md muc 8). KHONG bam Cancel.'
         Write-Host '  PC phai bat va khong ngu. Dung dung link so o tren, khong dung ten may.'
         Write-Host '  Tu tat sau 8 gio, hoac khi Tailscale tren PC tat hoac doi dia chi.'

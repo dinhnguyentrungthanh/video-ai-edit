@@ -10,6 +10,7 @@ Branch `feat/phone-tailscale`, worktree `temp\wt-phone-tailscale`. Builds on the
 4. Tailscale **updates itself** (`TS_INSTALLUPDATES=always`).
 5. Tailscale **runs unattended** (before a Windows sign-in; `TS_UNATTENDEDMODE=always`).
 6. **"Gia hạn thêm 8 giờ" also from the phone**, only while the phone mode is open over Tailscale. On/off stay PC-only. **Changed on 2026-10-07** after the user's test (the auto-off time hardly moved, because a press set 8 hours from the press): each press adds 8 hours to the time left, at most 24 hours from now (the user's choice).
+7. **No access code for the PC's own Tailscale account** (2026-10-07, after the user's test: "vì phải chung mail như vậy đã đủ bảo mật"). Asked, the user chose "Bỏ mã nếu cùng tài khoản": over Tailscale, a device whose `tailscale whois` user is the PC's own user (not shared in, not tagged) opens without the code; any other device, a lookup error and the home Wi-Fi keep the code. The main folder and push wait until this is tested.
 
 ## What BiliFlow cannot do (said to the user)
 

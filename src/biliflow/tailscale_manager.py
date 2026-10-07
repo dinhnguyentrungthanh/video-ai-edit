@@ -54,6 +54,17 @@ CONNECT_WAIT_SECONDS = 30.0
 SERVICE_WAIT_SECONDS = 30.0
 POLL_SECONDS = 0.5
 FIREWALL_CACHE_SECONDS = 30.0
+# The user's choice (2026-10-07): a device of the PC's own Tailscale account opens the phone mode
+# without the code. Who a device is comes from `tailscale whois` (tailscaled knows the WireGuard key
+# each packet came with); answers are reused per address for a while (a refusal for less).
+WHOIS_CACHE_SECONDS = 60.0
+WHOIS_MISS_SECONDS = 10.0
+WHOIS_TIMEOUT_SECONDS = 5.0
+WHOIS_CACHE_SIZE = 256
+WHOIS_WAIT_SECONDS = 1.0  # how long a request waits for another address's lookup before the code page
+_MISS = object()
+DEVICE_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9.\-]{0,62}")
+UNNAMED_DEVICE = "thiết bị Tailscale"
 ACTIONS = {
     "install": "Cài và cấu hình Tailscale",
     "start-service": "Khởi động dịch vụ Tailscale",
@@ -332,6 +343,9 @@ class TailscaleManager:
         self._status_lock = threading.Lock()
         self._status_cache: tuple[float, dict[str, Any]] | None = None
         self._status_generation = 0
+        # same_account_device(): one lookup at a time, {ip: (monotonic time, device name or None)}.
+        self._whois_lock = threading.Lock()
+        self._whois: dict[str, tuple[float, str | None]] = {}
 
     # ------------------------------------------------------------------ reading
     def cli(self) -> str | None:
@@ -341,8 +355,8 @@ class TailscaleManager:
         """The PC's Tailscale IPv4 for the phone mode (`tailscale ip -4`)."""
         return phone_access.tailscale_address(run=self._run, cli=self.cli)
 
-    def _status_json(self, cli: str) -> dict[str, Any]:
-        done = _quiet(self._run, [cli, "status", "--json"])
+    def _status_json(self, cli: str, *, timeout: float = CLI_TIMEOUT_SECONDS) -> dict[str, Any]:
+        done = _quiet(self._run, [cli, "status", "--json"], timeout=timeout)
         try:
             value = json.loads(done.stdout or "")
         except ValueError:
@@ -350,6 +364,70 @@ class TailscaleManager:
         if not isinstance(value, dict):
             raise ValueError(CLI_MESSAGE.format(args="status", detail=_first_line(done)))
         return value
+
+    def same_account_device(self, ip: Any) -> str | None:
+        """The name of the Tailscale device at `ip` when it belongs to the PC's own Tailscale user.
+
+        None for anything else: not a 100.64.0.0/10 address, another user's device, a device shared in
+        from another tailnet, a tagged device, no CLI, or any error. Then the phone types the code.
+        """
+        if not isinstance(ip, str) or not phone_access.is_tailscale_ipv4(ip):
+            return None
+        cached = self._cached_device(ip)
+        if cached is not _MISS:
+            return cached
+        # One lookup at a time; a cached answer never waits for it, and a busy lookup is a refusal.
+        if not self._whois_lock.acquire(timeout=WHOIS_WAIT_SECONDS):
+            return None
+        try:
+            cached = self._cached_device(ip)
+            if cached is not _MISS:
+                return cached
+            device = self._lookup_device(ip)
+            with self._lock:
+                if len(self._whois) >= WHOIS_CACHE_SIZE:
+                    self._whois.clear()
+                self._whois[ip] = (time.monotonic(), device)
+            return device
+        finally:
+            self._whois_lock.release()
+
+    def _cached_device(self, ip: str) -> Any:
+        """The cached answer for `ip` (a name or None) while it is fresh, else _MISS."""
+        with self._lock:
+            cached = self._whois.get(ip)
+        if cached is None:
+            return _MISS
+        fresh = WHOIS_CACHE_SECONDS if cached[1] else WHOIS_MISS_SECONDS
+        return cached[1] if time.monotonic() - cached[0] < fresh else _MISS
+
+    def _lookup_device(self, ip: str) -> str | None:
+        cli = self.cli()
+        if cli is None:
+            return None
+        try:
+            me = self._status_json(cli, timeout=WHOIS_TIMEOUT_SECONDS).get("Self")
+            done = _quiet(self._run, [cli, "whois", "--json", ip], timeout=WHOIS_TIMEOUT_SECONDS)
+            who = json.loads(done.stdout or "") if done.returncode == 0 else None
+        except (ValueError, OSError, subprocess.SubprocessError):
+            return None
+        if not isinstance(me, dict) or not isinstance(who, dict):
+            return None
+        # Security review (MEDIUM): the PC's own address is never a device without the code; a relay on
+        # the PC (port proxy, tunnel, another account's process) would arrive from it.
+        own = me.get("TailscaleIPs")
+        if not isinstance(own, list) or ip in own:
+            return None
+        node, profile = who.get("Node"), who.get("UserProfile")
+        owner = me.get("UserID")
+        if not isinstance(node, dict) or not isinstance(profile, dict):
+            return None
+        if not isinstance(owner, int) or isinstance(owner, bool) or owner <= 0:
+            return None
+        if node.get("User") != owner or profile.get("ID") != owner or node.get("Sharer") or node.get("Tags"):
+            return None
+        name = node.get("ComputedName")
+        return name if isinstance(name, str) and DEVICE_NAME.fullmatch(name) else UNNAMED_DEVICE
 
     def _firewall_state(self) -> str:
         now = time.monotonic()

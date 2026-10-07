@@ -265,7 +265,11 @@ def _phone_access(center: Any) -> phone_access.PhoneAccess:
                     store.add_event(None, event_type, message, level=level, payload=payload or None)
 
             # The Tailscale address comes from the Tailscale BiliFlow manages (runtime\tailscale first).
-            value = phone_access.PhoneAccess(on_event=store_event, tailscale=lambda: _tailscale(center).address())
+            # Over Tailscale a device of the PC's own Tailscale account needs no code (the user's choice,
+            # 2026-10-07); the manager asks Tailscale who a device is.
+            value = phone_access.PhoneAccess(
+                on_event=store_event, tailscale=lambda: _tailscale(center).address(),
+                tailscale_device=lambda ip: _tailscale(center).same_account_device(ip))
             if store is not None:
                 # Question 14: the panel shows the latest phone events and the last state after a restart.
                 with contextlib.suppress(Exception):
@@ -299,7 +303,9 @@ def _tailscale(center: Any) -> tailscale_manager.TailscaleManager:
 PHONE_PAGE_WARNINGS = {
     "wifi": "Chỉ dùng trong Wi-Fi nhà: kết nối này là HTTP, không mã hóa.",
     "tailscale": "Qua Tailscale: chỉ thiết bị đã đăng nhập Tailscale của bạn mở được trang này; "
-                 "Tailscale mã hóa đường truyền.",
+                 "Tailscale mã hóa đường truyền. Thiết bị cùng tài khoản Tailscale với PC vào thẳng, không "
+                 "cần mã; trang này hiện khi thiết bị chưa được nhận ra (tài khoản khác, thiết bị được chia "
+                 "sẻ, hoặc Tailscale trên PC chưa trả lời): nhập mã trên PC.",
 }
 
 
@@ -2563,6 +2569,13 @@ def _phone_handler_class(center: ControlCenter, phone: phone_access.PhoneAccess)
             if parsed is None:
                 return
             if not self.has_access():
+                # Over Tailscale a device of the PC's own account opens an entry page without the code
+                # (the user's choice, 2026-10-07); API calls never ask Tailscale.
+                cookie = phone.tailscale_cookie(self.client_address[0]) if parsed.path in ENTRY_PATHS else None
+                if cookie:
+                    self.send_page(200, page("Đã nhận ra thiết bị", "Thiết bị này cùng tài khoản Tailscale với PC. "
+                                             "Đang mở BiliFlow…", form=False, redirect=V2), cookie=cookie)
+                    return
                 # The code is only typed into the form (question 12): a ?code= link is ignored.
                 self.refuse_without_access(parsed.path)
                 return

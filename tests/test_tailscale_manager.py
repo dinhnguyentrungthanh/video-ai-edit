@@ -47,6 +47,17 @@ def status_json(backend="Running", ip="100.101.102.103", auth=""):
     })
 
 
+def whois_json(user=7, profile=None, sharer=None, tags=None, name="zphone"):
+    """`tailscale whois --json <ip>` as Tailscale 1.102 prints it (shortened)."""
+    node = {"ID": 1, "User": user, "ComputedName": name, "Addresses": ["100.64.0.9/32"]}
+    if sharer is not None:
+        node["Sharer"] = sharer
+    if tags is not None:
+        node["Tags"] = tags
+    return json.dumps({"Node": node, "UserProfile": {"ID": user if profile is None else profile,
+                                                     "LoginName": "user@example.com"}})
+
+
 class FakeSystem:
     """subprocess.run stand-in: sc.exe, PowerShell (signature, firewall) and the tailscale CLI."""
 
@@ -225,6 +236,66 @@ class FindingTests(Base):
         for out, state in (("True", "enabled"), ("False", "disabled"), ("missing", "missing"), ("?", "unknown")):
             self.system.firewall = out
             self.assertEqual(tm.firewall_rule_state(self.system), state)
+
+
+class SameAccountTests(Base):
+    """The user's choice (2026-10-07): a device of the PC's own Tailscale account opens without the code."""
+
+    def setUp(self):
+        super().setUp()
+        self.installed()
+
+    def lookup(self, ip="100.64.0.9", **whois):
+        self.system.cli_results[f"whois --json {ip}"] = done(0, whois_json(**whois))
+        return self.manager().same_account_device(ip)
+
+    def test_a_device_of_the_pcs_own_account_is_named(self):
+        self.assertEqual(self.lookup(), "zphone")
+
+    def test_another_users_shared_or_tagged_device_is_not(self):
+        for case in (dict(user=8), dict(profile=8), dict(user=None), dict(sharer=8), dict(tags=["tag:server"])):
+            with self.subTest(case=case):
+                self.assertIsNone(self.lookup(**case))
+
+    def test_errors_give_none_and_odd_names_are_not_shown(self):
+        for answer in (done(1, "", "no such peer"), done(0, "not json"), done(0, "[]")):
+            with self.subTest(answer=answer):
+                self.system.cli_results["whois --json 100.64.0.9"] = answer
+                self.assertIsNone(self.manager().same_account_device("100.64.0.9"))
+        self.assertEqual(self.lookup(name="<b>x</b>"), tm.UNNAMED_DEVICE)
+
+    def test_only_tailscale_addresses_reach_the_cli(self):
+        manager = self.manager()
+        for ip in ("127.0.0.1", "192.168.1.5", "100.128.0.1", "not an ip", "", None):
+            self.assertIsNone(manager.same_account_device(ip))
+        self.assertFalse([call for call in self.system.calls if "whois" in call])
+
+    def test_an_answer_is_reused_for_a_while(self):
+        manager = self.manager()
+        self.system.cli_results["whois --json 100.64.0.9"] = done(0, whois_json())
+        self.assertEqual([manager.same_account_device("100.64.0.9") for _ in range(3)], ["zphone"] * 3)
+        self.assertEqual(sum("whois" in call for call in self.system.calls), 1)
+
+    def test_the_pcs_own_tailscale_address_is_never_a_device_without_the_code(self):
+        """Security review (MEDIUM): a relay on the PC (port proxy, tunnel) arrives from the PC's own 100.x."""
+        own = "100.101.102.103"  # status_json(): Self.TailscaleIPs
+        self.assertIsNone(self.lookup(ip=own))
+
+    def test_a_cached_answer_never_waits_for_another_lookup(self):
+        """Security review (LOW): a slow lookup of one address does not hold the owner's cached one."""
+        manager = self.manager()
+        self.system.cli_results["whois --json 100.64.0.9"] = done(0, whois_json())
+        self.assertEqual(manager.same_account_device("100.64.0.9"), "zphone")
+        with manager._whois_lock, mock.patch.object(tm, "WHOIS_WAIT_SECONDS", 0.05):
+            started = time.monotonic()
+            self.assertEqual(manager.same_account_device("100.64.0.9"), "zphone")
+            self.assertIsNone(manager.same_account_device("100.64.0.10"), "a busy lookup is a refusal")
+            self.assertLess(time.monotonic() - started, 2.0)
+
+    def test_nothing_installed_gives_none(self):
+        self.cli_path.unlink()
+        self.assertIsNone(self.manager().same_account_device("100.64.0.9"))
+        self.assertFalse([call for call in self.system.calls if Path(call[0]).name == "tailscale.exe"])
 
 
 class DownloadTests(Base):

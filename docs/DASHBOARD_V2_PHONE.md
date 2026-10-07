@@ -207,15 +207,16 @@ Bạn đã chọn (2026-10-06):
 
 1. Bật Tailscale trên điện thoại.
 2. Mở **đúng link số** `http://100.x.y.z:8767/`. Không dùng tên máy của Tailscale (MagicDNS, ví dụ `ten-may` hay `ten-may.xxx.ts.net`): listener chỉ nhận đúng `ip:8767` (chống DNS rebinding), tên máy bị trả "Địa chỉ truy cập không hợp lệ".
-3. Gõ mã như mục 3. Trang nhập mã ghi "Qua Tailscale" thay cho cảnh báo Wi-Fi nhà.
+3. Điện thoại **cùng tài khoản Tailscale với PC** vào thẳng, không cần mã (lựa chọn của bạn, 2026-10-07): BiliFlow hỏi Tailscale thiết bị đang kết nối thuộc tài khoản nào (`tailscale whois`, dựa trên khóa mã hóa của từng thiết bị: biết chắc là **thiết bị nào**, không biết **người nào** đang cầm), trùng tài khoản của PC thì mở BiliFlow luôn, nhật ký ghi "vào qua Tailscale, cùng tài khoản với PC: không cần mã". Thiết bị **khác** (tài khoản khác, được chia sẻ vào, thiết bị gắn tag) hoặc khi Tailscale trên PC không trả lời thì vẫn gõ mã như mục 3; trang nhập mã ghi "Qua Tailscale" thay cho cảnh báo Wi-Fi nhà. Ở Wi-Fi nhà luôn cần mã.
 
 ### 8.4 Giới hạn và an toàn
 
 - PC phải đang bật và **không ngủ** (Sleep); Control Center và Tailscale trên PC phải đang chạy.
 - **Bật và tắt chỉ làm trên PC.** Chế độ tự tắt 8 giờ sau lúc bật; mỗi lần gia hạn cộng thêm 8 giờ, tối đa 24 giờ kể từ lúc bấm. Khi mở qua Tailscale, khung "Đang mở qua điện thoại / laptop (Tailscale)" trên điện thoại hiện giờ tự tắt và nút **Gia hạn thêm 8 giờ**: bấm trước giờ đó thì dùng tiếp, mã giữ nguyên, nhật ký ghi "(từ thiết bị 100.x.y.z)". Đã tự tắt thì không mở lại được từ xa; phải về PC bật lại.
 - Tự tắt khi Tailscale trên PC tắt, bị ngắt, đăng xuất hoặc đổi địa chỉ (kiểm tra mỗi phút; tắt sau **hai** lần kiểm tra sai liên tiếp, để một lần Tailscale chậm trả lời không làm mất kết nối khi bạn đang ở ngoài; khung ghi "Tailscale trên PC tắt hoặc đổi địa chỉ"). Vì vậy bấm **Ngắt Tailscale** hoặc **Đăng xuất Tailscale** trên PC cũng tắt chế độ điện thoại qua Tailscale.
-- Ai vào được: chỉ thiết bị trong mạng Tailscale (tailnet) của bạn **và** có mã. Đừng chia sẻ PC cho người khác trong Tailscale và đừng thêm người lạ vào tailnet.
-- **Mất điện thoại:** trên PC tắt chế độ điện thoại (mã cũ và mọi phiên hết hiệu lực ngay), rồi gỡ điện thoại đó khỏi tailnet trong trang quản trị Tailscale.
+- Ai vào được: thiết bị **cùng tài khoản Tailscale với PC** (không cần mã), và thiết bị khác trong tailnet **có mã**. Mọi máy bạn đăng nhập Tailscale bằng tài khoản đó đều vào thẳng được, kể cả xóa vĩnh viễn video gốc: chỉ đăng nhập Tailscale trên máy của chính bạn. Nên bật xác minh hai bước cho tài khoản dùng để đăng nhập Tailscale, và nếu gói Tailscale của bạn có **Device approval** thì bật để thiết bị mới phải được duyệt. Đừng chia sẻ PC cho người khác trong Tailscale và đừng thêm người lạ vào tailnet.
+- "Cùng tài khoản" là cả mọi thứ gửi kết nối **từ** một thiết bị của tài khoản đó: ứng dụng, máy ảo trên nó, máy khác dùng nó làm điểm phát, hay một chương trình chuyển tiếp (port forward, tunnel) chạy trên nó; cả máy chủ đăng ký bằng auth key không gắn tag. Thu hồi các auth key cũ không dùng nữa trong trang quản trị Tailscale. Riêng địa chỉ Tailscale của **chính PC** không bao giờ được vào không cần mã (một chương trình chuyển tiếp chạy trên PC sẽ tới từ địa chỉ đó).
+- **Mất điện thoại:** trên PC tắt chế độ điện thoại (mọi phiên đang mở hết hiệu lực ngay), rồi gỡ điện thoại đó khỏi tailnet trong trang quản trị Tailscale **trước khi bật lại** chế độ điện thoại: điện thoại còn trong tailnet sẽ vào lại không cần mã ngay khi chế độ bật. BiliFlow nhớ câu trả lời của Tailscale tối đa 60 giây, nên chờ một phút sau khi gỡ.
 - Bên trong, kết nối vẫn là HTTP như ở Wi-Fi nhà, nhưng chạy trong đường hầm mã hóa của Tailscale.
 - BiliFlow không gửi video hay dữ liệu nào lên Tailscale; Tailscale chỉ nối PC với điện thoại.
 
