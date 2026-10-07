@@ -1,3 +1,16 @@
+## Tailscale managed by BiliFlow (2026-10-07) — branch `feat/phone-tailscale`, not committed
+
+- The user's choice: BiliFlow downloads, checks, installs (into `C:\Program Files\Tailscale` since the security review of 2026-10-07; auto-update, unattended), signs in and drives Tailscale from Dashboard V2 → Cài đặt → Tailscale; it starts the service when needed; the phone may extend the 8 hours while open over Tailscale. Plan `docs/TAILSCALE_PLAN.md` (T1–T4 done), details in CHANGELOG.
+- Tests: manager and phone Tailscale 57 OK; V2/phone/contract 123 OK; node gates 37/37; full suite 1646 tests (after the security fixes and the Program Files change), 0 failures, 28 known input-video errors. Security review: no CRITICAL; fixes applied; the HIGH about the SYSTEM service in a folder every local account can modify was settled by the user: Tailscale goes to `C:\Program Files\Tailscale`.
+- Waiting for (moved to 2026-10-08 by the user, a video was being processed): merge current `main` (`75aae1a`) into the branch, restart the real Control Center (consent, no job running), the user presses "Cài và cấu hình Tailscale", signs in, installs the phone app, opens the mode over Tailscale and tests 4G and "Gia hạn" on the phone. Tailscale is not installed on the PC yet.
+
+## Phone mode over Tailscale (2026-10-06) — branch `feat/phone-tailscale`, not committed
+
+- The user's choice: reach the phone mode from outside the home Wi-Fi through Tailscale, with the same actions as on the home Wi-Fi (permanent deletes included).
+- Done in worktree `temp\wt-phone-tailscale`: `network` wifi/tailscale in `phone_access.py`, `POST /api/phone-mode`, the V2 Cài đặt panel, `Start-BiliFlow-Tailscale.cmd`, `docs/DASHBOARD_V2_PHONE.md` section 8. Details in CHANGELOG.
+- Tests: `test_phone_tailscale.py` 18 OK; phone/hardening/frontend 70 OK; full suite 1607 tests, 1544 OK, 35 skipped, 28 errors; all 28 are `StopIteration` in `test_job_pipeline` / `test_job_ocr_option`, which need a real `input\*.mp4` that the worktree does not have (they do not touch the phone code).
+- Superseded on 2026-10-07: BiliFlow now installs Tailscale and adds the firewall rule itself (section above).
+
 ## Dashboard V2 is the dashboard; the classic one is off for now (2026-10-06) — in `main`, pushed
 
 - At the user's request, `/` on the PC opens V2 (`303` to `/dashboard-v2/`), as on the phone. The classic page stays in the code behind `CLASSIC_DASHBOARD` in `control_center.py`, for a rollback (set `True`, restart).

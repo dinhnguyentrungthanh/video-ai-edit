@@ -4,7 +4,10 @@ param(
     [switch]$RefreshExisting,
     # Also open BiliFlow to a phone or laptop on the home Wi-Fi (access code; Start-BiliFlow-Phone.cmd).
     [switch]$Phone,
-    [int]$PhonePort = 8767
+    [int]$PhonePort = 8767,
+    # Where the phone mode opens: wifi (home Wi-Fi) or tailscale (from anywhere; Start-BiliFlow-Tailscale.cmd).
+    [ValidateSet('wifi', 'tailscale')]
+    [string]$PhoneNetwork = 'wifi'
 )
 
 $BiliflowRoot = Split-Path -Parent $PSScriptRoot
@@ -44,7 +47,7 @@ function Enable-PhoneMode([string]$Url) {
     # Turns on the phone listener of the running Control Center (no restart) and prints link and code.
     $State = Get-Content -LiteralPath $StatePath -Raw | ConvertFrom-Json
     $Headers = @{ 'X-BiliFlow-Token' = [string]$State.token }
-    $Body = @{ enabled = $true; port = $PhonePort } | ConvertTo-Json -Compress
+    $Body = @{ enabled = $true; port = $PhonePort; network = $PhoneNetwork } | ConvertTo-Json -Compress
     try {
         $Result = Invoke-RestMethod -Uri ($Url + 'api/phone-mode') -Method Post -Headers $Headers `
             -ContentType 'application/json' -Body $Body -TimeoutSec 15
@@ -73,14 +76,30 @@ function Enable-PhoneMode([string]$Url) {
     }
     $Line = '=' * 64
     Write-Host $Line
-    Write-Host '  BILIFLOW TREN DIEN THOAI / LAPTOP (cung Wi-Fi nha)'
-    Write-Host "  Mo tren dien thoai:  $($Result.url)"
-    Write-Host "  Nhap ma truy cap:    $($Result.code)"
-    Write-Host '  Tuong lua: KHONG bam Cancel (Cancel tao rule Block cho Python, chan ca cong 8767).'
-    Write-Host '  Thu tu: dat Wi-Fi la Private -> tao rule Python + cong 8767 -> thu -> don rule cu (docs\DASHBOARD_V2_PHONE.md muc 2);'
-    Write-Host '  hoac khi Windows hoi: chon Private networks, khong chon Public, roi bam Allow.'
-    Write-Host '  Chi dung trong Wi-Fi nha: ket noi HTTP, khong ma hoa.'
-    Write-Host '  Tu tat sau 8 gio, hoac khi dia chi Wi-Fi cua PC doi.'
+    # The banner follows the answer: an older Control Center has no network field and opens the home Wi-Fi.
+    if ($Result.network -eq 'tailscale') {
+        Write-Host '  BILIFLOW TREN DIEN THOAI / LAPTOP (qua Tailscale, o bat ky dau)'
+        Write-Host "  Mo tren dien thoai:  $($Result.url)  (bat Tailscale tren dien thoai truoc)"
+        Write-Host "  Nhap ma truy cap:    $($Result.code)"
+        Write-Host '  Tuong lua: can them mot rule cho Tailscale (docs\DASHBOARD_V2_PHONE.md muc 8). KHONG bam Cancel.'
+        Write-Host '  PC phai bat va khong ngu. Dung dung link so o tren, khong dung ten may.'
+        Write-Host '  Tu tat sau 8 gio, hoac khi Tailscale tren PC tat hoac doi dia chi.'
+    } else {
+        Write-Host '  BILIFLOW TREN DIEN THOAI / LAPTOP (cung Wi-Fi nha)'
+        Write-Host "  Mo tren dien thoai:  $($Result.url)"
+        Write-Host "  Nhap ma truy cap:    $($Result.code)"
+        Write-Host '  Tuong lua: KHONG bam Cancel (Cancel tao rule Block cho Python, chan ca cong 8767).'
+        Write-Host '  Thu tu: dat Wi-Fi la Private -> tao rule Python + cong 8767 -> thu -> don rule cu (docs\DASHBOARD_V2_PHONE.md muc 2);'
+        Write-Host '  hoac khi Windows hoi: chon Private networks, khong chon Public, roi bam Allow.'
+        Write-Host '  Chi dung trong Wi-Fi nha: ket noi HTTP, khong ma hoa.'
+        Write-Host '  Tu tat sau 8 gio, hoac khi dia chi Wi-Fi cua PC doi.'
+    }
+    if (-not $Result.network -and $PhoneNetwork -eq 'tailscale') {
+        Write-Host '  CHU Y: Control Center dang chay la ban cu, chua co Tailscale: vua bat cho Wi-Fi nha.'
+        Write-Host '  Khi khong co video dang xu ly: tat bang Stop-BiliFlow.cmd roi chay lai Start-BiliFlow-Tailscale.cmd.'
+    } elseif ($Result.network -and $Result.network -ne $PhoneNetwork) {
+        Write-Host "  CHU Y: che do dien thoai DA BAT san cho '$($Result.network)'. Muon doi: tat roi chay lai."
+    }
     Write-Host '  Tat: nut "Tat che do dien thoai" trong Dashboard V2 > Cai dat tren PC, hoac Stop-BiliFlow.cmd (tat ca hai).'
     Write-Host $Line
 }

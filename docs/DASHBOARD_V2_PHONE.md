@@ -1,8 +1,8 @@
-# Mở BiliFlow trên điện thoại hoặc laptop (Wi-Fi nhà)
+# Mở BiliFlow trên điện thoại hoặc laptop (Wi-Fi nhà hoặc Tailscale)
 
-Chế độ này cho điện thoại hoặc laptop **cùng Wi-Fi nhà** mở Dashboard V2 của BiliFlow đang chạy trên PC. Mặc định chế độ này tắt.
+Chế độ này cho điện thoại hoặc laptop **cùng Wi-Fi nhà** mở Dashboard V2 của BiliFlow đang chạy trên PC. Từ 2026-10-06 cũng mở được **từ ngoài nhà qua Tailscale** (4G, Wi-Fi khác): xem **mục 8**. Mặc định chế độ này tắt.
 
-> **Chỉ dùng trong Wi-Fi nhà.** Kết nối là HTTP, không mã hóa. Không bật khi PC đang dùng Wi-Fi công cộng (quán cà phê, khách sạn, sân bay).
+> **Bật cho Wi-Fi nhà thì chỉ dùng trong Wi-Fi nhà.** Kết nối là HTTP, không mã hóa. Không bật khi PC đang dùng Wi-Fi công cộng (quán cà phê, khách sạn, sân bay).
 
 ## 1. Bật trên PC
 
@@ -125,15 +125,17 @@ Hộp thoại vẫn liệt kê từng video, vẫn có ô "Tôi hiểu", và ser
 - cấu hình và đăng nhập AI Supervisor;
 - **Visual AI Audit** (gửi tối đa 36 ảnh thumbnail ra ngoài máy cho Codex);
 - sửa hoặc xóa bộ nhớ logo;
-- bật hoặc tắt chế độ điện thoại.
+- cài, đăng nhập và điều khiển Tailscale (khung Tailscale không hiện trên điện thoại);
+- bật hoặc tắt chế độ điện thoại. Gia hạn thì điện thoại làm được khi đang mở qua Tailscale (mục 8.4).
 
 ## 5. Tắt
 
 - Trên PC: Dashboard V2 → Cài đặt → **Tắt chế độ điện thoại**. Listener đóng ngay và mã cũ hết hiệu lực.
 - Hoặc `Stop-BiliFlow.cmd`: tắt Control Center, và chế độ điện thoại tắt theo.
 - **Tự tắt:**
-  - sau **8 giờ** kể từ lúc bật (khung trên PC hiện giờ sẽ tắt). Muốn dùng lâu hơn: bấm **Gia hạn thêm 8 giờ** trong khung trên PC; giờ tắt tính lại 8 giờ kể từ lúc bấm, mã giữ nguyên;
-  - khi **địa chỉ Wi-Fi của PC đổi**, ví dụ đổi Wi-Fi hoặc mất mạng; kiểm tra mỗi phút.
+  - sau **8 giờ** kể từ lúc bật (khung trên PC hiện giờ sẽ tắt). Muốn dùng lâu hơn: bấm **Gia hạn thêm 8 giờ** trong khung trên PC; giờ tắt tính lại 8 giờ kể từ lúc bấm, mã giữ nguyên. Khi mở **qua Tailscale**, điện thoại cũng có nút này (mục 8.4); ở Wi-Fi nhà chỉ PC gia hạn được;
+  - khi **địa chỉ Wi-Fi của PC đổi**, ví dụ đổi Wi-Fi hoặc mất mạng; kiểm tra mỗi phút;
+  - khi bật qua Tailscale: khi **Tailscale trên PC tắt, đăng xuất hoặc đổi địa chỉ** (mục 8); cũng kiểm tra mỗi phút.
 - Khung "Mở trên điện thoại" cho biết lần tắt gần nhất vì sao: người dùng tắt, hết 8 giờ, đổi địa chỉ, hoặc Control Center dừng.
 - Mỗi lần bật lại sẽ có mã mới.
 - Khi chế độ đang bật, Dashboard V2 trên PC có dòng báo "Đang mở cho điện thoại: …" ở đầu mọi trang trừ Cài đặt (từ 2026-10-06; trước đó dòng này ở dashboard cũ `/`). Dòng báo không bao giờ có mã. Tab V2 mở từ trước lúc bật chế độ chỉ hiện dòng này sau khi tải lại trang hoặc vào Cài đặt. `Start-BiliFlow.cmd` cũng in dòng `NOTE: phone mode is ON` khi dùng lại Control Center đang bật chế độ này.
@@ -147,7 +149,7 @@ Sau khi khởi động lại Control Center, khung đọc lại các việc gầ
 
 ## 7. Ghi chú kỹ thuật
 
-- Listener riêng ở cổng **8767**. Nó chỉ nghe địa chỉ IPv4 riêng của PC (10.x, 172.16–31.x, 192.168.x), không bao giờ nghe `0.0.0.0` hay địa chỉ công cộng.
+- Listener riêng ở cổng **8767**. Nó chỉ nghe địa chỉ IPv4 riêng của PC (10.x, 172.16–31.x, 192.168.x) hoặc, khi bật qua Tailscale, địa chỉ Tailscale của PC (100.64.0.0/10, lấy từ `tailscale ip -4`; `tailscale.exe` được tìm cạnh dịch vụ Tailscale đã cài, rồi trong `C:\Program Files\Tailscale`; không tìm trong PATH hay trong thư mục BiliFlow). Không bao giờ nghe `0.0.0.0` hay địa chỉ công cộng. Mỗi lúc chỉ một mạng.
 - `127.0.0.1:8765` trên PC giữ nguyên như cũ.
 - Mọi request vào listener điện thoại đều cần cookie mã, trừ trang nhập mã:
   - cookie HttpOnly, SameSite=Strict;
@@ -163,6 +165,75 @@ Sau khi khởi động lại Control Center, khung đọc lại các việc gầ
   - tắt chế độ điện thoại thì mọi kết nối đang mở, kể cả video đang phát trên điện thoại, bị cắt ngay; video đang phát trên PC không ảnh hưởng;
   - đường dẫn hỏng trả 400; log lỗi chỉ một dòng, tối đa 1 dòng mỗi 10 s.
 - Nhật ký "thiết bị nhập đúng mã" chỉ ghi một lần cho mỗi thiết bị trong một lần bật.
-- Bật/tắt chỉ nhận từ `127.0.0.1` kèm token phiên; bật/tắt không khởi động lại Control Center.
+- Bật/tắt chỉ nhận từ `127.0.0.1` kèm token phiên; bật/tắt không khởi động lại Control Center. Gia hạn (`POST /api/phone-mode/extend`) nhận từ PC, và từ điện thoại chỉ khi chế độ đang mở qua Tailscale; điện thoại chỉ nhận lại giờ tắt mới, không bao giờ nhận mã.
+- Quản lý Tailscale (`GET /api/tailscale`, `POST /api/tailscale/<việc>`) chỉ nhận từ `127.0.0.1` kèm token phiên; listener điện thoại trả 403 `pc_only` (mục 8.6).
 - Mã: 8 ký tự ngẫu nhiên, không gồm các ký tự dễ nhầm như `0/o`, `1/l/i`.
 - Khóa mở đặc biệt (`UNLOCK_KEY` trong `src/biliflow/phone_access.py`) nằm trong mã nguồn, nên nó chỉ gỡ khóa, không bao giờ tự cấp cookie. Giới hạn: 5 lần sai, 3 lần gỡ mỗi lần bật.
+
+## 8. Mở từ ngoài nhà qua Tailscale (từ 2026-10-06)
+
+Tailscale là một mạng riêng ảo (VPN), miễn phí cho cá nhân (gói Personal). Nó nối PC với điện thoại của bạn ở bất kỳ đâu (4G, Wi-Fi khác) mà **không mở cổng nào ra Internet**: chỉ thiết bị đăng nhập **cùng tài khoản Tailscale** của bạn mới thấy PC, và đường truyền được Tailscale mã hóa.
+
+Bạn đã chọn (2026-10-06):
+
+- qua Tailscale làm được **mọi thứ như ở Wi-Fi nhà**, kể cả Xóa video gốc, Xóa video và Dọn video mất gốc (mục 4);
+- **BiliFlow cài và quản lý Tailscale** trong Dashboard V2 → **Cài đặt** → khung **Tailscale**: tự cập nhật, chạy cả trước khi đăng nhập Windows. Lúc đầu bạn chọn cài vào `E:\DungChung\BiliFlow\runtime\tailscale`; sau bản rà soát bảo mật (2026-10-07: mọi tài khoản trên máy đều sửa được thư mục BiliFlow, nên dịch vụ quyền SYSTEM đặt ở đó có thể bị tráo) bạn chọn thư mục mặc định **`C:\Program Files\Tailscale`**. Bản cài tải về, nhật ký và file tạm vẫn ở `E:\DungChung\BiliFlow`;
+- điện thoại **gia hạn** được khi đang mở qua Tailscale; bật và tắt vẫn chỉ trên PC.
+
+### 8.1 Cài một lần
+
+1. **PC:** Dashboard V2 → **Cài đặt** → khung **Tailscale** → **Cài và cấu hình Tailscale** → đọc hộp xác nhận → **Tải và cài**. BiliFlow:
+   - hỏi danh sách bản cài trên `https://pkgs.tailscale.com/stable/`, tải bản MSI mới nhất cho Windows (amd64) vào `cache\tailscale`; chỉ tải từ máy chủ `*.tailscale.com`;
+   - kiểm mã **SHA-256** mà Tailscale công bố cạnh bản cài và **chữ ký số của Tailscale Inc.**; sai thì dừng, không cài;
+   - chạy bước cài với quyền Admin: Windows hiện hộp **UAC** một lần, bấm **Yes**. Không thấy hộp hỏi thì bấm biểu tượng nhấp nháy trên thanh tác vụ. Bấm **No** thì bước này không chạy và khung ghi lý do;
+   - cài vào **`C:\Program Files\Tailscale`** (thư mục mặc định, chỉ Admin sửa được), dịch vụ Windows `Tailscale` chạy ẩn, khởi động cùng máy, **tự cập nhật**, chạy cả **trước khi đăng nhập Windows** (unattended);
+   - tạo rule tường lửa "BiliFlow phone mode Tailscale (Python, TCP 8767)": chỉ cho đúng Python của BiliFlow, cổng 8767, mạng Private, địa chỉ Tailscale `100.64.0.0/10`.
+
+   Khung hiện từng bước và phần trăm tải. Nhật ký cài: `logs\tailscale\msiexec-*.log`.
+2. **PC:** bấm **Đăng nhập Tailscale**, rồi **Mở trang đăng nhập Tailscale** (mở trang `login.tailscale.com` trong trình duyệt) và đăng nhập bằng tài khoản bạn sẽ dùng trên điện thoại. Khung tự cập nhật khi xong (chờ tối đa 10 phút).
+3. **Điện thoại:** cài app Tailscale (App Store hoặc Google Play), đăng nhập **cùng tài khoản**, bật kết nối. Khung trên PC liệt kê các thiết bị trong Tailscale (tên, hệ điều hành, trực tuyến hay không).
+4. **Tùy chọn:** khóa đăng nhập của mỗi máy trong Tailscale mặc định hết hạn sau một thời gian (180 ngày). Để PC không tự rớt khỏi Tailscale khi bạn đang ở ngoài, có thể tắt hạn này cho PC trong trang quản trị Tailscale (*Machines → PC → Disable key expiry*).
+
+Đã cài Tailscale từ trước (ví dụ trong `C:\Program Files\Tailscale`)? BiliFlow tìm `tailscale.exe` cạnh dịch vụ Tailscale đang cài, nên khung dùng luôn bản đó và không hiện nút cài. Rule tường lửa thiếu thì khung có nút **Tạo rule tường lửa** (UAC một lần).
+
+### 8.2 Bật trên PC
+
+- Khung **Tailscale** → **Mở cho điện thoại ngoài nhà**, hoặc khung "Mở trên điện thoại" → **Bật qua Tailscale (ngoài nhà)**. Hai nút làm cùng một việc: nếu dịch vụ Tailscale chưa chạy thì khởi động nó (UAC), nếu Tailscale đang ngắt thì kết nối lại, rồi bật chế độ điện thoại qua Tailscale. Khung "Mở trên điện thoại" hiện **Mạng: Tailscale**, link `http://100.x.y.z:8767/` và mã.
+- Hoặc bấm đúp **`Start-BiliFlow-Tailscale.cmd`** (giống `Start-BiliFlow-Phone.cmd`, chỉ khác mạng). File này không khởi động Tailscale: Tailscale phải đang kết nối, nếu không thì dùng nút trong Cài đặt.
+- Mỗi lúc chỉ bật **một** mạng: Wi-Fi nhà **hoặc** Tailscale. Muốn đổi: tắt rồi bật lại. Ở nhà, điện thoại vẫn vào link Tailscale được (Tailscale tự đi đường ngắn trong nhà), nên có thể chỉ dùng Tailscale.
+- **Lúc mở máy:** dịch vụ Tailscale tự khởi động cùng Windows. Nếu nó chưa chạy (ví dụ ai đó đã dừng nó), khung ghi "Dịch vụ: Đang tắt" và có nút **Khởi động dịch vụ Tailscale**; "Mở cho điện thoại ngoài nhà" cũng tự khởi động nó. Hai việc này cần bấm **Yes** ở hộp UAC trên PC, nên chỉ làm được khi bạn ngồi ở PC.
+
+### 8.3 Mở trên điện thoại
+
+1. Bật Tailscale trên điện thoại.
+2. Mở **đúng link số** `http://100.x.y.z:8767/`. Không dùng tên máy của Tailscale (MagicDNS, ví dụ `ten-may` hay `ten-may.xxx.ts.net`): listener chỉ nhận đúng `ip:8767` (chống DNS rebinding), tên máy bị trả "Địa chỉ truy cập không hợp lệ".
+3. Gõ mã như mục 3. Trang nhập mã ghi "Qua Tailscale" thay cho cảnh báo Wi-Fi nhà.
+
+### 8.4 Giới hạn và an toàn
+
+- PC phải đang bật và **không ngủ** (Sleep); Control Center và Tailscale trên PC phải đang chạy.
+- **Bật và tắt chỉ làm trên PC.** Chế độ tự tắt 8 giờ sau lúc bật hoặc sau lần gia hạn gần nhất. Khi mở qua Tailscale, khung "Đang mở qua điện thoại / laptop (Tailscale)" trên điện thoại hiện giờ tự tắt và nút **Gia hạn thêm 8 giờ**: bấm trước giờ đó thì dùng tiếp, mã giữ nguyên, nhật ký ghi "(từ thiết bị 100.x.y.z)". Đã tự tắt thì không mở lại được từ xa; phải về PC bật lại.
+- Tự tắt khi Tailscale trên PC tắt, bị ngắt, đăng xuất hoặc đổi địa chỉ (kiểm tra mỗi phút; tắt sau **hai** lần kiểm tra sai liên tiếp, để một lần Tailscale chậm trả lời không làm mất kết nối khi bạn đang ở ngoài; khung ghi "Tailscale trên PC tắt hoặc đổi địa chỉ"). Vì vậy bấm **Ngắt Tailscale** hoặc **Đăng xuất Tailscale** trên PC cũng tắt chế độ điện thoại qua Tailscale.
+- Ai vào được: chỉ thiết bị trong mạng Tailscale (tailnet) của bạn **và** có mã. Đừng chia sẻ PC cho người khác trong Tailscale và đừng thêm người lạ vào tailnet.
+- **Mất điện thoại:** trên PC tắt chế độ điện thoại (mã cũ và mọi phiên hết hiệu lực ngay), rồi gỡ điện thoại đó khỏi tailnet trong trang quản trị Tailscale.
+- Bên trong, kết nối vẫn là HTTP như ở Wi-Fi nhà, nhưng chạy trong đường hầm mã hóa của Tailscale.
+- BiliFlow không gửi video hay dữ liệu nào lên Tailscale; Tailscale chỉ nối PC với điện thoại.
+
+### 8.5 Gỡ Tailscale
+
+BiliFlow không tự gỡ Tailscale. Muốn gỡ: Windows **Settings → Apps → Installed apps → Tailscale → Uninstall**, rồi xóa rule tường lửa trong **PowerShell bằng quyền Administrator**:
+
+```powershell
+Remove-NetFirewallRule -DisplayName "BiliFlow phone mode Tailscale (Python, TCP 8767)"
+```
+
+Bản cài đã tải nằm trong `cache\tailscale` và có thể xóa tay.
+
+### 8.6 Ghi chú kỹ thuật
+
+- Mã: `src/biliflow/tailscale_manager.py` (đọc trạng thái, tải và kiểm bản cài, chạy từng việc), `src/biliflow/windows_elevation.py` (hộp UAC), `scripts/tailscale-setup.ps1` (phần duy nhất chạy quyền Admin). Kế hoạch: `docs/TAILSCALE_PLAN.md`.
+- Phần chạy quyền Admin chỉ làm ba việc (cài, khởi động dịch vụ, tạo rule tường lửa). Mọi thứ nó dùng nằm trên dòng lệnh do BiliFlow đặt lúc Windows hỏi quyền (việc cần làm; khi cài thì tên file và mã SHA-256 Tailscale công bố), không đọc file yêu cầu nào mà tiến trình khác có thể sửa trong lúc chờ. Trước khi chạy `msiexec` nó **kiểm lại** bản cài: phải là `cache\tailscale\tailscale-setup-<phiên bản>-amd64.msi`, đúng SHA-256 và chữ ký Tailscale Inc.; file được giữ mở (chỉ cho đọc) từ lúc kiểm tới khi `msiexec` xong, nên không bị tráo giữa chừng. Không đi qua junction hay symlink. Mọi đường dẫn khác do script tự tính từ thư mục BiliFlow. Kết quả trả về qua `temp\tailscale\result-<id>.json` (không bao giờ ghi đè file có sẵn), xóa sau khi đọc.
+- Thuộc tính MSI: `TS_UNATTENDEDMODE=always TS_INSTALLUPDATES=always TS_NOLAUNCH=1`, thư mục mặc định `C:\Program Files\Tailscale` (không đặt `INSTALLDIR`). BiliFlow không tìm `tailscale.exe` trong thư mục của mình: mọi tài khoản trên máy đều ghi được ở đó.
+- Mỗi lúc chỉ chạy **một** việc Tailscale; bấm thêm thì khung báo đang bận. Mỗi việc xong ghi một sự kiện `TAILSCALE_TASK` vào nhật ký Control Center (không có mã, không có link đăng nhập).
+- Đọc trạng thái (`sc.exe query`, `tailscale status --json`, rule tường lửa) không cần quyền Admin. Khung chỉ hiện tên, hệ điều hành và trạng thái trực tuyến của thiết bị khác, không hiện địa chỉ của chúng. Link đăng nhập chỉ được hiện khi đúng dạng `https://login.tailscale.com/…`.
+- Tắt Control Center thì một lần đăng nhập đang chờ bị hủy; Tailscale vẫn chạy như một dịch vụ Windows.

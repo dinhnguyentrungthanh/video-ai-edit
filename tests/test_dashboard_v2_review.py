@@ -70,11 +70,14 @@ PHONE_POSTS_LITERAL = (
     # "Xóa video gốc", "Xóa video" and "Dọn video mất gốc" from the phone too (the user's choice, 2026-10-06).
     r"/api/source-cleanup",
     r"/api/job-delete",
+    # "Gia hạn thêm 8 giờ" from the phone, only over Tailscale (the user's choice, 2026-10-06).
+    r"/api/phone-mode/extend",
 )
 # SHA-256 of JSON.stringify(contracts.js endpoints, keys sorted): 50 endpoints at the start of R0 (06c1dd42…),
 # 63 with the 13 "Tải video" endpoints of the video download plan (D3, a28b19df…), 52 with deletePreview and delete
-# of "Xóa video" (delete flow, 071106c5…), and 65 with both (test/download-delete).
-ENDPOINTS_SHA256 = "489eca65d8a778651d939c4b25b06e1b5cc05f7d82b7de380361a628eedbfbd6"
+# of "Xóa video" (delete flow, 071106c5…), 65 with both (test/download-delete, 489eca65…), and 75 with phoneExtend
+# and the 9 Tailscale endpoints of Cài đặt → Tailscale (docs/TAILSCALE_PLAN.md).
+ENDPOINTS_SHA256 = "4ae7acd9b60fa311b03c7b323fdf091276437f5471b43c702c8759a988e02a7c"
 
 
 def node(script: str) -> str:

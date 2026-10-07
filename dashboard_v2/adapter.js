@@ -239,6 +239,8 @@
       loadMemory: () => get(C.endpoints.logos[1]),
       /* Phone mode: on the PC the status (code included); on the phone only {remote: true}. */
       loadPhone: () => get(C.endpoints.phoneStatus[1]),
+      /* Cài đặt → Tailscale: PC only (the phone listener answers 403 pc_only). */
+      loadTailscale: () => get(C.endpoints.tailscale[1]),
       health: () => get(C.endpoints.health[1]),
       review,
       /* Read-only preview right before a cleanup ("Xóa video gốc"), a delete ("Xóa video") or an archive. */
@@ -310,6 +312,7 @@
       memory_sha256: memory ? memory.memory_sha256 : (previous.memory_sha256 || null),
       memory_loaded: !!memory || !!previous.memory_loaded,
       phone: previous.phone || null,
+      tailscale: previous.tailscale || null, // Cài đặt → Tailscale (GET /api/tailscale, PC only)
       remote: !!previous.remote,
       // "Tải video" polls on its own (only while #downloads is open); /api/status keeps its last answer.
       downloads: previous.downloads || null,
@@ -327,6 +330,7 @@
     let snap = {mode: 'live', jobs: [], logos: [], active: null, queue: {length: 0, paused: false}, resources: {cpu_percent: 0, memory: {percent: 0}, disk: {}, gpu: null}, ai: {ready: false, config: {}, message: 'Đang tải…'}, offline: false, loading: true, requests: []};
     const listeners = new Set();
     let ai = null, memory = null, timer = null, phone = null, paused = false, downloadTimer = null, statusPolling = null;
+    let tailscale = null, tailscaleWatch = false, tailscalePolling = null;
     // A listener that throws (a render bug) must not turn a finished request into a failed one: reported apart.
     const emit = () => listeners.forEach(fn => { try { fn(snap); } catch (error) { setTimeout(() => { throw error; }); } });
 
@@ -379,6 +383,8 @@
       pollStatus();
       if (ai && ai.login_running) loadAI();
       if (phone && phone.enabled && !phone.remote) loadPhone(); // failed attempts / lock on the PC panel
+      // Cài đặt open on the PC, or a Tailscale task still running (its end may have turned the phone mode on).
+      if (!snap.remote && (tailscaleWatch || (tailscale && tailscale.task && tailscale.task.running))) loadTailscale();
     }
     function onVisible() { if (!timer || document.hidden || paused) return; statusPolling = null; tick(); }
     async function loadAI() {
@@ -395,6 +401,26 @@
       }
       return snap;
     }
+    /* One request at a time (the server runs sc.exe and `tailscale status` for it). An older Control Center
+     * (404) shows the panel's restart note; another error keeps the last state. */
+    function loadTailscale() {
+      if (tailscalePolling) return tailscalePolling;
+      const request = (async () => {
+        const wasRunning = !!(tailscale && tailscale.task && tailscale.task.running);
+        try {
+          tailscale = await adapter.loadTailscale();
+        } catch (error) {
+          tailscale = error.status === 404 ? {unavailable: true} : {...(tailscale || {}), load_error: error.message};
+        }
+        snap = {...snap, tailscale};
+        emit();
+        // "Mở cho điện thoại ngoài nhà" turns the phone mode on at the end of its task.
+        if (wasRunning && !(tailscale.task && tailscale.task.running)) await loadPhone();
+        return snap;
+      })().finally(() => { if (tailscalePolling === request) tailscalePolling = null; });
+      tailscalePolling = request;
+      return request;
+    }
     async function loadMemory() {
       memory = await adapter.loadMemory();
       snap = {...snap, logos: normalizeLogos(memory), memory_sha256: memory.memory_sha256, memory_loaded: true};
@@ -410,8 +436,14 @@
       loadAI,
       loadMemory,
       loadPhone,
+      loadTailscale,
+      /* Cài đặt open on the PC: the Tailscale panel follows every poll; closed: only while a task runs. */
+      watchTailscale(on) {
+        tailscaleWatch = !!on;
+        if (tailscaleWatch && !snap.remote) loadTailscale();
+      },
       start(intervalMs) {
-        pollStatus(); loadAI(); loadPhone();
+        pollStatus(); loadAI(); loadPhone().then(s => { if (!s.remote) loadTailscale(); });
         if (timer || !intervalMs) return;
         timer = setInterval(tick, intervalMs);
         if (typeof document !== 'undefined' && document.addEventListener) document.addEventListener('visibilitychange', onVisible);
@@ -454,6 +486,10 @@
         const result = await adapter.dispatch(operation, job, body);
         if (['aiConfig', 'aiCheck', 'aiLogin'].includes(operation)) { ai = result.body; snap = {...snap, ai}; }
         if (operation === 'phoneMode') { phone = result.body; snap = {...snap, phone, remote: false}; emit(); return result; }
+        // "Gia hạn thêm 8 giờ": the PC gets its full status back, the phone (over Tailscale) only the new time.
+        if (operation === 'phoneExtend') { phone = {...(phone || {}), ...result.body}; snap = {...snap, phone, remote: result.body.remote === true}; emit(); return result; }
+        // tailscaleInstall … tailscaleRemoteOn: the answer is the panel state with the task just started.
+        if (/^tailscale[A-Z]/.test(operation)) { tailscale = result.body; snap = {...snap, tailscale}; emit(); return result; }
         if (operation === 'shutdown') { snap = {...snap, offline: true, stopping: true}; emit(); return result; }
         await refresh();
         return result;

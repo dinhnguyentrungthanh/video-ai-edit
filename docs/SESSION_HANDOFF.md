@@ -12,6 +12,7 @@ This is the short, authoritative starting point for a new Codex account or chat.
   - The main folder is on `main`, and the Control Center runs it.
   - 2026-10-06: at the user's request `main` was pushed to `origin` (with the U4 fix below). Push again only when the user asks.
   - The user asked on 2026-10-06 to use `main` as the working line from now on. The feature branches and the test branch are kept.
+- 2026-10-06/07: branch `feat/phone-tailscale` (worktree `temp\wt-phone-tailscale`, not committed) opens the phone mode over Tailscale too, and BiliFlow installs and manages Tailscale from Cài đặt. The user's real test is set for 2026-10-08. See "Current work — 2026-10-06 phone mode over Tailscale" below.
 - 2026-10-06: **Dashboard V2 is the dashboard.** `/` on the PC redirects to `/dashboard-v2/` (the phone already did). The classic page is off behind `CLASSIC_DASHBOARD = False` in `src/biliflow/control_center.py`; set it to `True` and restart the Control Center to bring it back (then `test_the_classic_dashboard_is_off_by_default` must change too). While the phone mode is on, V2 on the PC shows "Đang mở cho điện thoại" (H3), as the classic page did. Made on the short branch `feat/v2-default-dashboard` (worktree `temp\wt-v2-flicker`), then fast-forwarded into `main` and pushed. It applies at the next Control Center start.
 - Branch `fix/v2-list-flicker` (from `main` `6dc2210`, worktree `temp\wt-v2-flicker`, 2026-10-06): the Dashboard V2 list no longer blinks on every refresh (U4). It is in `main` and pushed. See "Current work — 2026-10-06 U4" below.
 - Branch `feat/dashboard-v2` (from `main` f6996bb, pushed 2026-10-03) holds the Dashboard V2 prototype and its integration plan.
@@ -40,6 +41,18 @@ Since 2026-10-03 local `main` also holds everything from `improve/scan-performan
 5. `0b4ff3c Map logo candidates by geometry track`
 
 Always confirm this section with `git status` and `git log` because it becomes stale after new work.
+
+## Current work — 2026-10-06 phone mode over Tailscale (branch `feat/phone-tailscale`, not committed)
+
+- Request: open BiliFlow on the phone from outside the home Wi-Fi. The user chose Tailscale and "same as on the home Wi-Fi" (permanent deletes allowed). Cloudflare Tunnel and port forwarding were offered and not chosen.
+- Worktree `temp\wt-phone-tailscale`, branch `feat/phone-tailscale` from `main` `b96a09f`. The main folder was not touched (it keeps another session's uncommitted docs: AGENTS.md, CHANGELOG.md, PROJECT_STATUS.md, SESSION_HANDOFF.md, VIDEO_DOWNLOAD_PLAN.md, so a fast-forward needs care).
+- 2026-10-07: **BiliFlow now installs and manages Tailscale** (the user's request and choices: `C:\Program Files\Tailscale` (chosen after the security review instead of `runtime\tailscale`), auto-update, unattended, BiliFlow starts the service when needed, "Gia hạn" from the phone over Tailscale). Plan and batch status: `docs/TAILSCALE_PLAN.md` (T1–T5 done; the user's real test is set for 2026-10-08); guide `docs/DASHBOARD_V2_PHONE.md` section 8; details in CHANGELOG. Tests: manager and phone Tailscale 57 OK, V2/phone/contract 123 OK, node gates 37/37, full suite 1646 tests (after the security fixes and the Program Files change) with only the 28 known input-video errors. Security review: no CRITICAL; fixes applied; the HIGH (a SYSTEM service in `E:\DungChung\BiliFlow`, which every local account can modify) was settled by the user on 2026-10-07: install into `C:\Program Files\Tailscale`.
+- Tailscale is not installed on the PC (checked 2026-10-07). Agents never press install, firewall, sign-in or connect on the real Control Center and never run `scripts/tailscale-setup.ps1` (AGENTS.md); the user does it in Cài đặt.
+- The branch is at `b96a09f`; `main` and `origin/main` are at `75aae1a` (source providers and docs). Merge current `main` into the branch before running it on the real Control Center.
+- Next (moved to 2026-10-08 at the user's request: a video was being processed on 2026-10-07):
+  1. With the user's consent and no job running, merge `main`, then restart the real Control Center from this branch's code (the Python part loads at start).
+  2. The user presses "Cài và cấu hình Tailscale" (UAC), "Đăng nhập Tailscale", installs the phone app with the same account, then "Mở cho điện thoại ngoài nhà", opens the link on 4G and tries "Gia hạn thêm 8 giờ" on the phone.
+  3. Commit, merge into `main` and push only when the user asks.
 
 ## Current work — 2026-10-06 U4: the Dashboard V2 list blinked on every refresh (in `main`, pushed)
 

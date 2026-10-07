@@ -68,6 +68,9 @@ const server = http.createServer((req, res) => {
     if (p === '/api/session') return send(res, 200, {token: TOKEN});
     if (p === '/api/status') { polls++; return send(res, 200, status()); }
     if (p === '/api/phone-mode') return send(res, 200, phoneStatus());
+    // Cài đặt → Tailscale: not installed; the check below opens "Cài và cấu hình Tailscale" and cancels it.
+    if (p === '/api/tailscale') return send(res, 200, {installed: false, cli: null, install_dir: 'C:\\Program Files\\Tailscale',
+      service: 'missing', backend: null, peers: [], auth_url: null, firewall_rule: 'missing', task: null});
     if (p === '/api/ai') return send(res, 200, {ready: true, config: {enabled: true, model: 'gpt-5.6-luna', reasoning_effort: 'medium'}, models: ['gpt-5.6-luna'], efforts: ['low', 'medium'], message: 'Đã kết nối (giả)'});
     if (p === '/api/logo-memory') return send(res, 200, {memory_sha256: 'c'.repeat(64), records: [{key: 'k1', labels: ['iQIYI'], memory_class: 'platform_logo', platform: 'iqiyi', frames: 1, frame_urls: []}], backups: []});
     if (/^\/review\/\d+$/.test(p)) return send(res, 200, '<!doctype html><title>review</title><h1>Trang duyệt cũ</h1>', 'text/html');
@@ -80,7 +83,7 @@ const server = http.createServer((req, res) => {
     if (req.headers['x-biliflow-token'] !== TOKEN) return send(res, 403, {error: 'Phiên Control Center không hợp lệ'});
     posts.push({path: p, body: JSON.parse(body || '{}'), type: req.headers['content-type']});
     if (remoteMode && PC_ONLY.includes(p)) return send(res, 403, {error: 'Chỉ làm trên PC: (giả)', code: 'pc_only'});
-    if (p === '/api/phone-mode' && JSON.parse(body).extend) { phoneExtended = true; return send(res, 200, phoneStatus()); }
+    if (p === '/api/phone-mode/extend' || p === '/api/phone-mode' && JSON.parse(body).extend) { phoneExtended = true; return send(res, 200, phoneStatus()); }
     if (p === '/api/phone-mode') { phoneOn = JSON.parse(body).enabled; if (phoneOn) phoneCode = phoneCode === 'abcd2345' ? 'wxyz6789' : 'abcd2345'; return send(res, 200, phoneStatus()); }
     setTimeout(() => {
       if (p.endsWith('/cancel') && refuseNextCancel) { refuseNextCancel = false; return send(res, 409, {error: 'Trạng thái vừa đổi', code: 'state_changed'}); }
@@ -317,7 +320,7 @@ async function check(name, fn) { await fn(); passed++; results.push(name); proce
       await page.waitForSelector('[data-action="phone-toggle"][data-enabled="1"]');
       assert.match(await page.locator('.phone-panel').textContent(), /Private networks/);
       assert.match(await page.locator('.phone-panel').textContent(), /Wi-Fi nhà/);
-      await page.locator('[data-action="phone-toggle"][data-enabled="1"]').click();
+      await page.locator('[data-action="phone-toggle"][data-enabled="1"][data-network="wifi"]').click();
       await page.waitForSelector('.phone-code');
       const first = await page.locator('.phone-code').textContent();
       assert.match(await page.locator('.phone-panel').textContent(), /http:\/\/192\.168\.1\.23:8767\//);
@@ -327,16 +330,31 @@ async function check(name, fn) { await fn(); passed++; results.push(name); proce
       await page.locator('[data-action="phone-extend"]').click();
       await page.waitForFunction(b => document.querySelector('.phone-panel').textContent !== b, before);
       assert.equal(await page.locator('.phone-code').textContent(), first, 'extending keeps the code');
-      assert.deepEqual(posts[posts.length - 1].body, {extend: true});
+      assert.deepEqual([posts[posts.length - 1].path, posts[posts.length - 1].body], ['/api/phone-mode/extend', {}]);
       await page.locator('[data-action="phone-toggle"][data-enabled="0"]').click();
       await page.waitForSelector('[data-action="phone-toggle"][data-enabled="1"]');
       assert.equal(await page.locator('.phone-code').count(), 0);
       assert.match(await page.locator('.phone-panel').textContent(), /lần trước tắt vì hết 8 giờ/);
-      await page.locator('[data-action="phone-toggle"][data-enabled="1"]').click();
+      await page.locator('[data-action="phone-toggle"][data-enabled="1"][data-network="wifi"]').click();
       await page.waitForSelector('.phone-code');
       assert.notEqual(await page.locator('.phone-code').textContent(), first, 'a new code each time');
-      assert.deepEqual(posts.slice(-4).map(x => [x.path, x.body.enabled ?? (x.body.extend ? 'extend' : null)]),
-        [['/api/phone-mode', true], ['/api/phone-mode', 'extend'], ['/api/phone-mode', false], ['/api/phone-mode', true]]);
+      assert.deepEqual(posts.slice(-4).map(x => [x.path, x.body.enabled ?? null]),
+        [['/api/phone-mode', true], ['/api/phone-mode/extend', null], ['/api/phone-mode', false], ['/api/phone-mode', true]]);
+    });
+
+    await check('Tailscale panel on the PC: not installed → "Cài và cấu hình Tailscale" asks first; Hủy sends nothing', async () => {
+      await page.waitForSelector('.tailscale-panel [data-action="ts"][data-op="install"]');
+      assert.match(await page.locator('.tailscale-panel').textContent(), /Program Files\\Tailscale/);
+      await page.locator('[data-action="phone-toggle"][data-enabled="0"]').click();
+      await page.waitForSelector('[data-action="phone-toggle"][data-network="tailscale"]');
+      assert.equal(await page.locator('[data-action="phone-toggle"][data-network="tailscale"]').isDisabled(), true,
+        '"Bật qua Tailscale" waits for the install');
+      const before = posts.length;
+      await page.locator('.tailscale-panel [data-action="ts"][data-op="install"]').click();
+      await page.waitForSelector('#modal[open] #confirm-action');
+      assert.match(await page.locator('#modal').textContent(), /pkgs\.tailscale\.com/);
+      await page.locator('#modal [data-action="close-modal"]').first().click();
+      assert.equal(posts.length, before, 'no install without the confirm');
     });
 
     await check('Opened through the phone: PC-only actions are disabled with the reason, 375 px fits', async () => {

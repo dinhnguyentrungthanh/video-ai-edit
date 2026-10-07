@@ -21,7 +21,11 @@
     ai:['GET','/api/ai'],aiConfig:['POST','/api/ai/config'],aiCheck:['POST','/api/ai/check'],aiLogin:['POST','/api/ai/login'],
     cleanupPreview:['GET','/api/source-cleanup/preview'],cleanup:['POST','/api/source-cleanup'],deletePreview:['GET','/api/job-delete/preview'],delete:['POST','/api/job-delete'],archivePreview:['GET','/api/source-archive/preview'],archive:['POST','/api/source-archive'],restore:['POST','/api/source-archive/restore'],recheck:['POST','/api/source-recycle-check'],
     logoPage:['GET','/logo-memory'],logos:['GET','/api/logo-memory'],logoFrame:['GET','/api/logo-memory/frame'],logoClass:['POST','/api/logo-memory/class'],logoDelete:['POST','/api/logo-memory/delete'],
-    phoneStatus:['GET','/api/phone-mode'],phoneMode:['POST','/api/phone-mode'],
+    phoneStatus:['GET','/api/phone-mode'],phoneMode:['POST','/api/phone-mode'],phoneExtend:['POST','/api/phone-mode/extend'],
+    /* Cài đặt → Tailscale (docs/TAILSCALE_PLAN.md): PC only; one background task at a time. */
+    tailscale:['GET','/api/tailscale'],tailscaleInstall:['POST','/api/tailscale/install'],tailscaleService:['POST','/api/tailscale/start-service'],
+    tailscaleFirewall:['POST','/api/tailscale/firewall'],tailscaleLogin:['POST','/api/tailscale/login'],tailscaleUp:['POST','/api/tailscale/up'],
+    tailscaleDown:['POST','/api/tailscale/down'],tailscaleLogout:['POST','/api/tailscale/logout'],tailscaleRemoteOn:['POST','/api/tailscale/remote-on'],
     /* "Tải video" (docs/VIDEO_DOWNLOAD_PLAN.md §5): {id} is the download task id, not a job id. */
     downloads:['GET','/api/downloads'],downloadTask:['GET','/api/downloads/{id}'],storageSummary:['GET','/api/storage-summary'],
     downloadAdd:['POST','/api/downloads'],downloadSettings:['POST','/api/downloads/settings'],downloadCleanup:['POST','/api/downloads/cleanup-temp'],
@@ -61,7 +65,32 @@
   const PC_ONLY_REASON = 'Chỉ làm trên PC: lưu trữ, khôi phục bản xuất và kiểm tra lại Thùng rác không làm qua điện thoại.';
   /* H3: while the phone mode is on, the PC says so (the classic "/" page did until V2 replaced it on 2026-10-06).
    * Only on the PC (the phone listener answers {remote: true}), never with the code. */
-  function phoneNotice(phone,{live,remote}={}){return live&&!remote&&!!phone&&phone.enabled===true?'Đang mở cho điện thoại: '+(phone.url||''):'';}
+  function phoneNotice(phone,{live,remote}={}){return live&&!remote&&!!phone&&phone.enabled===true?'Đang mở cho điện thoại'+(phone.network==='tailscale'?' qua Tailscale':'')+': '+(phone.url||''):'';}
+  /* Cài đặt → Tailscale: action → contract operation; labels are tailscale_manager.ACTIONS (checked by the tests). */
+  const tailscaleOps = {install:'tailscaleInstall','start-service':'tailscaleService',firewall:'tailscaleFirewall',login:'tailscaleLogin',
+    up:'tailscaleUp',down:'tailscaleDown',logout:'tailscaleLogout','remote-on':'tailscaleRemoteOn'};
+  const TAILSCALE_LABELS = {install:'Cài và cấu hình Tailscale','start-service':'Khởi động dịch vụ Tailscale',firewall:'Tạo rule tường lửa',
+    login:'Đăng nhập Tailscale',up:'Kết nối Tailscale',down:'Ngắt Tailscale',logout:'Đăng xuất Tailscale','remote-on':'Mở cho điện thoại ngoài nhà'};
+  /* The step the PC is at, from GET /api/tailscale: what the panel explains and which button comes first. */
+  function tailscaleStep(ts){
+    if(!ts)return 'loading';
+    if(ts.unavailable)return 'unavailable';
+    if(typeof ts.installed!=='boolean')return 'error'; // the first read failed (load_error)
+    if(!ts.installed)return 'install';
+    if(ts.service!=='running')return 'service';
+    if(ts.backend==='NeedsLogin'||ts.backend==='NeedsMachineAuth')return 'login';
+    return ts.backend==='Running'?'ready':'connect';
+  }
+  const TAILSCALE_STEP_ACTIONS = {install:['install'],service:['start-service'],login:['login'],connect:['up','logout'],ready:['remote-on','down','logout']};
+  /* [[action, label, primary?]]: none while a task runs (one at a time); the firewall rule whenever it is missing or off. */
+  function tailscaleActions(ts){
+    if(!ts||ts.task&&ts.task.running)return [];
+    const list=(TAILSCALE_STEP_ACTIONS[tailscaleStep(ts)]||[]).slice();
+    if(ts.installed&&['missing','disabled'].includes(ts.firewall_rule))list.push('firewall');
+    return list.map((a,i)=>[a,TAILSCALE_LABELS[a],i===0]);
+  }
+  /* Only a Tailscale sign-in page is ever offered as a link (the server checks it too). */
+  const tailscaleLoginUrl = ts => !!ts&&typeof ts.auth_url==='string'&&/^https:\/\/login\.tailscale\.com\/[A-Za-z0-9/_-]+$/.test(ts.auth_url)?ts.auth_url:null;
   function reviewStats(j) {
     const r=j.review_summary||{},d=r.decisions||{};
     const total=Number(r.main_items)||0,resolved=['KEEP','BLUR','CUT'].reduce((n,k)=>n+(Number(d[k])||0),0);
@@ -198,5 +227,5 @@
     if (pairs.length) path += '?'+pairs.join('&');
     return {operation:id,method:ep[0],path,body:body||{}};
   }
-  return {pcOnlyOps,permanentOps,DELETE_NOTE,lostIds,PC_ONLY_REASON,phoneNotice,SOURCE_MISSING_MESSAGE,sourceLine,formatStamp,formatBytes,detectors,tabs,labels,scanning,pausable,rerunnable,endpoints,cleaned,archived,hidden,locked,inFlight,eligible,reviewStats,tab,phase,overviewLabels,overviewMatch,operations,primary,validateScan,exportSelection,EXPORT_GATE_MESSAGE,EXPORT_SIZE_OPTIONS,EXPORT_CUSTOM_GB,exportDescription,exportConfirmText,exportPolicyChoice,OUTPUT_MOVED_REASON,reexportState,resourceItems,request};
+  return {pcOnlyOps,permanentOps,DELETE_NOTE,lostIds,PC_ONLY_REASON,phoneNotice,tailscaleOps,TAILSCALE_LABELS,tailscaleStep,tailscaleActions,tailscaleLoginUrl,SOURCE_MISSING_MESSAGE,sourceLine,formatStamp,formatBytes,detectors,tabs,labels,scanning,pausable,rerunnable,endpoints,cleaned,archived,hidden,locked,inFlight,eligible,reviewStats,tab,phase,overviewLabels,overviewMatch,operations,primary,validateScan,exportSelection,EXPORT_GATE_MESSAGE,EXPORT_SIZE_OPTIONS,EXPORT_CUSTOM_GB,exportDescription,exportConfirmText,exportPolicyChoice,OUTPUT_MOVED_REASON,reexportState,resourceItems,request};
 });

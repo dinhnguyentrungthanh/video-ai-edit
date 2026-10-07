@@ -101,7 +101,7 @@ from biliflow.review_evidence import (
 )
 from biliflow.scheduler import SKIPPED_REFUSAL, InputWatcher, JobScheduler
 from biliflow.storage import storage_status
-from biliflow import phone_access
+from biliflow import phone_access, tailscale_manager
 
 
 UNCONFIGURED_RECYCLE_BIN_MESSAGE = "Chưa cấu hình Thùng rác cho Control Center này."
@@ -147,6 +147,7 @@ PHONE_LOGIN_CSP = (
     "frame-ancestors 'none'"
 )
 _PHONE_ACCESS_LOCK = threading.Lock()
+_TAILSCALE_LOCK = threading.Lock()
 # The classic review page as served by the phone listener (user decision, plan §8 question 10):
 # added after its own styles, so 127.0.0.1:8765 serves the page byte for byte as before.
 # (a) an arrow at the right edge of the filter chips, (b) no "phím N" hints on touch screens,
@@ -263,7 +264,8 @@ def _phone_access(center: Any) -> phone_access.PhoneAccess:
                     level = "WARN" if event_type in ("PHONE_CODE_LOCKED", "PHONE_UNLOCK_LOCKED") else "INFO"
                     store.add_event(None, event_type, message, level=level, payload=payload or None)
 
-            value = phone_access.PhoneAccess(on_event=store_event)
+            # The Tailscale address comes from the Tailscale BiliFlow manages (runtime\tailscale first).
+            value = phone_access.PhoneAccess(on_event=store_event, tailscale=lambda: _tailscale(center).address())
             if store is not None:
                 # Question 14: the panel shows the latest phone events and the last state after a restart.
                 with contextlib.suppress(Exception):
@@ -272,8 +274,37 @@ def _phone_access(center: Any) -> phone_access.PhoneAccess:
         return value
 
 
+def _tailscale(center: Any) -> tailscale_manager.TailscaleManager:
+    """The center's Tailscale manager (Dashboard V2 → Cài đặt → Tailscale), created on first use."""
+    with _TAILSCALE_LOCK:
+        value = getattr(center, "tailscale", None)
+        if value is None:
+            store = getattr(center, "store", None)
+
+            def store_event(event_type: str, message: str, payload: dict[str, Any]) -> None:
+                if store is not None:
+                    store.add_event(None, event_type, message, level="INFO" if payload.get("ok") else "WARN",
+                                    payload=payload or None)
+
+            def phone_enable() -> dict[str, Any]:
+                # "Mở cho điện thoại ngoài nhà": the phone mode over Tailscale, as the PC panel's button does.
+                return _phone_access(center).enable(lambda access: _phone_handler_class(center, access),
+                                                    network="tailscale")
+
+            value = tailscale_manager.TailscaleManager(center.root, phone_enable=phone_enable, on_event=store_event)
+            center.tailscale = value
+        return value
+
+
+PHONE_PAGE_WARNINGS = {
+    "wifi": "Chỉ dùng trong Wi-Fi nhà: kết nối này là HTTP, không mã hóa.",
+    "tailscale": "Qua Tailscale: chỉ thiết bị đã đăng nhập Tailscale của bạn mở được trang này; "
+                 "Tailscale mã hóa đường truyền.",
+}
+
+
 def _phone_page(title: str, message: str, *, form: bool, attempts_left: int | None = None,
-                redirect: str | None = None, unlock: bool = False) -> bytes:
+                redirect: str | None = None, unlock: bool = False, network: str | None = None) -> bytes:
     """Small page of the phone listener: the code form, a refusal, or the hop to V2."""
     import html as _html
     note = (f"<p class=\"left\">Còn {attempts_left} lần nhập.</p>" if attempts_left is not None else "")
@@ -299,7 +330,7 @@ def _phone_page(title: str, message: str, *, form: bool, attempts_left: int | No
         "font-size:17px;padding:12px;border:0;border-radius:10px;background:#245ebc;color:#fff}"
         ".msg{color:#b42338;font-weight:600}.left,.warn{color:#5b6677;font-size:14px}</style></head><body><main>"
         f"<h1>{_html.escape(title)}</h1><p class=\"msg\">{_html.escape(message)}</p>{note}{body}{hop}"
-        "<p class=\"warn\">Chỉ dùng trong Wi-Fi nhà: kết nối này là HTTP, không mã hóa.</p>"
+        f"<p class=\"warn\">{_html.escape(PHONE_PAGE_WARNINGS.get(network or '', PHONE_PAGE_WARNINGS['wifi']))}</p>"
         "</main></body></html>"
     ).encode("utf-8")
 
@@ -1801,6 +1832,8 @@ class ControlCenter:
                 self._stopping.set()
                 if getattr(self, "phone", None) is not None:
                     self.phone.disable("stopped")
+                if getattr(self, "tailscale", None) is not None:
+                    self.tailscale.close()  # a waiting `tailscale login` ends with the Control Center
                 self.stop_ai_audits()
                 self.stop_ai_login()
                 self.watcher.shutdown()
@@ -1835,6 +1868,8 @@ class ControlCenter:
         self._stopping.set()
         if getattr(self, "phone", None) is not None:
             self.phone.disable("stopped")  # the phone code dies with the Control Center
+        if getattr(self, "tailscale", None) is not None:
+            self.tailscale.close()  # Tailscale itself keeps running; only BiliFlow's helper stops
         try:
             self.stop_ai_audits()
             self.stop_ai_login()
@@ -2043,6 +2078,12 @@ def _handler_class(center: ControlCenter) -> type[BaseHTTPRequestHandler]:
                         self.send_json(403, {"error": phone_access.PC_ONLY_POSTS[path], "code": "pc_only"})
                     else:
                         self.send_json(200, {"remote": False, **_phone_access(center).status(include_secret=True)})
+                elif path == "/api/tailscale":
+                    # Dashboard V2 → Cài đặt → Tailscale; PC only (the phone listener refuses it first).
+                    if not self.loopback_client():
+                        self.send_json(403, {"error": phone_access.PC_ONLY_TAILSCALE, "code": "pc_only"})
+                    else:
+                        self.send_json(200, _tailscale(center).status())
                 elif path == "/healthz":
                     self.send_json(200, {"status": "ok", "version": __version__})
                 elif path == "/api/session":
@@ -2222,10 +2263,32 @@ def _handler_class(center: ControlCenter) -> type[BaseHTTPRequestHandler]:
                         raise ValueError("enabled phải là true hoặc false")
                     if enabled:
                         port = body.get("port", phone_access.DEFAULT_PORT)
-                        result = phone.enable(lambda access: _phone_handler_class(center, access), port=port)
+                        # "wifi" (home Wi-Fi) or "tailscale" (outside home; the user's choice, 2026-10-06).
+                        network = body.get("network", phone_access.DEFAULT_NETWORK)
+                        result = phone.enable(lambda access: _phone_handler_class(center, access), port=port,
+                                              network=network)
                     else:
                         result = phone.disable("user")
                     result = {"remote": False, **result}
+                elif path == "/api/phone-mode/extend":
+                    # "Gia hạn thêm 8 giờ" from the phone, only while it is open over Tailscale (the user's
+                    # choice, 2026-10-06). The phone learns the new time, never the code.
+                    phone = _phone_access(center)
+                    if not self.loopback_client():
+                        if phone.network != "tailscale":
+                            self.send_json(403, {"error": phone_access.EXTEND_TAILSCALE_ONLY, "code": "pc_only"})
+                            return
+                        status = phone.extend(by=self.client_address[0])
+                        result = {"remote": True, "enabled": status["enabled"], "network": status["network"],
+                                  "expires_at": status["expires_at"]}
+                    else:
+                        result = {"remote": False, **phone.extend()}
+                elif match := re.fullmatch(r"/api/tailscale/(install|start-service|firewall|login|up|down|logout|remote-on)", path):
+                    # Install, sign in and drive Tailscale: 127.0.0.1 + token only; one task at a time.
+                    if not self.loopback_client():
+                        self.send_json(403, {"error": phone_access.PC_ONLY_TAILSCALE, "code": "pc_only"})
+                        return
+                    result = _tailscale(center).start(match.group(1))
                 elif match := re.fullmatch(r"/api/jobs/(\d+)/(hide|unhide)", path):
                     result = center.set_job_hidden(int(match.group(1)), match.group(2) == "hide")
                 elif match := re.fullmatch(r"/api/jobs/(\d+)/(start|resume|pause|stop-after-stage|cancel|retry|rerun|skip|unskip|ai-audit)", path):
@@ -2352,6 +2415,10 @@ def _phone_handler_class(center: ControlCenter, phone: phone_access.PhoneAccess)
     ENTRY_PATHS = ("/", "/dashboard-v2", "/dashboard-v2/", "/phone-login")
     V2 = "/dashboard-v2/"
 
+    def page(*args: Any, **kwargs: Any) -> bytes:
+        """The code page with the warning of the network this listener is on."""
+        return _phone_page(*args, network=phone.network, **kwargs)
+
     class PhoneHandler(base):
         phone_listener = True
         # H1: a connection that has not shown the cookie is held at most this long.
@@ -2461,30 +2528,30 @@ def _phone_handler_class(center: ControlCenter, phone: phone_access.PhoneAccess)
             """Check one code attempt and answer with the hop to V2, the form again, or the lock."""
             outcome, cookie = phone.try_code(code, ip=self.client_address[0])
             if outcome == "ok" and cookie:
-                self.send_page(200, _phone_page("Đã xác nhận mã", "Đang mở BiliFlow…", form=False, redirect=V2),
+                self.send_page(200, page("Đã xác nhận mã", "Đang mở BiliFlow…", form=False, redirect=V2),
                                cookie=cookie)
             elif outcome == "locked":
                 # The form stays: the special key can lift the lock (plan §8, question 9).
-                self.send_page(403, _phone_page("Đã khóa nhập mã", phone_access.LOCKED_MESSAGE, form=True, unlock=True))
+                self.send_page(403, page("Đã khóa nhập mã", phone_access.LOCKED_MESSAGE, form=True, unlock=True))
             elif outcome == "wrong_unlock":
-                self.send_page(403, _phone_page("Đã khóa nhập mã", phone_access.WRONG_UNLOCK_MESSAGE, form=True,
+                self.send_page(403, page("Đã khóa nhập mã", phone_access.WRONG_UNLOCK_MESSAGE, form=True,
                                                 attempts_left=phone.unlock_attempts_left(), unlock=True))
             elif outcome == "unlock_locked":
-                self.send_page(403, _phone_page("Đã khóa nhập mã", phone_access.UNLOCK_LOCKED_MESSAGE, form=False))
+                self.send_page(403, page("Đã khóa nhập mã", phone_access.UNLOCK_LOCKED_MESSAGE, form=False))
             elif outcome == "unlocked":
-                self.send_page(401, _phone_page("Đã gỡ khóa", phone_access.UNLOCKED_MESSAGE, form=True,
+                self.send_page(401, page("Đã gỡ khóa", phone_access.UNLOCKED_MESSAGE, form=True,
                                                 attempts_left=phone.attempts_left()))
             else:
-                self.send_page(401, _phone_page("Mã không đúng", "Mã không đúng. Xem lại mã trên PC.", form=True,
+                self.send_page(401, page("Mã không đúng", "Mã không đúng. Xem lại mã trên PC.", form=True,
                                                 attempts_left=phone.attempts_left()))
 
         def refuse_without_access(self, path: str) -> None:
             state = phone.status()
             if state["locked"] and path in ENTRY_PATHS:
                 message = phone_access.UNLOCK_LOCKED_MESSAGE if state["unlock_locked"] else phone_access.LOCKED_MESSAGE
-                self.send_page(403, _phone_page("Đã khóa nhập mã", message, form=not state["unlock_locked"], unlock=True))
+                self.send_page(403, page("Đã khóa nhập mã", message, form=not state["unlock_locked"], unlock=True))
             elif path in ENTRY_PATHS:
-                self.send_page(401, _phone_page("BiliFlow trên điện thoại", "Nhập mã truy cập hiện trên PC.",
+                self.send_page(401, page("BiliFlow trên điện thoại", "Nhập mã truy cập hiện trên PC.",
                                                 form=True))
             else:
                 self.send_json(401, {"error": "Cần mã truy cập của chế độ điện thoại"})
@@ -2513,8 +2580,10 @@ def _phone_handler_class(center: ControlCenter, phone: phone_access.PhoneAccess)
                 self.send_bytes(200, _review_page_for_phone(html).encode(), "text/html; charset=utf-8")
                 return
             if parsed.path == "/api/phone-mode":
-                # No code, link or counters here: the phone only learns that it is the phone.
-                self.send_json(200, {"remote": True, "enabled": True,
+                # No code, link or counters here: the phone only learns that it is the phone (and how),
+                # and over Tailscale when the mode turns off ("Gia hạn thêm 8 giờ" on the phone).
+                self.send_json(200, {"remote": True, "enabled": True, "network": phone.network,
+                                     "expires_at": phone.status()["expires_at"],
                                      "pc_only": sorted(set(phone_access.PC_ONLY_POSTS.values())
                                                        | {phone_access.PC_ONLY_VISUAL_AUDIT})})
                 return

@@ -239,11 +239,41 @@ check('H3 on V2 (the classic "/" page is off since 2026-10-06): the PC says the 
   const text=C.phoneNotice(on,{live:true,remote:false});
   assert.equal(text,'Đang mở cho điện thoại: http://192.168.1.23:8767/');
   assert.ok(!text.includes(on.code),'never the code');
+  const tail={...on,network:'tailscale',url:'http://100.101.102.103:8767/'};
+  assert.equal(C.phoneNotice(tail,{live:true,remote:false}),'Đang mở cho điện thoại qua Tailscale: http://100.101.102.103:8767/');
+  assert.equal(C.phoneNotice(tail,{live:true,remote:true}),'','not on the phone itself, over Tailscale either');
   assert.equal(C.phoneNotice(on,{live:true,remote:true}),'','not on the phone itself');
   assert.equal(C.phoneNotice({...on,enabled:false},{live:true,remote:false}),'');
   assert.equal(C.phoneNotice(null,{live:true,remote:false}),'','status not loaded yet');
   assert.equal(C.phoneNotice({unavailable:true},{live:true,remote:false}),'','an older Control Center');
   assert.equal(C.phoneNotice(on,{live:false,remote:false}),'','the demo has no phone mode');
+});
+check('Cài đặt → Tailscale: the step and its buttons follow GET /api/tailscale; one task at a time; only a Tailscale sign-in link',()=>{
+  const base={installed:true,service:'running',backend:'Running',firewall_rule:'enabled',task:null};
+  assert.equal(C.tailscaleStep(null),'loading');
+  assert.equal(C.tailscaleStep({unavailable:true}),'unavailable');
+  assert.equal(C.tailscaleStep({load_error:'x'}),'error');
+  assert.equal(C.tailscaleStep({...base,installed:false,service:'missing'}),'install');
+  assert.equal(C.tailscaleStep({...base,service:'stopped'}),'service');
+  assert.equal(C.tailscaleStep({...base,backend:'NeedsLogin'}),'login');
+  assert.equal(C.tailscaleStep({...base,backend:'Stopped'}),'connect');
+  assert.equal(C.tailscaleStep(base),'ready');
+  const ops=ts=>C.tailscaleActions(ts).map(a=>a[0]);
+  assert.deepEqual(ops({...base,installed:false,service:'missing',firewall_rule:'missing'}),['install'],'no firewall button before the install');
+  assert.deepEqual(ops({...base,service:'stopped'}),['start-service']);
+  assert.deepEqual(ops({...base,backend:'NeedsLogin',firewall_rule:'missing'}),['login','firewall']);
+  assert.deepEqual(ops({...base,backend:'Stopped'}),['up','logout']);
+  assert.deepEqual(ops(base),['remote-on','down','logout']);
+  assert.deepEqual(ops({...base,firewall_rule:'disabled'}),['remote-on','down','logout','firewall']);
+  assert.deepEqual(ops({...base,task:{action:'install',running:true}}),[],'one task at a time');
+  assert.deepEqual(ops({unavailable:true}),[]);
+  assert.deepEqual(C.tailscaleActions(base).map(a=>a[2]),[true,false,false],'the first button is the next step');
+  for(const [op,label] of C.tailscaleActions(base))assert.equal(label,C.TAILSCALE_LABELS[op]);
+  for(const op of Object.keys(C.tailscaleOps))assert.deepEqual(C.endpoints[C.tailscaleOps[op]],['POST','/api/tailscale/'+op]);
+  assert.deepEqual(C.endpoints.phoneExtend,['POST','/api/phone-mode/extend']);
+  assert.equal(C.tailscaleLoginUrl({auth_url:'https://login.tailscale.com/a/1b2c3d'}),'https://login.tailscale.com/a/1b2c3d');
+  for(const bad of ['https://login.tailscale.com.evil.example/a/1','http://login.tailscale.com/a/1','javascript:alert(1)','https://login.tailscale.com/a/1"onclick=x',null])
+    assert.equal(C.tailscaleLoginUrl({auth_url:bad}),null,String(bad));
 });
 check('Delete flow: "Xóa video" follows the server hint, the golden set and the file lock, on the PC and the phone',()=>{
   const cancelled=job('CANCELLED',{delete:{eligible:true,kind:'CANCELLED',reason:null,size_bytes:5}});

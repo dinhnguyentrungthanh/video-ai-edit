@@ -70,8 +70,11 @@ test('Every operation of guide section 4 uses its real path and body', async () 
     ['logoClass', null, {key: 'k', memory_class: 'platform_logo', platform: 'iqiyi', expected_sha256: 'a'.repeat(64)}, '/api/logo-memory/class'],
     ['logoDelete', null, {key: 'k', expected_sha256: 'a'.repeat(64)}, '/api/logo-memory/delete'],
     ['phoneMode', null, {enabled: true}, '/api/phone-mode'],
+    ['phoneMode', null, {enabled: true, network: 'tailscale'}, '/api/phone-mode'],
     ['phoneMode', null, {enabled: false}, '/api/phone-mode'],
     ['phoneMode', null, {extend: true}, '/api/phone-mode'],
+    ['phoneExtend', null, {}, '/api/phone-mode/extend'],
+    ...Object.entries(C.tailscaleOps).map(([action, op]) => [op, null, {}, '/api/tailscale/' + action]),
   ];
   for (const [op, target, body] of cases) await a.dispatch(op, target, body);
   const posts = f.posts();
@@ -266,6 +269,79 @@ test('Phone mode: the PC store keeps the status with its code; the phone store o
   const legacy = A.createLiveStore(adapterWith(old));
   await legacy.loadPhone();
   assert.deepEqual(legacy.snapshot().phone, {unavailable: true});
+});
+
+test('Tailscale: the PC store follows a task to its end, then reloads the phone mode; no /api/status reload', async () => {
+  const running = {installed: true, service: 'running', backend: 'Running', task: {action: 'remote-on', running: true, started_at: 1}};
+  const done = {...running, task: {...running.task, running: false, ok: true, message: 'Đã mở'}};
+  const f = fake({
+    'GET /api/phone-mode': [{status: 200, body: {remote: false, enabled: false}},
+      {status: 200, body: {remote: false, enabled: true, network: 'tailscale', code: 'abcd2345'}}],
+    'GET /api/tailscale': [{status: 200, body: running}, {status: 200, body: done}],
+    'POST /api/tailscale/remote-on': {status: 200, body: running},
+  });
+  const store = A.createLiveStore(adapterWith(f));
+  await store.loadPhone();
+  const result = await store.dispatch('tailscaleRemoteOn', null, {});
+  assert.equal(result.descriptor.path, '/api/tailscale/remote-on');
+  assert.deepEqual(store.snapshot().tailscale, running);
+  await store.loadTailscale();
+  assert.equal(store.snapshot().phone.enabled, false, 'still running: the phone mode is not read again');
+  await store.loadTailscale();
+  assert.deepEqual(store.snapshot().tailscale, done);
+  assert.equal(store.snapshot().phone.network, 'tailscale', 'the end of remote-on reloads the phone panel');
+  assert.equal(f.calls.filter(c => c.path === '/api/status').length, 0);
+  const both = [store.loadTailscale(), store.loadTailscale()];
+  assert.equal(both[0], both[1], 'one request at a time');
+  await both[0];
+});
+
+test('Tailscale: an older Control Center (404) is unavailable; a later error keeps the last state', async () => {
+  const old = A.createLiveStore(adapterWith(fake({'GET /api/tailscale': {status: 404, body: {error: 'Không tìm thấy'}}})));
+  await old.loadTailscale();
+  assert.deepEqual(old.snapshot().tailscale, {unavailable: true});
+  const good = {installed: false, service: 'missing', task: null};
+  const flaky = A.createLiveStore(adapterWith(fake({'GET /api/tailscale': [{status: 200, body: good}, {status: 500, body: {error: 'boom'}}]})));
+  await flaky.loadTailscale();
+  await flaky.loadTailscale();
+  assert.equal(flaky.snapshot().tailscale.installed, false);
+  assert.match(flaky.snapshot().tailscale.load_error, /boom/);
+  const first = A.createLiveStore(adapterWith(fake({'GET /api/tailscale': {status: 500, body: {error: 'boom'}}})));
+  await first.loadTailscale();
+  assert.equal(C.tailscaleStep(first.snapshot().tailscale), 'error', 'never "not installed" on a failed read');
+});
+
+test('Tailscale: the phone store never asks for /api/tailscale; the PC store does at start', async () => {
+  const settle = () => new Promise(resolve => setTimeout(resolve, 20));
+  const phone = fake({'GET /api/phone-mode': {status: 200, body: {remote: true, enabled: true, network: 'tailscale'}}});
+  const remote = A.createLiveStore(adapterWith(phone));
+  remote.start(0); await settle();
+  remote.watchTailscale(true); await settle();
+  assert.equal(phone.calls.filter(c => c.path === '/api/tailscale').length, 0);
+  const pc = fake({'GET /api/phone-mode': {status: 200, body: {remote: false, enabled: false}},
+    'GET /api/tailscale': {status: 200, body: {installed: false, service: 'missing'}}});
+  const local = A.createLiveStore(adapterWith(pc));
+  local.start(0); await settle();
+  assert.equal(pc.calls.filter(c => c.path === '/api/tailscale').length, 1);
+  assert.equal(local.snapshot().tailscale.installed, false);
+});
+
+test('"Gia hạn thêm 8 giờ": the PC gets its full status, the phone over Tailscale only the new time', async () => {
+  const pcFull = {remote: false, enabled: true, network: 'tailscale', code: 'abcd2345', expires_at: 2};
+  const f = fake({'GET /api/phone-mode': {status: 200, body: {...pcFull, expires_at: 1}},
+    'POST /api/phone-mode/extend': {status: 200, body: pcFull}});
+  const pc = A.createLiveStore(adapterWith(f));
+  await pc.loadPhone();
+  await pc.dispatch('phoneExtend', null, {});
+  assert.deepEqual(pc.snapshot().phone, pcFull);
+  assert.deepEqual(f.posts()[0].body, {});
+  const g = fake({'GET /api/phone-mode': {status: 200, body: {remote: true, enabled: true, network: 'tailscale', expires_at: 1, pc_only: ['x']}},
+    'POST /api/phone-mode/extend': {status: 200, body: {remote: true, enabled: true, network: 'tailscale', expires_at: 3}}});
+  const phone = A.createLiveStore(adapterWith(g));
+  await phone.loadPhone();
+  await phone.dispatch('phoneExtend', null, {});
+  assert.deepEqual(phone.snapshot().phone, {remote: true, enabled: true, network: 'tailscale', expires_at: 3, pc_only: ['x']});
+  assert.equal(phone.snapshot().remote, true);
 });
 
 test('Phone mode: a 403 pc_only refusal is shown, without token refresh or resend', async () => {

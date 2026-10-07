@@ -213,28 +213,101 @@ function startDownload(){
   }catch(error){downloadDraft.error=error.message;$('#download-error').textContent=error.message;$('#download-error').hidden=false;$('#download-url').setAttribute('aria-invalid','true');$('#download-url').focus();}
 }
 /* "Mở trên điện thoại": status, link, code and the switch, on the PC only (plan §12.3). */
+/* The phone mode opens on the home Wi-Fi or, since 2026-10-06 (the user's choice), over Tailscale. */
+let phoneBusy=false; // one on/off request at a time across the two "Bật" buttons and "Tắt"
+const PHONE_WARN={
+  wifi:'<p class="muted">Chỉ dùng trong Wi-Fi nhà: kết nối là HTTP, không mã hóa; không dùng Wi-Fi công cộng. Khi chế độ này bật, người có mã (hoặc lấy được phiên trong cùng Wi-Fi) có thể xóa vĩnh viễn video gốc, kể cả video chưa xuất (Hủy rồi Xóa video); tắt khi không dùng. Lần đầu Windows hỏi cho Python qua tường lửa, chọn <strong>Private networks</strong>.</p>',
+  tailscale:'<p class="muted">Qua Tailscale: Tailscale mã hóa đường truyền, chỉ thiết bị đã đăng nhập tài khoản Tailscale của bạn mở được link, ở bất kỳ đâu. Người cầm thiết bị đó và có mã (hoặc điện thoại đã vào BiliFlow) có thể xóa vĩnh viễn video gốc, kể cả video chưa xuất (Hủy rồi Xóa video); tắt khi không dùng. PC phải bật và không ngủ. Cài, đăng nhập và rule tường lửa của Tailscale làm ở khung Tailscale bên dưới.</p>'};
 function phonePanel(){
-  const warn='<p class="muted">Chỉ dùng trong Wi-Fi nhà: kết nối là HTTP, không mã hóa; không dùng Wi-Fi công cộng. Khi chế độ này bật, người có mã (hoặc lấy được phiên trong cùng Wi-Fi) có thể xóa vĩnh viễn video gốc, kể cả video chưa xuất (Hủy rồi Xóa video); tắt khi không dùng. Lần đầu Windows hỏi cho Python qua tường lửa, chọn <strong>Private networks</strong>.</p>';
   if(!LIVE)return '<section class="panel phone-panel" style="margin-bottom:18px"><h2>Mở trên điện thoại</h2><p class="muted">Chỉ có ở bản live (/dashboard-v2/) trên PC.</p></section>';
-  const p=state.phone;
-  if(state.remote)return '<section class="panel phone-panel" style="margin-bottom:18px"><h2>Đang mở qua điện thoại / laptop</h2><p class="pc-only-note">Xóa video gốc, Xóa video và Dọn video mất gốc làm được ở đây: video gốc bị xóa vĩnh viễn, không qua Thùng rác. Các thao tác sau chỉ làm trên PC: lưu trữ, khôi phục bản xuất, kiểm tra lại Thùng rác; tắt Control Center; cấu hình và đăng nhập AI; Visual AI Audit (gửi ảnh ra ngoài máy); sửa hoặc xóa bộ nhớ logo; bật/tắt chế độ điện thoại. Duyệt cảnh ở đây vẫn có thể thêm hoặc bỏ logo đã nhớ.</p>'+warn+'</section>';
+  const p=state.phone,tailscale=!!p&&p.network==='tailscale';
+  const warn=tailscale?PHONE_WARN.tailscale:PHONE_WARN.wifi;
+  // Over Tailscale the phone may push the auto-off back (the user's choice, 2026-10-06); on the home Wi-Fi only the PC.
+  const remoteExtend=tailscale?'<div class="key-value"><span>Tự tắt lúc</span><span>'+(p.expires_at?esc(new Date(p.expires_at*1000).toLocaleString('vi-VN')):'—')+'</span></div><div class="action-grid"><button class="secondary" data-action="phone-extend">Gia hạn thêm 8 giờ</button></div>':'';
+  if(state.remote)return '<section class="panel phone-panel" style="margin-bottom:18px"><h2>Đang mở qua điện thoại / laptop'+(tailscale?' (Tailscale)':'')+'</h2>'+remoteExtend+'<p class="pc-only-note">Xóa video gốc, Xóa video và Dọn video mất gốc làm được ở đây: video gốc bị xóa vĩnh viễn, không qua Thùng rác. Các thao tác sau chỉ làm trên PC: lưu trữ, khôi phục bản xuất, kiểm tra lại Thùng rác; tắt Control Center; cấu hình và đăng nhập AI; Visual AI Audit (gửi ảnh ra ngoài máy); sửa hoặc xóa bộ nhớ logo; cài và điều khiển Tailscale; bật/tắt chế độ điện thoại'+(tailscale?' (gia hạn thì làm được ở đây)':'')+'. Duyệt cảnh ở đây vẫn có thể thêm hoặc bỏ logo đã nhớ.</p>'+warn+'</section>';
   if(!p)return '<section class="panel phone-panel" style="margin-bottom:18px"><h2>Mở trên điện thoại</h2><p class="muted">Đang tải trạng thái…</p></section>';
   if(p.unavailable)return '<section class="panel phone-panel" style="margin-bottom:18px"><h2>Mở trên điện thoại</h2><p class="notice">Control Center đang chạy chưa có chế độ điện thoại. Tắt bằng Stop-BiliFlow.cmd rồi mở lại bằng Start-BiliFlow-Phone.cmd.</p></section>';
+  // "Bật qua Tailscale" starts Tailscale first (remote-on) when BiliFlow manages it: off until it is installed.
+  const ts=state.tailscale,tsMissing=!!ts&&ts.installed===false,tsOpening=!!(ts&&ts.task&&ts.task.running&&ts.task.action==='remote-on');
   const body=p.enabled?
     '<div class="key-value"><span>Trạng thái</span><span><strong>Đang bật</strong>'+(p.locked?' · đã khóa nhập mã (sai '+p.failed_attempts+' lần)':p.failed_attempts?' · '+p.failed_attempts+'/'+p.max_failed_attempts+' lần nhập sai':'')+'</span></div>'+
+    '<div class="key-value"><span>Mạng</span><span class="phone-network">'+esc(p.network_text||'Wi-Fi nhà')+'</span></div>'+
     '<div class="key-value"><span>Mở trên điện thoại</span><span class="mono phone-link">'+esc(p.url)+'</span></div>'+
-    '<div class="key-value"><span>Mã truy cập</span><span class="mono phone-code">'+esc(p.code)+'</span></div><p class="muted">Mở link trên điện thoại rồi gõ mã vào ô “Mã truy cập”.</p>'+
-    (p.expires_at?'<div class="key-value"><span>Tự tắt lúc</span><span>'+esc(new Date(p.expires_at*1000).toLocaleString('vi-VN'))+' (sau 8 giờ, hoặc khi địa chỉ Wi-Fi đổi)</span></div>':'')+
+    '<div class="key-value"><span>Mã truy cập</span><span class="mono phone-code">'+esc(p.code)+'</span></div><p class="muted">'+(tailscale?'Bật Tailscale trên điện thoại, mở link rồi gõ mã vào ô “Mã truy cập”. Dùng đúng link số này, không dùng tên máy.':'Mở link trên điện thoại rồi gõ mã vào ô “Mã truy cập”.')+'</p>'+
+    (p.expires_at?'<div class="key-value"><span>Tự tắt lúc</span><span>'+esc(new Date(p.expires_at*1000).toLocaleString('vi-VN'))+' (sau 8 giờ, hoặc khi '+(tailscale?'Tailscale trên PC tắt hoặc đổi địa chỉ':'địa chỉ Wi-Fi đổi')+')</span></div>':'')+
     (p.locked?'<p class="notice">Đã nhập sai mã quá nhiều lần nên nhập mã đang bị khóa. '+(p.unlock_locked?'Khóa mở đặc biệt cũng đã bị khóa; tắt rồi bật lại để có mã mới.':'Trên điện thoại có thể gỡ bằng khóa mở đặc biệt (còn '+Math.max(0,(p.max_unlocks||0)-(p.unlocks||0))+' lượt), sau đó vẫn phải nhập mã; hoặc tắt rồi bật lại để có mã mới.')+'</p>':'')+
     '<div class="action-grid"><button class="secondary" data-action="phone-extend">Gia hạn thêm 8 giờ</button><button class="danger" data-action="phone-toggle" data-enabled="0">Tắt chế độ điện thoại</button></div>':
-    '<div class="key-value"><span>Trạng thái</span><span>Đang tắt'+(p.last_disabled_reason_text?' · lần trước tắt vì '+esc(p.last_disabled_reason_text):'')+'</span></div><p class="muted">Bật để điện thoại hoặc laptop cùng Wi-Fi nhà mở được BiliFlow bằng link và mã. Mã đổi mỗi lần bật.</p>'+
-    '<div class="action-grid"><button class="primary" data-action="phone-toggle" data-enabled="1">Bật chế độ điện thoại</button></div>';
+    '<div class="key-value"><span>Trạng thái</span><span>Đang tắt'+(p.last_disabled_reason_text?' · lần trước tắt vì '+esc(p.last_disabled_reason_text):'')+'</span></div><p class="muted">Bật để điện thoại hoặc laptop mở được BiliFlow bằng link và mã. <strong>Wi-Fi nhà:</strong> thiết bị cùng Wi-Fi với PC. <strong>Tailscale:</strong> ở bất kỳ đâu (4G, Wi-Fi khác); cần cài Tailscale trên PC và điện thoại, đăng nhập cùng một tài khoản. Mã đổi mỗi lần bật.</p>'+
+    '<div class="action-grid"><button class="primary" data-action="phone-toggle" data-enabled="1" data-network="wifi"'+(tsOpening?' disabled':'')+'>Bật cho Wi-Fi nhà</button><button class="secondary" data-action="phone-toggle" data-enabled="1" data-network="tailscale"'+(tsMissing||tsOpening?' disabled':'')+'>'+(tsOpening?'Đang mở qua Tailscale…':'Bật qua Tailscale (ngoài nhà)')+'</button></div>'+
+    (tsMissing?'<p class="muted">Chưa cài Tailscale trên PC: bấm “Cài và cấu hình Tailscale” ở khung Tailscale bên dưới.</p>':'');
   const events=Array.isArray(p.events)&&p.events.length?'<details class="detail-section phone-events" data-fold="phone-events"><summary>Nhật ký gần đây ('+p.events.length+')</summary><ul class="confirm-list">'+p.events.map(e=>'<li><strong>'+esc(e.message||e.type)+'</strong><small>'+esc(new Date((e.at||0)*1000).toLocaleString('vi-VN'))+(e.ip?' · '+esc(e.ip):'')+'</small></li>').join('')+'</ul></details>':'';
-  return '<section class="panel phone-panel" style="margin-bottom:18px" aria-label="Mở trên điện thoại"><h2>Mở trên điện thoại</h2>'+body+events+warn+'</section>';
+  const warns=p.enabled?warn:PHONE_WARN.wifi+PHONE_WARN.tailscale; // off: both choices
+  return '<section class="panel phone-panel" style="margin-bottom:18px" aria-label="Mở trên điện thoại"><h2>Mở trên điện thoại</h2>'+body+events+warns+'</section>';
+}
+/* Cài đặt → Tailscale (docs/TAILSCALE_PLAN.md): BiliFlow installs, signs in and drives Tailscale on the PC.
+   PC only; the server runs one task at a time and the panel follows it (store.watchTailscale). */
+let tsBusy=false,tsWatching=null; // tsWatching: started_at of the running task whose end gets a toast
+const TS_STEP_TEXT={
+  loading:'Đang đọc trạng thái Tailscale…',
+  unavailable:'Control Center đang chạy chưa có quản lý Tailscale. Tắt bằng Stop-BiliFlow.cmd rồi mở lại.',
+  error:'Không đọc được trạng thái Tailscale',
+  install:'Chưa cài Tailscale trên PC. “Cài và cấu hình Tailscale” tải bản chính thức từ pkgs.tailscale.com, kiểm mã SHA-256 và chữ ký số Tailscale Inc., rồi cài vào thư mục mặc định C:\\Program Files\\Tailscale, nơi chỉ Admin sửa được (Windows hỏi quyền Admin một lần). Tailscale chạy ẩn như một dịch vụ Windows, tự cập nhật và chạy cả trước khi đăng nhập Windows; BiliFlow tạo luôn rule tường lửa cho cổng 8767.',
+  service:'Dịch vụ Tailscale đang tắt. Bấm “Khởi động dịch vụ Tailscale”; “Mở cho điện thoại ngoài nhà” cũng tự khởi động nó.',
+  login:'Tailscale đã cài nhưng chưa đăng nhập. Bấm “Đăng nhập Tailscale”, rồi “Mở trang đăng nhập Tailscale” và đăng nhập bằng tài khoản bạn sẽ dùng trên điện thoại.',
+  connect:'Tailscale đã đăng nhập nhưng đang ngắt. Bấm “Kết nối Tailscale”, hoặc “Mở cho điện thoại ngoài nhà” để kết nối và bật chế độ điện thoại một lần.',
+  ready:'Tailscale đã kết nối. Trên điện thoại: cài app Tailscale, đăng nhập cùng tài khoản, rồi bấm “Mở cho điện thoại ngoài nhà” ở đây; link và mã hiện trong khung “Mở trên điện thoại”.'};
+const TS_SERVICE={running:'Đang chạy',stopped:'Đang tắt',starting:'Đang khởi động',stopping:'Đang dừng',missing:'Chưa cài',unknown:'Không đọc được'};
+const TS_BACKEND={Running:'Đã kết nối',Stopped:'Đã ngắt',NeedsLogin:'Chưa đăng nhập',NeedsMachineAuth:'Chờ duyệt thiết bị',Starting:'Đang kết nối',NoState:'Đang khởi động'};
+const TS_FIREWALL={enabled:'Đã có rule',disabled:'Rule đang tắt',missing:'Chưa có rule',unknown:'Không đọc được'};
+function tailscaleTask(task){
+  if(!task)return '';
+  if(task.running){
+    const p=task.progress,pct=p&&p.total?Math.min(100,Math.round(p.done*100/p.total)):null;
+    return '<div class="ts-task" role="status"><div class="key-value"><span>Đang làm</span><span><strong>'+esc(task.label||'')+'</strong> · '+esc(task.message||'')+(pct!==null?' ('+pct+'%)':'')+'</span></div>'+(pct!==null?'<div class="meter"><i style="width:'+pct+'%"></i></div>':'')+'</div>';
+  }
+  return task.ok?'<p class="muted ts-task">'+esc(task.message||'')+'</p>':'<p class="notice ts-task">'+esc((task.label||'Tailscale')+': '+(task.error||'lỗi'))+'</p>';
+}
+function tailscalePanel(){
+  if(!LIVE||state.remote)return ''; // the phone listener refuses /api/tailscale (PC only)
+  const ts=state.tailscale,step=C.tailscaleStep(ts);
+  let body='<p class="muted">'+esc(TS_STEP_TEXT[step])+(step==='error'&&ts.load_error?': '+esc(ts.load_error):'')+'</p>';
+  if(ts&&typeof ts.installed==='boolean'){
+    const rows=[['Dịch vụ',TS_SERVICE[ts.service]||ts.service]];
+    if(ts.installed)rows.push(['Kết nối',TS_BACKEND[ts.backend]||ts.backend],['Địa chỉ',ts.ip],['Tên máy',ts.hostname],
+      ['Tài khoản',[ts.user,ts.tailnet].filter(Boolean).join(' · ')],['Phiên bản',ts.version?ts.version+' · tự cập nhật':''],
+      ['Tường lửa',TS_FIREWALL[ts.firewall_rule]||ts.firewall_rule]);
+    rows.push(['Thư mục cài',ts.install_dir]);
+    body+=rows.filter(([,v])=>v).map(([k,v])=>'<div class="key-value"><span>'+esc(k)+'</span><span>'+esc(v)+'</span></div>').join('');
+    if(ts.status_error)body+='<p class="notice">'+esc(ts.status_error)+'</p>';
+  }
+  body+=tailscaleTask(ts&&ts.task);
+  const login=C.tailscaleLoginUrl(ts);
+  if(login)body+='<p><a class="primary link-button ts-login" href="'+esc(login)+'" target="_blank" rel="noopener noreferrer">Mở trang đăng nhập Tailscale</a></p>';
+  const actions=C.tailscaleActions(ts);
+  if(actions.length)body+='<div class="action-grid">'+actions.map(([op,label,first])=>'<button class="'+(first?'primary':'secondary')+'" data-action="ts" data-op="'+op+'"'+(tsBusy||state.offline?' disabled':'')+'>'+esc(label)+'</button>').join('')+'</div>';
+  const peers=ts&&Array.isArray(ts.peers)&&ts.peers.length?'<details class="detail-section ts-peers" data-fold="ts-peers"><summary>Thiết bị trong Tailscale ('+ts.peers.length+')</summary><ul class="confirm-list">'+ts.peers.map(d=>'<li><strong>'+esc(d.name)+'</strong><small>'+esc([d.os,d.online?'đang trực tuyến':'ngoại tuyến'].filter(Boolean).join(' · '))+'</small></li>').join('')+'</ul></details>':'';
+  return '<section class="panel tailscale-panel" style="margin-bottom:18px" aria-label="Tailscale"><h2>Tailscale (mở BiliFlow ngoài nhà)</h2>'+body+peers+'</section>';
+}
+/* The end of a task started or seen running on this page gets one toast. */
+function tailscaleToast(){
+  const task=state.tailscale&&state.tailscale.task;
+  if(!task)return;
+  if(task.running){tsWatching=task.started_at;return;}
+  if(tsWatching===null||tsWatching!==task.started_at)return;
+  tsWatching=null;
+  toast(task.ok?(task.message||'Xong.'):(task.label||'Tailscale')+': '+(task.error||'lỗi'),!task.ok);
+}
+const TS_CONFIRM={
+  install:['Cài và cấu hình Tailscale',()=>'<p>BiliFlow sẽ:</p><ol class="help-steps"><li>Tải bản Tailscale mới nhất cho Windows từ <strong>pkgs.tailscale.com</strong> vào thư mục cache\\tailscale của BiliFlow.</li><li>Kiểm mã SHA-256 Tailscale công bố và chữ ký số Tailscale Inc.; sai thì dừng, không cài.</li><li>Cài vào <strong>'+esc(state.tailscale&&state.tailscale.install_dir||'C:\\Program Files\\Tailscale')+'</strong> (thư mục mặc định, chỉ Admin sửa được): Windows hỏi quyền Admin một lần (hộp UAC).</li><li>Đặt Tailscale chạy ẩn như dịch vụ Windows, tự cập nhật, chạy cả trước khi đăng nhập Windows; tạo rule tường lửa cho cổng 8767 chỉ nhận thiết bị Tailscale.</li></ol><p>Sau đó bấm “Đăng nhập Tailscale”. Tailscale là phần mềm miễn phí cho cá nhân; BiliFlow không gửi video hay dữ liệu nào lên Tailscale.</p>','Tải và cài'],
+  logout:['Đăng xuất Tailscale',()=>'<p>PC rời mạng Tailscale: điện thoại ngoài nhà không mở được BiliFlow, và chế độ điện thoại qua Tailscale tự tắt. Đăng nhập lại cần trình duyệt.</p>','Đăng xuất']};
+async function tailscaleRun(op){
+  tsBusy=true;
+  try{await store.dispatch(C.tailscaleOps[op],null,{});state=store.snapshot();const task=state.tailscale&&state.tailscale.task;if(task&&task.running)tsWatching=task.started_at;}
+  finally{tsBusy=false;render();}
 }
 function settingsView(){
   const ai=state.ai;
-  return heading('Cài đặt không gian','Thiết lập AI Supervisor và xem trạng thái hệ thống.','<span class="badge">'+(ai.ready?'AI đã kết nối':'AI chưa sẵn sàng')+'</span>')+phonePanel()+'<div class="settings-grid"><section class="panel"><h2>AI Supervisor</h2><p class="muted" style="font-size:11px">Kiểm tra tùy chọn bằng tài khoản ChatGPT. Mọi gợi ý vẫn cần bạn duyệt.</p><label class="check-line"><input id="ai-enabled" type="checkbox" '+(ai.config.enabled?'checked':'')+'><span>Bật AI Supervisor<small>JSON audit và Visual AI Audit dùng chung phiên.</small></span></label><label class="field"><span>Model</span><select id="ai-model">'+(Array.isArray(ai.models)&&ai.models.length?ai.models:['gpt-5.6-luna','gpt-5.6-terra','gpt-5.6-sol']).map(m=>'<option '+(ai.config.model===m?'selected':'')+'>'+m+'</option>').join('')+'</select></label><label class="field"><span>Mức suy luận</span><select id="ai-effort">'+(Array.isArray(ai.efforts)&&ai.efforts.length?ai.efforts:['low','medium','high']).map(m=>'<option '+(ai.config.reasoning_effort===m?'selected':'')+'>'+m+'</option>').join('')+'</select></label><div class="action-grid"><button class="primary" data-action="ai-save" '+(state.offline?'disabled':'')+pcOnly('cấu hình AI Supervisor')+'>Lưu cấu hình</button><button class="secondary" data-action="ai-check" '+(state.offline?'disabled':'')+'>Kiểm tra kết nối</button><button class="secondary" data-action="ai-login" '+(state.offline?'disabled':'')+pcOnly('đăng nhập ChatGPT')+'>Đăng nhập ChatGPT</button></div><small>'+esc(ai.message)+(LIVE?'':' · dữ liệu mẫu')+'</small></section><section class="panel"><h2>Hệ thống cục bộ</h2><div class="key-value"><span>Phiên bản</span><span>'+state.version+' · hợp đồng hiện tại</span></div><div class="key-value"><span>Dữ liệu</span><span>E:\\DungChung\\BiliFlow</span></div><div class="key-value"><span>Worker</span><span>1 GPU · hàng đợi FIFO</span></div><div class="key-value"><span>Xuất mặc định</span><span>Tối đa 3,5 GB</span></div><p class="muted" style="font-size:11px">Đóng tab trình duyệt không dừng Control Center.</p><div class="action-grid"><button class="secondary" data-action="shutdown" data-mode="after_stage" '+(state.offline?'disabled':'')+pcOnly('tắt Control Center')+'>Tắt sau bước hiện tại</button><button class="danger" data-action="shutdown" data-mode="immediate" '+(state.offline?'disabled':'')+pcOnly('tắt Control Center')+'>Tắt ngay</button></div>'+(LIVE?'':'<div class="detail-section"><h3>Tình huống kiểm thử demo</h3><label class="field"><span>Trạng thái mô phỏng</span><select id="scenario">'+scenarioOptions()+'</select><small>Chỉ thay đổi dữ liệu mẫu của bản demo này.</small></label><button class="secondary small" data-action="reset">Đặt lại dữ liệu mẫu</button></div>')+'</section></div>'+(LIVE?'':'<section class="panel" style="margin-top:18px"><h2>Lịch sử thao tác mẫu</h2><ol class="log-list">'+state.requests.slice(-8).reverse().map(r=>'<li>'+esc(r.method+' '+r.path)+'<small> · '+esc(r.operation)+'</small></li>').join('')+'</ol>'+(state.requests.length?'':'<p class="muted" style="font-size:11px">Chưa có thao tác. Bạn có thể thử duyệt, xuất hoặc lưu trữ một video mẫu.</p>')+'</section>');
+  return heading('Cài đặt không gian','Thiết lập AI Supervisor và xem trạng thái hệ thống.','<span class="badge">'+(ai.ready?'AI đã kết nối':'AI chưa sẵn sàng')+'</span>')+phonePanel()+tailscalePanel()+'<div class="settings-grid"><section class="panel"><h2>AI Supervisor</h2><p class="muted" style="font-size:11px">Kiểm tra tùy chọn bằng tài khoản ChatGPT. Mọi gợi ý vẫn cần bạn duyệt.</p><label class="check-line"><input id="ai-enabled" type="checkbox" '+(ai.config.enabled?'checked':'')+'><span>Bật AI Supervisor<small>JSON audit và Visual AI Audit dùng chung phiên.</small></span></label><label class="field"><span>Model</span><select id="ai-model">'+(Array.isArray(ai.models)&&ai.models.length?ai.models:['gpt-5.6-luna','gpt-5.6-terra','gpt-5.6-sol']).map(m=>'<option '+(ai.config.model===m?'selected':'')+'>'+m+'</option>').join('')+'</select></label><label class="field"><span>Mức suy luận</span><select id="ai-effort">'+(Array.isArray(ai.efforts)&&ai.efforts.length?ai.efforts:['low','medium','high']).map(m=>'<option '+(ai.config.reasoning_effort===m?'selected':'')+'>'+m+'</option>').join('')+'</select></label><div class="action-grid"><button class="primary" data-action="ai-save" '+(state.offline?'disabled':'')+pcOnly('cấu hình AI Supervisor')+'>Lưu cấu hình</button><button class="secondary" data-action="ai-check" '+(state.offline?'disabled':'')+'>Kiểm tra kết nối</button><button class="secondary" data-action="ai-login" '+(state.offline?'disabled':'')+pcOnly('đăng nhập ChatGPT')+'>Đăng nhập ChatGPT</button></div><small>'+esc(ai.message)+(LIVE?'':' · dữ liệu mẫu')+'</small></section><section class="panel"><h2>Hệ thống cục bộ</h2><div class="key-value"><span>Phiên bản</span><span>'+state.version+' · hợp đồng hiện tại</span></div><div class="key-value"><span>Dữ liệu</span><span>E:\\DungChung\\BiliFlow</span></div><div class="key-value"><span>Worker</span><span>1 GPU · hàng đợi FIFO</span></div><div class="key-value"><span>Xuất mặc định</span><span>Tối đa 3,5 GB</span></div><p class="muted" style="font-size:11px">Đóng tab trình duyệt không dừng Control Center.</p><div class="action-grid"><button class="secondary" data-action="shutdown" data-mode="after_stage" '+(state.offline?'disabled':'')+pcOnly('tắt Control Center')+'>Tắt sau bước hiện tại</button><button class="danger" data-action="shutdown" data-mode="immediate" '+(state.offline?'disabled':'')+pcOnly('tắt Control Center')+'>Tắt ngay</button></div>'+(LIVE?'':'<div class="detail-section"><h3>Tình huống kiểm thử demo</h3><label class="field"><span>Trạng thái mô phỏng</span><select id="scenario">'+scenarioOptions()+'</select><small>Chỉ thay đổi dữ liệu mẫu của bản demo này.</small></label><button class="secondary small" data-action="reset">Đặt lại dữ liệu mẫu</button></div>')+'</section></div>'+(LIVE?'':'<section class="panel" style="margin-top:18px"><h2>Lịch sử thao tác mẫu</h2><ol class="log-list">'+state.requests.slice(-8).reverse().map(r=>'<li>'+esc(r.method+' '+r.path)+'<small> · '+esc(r.operation)+'</small></li>').join('')+'</ol>'+(state.requests.length?'':'<p class="muted" style="font-size:11px">Chưa có thao tác. Bạn có thể thử duyệt, xuất hoặc lưu trữ một video mẫu.</p>')+'</section>');
 }
 /* U1: open <details data-fold> keep their state across re-renders (keyed, never by position). */
 function foldState(root){const out={};if(root)root.querySelectorAll('details[data-fold]').forEach(d=>{out[d.dataset.fold]=d.open;});return out;}
@@ -566,14 +639,37 @@ document.addEventListener('click',async event=>{
   else if(action==='shutdown')showModal('Tắt BiliFlow','<p>'+ (el.dataset.mode==='immediate'?'Dừng bước hiện tại và tắt Control Center?':'Tắt Control Center sau khi bước hiện tại hoàn tất?')+'</p><p>Đóng tab không dừng backend. '+(LIVE?'Control Center nhận lệnh rồi mới tắt; trang sẽ mất kết nối.':'Ở demo, thao tác này mô phỏng mất kết nối.')+'</p>',async()=>{await mutate('shutdown',null,{mode:el.dataset.mode});toast(LIVE?'Control Center nhận lệnh tắt (202). Chưa chứng minh đã tắt; kiểm tra lại sau.':'Đã mô phỏng lệnh tắt; backend thật vẫn hoạt động.');return true;},'Xác nhận tắt');
   else if(action==='ai-save'){const data={enabled:$('#ai-enabled').checked,model:$('#ai-model').value,reasoning_effort:$('#ai-effort').value};if(el.dataset.busy)return;el.dataset.busy='1';try{await mutate('aiConfig',null,data);aiDirty=false;toast(LIVE?'Đã lưu cấu hình AI.':'Đã lưu cấu hình AI mẫu.');render();}catch(e){toast(e.message,true);}finally{delete el.dataset.busy;}}
   else if(action==='phone-toggle'){
-    if(!LIVE||state.remote||el.dataset.busy)return;el.dataset.busy='1';el.disabled=true;const on=el.dataset.enabled==='1';
-    try{await store.dispatch('phoneMode',null,{enabled:on});state=store.snapshot();toast(on?'Đã bật chế độ điện thoại. Mã mới hiện trong khung.':'Đã tắt chế độ điện thoại; mã cũ hết hiệu lực.');}
-    catch(e){toast(e.message,true);}finally{delete el.dataset.busy;render();}
+    if(!LIVE||state.remote||phoneBusy)return;phoneBusy=true;el.disabled=true;const on=el.dataset.enabled==='1';
+    const network=el.dataset.network==='tailscale'?'tailscale':'wifi';
+    if(on&&network==='tailscale'&&state.tailscale&&typeof state.tailscale.installed==='boolean'){
+      // BiliFlow manages Tailscale: start and connect it first (remote-on), then the phone mode; the panel follows.
+      try{await tailscaleRun('remote-on');toast('Đang bật Tailscale rồi mở chế độ điện thoại; link và mã hiện ở đây khi xong.');}
+      catch(e){toast(e.message,true);}finally{phoneBusy=false;render();}
+      return;
+    }
+    try{await store.dispatch('phoneMode',null,on?{enabled:true,network}:{enabled:false});state=store.snapshot();
+      // The toast follows the answer, not the button: an older Control Center ignores `network`
+      // (no field in its answer), and a mode already on keeps its network.
+      const got=state.phone&&state.phone.network;
+      if(!on)toast('Đã tắt chế độ điện thoại; mã cũ hết hiệu lực.');
+      else if(got===network)toast('Đã bật chế độ điện thoại'+(got==='tailscale'?' qua Tailscale':' cho Wi-Fi nhà')+'. Mã mới hiện trong khung.');
+      else if(!got)toast(network==='tailscale'?'Control Center đang chạy là bản cũ, chưa có Tailscale: chế độ điện thoại vừa bật cho Wi-Fi nhà. Tắt nó, khởi động lại Control Center rồi bật lại.':'Đã bật chế độ điện thoại. Mã mới hiện trong khung.',network==='tailscale');
+      else toast('Chế độ điện thoại đã bật sẵn '+(got==='tailscale'?'qua Tailscale':'cho Wi-Fi nhà')+'. Muốn đổi mạng: tắt rồi bật lại.',true);}
+    catch(e){toast(e.message,true);}finally{phoneBusy=false;render();}
   }
   else if(action==='phone-extend'){
-    if(!LIVE||state.remote||el.dataset.busy)return;el.dataset.busy='1';el.disabled=true;
-    try{await store.dispatch('phoneMode',null,{extend:true});state=store.snapshot();toast('Đã gia hạn: chế độ điện thoại tự tắt sau 8 giờ kể từ bây giờ. Mã giữ nguyên.');}
+    // The phone too while it is open over Tailscale (the server checks it: 403 on the home Wi-Fi).
+    const remoteOk=state.phone&&state.phone.network==='tailscale';
+    if(!LIVE||state.remote&&!remoteOk||el.dataset.busy)return;el.dataset.busy='1';el.disabled=true;
+    try{await store.dispatch('phoneExtend',null,{});state=store.snapshot();toast('Đã gia hạn: chế độ điện thoại tự tắt sau 8 giờ kể từ bây giờ. Mã giữ nguyên.');}
     catch(e){toast(e.message,true);}finally{delete el.dataset.busy;render();}
+  }
+  else if(action==='ts'){
+    const op=el.dataset.op;
+    if(!LIVE||state.remote||tsBusy||!C.tailscaleOps[op])return;
+    const confirm=TS_CONFIRM[op];
+    if(confirm)showModal(confirm[0],confirm[1](),async()=>{await tailscaleRun(op);return true;},confirm[2]);
+    else tailscaleRun(op).catch(e=>toast(e.message,true));
   }
   else if(action==='ai-check'){if(el.dataset.busy)return;el.dataset.busy='1';try{await mutate('aiCheck',null,{});state=store.snapshot();toast(state.ai.message);render();}catch(e){toast(e.message,true);}finally{delete el.dataset.busy;}}
   else if(action==='ai-login')showModal('Đăng nhập ChatGPT',(LIVE?'<p>Mở luồng đăng nhập ChatGPT hiện có của Codex trên máy này. Không dùng API trả phí.</p>':'<p>Trong bản tích hợp, thao tác này mở luồng đăng nhập hiện có. Demo chỉ mô phỏng trạng thái.</p>'),async()=>{await mutate('aiLogin',null,{});toast(LIVE?'Đã mở luồng đăng nhập ChatGPT hiện có.':'Đã mô phỏng đăng nhập.');return true;});
@@ -627,6 +723,7 @@ function route(){
   if(!((target||wasOpen)&&next===view&&$('#main').innerHTML)){view=next;render();window.scrollTo(0,0);}
   if(target)review.open(target.id,target.view);
   if(DL)DL.watch(view==='downloads'); // its list is polled only while the page is open
+  if(LIVE)store.watchTailscale(view==='settings'); // the Tailscale panel follows the polls while Cài đặt is open
 }
 /* Closing (×, Đóng, Esc) returns to <view>: back in history when the dialog was opened from V2, else replace the hash. */
 function requestReviewClose(back){
@@ -647,9 +744,11 @@ function liveChrome(){
   if(bar&&bar.style.width!==width)bar.style.width=width;
 }
 function onSnapshot(){
-  state=store.snapshot();liveChrome();review.updateJob();
+  state=store.snapshot();liveChrome();review.updateJob();tailscaleToast();
   if(view==='downloads'&&DL){if(topNotice()!==shownNotice||!DL.refresh())render();else{nav();const mode=$('#dl-mode'),text=state.remote?'Qua điện thoại':'Control Center';if(mode&&mode.textContent!==text)mode.textContent=text;}return;}
-  if(view==='downloads'||view==='settings'&&(aiDirty||$('#main').contains(document.activeElement))){nav();return;}
+  // Cài đặt keeps an AI form being edited; a focused button (e.g. after a click) no longer freezes its panels.
+  const editing=document.activeElement&&$('#main').contains(document.activeElement)&&/^(INPUT|SELECT|TEXTAREA)$/.test(document.activeElement.tagName);
+  if(view==='downloads'||view==='settings'&&(aiDirty||editing)){nav();return;}
   const focus=document.activeElement,id=focus&&focus.id,range=id==='search'?[focus.selectionStart,focus.selectionEnd]:null;
   const inMain=focus&&$('#main').contains(focus)?[focus.dataset.action,focus.dataset.id,focus.dataset.op,focus.dataset.filter]:null;
   // U1: an open <select> (e.g. sort) in #main would be closed by a rebuild: keep #main until it loses focus.

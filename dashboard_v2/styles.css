@@ -14,3 +14,5 @@ dialog{width:min(650px,calc(100vw - 28px));max-height:calc(100dvh - 40px);border
 @media(prefers-reduced-motion:reduce){*{transition:none!important;scroll-behavior:auto!important}}
 #video-list{scroll-margin-top:80px}.review-heading{gap:8px;flex-wrap:wrap}.review-heading>span{margin-right:auto}
 @media(max-width:700px){#video-list{scroll-margin-top:122px}}
+/* Cai dat -> Tailscale: the sign-in link is laid out like a button (colors from .primary); the running task line. */
+a.link-button{display:inline-block;padding:9px 13px;font-weight:550;font-size:11px;border-width:1px;border-style:solid;border-radius:8px;text-decoration:none}.ts-task .meter{margin:4px 0 10px}

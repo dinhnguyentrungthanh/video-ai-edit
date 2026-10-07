@@ -56,7 +56,7 @@ AI Supervisor là kiểm tra tư vấn theo yêu cầu. Dashboard có khu vực 
 - Trong hộp: ảnh và video của từng cảnh, dải khung, timeline, phóng to thẻ, các nút Giữ / Làm mờ / Cắt / Cần xem thêm / Xóa quyết định, nút vùng logo, nhớ logo, phím 1–4, hoàn tác, "Giữ tất cả", "Dùng đề xuất" và "Xuất video". Hộp chỉ gửi quyết định khi bạn bấm, không bao giờ tự xuất.
 - Trang duyệt cũ `/review/<id>` không đổi, mở bằng link "Mở trang duyệt cũ" trong hộp.
 - PC: thẻ 2 cột. Laptop hẹp: 1 cột. Điện thoại: hộp toàn màn hình, nút cao ít nhất 44 px, chữ ít nhất 12 px, hàng bộ lọc cuộn ngang và mờ dần ở mép còn bộ lọc.
-- Mở trên điện thoại hoặc laptop trong Wi-Fi nhà: [`docs/DASHBOARD_V2_PHONE.md`](docs/DASHBOARD_V2_PHONE.md). Kế hoạch và kết quả kiểm từng đợt: [`docs/DASHBOARD_V2_REVIEW_PLAN.md`](docs/DASHBOARD_V2_REVIEW_PLAN.md).
+- Mở trên điện thoại hoặc laptop trong Wi-Fi nhà, hoặc từ ngoài nhà qua Tailscale (mục 8: BiliFlow tự tải, kiểm và cài Tailscale (vào `C:\Program Files\Tailscale`) từ Cài đặt → Tailscale): [`docs/DASHBOARD_V2_PHONE.md`](docs/DASHBOARD_V2_PHONE.md). Kế hoạch và kết quả kiểm từng đợt: [`docs/DASHBOARD_V2_REVIEW_PLAN.md`](docs/DASHBOARD_V2_REVIEW_PLAN.md).
 
 ## Kiểm tra chi phí và giấy phép
 
