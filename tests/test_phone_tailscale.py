@@ -481,7 +481,9 @@ class TailscaleRouteTests(ListenerBase):
         time.sleep(0.05)
         status, body, raw = self.phone_call(session, "POST", "/api/phone-mode/extend")
         self.assertEqual(status, 200, body)
-        self.assertEqual(set(body), {"remote", "enabled", "network", "expires_at"}, "never the code or the link")
+        self.assertEqual(set(body), {"remote", "enabled", "network", "expires_at", "added_seconds"},
+                         "never the code or the link")
+        self.assertGreater(body["added_seconds"], 0)
         self.assertEqual((body["remote"], body["enabled"], body["network"]), (True, True, "tailscale"))
         self.assertGreater(body["expires_at"], before)
         self.assertNotIn(answer["code"].encode(), raw)

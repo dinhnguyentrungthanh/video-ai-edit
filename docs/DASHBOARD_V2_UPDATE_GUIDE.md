@@ -401,7 +401,7 @@ Hướng dẫn cho người dùng: `docs/DASHBOARD_V2_PHONE.md`. Code: `src/bili
 - **H4:** event của Control Center (`job_id` NULL): `PHONE_MODE_ENABLED`, `PHONE_MODE_DISABLED` (`reason`), `PHONE_LOGIN`, `PHONE_CODE_WRONG`, `PHONE_CODE_LOCKED` (WARN), `PHONE_UNLOCKED`, `PHONE_UNLOCK_WRONG`, `PHONE_UNLOCK_LOCKED` (WARN). Payload chỉ có `ip`, bộ đếm, lý do, địa chỉ/cổng của listener; không bao giờ có mã, chữ đã gõ hay cookie. GET `/api/phone-mode` (PC) có `events`: 10 event gần nhất (trong bộ nhớ), mới nhất trước; listener điện thoại không trả trường này.
 - **H5:** launcher: lỗi không có HTTP status → GET `/api/phone-mode` → báo "IS on" (in link, mã) / "NOT on" / "unknown".
 - **Câu 14:** khi tạo `PhoneAccess`, `restore_history(store.events(None, limit=500))` đọc lại tối đa 20 event `PHONE_*` gần nhất (đánh dấu `restored: true`) và lý do tắt gần nhất: từ event `PHONE_MODE_DISABLED` mới nhất; nếu event mới nhất là `PHONE_MODE_ENABLED` thì lý do là `stopped`.
-- **Câu 15:** POST `/api/phone-mode` `{extend: true}` (PC, token): giờ tắt = bây giờ + 8 giờ, giữ mã, event `PHONE_MODE_EXTENDED`; đang tắt → 400. Qua listener điện thoại → 403 `pc_only`.
+- **Câu 15:** POST `/api/phone-mode` `{extend: true}` (PC, token): giờ tắt = bây giờ + 8 giờ, giữ mã, event `PHONE_MODE_EXTENDED`; đang tắt → 400. (Đổi 2026-10-07, lựa chọn của người dùng: cộng 8 giờ vào thời gian còn lại, tối đa 24 giờ kể từ lúc bấm; trả thêm `added_seconds`. Xem `docs/DASHBOARD_V2_PHONE.md`.) Qua listener điện thoại → 403 `pc_only`.
 - **H6:** `PhoneAccess.try_code(text, ip=…)` trả `(outcome, set_cookie_header | None)` trong một lần giữ khóa; `set_cookie_header()` đã bỏ.
 
 ### 8.7. Đợt 4 (mục 14 của kế hoạch)

@@ -165,6 +165,7 @@ Always confirm this section with `git status` and `git log` because it becomes s
   1. Put the main folder on the merge (detached, as for the earlier tests) and start the real Control Center (the Python part loads at start).
   2. The user presses "Cài và cấu hình Tailscale" (UAC), "Đăng nhập Tailscale", installs the phone app with the same account, then "Mở cho điện thoại ngoài nhà", opens the link on 4G and tries "Gia hạn thêm 8 giờ" on the phone.
   3. Merge into `main` and push only when the user asks.
+- Done 2026-10-07: main folder detached at `a2b5398`, real Control Center started 07:54:44 (30 jobs intact). The user's test 08:03–08:08: install (UAC), sign-in, open over Tailscale and the phone's sign-in worked. "Gia hạn" worked but the time hardly moved (8 hours from the press); the user chose "Cộng dồn, tối đa 24 giờ": `phone_access.extend()` now adds 8 hours to the time left, at most 24 hours from now; the toast shows what was added and the new time (uncommitted). Next: with the user's OK, commit, put the main folder on it and restart the Control Center (the phone mode turns off; the user turns it on again), then the user re-tries "Gia hạn" and, if not done yet, 4G.
 
 ## Current work — 2026-10-06 U4: the Dashboard V2 list blinked on every refresh (in `main`, pushed)
 

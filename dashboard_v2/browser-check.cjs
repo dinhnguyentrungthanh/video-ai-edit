@@ -44,7 +44,7 @@ let remoteMode = false, phoneOn = false, phoneCode = 'abcd2345', phoneExtended =
 const phoneStatus = () => remoteMode ? {remote: true, enabled: true} : {remote: false, enabled: phoneOn,
   url: phoneOn ? 'http://192.168.1.23:8767/' : null, code: phoneOn ? phoneCode : null,
   locked: false, failed_attempts: 0, max_failed_attempts: 10, expires_at: phoneOn ? (phoneExtended ? 1790028800 : 1790000000) : null,
-  last_disabled_reason_text: phoneOn ? null : 'hết 8 giờ',
+  last_disabled_reason_text: phoneOn ? null : 'đến giờ tự tắt',
   events: phoneOn ? [{type: 'PHONE_CODE_WRONG', message: 'Thiết bị 192.168.1.50 nhập sai mã', at: 1789990000, ip: '192.168.1.50'}] : []};
 const PC_ONLY = ['/api/source-archive', '/api/source-archive/restore', '/api/source-recycle-check',
   '/api/shutdown', '/api/ai/config', '/api/ai/login', '/api/logo-memory/class', '/api/logo-memory/delete', '/api/phone-mode'];
@@ -334,7 +334,7 @@ async function check(name, fn) { await fn(); passed++; results.push(name); proce
       await page.locator('[data-action="phone-toggle"][data-enabled="0"]').click();
       await page.waitForSelector('[data-action="phone-toggle"][data-enabled="1"]');
       assert.equal(await page.locator('.phone-code').count(), 0);
-      assert.match(await page.locator('.phone-panel').textContent(), /lần trước tắt vì hết 8 giờ/);
+      assert.match(await page.locator('.phone-panel').textContent(), /lần trước tắt vì đến giờ tự tắt/);
       await page.locator('[data-action="phone-toggle"][data-enabled="1"][data-network="wifi"]').click();
       await page.waitForSelector('.phone-code');
       assert.notEqual(await page.locator('.phone-code').textContent(), first, 'a new code each time');

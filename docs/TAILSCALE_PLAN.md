@@ -9,7 +9,7 @@ Branch `feat/phone-tailscale`, worktree `temp\wt-phone-tailscale`. Builds on the
 3. ~~Install the program under `E:\DungChung\BiliFlow\runtime\tailscale`~~. **Changed on 2026-10-07** after the security review (every local account can modify `E:\DungChung\BiliFlow`, so a SYSTEM service there could be replaced): the user chose the default **`C:\Program Files\Tailscale`**; the installer cache, logs and temp files stay under the BiliFlow root. If the Tailscale service is not running when needed, BiliFlow starts it: from the panel, and first thing when "Mở cho điện thoại ngoài nhà" is pressed.
 4. Tailscale **updates itself** (`TS_INSTALLUPDATES=always`).
 5. Tailscale **runs unattended** (before a Windows sign-in; `TS_UNATTENDEDMODE=always`).
-6. **"Gia hạn thêm 8 giờ" also from the phone**, only while the phone mode is open over Tailscale. On/off stay PC-only.
+6. **"Gia hạn thêm 8 giờ" also from the phone**, only while the phone mode is open over Tailscale. On/off stay PC-only. **Changed on 2026-10-07** after the user's test (the auto-off time hardly moved, because a press set 8 hours from the press): each press adds 8 hours to the time left, at most 24 hours from now (the user's choice).
 
 ## What BiliFlow cannot do (said to the user)
 
@@ -58,7 +58,7 @@ All are refused on the phone listener (`PC_ONLY_POSTS`), and `GET /api/tailscale
 
 ### Phone extend (decision 6)
 
-`POST /api/phone-mode/extend` is in `PHONE_ALLOWED_POSTS`; the phone handler accepts it only when `phone.network == "tailscale"` (403 otherwise). Same `extend()` as the PC: 8 hours from now, same code, a `PHONE_MODE_EXTENDED` event with the device IP. The phone's `GET /api/phone-mode` adds `expires_at`.
+`POST /api/phone-mode/extend` is in `PHONE_ALLOWED_POSTS`; the phone handler accepts it only when `phone.network == "tailscale"` (403 otherwise). Same `extend()` as the PC: adds 8 hours to the time left, at most 24 hours from now (decision 6, changed 2026-10-07), same code, a `PHONE_MODE_EXTENDED` event with the device IP. The phone's `GET /api/phone-mode` adds `expires_at`.
 
 ### Safety
 

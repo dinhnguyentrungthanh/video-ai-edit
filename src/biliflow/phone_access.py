@@ -53,6 +53,9 @@ MAX_UNLOCKS = 3
 COOKIE_NAME = "biliflow_phone"
 # Batch 3 (plan §13): the extra door closes by itself and cannot be held open by strangers.
 AUTO_OFF_SECONDS = 8 * 3600        # H3: turned off 8 hours after it was turned on
+# The user's choice (2026-10-07): "Gia hạn" adds one lifetime to the time left, but never past
+# this many lifetimes from now (24 hours for the 8-hour default).
+EXTEND_MAX_LIFETIMES = 3
 ADDRESS_CHECK_SECONDS = 60          # H3: turned off when the PC's Wi-Fi address changes
 MAX_CONNECTIONS = 32                # H1: further connections are closed at once
 # L1/M1: one device cannot take every connection. Only connections that have not shown the cookie
@@ -66,7 +69,7 @@ ERROR_LOG_INTERVAL_SECONDS = 10.0   # H1: at most one error line per interval, w
 RECENT_EVENTS = 20                  # H4: kept in memory for the PC panel (also written to the store)
 DISABLE_REASONS = {
     "user": "người dùng tắt",
-    "expired": "hết 8 giờ",
+    "expired": "đến giờ tự tắt",
     "address_changed": "địa chỉ Wi-Fi của PC đổi",
     "tailscale_changed": "Tailscale trên PC tắt hoặc đổi địa chỉ",
     "stopped": "Control Center dừng",
@@ -248,6 +251,15 @@ def _epoch(stamp: Any) -> float | None:
         return datetime.fromisoformat(str(stamp)).timestamp()
     except (TypeError, ValueError):
         return None
+
+
+def _span(seconds: float) -> str:
+    """'8 giờ', '3 giờ 20 phút', '45 phút' or, for the short test lifetimes, '2 giây'."""
+    total = int(round(seconds))
+    if total < 60:
+        return f"{total} giây"
+    hours, minutes = divmod(total // 60, 60)
+    return " ".join(([f"{hours} giờ"] if hours else []) + ([f"{minutes} phút"] if minutes else []))
 
 
 def post_policy(path: str) -> tuple[bool, str | None, bool]:
@@ -572,23 +584,32 @@ class PhoneAccess:
         return self.status(include_secret=True)
 
     def extend(self, seconds: float | None = None, *, by: str | None = None) -> dict[str, Any]:
-        """Question 15: push the auto-off back to `seconds` (default 8 hours) from now; same code.
+        """Question 15: add `seconds` (default 8 hours) to the time left; same code.
 
+        The user's choice (2026-10-07): presses add up, but the auto-off never moves past
+        EXTEND_MAX_LIFETIMES lifetimes (24 hours) from now, and never earlier than it was.
         `by`: the IP of the phone that asked (over Tailscale, the user's choice 2026-10-06); None on the PC.
         """
         with self._lock:
             if self._server is None:
                 raise ValueError("Chế độ điện thoại đang tắt; bật lại trên PC.")
-            lifetime = self._lifetime if seconds is None else seconds
-            self._deadline = time.monotonic() + lifetime
-            self.expires_at = time.time() + lifetime
+            step = self._lifetime if seconds is None else seconds
+            limit = EXTEND_MAX_LIFETIMES * self._lifetime
+            now = time.monotonic()
+            left = max(0.0, (self._deadline or now) - now)
+            remaining = max(left, min(left + step, limit))
+            self._deadline = now + remaining
+            self.expires_at = time.time() + remaining
             expires_at, address, port = self.expires_at, self.address, self.port
+        added = remaining - left
+        off_at = time.strftime("%H:%M %d/%m", time.localtime(expires_at))
+        message = (f"Gia hạn chế độ điện thoại thêm {_span(added)}, tự tắt lúc {off_at}" if added >= 1 else
+                   f"Gia hạn chế độ điện thoại: đã ở mức tối đa {_span(limit)}, tự tắt lúc {off_at}")
         who = {"ip": by} if by else {}
-        self._event("PHONE_MODE_EXTENDED",
-                    f"Gia hạn chế độ điện thoại thêm {int(lifetime // 3600) or round(lifetime)} "
-                    f"{'giờ' if lifetime >= 3600 else 'giây'}" + (f" (từ thiết bị {by})" if by else ""),
-                    address=address, port=port, expires_in_seconds=int(lifetime), **who)
-        return self.status(include_secret=True)
+        self._event("PHONE_MODE_EXTENDED", message + (f" (từ thiết bị {by})" if by else ""),
+                    address=address, port=port, expires_in_seconds=int(remaining),
+                    added_seconds=int(round(added)), **who)
+        return {**self.status(include_secret=True), "added_seconds": int(round(added))}
 
     def restore_history(self, stored_events: list[dict[str, Any]]) -> None:
         """Question 14: after a restart, show the latest phone events and the last off reason.

@@ -2280,7 +2280,7 @@ def _handler_class(center: ControlCenter) -> type[BaseHTTPRequestHandler]:
                             return
                         status = phone.extend(by=self.client_address[0])
                         result = {"remote": True, "enabled": status["enabled"], "network": status["network"],
-                                  "expires_at": status["expires_at"]}
+                                  "expires_at": status["expires_at"], "added_seconds": status["added_seconds"]}
                     else:
                         result = {"remote": False, **phone.extend()}
                 elif match := re.fullmatch(r"/api/tailscale/(install|start-service|firewall|login|up|down|logout|remote-on)", path):

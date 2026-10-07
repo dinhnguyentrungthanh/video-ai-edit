@@ -329,4 +329,16 @@ check('Demo store: permanent deletes remove the video and send confirm_permanent
   await S.fileAction('archive',[109],a.preview_id);
   assert.deepEqual([last().path,last().body.confirm_permanent],['/api/source-archive',undefined]);
 });
+check('"Gia hạn": the toast says what was added and the new auto-off time (adds up, at most 24 hours)',()=>{
+  const src=fs.readFileSync(path.join(__dirname,'app.js'),'utf8');
+  const extendToast=vm.runInNewContext('('+src.match(/function extendToast\(added,after\)\{[\s\S]*?\n\}/)[0]+')');
+  const at=1790028800;
+  assert.match(extendToast(8*3600,at),/^Đã gia hạn thêm 8 giờ: tự tắt lúc .+\. Mã giữ nguyên\.$/);
+  assert.match(extendToast(3*3600+20*60,at),/thêm 3 giờ 20 phút:/);
+  assert.match(extendToast(0,at),/^Đã ở mức tối đa 24 giờ: tự tắt lúc /);
+  assert.match(extendToast(undefined,at),/^Đã gia hạn: tự tắt lúc /, 'an older Control Center sends no added_seconds');
+  assert.equal(extendToast(0,null),'Đã gia hạn. Mã giữ nguyên.');
+  assert.match(src,/extendToast\(result&&result\.body&&result\.body\.added_seconds,/, 'the amount comes from the server');
+  assert.ok((src.match(/\+EXTEND_NOTE/g)||[]).length===2,'the 24-hour note under both extend buttons');
+});
 Promise.all(pending).then(()=>process.stdout.write(JSON.stringify({passed:checks,failed:0})+'\n'),error=>{console.error(error);process.exitCode=1;});

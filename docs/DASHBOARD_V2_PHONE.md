@@ -133,10 +133,10 @@ Hộp thoại vẫn liệt kê từng video, vẫn có ô "Tôi hiểu", và ser
 - Trên PC: Dashboard V2 → Cài đặt → **Tắt chế độ điện thoại**. Listener đóng ngay và mã cũ hết hiệu lực.
 - Hoặc `Stop-BiliFlow.cmd`: tắt Control Center, và chế độ điện thoại tắt theo.
 - **Tự tắt:**
-  - sau **8 giờ** kể từ lúc bật (khung trên PC hiện giờ sẽ tắt). Muốn dùng lâu hơn: bấm **Gia hạn thêm 8 giờ** trong khung trên PC; giờ tắt tính lại 8 giờ kể từ lúc bấm, mã giữ nguyên. Khi mở **qua Tailscale**, điện thoại cũng có nút này (mục 8.4); ở Wi-Fi nhà chỉ PC gia hạn được;
+  - sau **8 giờ** kể từ lúc bật (khung trên PC hiện giờ sẽ tắt). Muốn dùng lâu hơn: bấm **Gia hạn thêm 8 giờ** trong khung trên PC; mỗi lần bấm cộng 8 giờ vào giờ tắt, tối đa 24 giờ kể từ lúc bấm (đã đủ 24 giờ thì bấm thêm không đổi gì), mã giữ nguyên; thông báo ghi đã cộng bao nhiêu và giờ tắt mới. Khi mở **qua Tailscale**, điện thoại cũng có nút này (mục 8.4); ở Wi-Fi nhà chỉ PC gia hạn được;
   - khi **địa chỉ Wi-Fi của PC đổi**, ví dụ đổi Wi-Fi hoặc mất mạng; kiểm tra mỗi phút;
   - khi bật qua Tailscale: khi **Tailscale trên PC tắt, đăng xuất hoặc đổi địa chỉ** (mục 8); cũng kiểm tra mỗi phút.
-- Khung "Mở trên điện thoại" cho biết lần tắt gần nhất vì sao: người dùng tắt, hết 8 giờ, đổi địa chỉ, hoặc Control Center dừng.
+- Khung "Mở trên điện thoại" cho biết lần tắt gần nhất vì sao: người dùng tắt, đến giờ tự tắt, đổi địa chỉ, hoặc Control Center dừng.
 - Mỗi lần bật lại sẽ có mã mới.
 - Khi chế độ đang bật, Dashboard V2 trên PC có dòng báo "Đang mở cho điện thoại: …" ở đầu mọi trang trừ Cài đặt (từ 2026-10-06; trước đó dòng này ở dashboard cũ `/`). Dòng báo không bao giờ có mã. Tab V2 mở từ trước lúc bật chế độ chỉ hiện dòng này sau khi tải lại trang hoặc vào Cài đặt. `Start-BiliFlow.cmd` cũng in dòng `NOTE: phone mode is ON` khi dùng lại Control Center đang bật chế độ này.
 - **Một mã cho mọi thiết bị:** trong một lần bật, mọi thiết bị đã nhập đúng mã đều vào được. Muốn đuổi hết thiết bị: tắt rồi bật lại để có mã mới.
@@ -212,7 +212,7 @@ Bạn đã chọn (2026-10-06):
 ### 8.4 Giới hạn và an toàn
 
 - PC phải đang bật và **không ngủ** (Sleep); Control Center và Tailscale trên PC phải đang chạy.
-- **Bật và tắt chỉ làm trên PC.** Chế độ tự tắt 8 giờ sau lúc bật hoặc sau lần gia hạn gần nhất. Khi mở qua Tailscale, khung "Đang mở qua điện thoại / laptop (Tailscale)" trên điện thoại hiện giờ tự tắt và nút **Gia hạn thêm 8 giờ**: bấm trước giờ đó thì dùng tiếp, mã giữ nguyên, nhật ký ghi "(từ thiết bị 100.x.y.z)". Đã tự tắt thì không mở lại được từ xa; phải về PC bật lại.
+- **Bật và tắt chỉ làm trên PC.** Chế độ tự tắt 8 giờ sau lúc bật; mỗi lần gia hạn cộng thêm 8 giờ, tối đa 24 giờ kể từ lúc bấm. Khi mở qua Tailscale, khung "Đang mở qua điện thoại / laptop (Tailscale)" trên điện thoại hiện giờ tự tắt và nút **Gia hạn thêm 8 giờ**: bấm trước giờ đó thì dùng tiếp, mã giữ nguyên, nhật ký ghi "(từ thiết bị 100.x.y.z)". Đã tự tắt thì không mở lại được từ xa; phải về PC bật lại.
 - Tự tắt khi Tailscale trên PC tắt, bị ngắt, đăng xuất hoặc đổi địa chỉ (kiểm tra mỗi phút; tắt sau **hai** lần kiểm tra sai liên tiếp, để một lần Tailscale chậm trả lời không làm mất kết nối khi bạn đang ở ngoài; khung ghi "Tailscale trên PC tắt hoặc đổi địa chỉ"). Vì vậy bấm **Ngắt Tailscale** hoặc **Đăng xuất Tailscale** trên PC cũng tắt chế độ điện thoại qua Tailscale.
 - Ai vào được: chỉ thiết bị trong mạng Tailscale (tailnet) của bạn **và** có mã. Đừng chia sẻ PC cho người khác trong Tailscale và đừng thêm người lạ vào tailnet.
 - **Mất điện thoại:** trên PC tắt chế độ điện thoại (mã cũ và mọi phiên hết hiệu lực ngay), rồi gỡ điện thoại đó khỏi tailnet trong trang quản trị Tailscale.

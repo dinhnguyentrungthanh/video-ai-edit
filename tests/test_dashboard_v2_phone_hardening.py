@@ -303,7 +303,7 @@ class H3Lifecycle(HardeningBase):
         self.assertFalse(self.phone.enabled)
         pc = json.loads(http(self.pc_port, "GET", "/api/phone-mode", host=f"127.0.0.1:{self.pc_port}")[2])
         self.assertEqual((pc["enabled"], pc["last_disabled_reason"]), (False, "expired"))
-        self.assertEqual(pc["last_disabled_reason_text"], "hết 8 giờ")
+        self.assertEqual(pc["last_disabled_reason_text"], "đến giờ tự tắt")
         with self.assertRaises(OSError):
             socket.create_connection(("127.0.0.1", self.port), timeout=2).close()
         self.self_check_banner(False)
@@ -446,6 +446,24 @@ class Q14Q15ExtendAndHistory(HardeningBase):
         self.assertIn("PHONE_MODE_EXTENDED", kinds)
         self.assertEqual(self.pc_post({"extend": True})[0], 400, "nothing to extend once off")
         self.assertEqual(self.pc_post({"extend": "yes"})[0], 400)
+
+    def test_extend_adds_the_lifetime_up_to_three_lifetimes_from_now(self):
+        """The user's choice (2026-10-07): each press adds 8 hours to the time left, at most 24 hours from now."""
+        status = self.enable(lifetime_seconds=1000, check_seconds=60)
+        first = self.phone.extend()["expires_at"]
+        self.assertAlmostEqual(first, status["expires_at"] + 1000, delta=5)
+        second = self.phone.extend()["expires_at"]
+        self.assertAlmostEqual(second, time.time() + 3000, delta=5)
+        answer = self.phone.extend()
+        third = answer["expires_at"]
+        self.assertEqual(answer["added_seconds"], 0, "the page shows the server's amount")
+        self.assertGreaterEqual(third, second - 0.01, "never shortened")
+        self.assertAlmostEqual(third, time.time() + 3000, delta=5, msg="capped at 3 lifetimes from now")
+        events = [e for e in self.store.events(None) if e["event_type"] == "PHONE_MODE_EXTENDED"]
+        self.assertEqual([e["payload"]["added_seconds"] for e in reversed(events)], [1000, 1000, 0])
+        self.assertIn("thêm 16 phút", events[-1]["message"])
+        self.assertIn("tự tắt lúc", events[-1]["message"])
+        self.assertIn("mức tối đa", events[0]["message"])
 
     def test_extend_is_pc_only(self):
         self.enable()

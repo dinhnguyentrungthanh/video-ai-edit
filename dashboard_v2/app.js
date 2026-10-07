@@ -218,12 +218,24 @@ let phoneBusy=false; // one on/off request at a time across the two "Bật" butt
 const PHONE_WARN={
   wifi:'<p class="muted">Chỉ dùng trong Wi-Fi nhà: kết nối là HTTP, không mã hóa; không dùng Wi-Fi công cộng. Khi chế độ này bật, người có mã (hoặc lấy được phiên trong cùng Wi-Fi) có thể xóa vĩnh viễn video gốc, kể cả video chưa xuất (Hủy rồi Xóa video); tắt khi không dùng. Lần đầu Windows hỏi cho Python qua tường lửa, chọn <strong>Private networks</strong>.</p>',
   tailscale:'<p class="muted">Qua Tailscale: Tailscale mã hóa đường truyền, chỉ thiết bị đã đăng nhập tài khoản Tailscale của bạn mở được link, ở bất kỳ đâu. Người cầm thiết bị đó và có mã (hoặc điện thoại đã vào BiliFlow) có thể xóa vĩnh viễn video gốc, kể cả video chưa xuất (Hủy rồi Xóa video); tắt khi không dùng. PC phải bật và không ngủ. Cài, đăng nhập và rule tường lửa của Tailscale làm ở khung Tailscale bên dưới.</p>'};
+// The user's choice (2026-10-07): each "Gia hạn" adds 8 hours to the auto-off, at most 24 hours from now.
+const EXTEND_NOTE='<p class="muted">Mỗi lần bấm “Gia hạn thêm 8 giờ” cộng 8 giờ vào giờ tự tắt, tối đa 24 giờ kể từ lúc bấm. Mã giữ nguyên.</p>';
+// `added`: the server's added_seconds (the page's own copy of the time may be stale on the phone).
+function extendToast(added,after){
+  if(!after)return 'Đã gia hạn. Mã giữ nguyên.';
+  const at=new Date(after*1000).toLocaleString('vi-VN',{hour:'2-digit',minute:'2-digit',day:'2-digit',month:'2-digit'});
+  if(typeof added!=='number')return 'Đã gia hạn: tự tắt lúc '+at+'. Mã giữ nguyên.';
+  const minutes=Math.round(Math.max(0,added)/60);
+  if(minutes<1)return 'Đã ở mức tối đa 24 giờ: tự tắt lúc '+at+'. Mã giữ nguyên.';
+  const h=Math.floor(minutes/60),m=minutes%60;
+  return 'Đã gia hạn thêm '+[h?h+' giờ':'',m?m+' phút':''].filter(Boolean).join(' ')+': tự tắt lúc '+at+'. Mã giữ nguyên.';
+}
 function phonePanel(){
   if(!LIVE)return '<section class="panel phone-panel" style="margin-bottom:18px"><h2>Mở trên điện thoại</h2><p class="muted">Chỉ có ở bản live (/dashboard-v2/) trên PC.</p></section>';
   const p=state.phone,tailscale=!!p&&p.network==='tailscale';
   const warn=tailscale?PHONE_WARN.tailscale:PHONE_WARN.wifi;
   // Over Tailscale the phone may push the auto-off back (the user's choice, 2026-10-06); on the home Wi-Fi only the PC.
-  const remoteExtend=tailscale?'<div class="key-value"><span>Tự tắt lúc</span><span>'+(p.expires_at?esc(new Date(p.expires_at*1000).toLocaleString('vi-VN')):'—')+'</span></div><div class="action-grid"><button class="secondary" data-action="phone-extend">Gia hạn thêm 8 giờ</button></div>':'';
+  const remoteExtend=tailscale?'<div class="key-value"><span>Tự tắt lúc</span><span>'+(p.expires_at?esc(new Date(p.expires_at*1000).toLocaleString('vi-VN')):'—')+'</span></div><div class="action-grid"><button class="secondary" data-action="phone-extend">Gia hạn thêm 8 giờ</button></div>'+EXTEND_NOTE:'';
   if(state.remote)return '<section class="panel phone-panel" style="margin-bottom:18px"><h2>Đang mở qua điện thoại / laptop'+(tailscale?' (Tailscale)':'')+'</h2>'+remoteExtend+'<p class="pc-only-note">Xóa video gốc, Xóa video và Dọn video mất gốc làm được ở đây: video gốc bị xóa vĩnh viễn, không qua Thùng rác. Các thao tác sau chỉ làm trên PC: lưu trữ, khôi phục bản xuất, kiểm tra lại Thùng rác; tắt Control Center; cấu hình và đăng nhập AI; Visual AI Audit (gửi ảnh ra ngoài máy); sửa hoặc xóa bộ nhớ logo; cài và điều khiển Tailscale; bật/tắt chế độ điện thoại'+(tailscale?' (gia hạn thì làm được ở đây)':'')+'. Duyệt cảnh ở đây vẫn có thể thêm hoặc bỏ logo đã nhớ.</p>'+warn+'</section>';
   if(!p)return '<section class="panel phone-panel" style="margin-bottom:18px"><h2>Mở trên điện thoại</h2><p class="muted">Đang tải trạng thái…</p></section>';
   if(p.unavailable)return '<section class="panel phone-panel" style="margin-bottom:18px"><h2>Mở trên điện thoại</h2><p class="notice">Control Center đang chạy chưa có chế độ điện thoại. Tắt bằng Stop-BiliFlow.cmd rồi mở lại bằng Start-BiliFlow-Phone.cmd.</p></section>';
@@ -234,9 +246,9 @@ function phonePanel(){
     '<div class="key-value"><span>Mạng</span><span class="phone-network">'+esc(p.network_text||'Wi-Fi nhà')+'</span></div>'+
     '<div class="key-value"><span>Mở trên điện thoại</span><span class="mono phone-link">'+esc(p.url)+'</span></div>'+
     '<div class="key-value"><span>Mã truy cập</span><span class="mono phone-code">'+esc(p.code)+'</span></div><p class="muted">'+(tailscale?'Bật Tailscale trên điện thoại, mở link rồi gõ mã vào ô “Mã truy cập”. Dùng đúng link số này, không dùng tên máy.':'Mở link trên điện thoại rồi gõ mã vào ô “Mã truy cập”.')+'</p>'+
-    (p.expires_at?'<div class="key-value"><span>Tự tắt lúc</span><span>'+esc(new Date(p.expires_at*1000).toLocaleString('vi-VN'))+' (sau 8 giờ, hoặc khi '+(tailscale?'Tailscale trên PC tắt hoặc đổi địa chỉ':'địa chỉ Wi-Fi đổi')+')</span></div>':'')+
+    (p.expires_at?'<div class="key-value"><span>Tự tắt lúc</span><span>'+esc(new Date(p.expires_at*1000).toLocaleString('vi-VN'))+' (hoặc sớm hơn khi '+(tailscale?'Tailscale trên PC tắt hoặc đổi địa chỉ':'địa chỉ Wi-Fi đổi')+')</span></div>':'')+
     (p.locked?'<p class="notice">Đã nhập sai mã quá nhiều lần nên nhập mã đang bị khóa. '+(p.unlock_locked?'Khóa mở đặc biệt cũng đã bị khóa; tắt rồi bật lại để có mã mới.':'Trên điện thoại có thể gỡ bằng khóa mở đặc biệt (còn '+Math.max(0,(p.max_unlocks||0)-(p.unlocks||0))+' lượt), sau đó vẫn phải nhập mã; hoặc tắt rồi bật lại để có mã mới.')+'</p>':'')+
-    '<div class="action-grid"><button class="secondary" data-action="phone-extend">Gia hạn thêm 8 giờ</button><button class="danger" data-action="phone-toggle" data-enabled="0">Tắt chế độ điện thoại</button></div>':
+    '<div class="action-grid"><button class="secondary" data-action="phone-extend">Gia hạn thêm 8 giờ</button><button class="danger" data-action="phone-toggle" data-enabled="0">Tắt chế độ điện thoại</button></div>'+EXTEND_NOTE:
     '<div class="key-value"><span>Trạng thái</span><span>Đang tắt'+(p.last_disabled_reason_text?' · lần trước tắt vì '+esc(p.last_disabled_reason_text):'')+'</span></div><p class="muted">Bật để điện thoại hoặc laptop mở được BiliFlow bằng link và mã. <strong>Wi-Fi nhà:</strong> thiết bị cùng Wi-Fi với PC. <strong>Tailscale:</strong> ở bất kỳ đâu (4G, Wi-Fi khác); cần cài Tailscale trên PC và điện thoại, đăng nhập cùng một tài khoản. Mã đổi mỗi lần bật.</p>'+
     '<div class="action-grid"><button class="primary" data-action="phone-toggle" data-enabled="1" data-network="wifi"'+(tsOpening?' disabled':'')+'>Bật cho Wi-Fi nhà</button><button class="secondary" data-action="phone-toggle" data-enabled="1" data-network="tailscale"'+(tsMissing||tsOpening?' disabled':'')+'>'+(tsOpening?'Đang mở qua Tailscale…':'Bật qua Tailscale (ngoài nhà)')+'</button></div>'+
     (tsMissing?'<p class="muted">Chưa cài Tailscale trên PC: bấm “Cài và cấu hình Tailscale” ở khung Tailscale bên dưới.</p>':'');
@@ -661,7 +673,7 @@ document.addEventListener('click',async event=>{
     // The phone too while it is open over Tailscale (the server checks it: 403 on the home Wi-Fi).
     const remoteOk=state.phone&&state.phone.network==='tailscale';
     if(!LIVE||state.remote&&!remoteOk||el.dataset.busy)return;el.dataset.busy='1';el.disabled=true;
-    try{await store.dispatch('phoneExtend',null,{});state=store.snapshot();toast('Đã gia hạn: chế độ điện thoại tự tắt sau 8 giờ kể từ bây giờ. Mã giữ nguyên.');}
+    try{const result=await store.dispatch('phoneExtend',null,{});state=store.snapshot();toast(extendToast(result&&result.body&&result.body.added_seconds,state.phone&&state.phone.expires_at));}
     catch(e){toast(e.message,true);}finally{delete el.dataset.busy;render();}
   }
   else if(action==='ts'){

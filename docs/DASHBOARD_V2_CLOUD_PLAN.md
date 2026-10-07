@@ -669,7 +669,7 @@ Mọi ràng buộc của 12.3 vẫn giữ nguyên:
 | --- | --- | --- |
 | 13 | Giữ (sau khi cloud giải thích lại) | Dòng báo ở `/` chỉ hiện khi chế độ điện thoại đang bật; khi tắt `/` trùng byte bản chụp mẫu f6996bb nên fixture D2 không đổi; test kiểm cả hai trạng thái |
 | 14 | Đọc lại các việc gần nhất và trạng thái của nó sau khi khởi động lại | `PhoneAccess.restore_history()` khi tạo: tối đa 20 event `PHONE_*` gần nhất (khung hiện 10) và lý do tắt gần nhất; lần chạy trước dừng khi đang bật → “Control Center dừng” |
-| 15 | Thêm gia hạn | Nút “Gia hạn thêm 8 giờ” ở khung PC → POST `/api/phone-mode` `{extend:true}`: giờ tắt = bây giờ + 8 giờ, giữ mã, ghi event `PHONE_MODE_EXTENDED`; chỉ PC |
+| 15 | Thêm gia hạn | Nút “Gia hạn thêm 8 giờ” ở khung PC → POST `/api/phone-mode` `{extend:true}`: giờ tắt = bây giờ + 8 giờ, giữ mã, ghi event `PHONE_MODE_EXTENDED`; chỉ PC. Đổi 2026-10-07: cộng 8 giờ vào thời gian còn lại, tối đa 24 giờ kể từ lúc bấm; qua Tailscale điện thoại cũng gia hạn được |
 | 16 | Chấp nhận tự tắt khi bật/tắt VPN làm đổi địa chỉ | Không đổi |
 
 **Sau đợt 3:**
