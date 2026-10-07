@@ -21,7 +21,7 @@ BiliFlow là hệ thống local-first hỗ trợ quét, review, xử lý và sau
 
 Double-click [`Start-BiliFlow.cmd`](Start-BiliFlow.cmd) để mở dashboard tập trung tại `127.0.0.1:8765` (từ 2026-10-06 là Dashboard V2, xem mục bên dưới). Dashboard tự nhập sáu nguồn và lịch sử review hiện có, theo dõi video mới sau khi file ổn định 60 giây, cho xếp nhiều video, chọn profile `careful`/`fast`, dừng sau stage, dừng ngay, retry, review và chọn riêng cho từng video: giới hạn mặc định 3,5 GB, giới hạn tùy chỉnh hoặc không giới hạn dung lượng.
 
-Đóng tab trình duyệt không dừng backend. Dùng nút **Tắt** trên dashboard hoặc [`Stop-BiliFlow.cmd`](Stop-BiliFlow.cmd) để tắt watcher, scheduler, worker và cổng web. BiliFlow không cài service và không tự chạy cùng Windows.
+Đóng tab trình duyệt không dừng backend. Dùng nút **Tắt** trên dashboard hoặc [`Stop-BiliFlow.cmd`](Stop-BiliFlow.cmd) để tắt watcher, scheduler, worker và cổng web. Khi BiliFlow đang chạy, `Start-BiliFlow.cmd` chỉ mở lại trình duyệt; sau khi cập nhật code, hãy tắt bằng `Stop-BiliFlow.cmd` rồi mới mở lại. BiliFlow không cài service và không tự chạy cùng Windows.
 
 SQLite WAL ở `state/control-center.sqlite3` giữ trạng thái job/stage/revision/artifact/event. Khi máy hoặc ứng dụng dừng bất ngờ, stage đang chạy trở về `INTERRUPTED_RECOVERABLE`; source và stage đã hoàn tất được giữ nguyên. Một GPU worker xử lý tuần tự để phù hợp RTX 2060 6 GB, còn nhiều video vẫn có thể nằm trong queue và review web hoạt động đồng thời.
 

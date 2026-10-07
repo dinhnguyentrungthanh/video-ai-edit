@@ -1,0 +1,21 @@
+{
+  "_comment": "Exact bare hosts only; copy to the gitignored download_providers.local.json. Shipped native adapters are player-hls, article-mp4 and embedded-media; unknown IDs are only recognized. No modules, commands, wildcards, ports or URLs. Direct media links need no entry. Use example hosts in tracked files.",
+  "providers": {
+    "player-hls": {
+      "hosts": [
+        "episodes.example"
+      ]
+    },
+    "article-mp4": {
+      "hosts": [
+        "articles.example",
+        "www.articles.example"
+      ]
+    },
+    "embedded-media": {
+      "hosts": [
+        "embedded.example"
+      ]
+    }
+  }
+}

@@ -89,19 +89,28 @@
     const h = Math.floor(n / 3600), m = Math.floor(n % 3600 / 60), sec = n % 60;
     return (h ? h + ':' + String(m).padStart(2, '0') : String(m)) + ':' + String(sec).padStart(2, '0');
   }
-  /* Percent only with a known total (never invented); 100 % only once the file is in input. */
+  /* Percent only with a known total (never invented); 100 % only once the file is in input. An HLS link
+     counts finished segments (fragments_done / fragments_total); downloaded_bytes stays real bytes. While
+     the segments are joined into MP4 (transfer_stage "remuxing") there is no percent, only the stage. */
   function progress(task) {
     const done = Math.max(0, Number(task.downloaded_bytes) || 0), total = Number(task.total_bytes) || 0, s = task.state;
+    const parts = Number(task.fragments_total) || 0, partsDone = Math.min(parts, Math.max(0, Number(task.fragments_done) || 0));
+    const segmented = task.progress_basis === 'fragments' && parts > 0;
+    const remuxing = s === 'DOWNLOADING' && task.transfer_stage === 'remuxing';
     let percent = null;
     if (s === 'COMPLETED') percent = 100;
-    else if (total > 0 && ['DOWNLOADING', 'STOPPED', 'INTERRUPTED', 'FAILED', 'CANCELLING'].includes(s)) {
-      percent = Math.min(99, Math.floor(100 * done / total));
+    else if (!remuxing && ['DOWNLOADING', 'STOPPED', 'INTERRUPTED', 'FAILED', 'CANCELLING'].includes(s)) {
+      if (segmented) percent = Math.min(99, Math.floor(100 * partsDone / parts));
+      else if (total > 0) percent = Math.min(99, Math.floor(100 * done / total));
     }
-    const sizeText = total > 0 ? formatBytes(done) + ' / ' + formatBytes(total) : done ? formatBytes(done) + ' đã tải' : '';
-    const speed = s === 'DOWNLOADING' && Number(task.speed) > 0 ? formatBytes(task.speed) + '/s' : '';
-    const eta = s === 'DOWNLOADING' && Number(task.eta) > 0 ? 'còn ' + clock(task.eta) : '';
+    let sizeText = total > 0 ? formatBytes(done) + ' / ' + formatBytes(total) : done ? formatBytes(done) + ' đã tải' : '';
+    if (segmented) sizeText = partsDone + '/' + parts + ' đoạn' + (done ? ' · ' + formatBytes(done) : '');
+    const moving = s === 'DOWNLOADING' && !remuxing;
+    const speed = moving && Number(task.speed) > 0 ? formatBytes(task.speed) + '/s' : '';
+    const eta = moving && Number(task.eta) > 0 ? 'còn ' + clock(task.eta) : '';
+    const stage = remuxing ? 'Đang ghép các đoạn thành MP4' : '';
     return {percent, indeterminate: percent === null && ['PROBING', 'DOWNLOADING', 'VERIFYING', 'PUBLISHING'].includes(s),
-      sizeText, speed, eta};
+      sizeText, speed, eta, stage};
   }
   /* The textarea: one link per line, blanks dropped. The backend checks every link again. */
   function links(text) {

@@ -10,7 +10,8 @@
     "BSD-2-Clause",
     "BSD-3-Clause",
     "MPL-2.0",
-    "LicenseRef-Public-Domain"
+    "LicenseRef-Public-Domain",
+    "PSF-2.0"
   ],
   "python_packages": {
     "yt-dlp": {
@@ -72,6 +73,24 @@
       "license_spdx": "BSD-2-Clause AND LicenseRef-Public-Domain",
       "source_url": "https://pypi.org/project/pycryptodomex/3.23.0/",
       "role": "Giải mã AES của luồng HLS không DRM."
+    },
+    "playwright": {
+      "version": "1.63.0",
+      "license_spdx": "Apache-2.0",
+      "source_url": "https://pypi.org/project/playwright/1.63.0/",
+      "role": "Anonymous headless Edge player reader; every page request uses SafeHttp."
+    },
+    "pyee": {
+      "version": "13.0.1",
+      "license_spdx": "MIT",
+      "source_url": "https://pypi.org/project/pyee/13.0.1/",
+      "role": "Playwright event emitter."
+    },
+    "greenlet": {
+      "version": "3.5.6",
+      "license_spdx": "MIT AND PSF-2.0",
+      "source_url": "https://pypi.org/project/greenlet/3.5.6/",
+      "role": "Playwright sync API; licenses verified from the installed distribution LICENSE and LICENSE.PSF."
     }
   },
   "binaries": {

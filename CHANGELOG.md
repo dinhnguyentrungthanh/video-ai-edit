@@ -42,6 +42,316 @@ The user asked to reach BiliFlow on the phone from outside the home Wi-Fi. Optio
 - Security review (agent): no CRITICAL or HIGH. Fixed: both MEDIUM (one failed CLI check turned the mode off; the toast and the script trusted the request instead of the answer) and the LOW notes on the enable/disable race, the Tailscale bind message and a shared busy flag.
 - Not tested yet: real Tailscale (not installed on this PC). The running Control Center needs a restart (no job running) to load the Python part.
 
+## Source providers in `main`; real Control Center restarted; the user's real test passed — 2026-10-06
+
+- At the user's request, `main` was fast-forwarded `84a5db1` → `a3b69f0` (`5056d94` source providers, `a3b69f0` merge of `main`). Pushed at the user's request (`84a5db1..bd4d019`). The sections below marked "(uncommitted)" are in `main` now.
+- The main folder's uncommitted draft of the downloader scope update (5 documents) was backed up with its diff in `temp\main-folder-backup-20261006-214658` and restored to `HEAD`. The branch already had all of it, with three statements updated. The backup also keeps copies of both `state\*.sqlite3` from before the restart.
+- `config\download_providers.local.json` was copied into the install (Git-ignored). Registry: `player-hls`, `article-mp4`, `embedded-media` (2 exact hosts each) and `direct`, no config problems. Playwright 1.63.0, Edge headless.
+- Checks on `a3b69f0`: `test_download*` 453 OK; `test_dashboard_v2*` 95 OK (1 skipped); `test_control_center*` 55 OK; Node gates 36/36, 33/33, 22/22, 31/31; tool audit 0 blocked; model license audit 9 allowed, 0 blocked. Full suite of the same tree before the fast-forward: 1858 OK (26 skipped) with a synthetic clip.
+- The real Control Center was already stopped (clean, about 21:34) and idle. It was started at 21:52:47 with `scripts\Start-BiliFlow.ps1` on `a3b69f0`, phone mode off as before. GET checks: no `worker_error`, nothing running, task #4 (FAILED, `UNSUPPORTED`) unchanged and left for the user to retry.
+- The user's real test passed: task #4 retried and four more links, five videos into `input\` (jobs 70–74, 43–48 minutes). Job 70 is task #4's episode (311,090,096 bytes, the size of the earlier probe). The user removed the rows afterwards.
+
+## Headless embedded-player adapter — 2026-10-06 (uncommitted)
+
+- The user approved adding Playwright. Installed/pinned Playwright 1.63.0, pyee 13.0.1 and greenlet 3.5.6; uses the existing Microsoft Edge, with no browser download. Dependency licenses are recorded in download_tools.json (Apache-2.0, MIT, MIT AND PSF-2.0); tool audit has zero blockers and the equivalent standard model license audit has 9 allowed, zero blocked.
+- Native `embedded-media` is registered alongside `player-hls`, `article-mp4`, and `direct`. Exact real hosts are enabled in the Git-ignored local config. It runs Edge headless in a fresh profile under the task directory, closes the browser and removes the profile on completion/error/stop; it never uses a user's profile or calls an outside extraction script.
+- Page requests are intercepted and fulfilled via SafeHttp only; no browser route continues unchecked. Service workers, WebSockets, popups and browser downloads are blocked. Cookies/auth headers are not forwarded. Media itself is aborted in the browser and fetched by the existing native transfers after identifying the designated player subtree. Internal browser URLs do not make HTTP requests. Signed links remain private.
+- Verified real HTTPS source probe: the user-provided episode source has H.264/AAC, duration 2634.19 seconds and size 311090096 bytes; resolving again produces the same identity. No browser profile remained. This was probe-only under an isolated temporary root, not a full episode download or production API write.
+- Five synthetic browser tests passed: nested movie iframe versus ads, actual headless launch, no cookies forwarded, private-address refusal, stop during page read/profile cleanup, missing library error, and the real download worker publishing a verified synthetic MP4. Full downloader regression: 453 tests OK (7 conditional skips); includes the five browser tests. git diff --check clean; local host config is Git-ignored.
+- Worktree remains `temp\wt-download-source-providers`, branch `feat/download-source-providers`, uncommitted. No merge, push or production Control Center restart. Earlier notes about pending browser approval are historical and superseded here.
+
+## Native page adapters — 2026-10-06 (uncommitted)
+
+- Worktree `temp\wt-download-source-providers`, branch `feat/download-source-providers`. The existing common downloader is preserved. No merge, push, or restart of the production Control Center.
+- `player-hls` reads only the designated player iframe, its episode JSON and the public literal URL transform. It resolves a fresh HLS link on every probe/download/resume. PNG cover removal is opt-in for this adapter, bounded and CRC checked; ordinary HLS still rejects PNG responses. Every stored TS packet is validated before ordered FFmpeg remux.
+- `article-mp4` reads the page's public article API through bounded checked POST. It ignores main/trailer and advertising sources, unwraps the outer media parameter exactly once, requires video/audio and at least 600 seconds, and asks for a version when several exist. The chosen version is resolved and probed before downloading. A moov index at the end of an MP4 is read through bounded byte ranges; ffprobe receives only a local sample.
+- Both adapters run inside the backend and reuse queue, progress, cancellation, resume, verification and publishing. They call no external extraction/download script. Exact real hosts are enabled only in the Git-ignored local config. Signed media URLs are not stored in public identities.
+- Verified with synthetic fixtures and the downloader regression tests. Real HTTPS probes of the two user-provided sources succeeded: fresh identities matched, an HLS sample of three segments (12.02 seconds) passed video/audio/head/tail validation, and the API source reported H.264/AAC and about 125 minutes. These checks used an isolated temp root and did not download the complete films or submit tasks to production.
+- Final checks: all 448 downloader tests OK (7 conditional skips), including 14 native-adapter tests; dashboard download gate 22/22; `git diff --check` clean. Local host config is confirmed Git-ignored and the active registry is `player-hls`, `article-mp4`, `direct`.
+- Browser-based page extraction remains pending approval to add Playwright to BiliFlow (not currently installed). The two HTTP adapters add no package or tool dependency.
+- The common-only scope notes below describe the earlier implementation phase; the native adapters above supersede their statements that no site provider exists.
+
+# Unreleased — "Tải video": the user's test recorded, full-suite errors classified, host dispatcher completed — 2026-10-06
+
+Status: the same uncommitted branch `feat/download-source-providers`. The user's test Control Center still runs on port 8797 (root `temp\try-source-downloads-25mzgbq6`). The real Control Center (port 8765) was not touched or restarted. Nothing is committed, merged or pushed.
+
+- **The user's test on the dashboard (port 8797).**
+  - The user downloaded `demo.mp4` (the direct MP4 link) and `slow.mp4` (from the slow HLS playlist `/slow/index.m3u8`, 60 segments). Both completed and played with picture and sound.
+  - `--check-input` of that root: `demo.mp4` 20 s and `slow.mp4` 120 s, both H.264 640×360 + AAC.
+  - The user did not report trying Stop, Resume or Cancel. Those were tried only by the agent's scripted run (port 8798) and by the automated tests.
+- **Full suite, every error classified.** Run in the worktree as before (`PYTHONPATH` = the worktree's `src`, `TEMP` = `<install>\temp`, `BILIFLOW_FFMPEG` = the project FFmpeg): 1796 tests, 28 errors, 26 skipped (the first run of this round; the last one is under Checks).
+  - All 28 are `StopIteration` in `test_job_pipeline` (17, three of them subtests of one test) and `test_job_ocr_option` (11). Each test starts with `next((ROOT / "input").glob("*.mp4"))`, and a worktree has no video in `input` (the install's `input` holds the user's real videos and is never copied).
+    - Baseline: `main` `6dc2210` exported with `git archive` to `temp\suite-check-20261006-165730\baseline`, same Python, FFmpeg and `TEMP`: 1587 tests and the same 28 errors by name, nothing else.
+    - With an 8-second synthetic test pattern (H.264 + AAC, made by the project FFmpeg) in `input\` of a copy of the worktree and of the baseline, the 35 tests of those two modules pass in both. No code was changed for this.
+  - The `WinError 32` of the previous run did not come back in this one. It is a race in an unchanged test, not a file held by another program.
+    - `verify_adult_report` starts `BackgroundSha256` (a daemon thread that opens the source to hash it) before it loads the model.
+    - When the model fails, it calls `hasher.cancel()` and raises without waiting for that thread, so the thread can still hold `input\movie.mp4` open while the test's cleanup deletes the temp folder.
+    - Python opens files without delete sharing, so Windows refuses the delete (WinError 32), even though the holder is the same process.
+    - Evidence: a scratch probe repeated the test's steps, 1,920 runs over both trees.
+      - Right after the call raised, the hash thread was still alive in all but 2 runs.
+      - An immediate delete failed with WinError 32 in 122 runs, every one while that thread was alive.
+      - The same delete always succeeded once the thread had ended.
+      - Back to back on an idle PC: 2 and 7 failures per 300 runs for the worktree, 10 and 6 for the baseline. A run during another suite's start-up gave 89 per 300.
+      - The real test run 300 times in one process gave 2 errors on the worktree and 1 on the baseline.
+    - `adult_verification.py`, `source_hash.py` and the test are byte-identical to `6dc2210`. They are detector code, so they were not changed to turn a test green.
+    - A fix for later, for the user to decide: join the hash thread on the error path, or let the test wait for it.
+- **Host dispatcher: reviewed and completed, not duplicated.** The routing already existed in `download_sources.SourceRegistry`:
+  - a provider claims a link from the link alone;
+  - the claimed link is resolved at PROBING and again before each transfer;
+  - `transport` picks `FileTransfer` or `HlsTransfer`;
+  - every other link, and every declined one, keeps the yt-dlp path.
+
+  Added:
+  - **One host parser.**
+    - `download_links.check_host(name)` holds the host checks that `_check_url` used inline, so `_check_url` keeps its order, codes and messages.
+    - `HostList` checks each configured host with it: a wildcard, a port, a URL or an IP address is skipped.
+    - `HostList.matches` now reads a link's host with `check_link` instead of its own `urlsplit`. A link that the link check refuses therefore matches nothing, for example `http://evil.example\@video.example/` (urlsplit reads `video.example`, a browser reads `evil.example`), `http://video.example:8080/` or `//video.example/`.
+    - In the queue, links were already normalized when added, so this gap could not be used; the matcher no longer depends on that.
+  - **The registry matches the host itself.** `provider_for` asks a site provider only about links whose host is in that provider's configured `HostList`. A provider's own `claims` can narrow this, for example to pages only, but never widen it.
+  - **The config never names code.**
+    - Only `hosts` lists are read, and every other key is ignored.
+    - A provider id must match `PROVIDER_ID` (lower-case letters, digits and hyphens, up to 40 characters), because it can appear in a message.
+    - Provider classes come only from `SITE_PROVIDERS`. A class whose id does not match `PROVIDER_ID` is refused.
+  - **Config mistakes are shown, not lost.** `read_provider_config` returns the host lists plus what it ignored:
+    - an unreadable or misshaped file, also one whose attributes cannot be read (before, `is_file()` could raise out of `DownloadWorker.__init__`);
+    - an id that does not match;
+    - an entry without `hosts`;
+    - a host that is not a bare name, such as `https://…`, a wildcard, a port or an IP address, with the reason the host check gave.
+
+    The worker puts that on the downloads page once, at start, as its last error ("Hàng tải video báo lỗi …: config/download_providers.local.json: …"). The valid hosts still work. A missing file is not a mistake. What the page shows of the file is limited:
+    - at most 5 entries of an id and 5 problems, each value at most 60 characters and each reason at most 160 (every fixed reason of the host check fits whole; only one that names a long host is cut);
+    - of a text entry, only its scheme and host: an account becomes `…@` and a path or query `/…`, so a token pasted there by mistake is not shown. Text before `://` counts as a scheme only if it looks like one, so `video.example/?sig=…&next=https://…` is cut at its host too;
+    - a list or an object only as `[…]` or `{…}`;
+    - a lone surrogate (a JSON escape for half of a pair) as that escape. Before, it reached the page's UTF-8 encoding, and every `/api/downloads` poll failed until the file was fixed.
+  - **Hosts a browser would read otherwise are refused (NO_HOST).** Python's IDNA 2003 codec turns `ß` into `ss` and `ς` into `σ`, and drops ZWJ, ZWNJ and U+1806, so the host BiliFlow read was not the one a browser opens.
+    - The codec also knows only Unicode 3.2. A character added since (U+180F, the variation selectors U+E0100–E01EF, Cherokee small letters, U+1C80…) is neither folded nor dropped as a browser does it, so every character that Unicode 3.2 did not have is refused too.
+    - The message says to give such a name in its `xn--` form, which works. Vietnamese, Chinese and other names made of Unicode 3.2 characters work as before. Names with newer characters (some recent CJK ideographs, most emoji) are refused as well, and work in their `xn--` form.
+    - A host whose last label is all digits or starts with `0x` (`127.1`, `0x7f.1`, `2130706433`) is now an IP_LITERAL. Before, such a host only met the DNS check.
+  - **The Referer goes out as a browser sends it by default** (strict-origin-when-cross-origin), on every request and every redirect hop of `SafeHttp`:
+    - the whole page link only to that page's own origin (scheme, host and port), without its fragment or account;
+    - only the page's origin to any other host, such as a CDN the provider chose or a redirect;
+    - nothing from an https page to an http address, and nothing for a value that is not an http(s) link.
+
+    So a page link's path and query (maybe a token) never reach another host. Before, only a redirect to another host was cut, and the first request to a CDN got the whole page link.
+    - The path and query sent to the page's own origin are percent-encoded as in the request line. Before, a page link with Vietnamese letters (`/tập-1`) made `http.client` fail, reported as a NETWORK error "(UnicodeEncodeError)". A Referer whose host is not in its IDNA form is dropped.
+    - A later site provider whose CDN insists on the whole page link would need an explicit, reviewed exception.
+  - **Recognized is not supported.**
+    - Hosts that the local config lists for an id with no provider in the code are only recognized (`SourceRegistry.recognized_without_provider`).
+    - Such a link still goes to yt-dlp. The task gets a `SOURCE_NOT_IMPLEMENTED` event (WARNING).
+    - When yt-dlp finds nothing (UNSUPPORTED, NO_ENTRIES, ONLY_SHORT_ENTRIES), the reason adds that the host is in `config/download_providers.local.json` for that reader, but BiliFlow has no such reader.
+    - A direct file or HLS link on that host is still fetched by `direct`.
+  - **Tests**, all on `.example` hosts, with the fixture server and the fake yt-dlp.
+    - `tests/test_download_dispatch.py` holds the dispatcher tests.
+      - `HostListTest`, `ProviderConfigTest` and `RegistryTest` moved there from `test_download_sources.py`, which drops from 1327 to 1110 lines.
+      - It adds `ReaderNoteTest` and `ConfigProblemTests`.
+      - Through the real `DownloadWorker`:
+        - the exact host goes to the test-only provider, then to a file and to an HLS transfer;
+        - lookalike hosts never reach it and keep the yt-dlp path;
+        - links hiding a host behind an account are refused before they are queued;
+        - a host listed without a provider goes to yt-dlp, with the note on UNSUPPORTED, NO_ENTRIES and ONLY_SHORT_ENTRIES and not on UNAVAILABLE, and still downloads when yt-dlp can read it;
+        - an unlisted host and a declined page keep yt-dlp.
+      - No code is loaded and no command is run (`importlib`, `subprocess` and `os.system` patched to fail).
+    - `CheckHostTests` (`test_download_links.py`) covers the IDNA deviations, the characters added after Unicode 3.2, the `xn--` form, Vietnamese and Chinese names, and the numeric shorthands. It adds a seeded fuzz of 4,000 links: for every link the check accepts, `urlsplit` of the normalized link reads the same host, the check is idempotent, and the host is ASCII and kept by `check_host`.
+    - `RefererPolicyTest` and `RedirectTests` (`test_download_http.py`) cover the Referer, also a page link with Vietnamese letters. The tests that pinned the whole page link on another host (`test_download_hls`, `test_download_sources`) now expect its origin.
+    - `ProviderConfigTest` also covers the reasons and their cut, the hidden parts of a link with or without a scheme, a 100-character entry, a lone surrogate and a file whose attributes cannot be read.
+    - **Fixed in the fake yt-dlp: a race when it logs a call.** Every fake appends to one calls file, and on Windows two processes appending at once can overwrite each other's line.
+      - `tests/fake_yt_dlp.py` now writes each line in one write while it holds a lock on one byte far past the end of the file, so the lock never blocks a test that reads the file.
+      - One dispatch test, 15 runs with 2 slots: the old fake gave 8 `JSONDecodeError` and 1 failure, the new one 0. Then 30 runs with 2 slots and 30 with 3: 0.
+      - The dispatch tests had worked around it with one slot. They now use the default slots again: 5 runs, all OK.
+      - Other worker tests with several fakes at once could have met the same race. It never showed in a full suite here.
+    - Mutation check: each of these 17 breaks at least one test (61 tests run, 0 failing unmutated):
+      - the old urlsplit-only matcher;
+      - substring matching;
+      - subdomain matching;
+      - no host gate in the registry;
+      - dropping the note;
+      - the note on every code;
+      - accepting any id;
+      - hiding config problems;
+      - accepting the IDNA deviations;
+      - accepting characters added after Unicode 3.2;
+      - accepting numeric shorthands;
+      - sending the whole Referer to every host;
+      - showing a skipped entry whole;
+      - the earlier display of config values (lone surrogates kept);
+      - skipped entries without their reason;
+      - any text before `://` taken as a scheme;
+      - values and reasons not cut.
+
+      The new tests also fail on the code before them, including the ones no mutation covers: a file whose attributes cannot be read, and the page link with Vietnamese letters (on the old code: HttpError "Mất kết nối với media.example (UnicodeEncodeError)").
+  - **Reviews.**
+    - First round: a code reviewer approved, with 2 MEDIUM and 4 LOW notes; a security reviewer found 3 LOW and nothing above. All are fixed.
+    - Second round, on those fixes:
+      - The code reviewer approved, with 4 LOW notes: untested branches of the Referer cut and of the 60-character cut; a refusal for `ß` that did not say what to do; one shared last-error slot; and hygiene (`is_file()`, the unused `load_provider_hosts`, a literal BOM in `download_hls.py`, the race in the fake).
+      - The security reviewer confirmed the earlier fixes and found nothing above LOW: more characters that Python's IDNA reads otherwise; the whole page link on the first request to a CDN; a lone surrogate breaking `/api/downloads`; and, as INFO, a link pasted into `hosts` shown with its account or token.
+      - All are fixed, except:
+        - The downloads page keeps one last error, so a later worker error replaces the config note. The code reviewer found this acceptable.
+        - `LinkRejected` and `_LinkError` remain two classes.
+        - `DirectMediaProvider.claims` still reads `urlsplit`. That is safe: queued links are normalized, and `SafeHttp` checks again.
+    - Third round, on those fixes, both with no CRITICAL, HIGH or MEDIUM:
+      - The code reviewer approved, with 3 LOW notes: the text before `://` taken as a scheme unchecked; the reason not cut; a stale line in PROJECT_STATUS. All are fixed. The reason limit is 160, not the suggested 120, because at 120 the IDNA reason lost its `xn--` hint (a test caught it).
+      - The security reviewer found that no host is now read otherwise by BiliFlow and a browser when both accept it, and 2 LOW: the unencoded same-origin Referer, and the same scheme issue. Both are fixed. Not changed (INFO): a provider's `Origin` header is still sent as the provider sets it; it never carries a path.
+    - Fourth, a short check of the last three changes (the scheme check, the reason cut, the encoded Referer): the code reviewer confirmed them, with nothing to fix. Left open, optional: a lone surrogate in a Referer that a later provider builds would still be reported as a network error. No stored link can carry one.
+- **Checks, after every fix of this round.** Same environment as above (`TEMP` = `<install>\temp`, the project FFmpeg).
+  - Full suite in the worktree: 1837 tests in 370 s. 28 errors, all of them the known `input\*.mp4` `StopIteration` errors (`test_job_pipeline` 17, `test_job_ocr_option` 11); 26 skipped; no `WinError 32` in this run.
+  - The same files in `temp\suite-check-20261006-165730\final3`, with the 8-second synthetic clip in its `input\`: 1837 tests in 378 s, OK (26 skipped). Earlier copies passed too: 1824 tests before the review fixes, 1834 before the last three.
+  - The 9 download modules changed most here (`test_download_links`, `_dispatch`, `_http`, `_sources`, `_hls`, `_https`, `_provider_worker`, `_runner`, `_worker`): 318 tests OK. `test_download_dispatch` five times in a row with the default slots: OK each time.
+  - The Node gate `verify-download.cjs` runs inside `test_dashboard_v2_downloads`: OK in the full suite. No JavaScript changed in this round.
+  - No stage-cache fingerprint file changed (`pyproject.toml`, `config/license_policy.json`, `scripts/env.ps1`, `scripts/run.ps1`, `cli.py`, `__init__.py`, `stage_cache.py`).
+- **Providers that really exist and work: only `direct`.** `SITE_PROVIDERS` is still empty: no reader for any site, and none was written or run for the three sites of the reference document.
+
+# Unreleased — "Tải video": a test run for the dashboard, HTTPS checked locally, file progress fixed — 2026-10-06
+
+Status: the same uncommitted branch `feat/download-source-providers`. A test Control Center for the user runs on port 8797 with a temporary root. The real Control Center (port 8765) was not touched or restarted. Nothing is committed, merged or pushed.
+
+- **Fixed: progress of a direct file.**
+  - `Response.chunks()` used `HTTPResponse.read(256 KiB)`, which waits for a whole piece. So the bytes of a file only moved in 256 KiB steps, and a slow server or a small file showed 0 % until the end.
+  - It now uses `read1()`: each piece is what one socket read gave, so the page follows the transfer.
+  - `ProgressMeter` keeps a running sum of its 5-second speed window, because a snapshot follows every piece. The speed values are unchanged.
+  - Found by the new HTTPS stop test, which first failed.
+- **HTTPS tested on this PC.** Before this only plain HTTP had been tested.
+  - `tests/tls_fixtures.py` makes a throwaway test CA and a server certificate for `media.example` at run time, with pycryptodomex, which is already in the audited lock.
+    - No key is stored in the repository.
+    - The CA key is dropped after signing.
+    - Only the test process trusts this CA.
+  - `FixtureServer(tls=..., routes=...)` serves HTTPS, optionally on the same routes as a plain server.
+  - `tests/test_download_https.py`, 9 tests:
+    - a trusted certificate is accepted;
+    - another host name is TLS_ERROR, and no request is sent;
+    - an unknown CA is TLS_ERROR;
+    - https → http is refused as DOWNGRADE before the plain request;
+    - a redirect to another HTTPS host needs that host's certificate;
+    - an MP4 and an HLS playlist over TLS go through the worker into `input`;
+    - a stop during a TLS read ends at once (under 5 s), and Resume continues with `Range`;
+    - an unknown certificate fails the task at PROBING and never reaches yt-dlp.
+- **`tests/try_source_downloads.py`, the dashboard test run.**
+  - Nothing needs to be set: it puts its own `src` first, keeps its root and temp files in `<install>\temp`, and finds the project FFmpeg.
+  - It refuses port 8765 and any busy port.
+  - Every fixture link works over `https://` and `http://`. New ones:
+    - an MP4 of about 30 s, to try Cancel or Stop / Resume on a file;
+    - an HLS of 60 segments taking about 1 min, for Stop / Resume;
+    - an HLS whose segment links expire every 6 s, so the playlist refresh shows in the log;
+    - an HLS whose segments are PNG images, refused as SEGMENT_NOT_TS.
+  - `--probe URL` resolves one user-given link as PROBING does and prints only masked details, with no Control Center and no download.
+  - `--check-input ROOT` and the exit of the server list the input files with their video and audio streams.
+- **Review.**
+  - A code-reviewer agent approved: no CRITICAL, HIGH or MEDIUM finding.
+  - It checked the `read1` cases (Content-Length, chunked, an early close, gzip, TLS records, an abort during a read) and compared the running sum with the old formula over 200k random operations.
+  - Its LOW note, that `ProgressMeter` had no test, is fixed: `ProgressMeterTest` covers the speed, the expiry of old pieces and the reset by `stage()`. It fails when that reset is removed.
+- **Checks.**
+  - `test_download*`: 393 OK, with 0 skipped when `BILIFLOW_FFMPEG` is set.
+  - Full suite: 1793 tests, 29 errors.
+    - 28 are the known `input\*.mp4` errors of a worktree.
+    - The other is in `test_adult_verification`: Windows refused to delete a just-written temp file (WinError 32). That module passed twice alone and was not changed.
+  - A scripted run on a separate test Control Center (port 8798, temporary root, deleted afterwards):
+    - the MP4 arrived over HTTPS and over HTTP;
+    - the HLS master picked 720p, 20/20 segments;
+    - no-audio, DRM, live and PNG segments were refused with their codes;
+    - the 60-segment HLS was stopped at 13/60 and resumed: it reused 13 segments and finished 60/60;
+    - the slow MP4 was cancelled at 576 KB: CANCELLED, and its temp folder was removed;
+    - it was also stopped at 1.05 MB and resumed: "Tải nối từ 1097728 byte", then finished;
+    - the token HLS refreshed its playlist once and finished 15/15.
+  - Every file in that `input` had H.264 + AAC and the right duration. The MP4s were byte-identical to their sources, including the resumed one.
+- **Noted, not changed.** Each start or resume of a direct file reads its first MiB again, to check that the source is the same.
+
+# Unreleased — "Tải video": direct MP4/HLS links and the source-provider interface — 2026-10-06
+
+Status: branch `feat/download-source-providers`, worktree `temp\wt-download-source-providers`, made from `main` `6dc2210` together with the uncommitted scope documents below. Not committed, not merged, not pushed. The running Control Center still runs `main` and was not restarted.
+
+- **The user's request.**
+  - Accept MP4 or HLS links from sources the user may use.
+  - Use the existing queue, progress, Stop, Resume, Cancel and Retry.
+  - Add a provider interface for later sources.
+  - Check picture and sound before a file goes into `input`.
+  - No DRM, login, paywall or anti-bot challenge bypass.
+  - Test only with self-made videos and HTTP/HLS fixtures.
+- **Not done.** The site-specific readers for the three film sites of the reference document were declined and are not in the code:
+  - decoding their obfuscated links;
+  - stripping PNG-wrapped segments;
+  - calling their private API;
+  - reading their pages in a browser.
+
+  `SITE_PROVIDERS` is empty.
+- **Provider interface** (`download_sources.py`, `download_source_types.py`).
+  - A `SourceProvider` has `id`, `label`, `claims(url)` and `resolve(url, ctx)`. `SourceRegistry` asks each provider in order.
+  - A `ResolvedSource` keeps two things apart:
+    - the private media link and headers, which never reach the database, the API or a log;
+    - a stable identity, built without signature-like query names, which are matched by name parts so that `author` is not caught.
+  - `SourceDeclined` hands a link to yt-dlp, `SourceError` fails it, and `SourceChanged` fails it as SOURCE_CHANGED.
+  - Hosts of a later site provider go only in the gitignored `config/download_providers.local.json`. A template is in `config/download_providers.example.json`.
+- **Provider `direct`.** It takes links whose path ends in `.mp4`, `.m4v`, `.mov`, `.mkv`, `.webm`, `.ts` or `.m3u8`. Every other link, and any link `direct` declines, goes to yt-dlp as before. The Generic 10-minute rule is unchanged.
+  - **Files** (`download_media_file.py`):
+    - The probe reads the first 1 MiB, recognises MP4/MOV/MKV/WebM/MPEG-TS, and requires video and audio in an ffprobe of the sample.
+    - The download goes to `media.part`. Resume uses Range + If-Range; without ETag or Last-Modified a later run starts again from 0.
+    - A different length means the source changed.
+    - MPEG-TS is probed in full, then copied into MP4 without re-encoding.
+  - **HLS** (`download_hls.py`):
+    - Playlists are bounded: line length, variant count, segment count and bytes.
+    - The variant is the largest one at most 1080p, then H.264 + AAC, then the highest bandwidth.
+    - The probe downloads the first segment and requires video and audio.
+    - Four segments download at once. Each must be MPEG-TS, and `seg/manifest.json` keeps its size and SHA-256.
+    - The join is in playlist order, through FFmpeg `-c copy` on stdin.
+    - Refused, not handed to yt-dlp: DRM (SAMPLE-AES or a non-`identity` KEYFORMAT) and live streams (no `EXT-X-ENDLIST`), even when another tag would hand the playlist on.
+    - Handed to yt-dlp: AES-128, fMP4/CMAF, byte ranges, discontinuities, gaps, LL-HLS and separate audio.
+- **Checked HTTP client** (`download_http.py`).
+  - Every link, redirect, playlist and segment passes the pasted-link rules: http/https on the default port, no credentials in the link, no IP literal, and every DNS answer public.
+  - It connects to the checked addresses only, against DNS rebinding.
+  - Redirects are followed by hand, at most 5, and https → http is refused.
+  - Headers come from an allow-list; there are no cookies and no proxy.
+  - A DNS failure can be retried.
+  - Stop and Cancel close the socket at once, even during a read.
+  - A truncated gzip body is an error.
+  - IPv4-in-IPv6 forms are judged by their IPv4 part, and `fec0::/10` is internal.
+- **Worker** (`download_source_steps.py`, `download_worker.py`).
+  - PROBING and DOWNLOADING go through the provider when one claims the link.
+  - Each download or resume resolves the source again, because a signed link may have expired, and its identity must match the probe.
+  - A refused segment link fetches the playlist again, at most 2 times per segment.
+  - These end INTERRUPTED and keep what was downloaded: network, DNS, a busy server, a full disk, a file held by another program.
+  - `media-done.json` lets a resume after VERIFYING or PUBLISHING reuse the finished file without the link.
+  - SizeGuard and the space wait are unchanged. Disk peak is the segments plus the MP4, within `SPACE_FACTOR` 2.2.
+  - `verify_video` runs before `input`; nothing scans or exports by itself.
+- **Database, API and page.**
+  - Four new columns: `progress_basis`, `fragments_done`, `fragments_total` and `transfer_stage`. They are added with `ALTER TABLE` when missing, and old rows are kept.
+  - `downloaded_bytes` stays real bytes.
+  - The API `url` masks signature-like query values and token-like path parts. `media` gains `provider`, `transport` and `source_label`.
+  - The page shows "x/y đoạn", "Đang ghép các đoạn thành MP4" (no percentage while joining) and "Nguồn: …". 100% is shown only at COMPLETED. The form explains direct links.
+- **Reviews.** A Python review, a security review and three test agents. Every bug they found was fixed. Some examples:
+  - a stop during a socket read;
+  - a truncated gzip body;
+  - https → http redirects;
+  - IPv6 forms of internal addresses;
+  - DRM and live behind a declined tag;
+  - a resume after VERIFYING whose link had expired;
+  - a full disk or a held file ending FAILED instead of INTERRUPTED;
+  - tokens in the API `url`.
+
+  Left open:
+  - the User-Agent is the same common browser string yt-dlp sends, which needs the user's decision;
+  - some LOW items: an unused `FilePlan.ranges`, and `probe_streams` not being cancellable (at most 60 s on a local sample).
+- **Checks.**
+  - Full suite: 1783 tests. 28 errors, all the known `input\*.mp4` errors of a worktree (`test_job_pipeline` 17, `test_job_ocr_option` 11). 26 skipped.
+  - `test_download*`: 380 OK, of which 196 are new: `test_download_sources`, `test_download_http`, `test_download_hls`, `test_download_provider_worker`.
+  - `test_dashboard_v2*`: 93 OK, 1 skipped.
+  - Node gates: `verify` 35, `verify-adapter` 30, `verify-download` 22, `verify-review` 31.
+  - No stage-cache fingerprint includes a `download_*` module.
+- **Manual run of `tests/try_source_downloads.py`.** A test Control Center on a new temporary root under `temp\`, port 8797, with fixture links served on 127.0.0.1 under `*.example`; the real Control Center was not used.
+  - The direct MP4 arrived byte-identical to its source.
+  - The two-quality HLS picked 720p, 20/20 segments.
+  - The rotating-token HLS finished 15/15, before any token expired, so the refresh path is covered only by unit tests.
+  - The no-audio file failed with NO_AUDIO_STREAM, the DRM playlist with DRM and the live playlist with LIVE.
+  - An HLS download stopped at 12/20 and was resumed from the page. It reused the 12 segments (size + SHA-256) and the result has the same SHA-256 as the uninterrupted download; it was saved as `show (2).mp4`.
+  - A Cancel at 8/20 removed the temp folder and put nothing in `input`.
+  - At 375 px there is no horizontal overflow.
+  - The temporary root was deleted afterwards.
+- **Not tested.** No real link, by request. No real TLS: the fixtures are plain HTTP, and certificates are checked by `ssl.create_default_context`.
+
+# Unreleased — allow public-source download providers — 2026-10-06
+
+- At the user's request, removed the no-site-specific-extraction scope restriction from AGENTS.md and VIDEO_DOWNLOAD_PLAN.md; public page/player source resolution is now allowed for user-pasted links.
+- Preserved the restrictions on DRM/paywall circumvention, user cookies/logins, challenge bypass and browser impersonation to bypass blocks, and all real-Control-Center, source-video and public-repository rules.
+- Updated SESSION_HANDOFF.md and PROJECT_STATUS.md so future sessions distinguish this scope change from the current yt-dlp-only implementation. No runtime code, dependency or Control Center state changed.
+- Verification: reviewed the scoped documentation diff; no runtime tests required for these documentation-only changes.
+
 # Unreleased — Dashboard V2 is the dashboard; the classic one is off for now — 2026-10-06
 
 At the user's request, after their phone check of U4: use V2 for good, turn the old dashboard off for now, and commit and push straight to `main`. Done on the short branch `feat/v2-default-dashboard` (from `main` `463cf1f`, worktree `temp\wt-v2-flicker`), then `main` was fast-forwarded to it and pushed.
@@ -55,6 +365,7 @@ At the user's request, after their phone check of U4: use V2 for good, turn the 
 - The phone-mode notice (H3) lived only on the classic page. While the phone mode is on, V2 on the PC now shows "Đang mở cho điện thoại: <link> · tắt trong Cài đặt" at the top of every page except Cài đặt, whose panel shows the state. It never shows the code and never appears on the phone; the text comes from `C.phoneNotice` in `contracts.js`. Like the classic notice, a tab opened before the mode was turned on shows it after a reload or a visit to Cài đặt; it goes away by itself when the mode turns off.
 - Checked before the switch: every API call of the classic page is also in V2. That covers job actions, cleanup, delete, archive and restore, the Recycle Bin check, scheduler, shutdown, AI login/config/check, Visual AI Audit, hide and unhide. No function is lost.
 - `Start-BiliFlow.cmd` still opens `127.0.0.1:8765/`, which now shows V2. The Python change applies at the next Control Center start; until then the running one keeps the classic page at `/`.
+- Real machine (2026-10-06): the user first ran `Start-BiliFlow.cmd` alone and still saw the classic page. The launcher only reuses a running Control Center, and that one had started at 16:48, before the change. It was then stopped with `Stop-BiliFlow` and started again with `Start-BiliFlow` at 20:37:51, while idle (no job running, empty queue, no download). `/` now answers 303 to `/dashboard-v2/`; all 10 jobs are there and none was interrupted. The phone mode went off with the restart. The user confirmed V2 on the PC: OK.
 - `control_center.py` is in no scan stage's import graph, so the scan cache stays valid.
 - Tests:
   - D2 (`test_dashboard_v2_route`) checks that `/` redirects to V2 by default. With `CLASSIC_DASHBOARD` patched on, it checks that the classic page still matches the f6996bb fixture byte for byte.

@@ -36,8 +36,11 @@ _COLUMNS = frozenset({
     "estimated_bytes", "entries_json", "chosen_entry", "probe_json", "downloaded_bytes",
     "total_bytes", "speed", "eta", "error_code", "error_message", "temp_dir", "temp_file",
     "output_path", "output_sha256", "output_size", "verify_json", "name_locked", "pid",
-    "pid_created",
+    "pid_created", "progress_basis", "fragments_done", "fragments_total", "transfer_stage",
 })
+# Added after D5 (source providers); older databases get them on open (ALTER TABLE ADD COLUMN, no data change).
+_ADDED_COLUMNS = {"progress_basis": "TEXT", "fragments_done": "INTEGER", "fragments_total": "INTEGER",
+                  "transfer_stage": "TEXT"}
 
 
 def utc_now() -> datetime:
@@ -99,7 +102,11 @@ class DownloadStore:
                 verify_json TEXT,
                 name_locked INTEGER NOT NULL DEFAULT 0,
                 pid INTEGER,
-                pid_created REAL
+                pid_created REAL,
+                progress_basis TEXT,
+                fragments_done INTEGER,
+                fragments_total INTEGER,
+                transfer_stage TEXT
             );
             CREATE INDEX IF NOT EXISTS download_tasks_state ON download_tasks(state);
             CREATE TABLE IF NOT EXISTS download_events (
@@ -129,6 +136,9 @@ class DownloadStore:
         columns = {row[1] for row in self._connection.execute("PRAGMA table_info(download_tasks)")}
         if "source_id" in columns:  # the list of sources, dropped after D4 (test roots only)
             self._connection.execute("ALTER TABLE download_tasks DROP COLUMN source_id")
+        for name, kind in _ADDED_COLUMNS.items():
+            if name not in columns:
+                self._connection.execute(f"ALTER TABLE download_tasks ADD COLUMN {name} {kind}")
         self._connection.commit()
 
     def _now(self) -> str:
@@ -276,12 +286,17 @@ class DownloadStore:
         return self.get(task_id)
 
     def update_progress(self, task_id: int, attempt: int, *, downloaded_bytes: int,
-                        total_bytes: int | None, speed: float | None, eta: float | None) -> bool:
+                        total_bytes: int | None, speed: float | None, eta: float | None,
+                        progress_basis: str | None = None, fragments_done: int | None = None,
+                        fragments_total: int | None = None, transfer_stage: str | None = None) -> bool:
+        """Only the running attempt, only while DOWNLOADING; ``downloaded_bytes`` is always real bytes."""
         with self._lock, self._connection:
             cursor = self._connection.execute(
                 "UPDATE download_tasks SET downloaded_bytes = ?, total_bytes = ?, speed = ?, eta = ?, "
+                "progress_basis = ?, fragments_done = ?, fragments_total = ?, transfer_stage = ?, "
                 "updated_at = ? WHERE id = ? AND attempt = ? AND state = 'DOWNLOADING'",
-                (downloaded_bytes, total_bytes, speed, eta, self._now(), task_id, attempt),
+                (downloaded_bytes, total_bytes, speed, eta, progress_basis, fragments_done, fragments_total,
+                 transfer_stage, self._now(), task_id, attempt),
             )
             return cursor.rowcount == 1
 

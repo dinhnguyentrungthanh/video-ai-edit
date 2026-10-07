@@ -29,6 +29,8 @@ LIVE_MESSAGES = {
 DRM_MESSAGE = "Video có DRM; không hỗ trợ."
 UNSUPPORTED_MESSAGE = "Trang này chưa được hỗ trợ: yt-dlp không tìm thấy video nào đọc được trong trang."
 NO_VIDEOS_MESSAGE = "Link không có video nào (danh sách phát hoặc kênh trống)."
+# The codes below (an error rule or ``choose``) that mean yt-dlp found nothing it could read on the page.
+NOTHING_READ_CODES = frozenset({"UNSUPPORTED", "NO_ENTRIES", "ONLY_SHORT_ENTRIES"})
 LONGEST_RATIO = 2.0
 MAX_TITLE_LENGTH = 300
 # yt-dlp's error lines echo links, redirect targets and socket addresses; a page could use them to map

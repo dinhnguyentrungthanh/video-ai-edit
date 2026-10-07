@@ -1014,8 +1014,8 @@ cổng trần ra Internet (ví dụ đi qua VPN). Trong đợt test này ngườ
 - V2 bỏ chữ "xem thử": tiêu đề "BiliFlow Control Center", chân trang "Dashboard V2 · chạy cục bộ", dòng hồ sơ "Dashboard V2".
 - Dòng báo chế độ điện thoại (H3) trước chỉ có ở trang cũ. Nay khi chế độ bật, V2 trên PC hiện "Đang mở cho điện thoại: <link> · tắt trong Cài đặt" ở đầu mọi trang trừ Cài đặt; không bao giờ có mã, không hiện trên điện thoại (`C.phoneNotice` trong `contracts.js`).
 - Review (agent): không có CRITICAL/HIGH; đã sửa MEDIUM (dòng báo H3) và ba LOW (test không phụ thuộc công tắc, `dashboard_v2/README.md` và `docs/DASHBOARD_V2_PHONE.md`, chữ "chạy trên máy này" sai khi xem trên điện thoại).
-- Có hiệu lực từ lần khởi động Control Center kế tiếp. Cache quét không bị ảnh hưởng.
+- **Máy thật** (2026-10-06): lần đầu người dùng chỉ bấm `Start-BiliFlow.cmd` nên vẫn thấy trang cũ, vì launcher dùng lại Control Center đang chạy (mở lúc 16:48, trước bản sửa). Sau đó Control Center được tắt bằng `Stop-BiliFlow` và mở lại bằng `Start-BiliFlow` lúc 20:37:51, khi không có việc gì chạy. Từ đó `/` chuyển sang V2, đủ 10 video, không job nào bị gián đoạn. Chế độ điện thoại tắt theo lần khởi động lại. **Người dùng** xác nhận đạt. Cache quét không bị ảnh hưởng.
 
 | ID | Hạng mục | Máy thật | Bằng chứng |
 | --- | --- | --- | --- |
-| V2-MAIN | `/` mở V2; trang cũ tắt nhưng bật lại được; dòng báo H3 trên V2 (PC) | — | 8 test tập trung đỏ trước khi sửa, xanh sau; chỉ một test ghim công tắc; node 36 / 33 / 21 / 31; Chrome headless trên Control Center thử 6/6; full suite 1589 OK (26 bỏ qua). Chờ Control Center khởi động lại. |
+| V2-MAIN | `/` mở V2; trang cũ tắt nhưng bật lại được; dòng báo H3 trên V2 (PC) | [x] | 8 test tập trung đỏ trước khi sửa, xanh sau; chỉ một test ghim công tắc; node 36 / 33 / 21 / 31; Chrome headless trên Control Center thử 6/6; full suite 1589 OK (26 bỏ qua). Máy thật (2026-10-06 20:37:51, sau khi khởi động lại): `/` → 303 `/dashboard-v2/`; **người dùng** xác nhận đạt. |

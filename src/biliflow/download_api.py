@@ -21,6 +21,8 @@ from pathlib import Path
 from typing import Any, Callable
 
 from biliflow.download_links import DownloadBatchError
+from biliflow.download_runner import mask_line
+from biliflow.download_source_types import is_volatile_query_name
 from biliflow.download_store import DownloadStore
 from biliflow.download_worker import MAX_SLOTS, DownloadActionError, DownloadWorker
 from biliflow.storage_summary import BinReader, Cleanable, StorageSummaryCache
@@ -37,12 +39,16 @@ _PUBLIC_FIELDS = (
     "id", "url", "state", "attempt", "desired_name", "original_title", "duration_seconds",
     "estimated_bytes", "downloaded_bytes", "total_bytes", "speed", "eta", "error_code", "error_message",
     "chosen_entry", "name_locked", "created_at", "state_since", "finished_at", "queued_at",
+    "progress_basis", "fragments_done", "fragments_total", "transfer_stage",
 )
 
 Response = tuple[int, Any]
 
 
 MAX_ID_DIGITS = 12  # a longer id is not a task (and would overflow SQLite): 404
+# A path part that looks like a token: long hex, or 32+ characters mixing upper case, lower case and digits
+# (a slug such as "episode-12-final-cut" is kept).
+_TOKEN_PART = re.compile(r"[0-9a-fA-F]{32,}|(?=[^/]*[A-Z])(?=[^/]*[a-z])(?=[^/]*[0-9])[A-Za-z0-9_\-+=~.]{32,}")
 MAX_CLEANUP_IDS = 1000
 
 
@@ -64,9 +70,25 @@ def path_scrubber(root: Path) -> Callable[[Any], Any]:
     return scrub
 
 
+def public_url(url: str) -> str:
+    """The pasted link as a page (also the phone) shows it: no account part or fragment, and the values of
+    signature-like query names and token-like path parts replaced by ***. The database keeps the link."""
+    try:
+        parts = urllib.parse.urlsplit(url)
+    except ValueError:
+        return mask_line(url)
+    path = "/".join("***" if _TOKEN_PART.fullmatch(piece) else piece for piece in parts.path.split("/"))
+    pairs = []
+    for pair in parts.query.split("&") if parts.query else []:
+        name, sep, _value = pair.partition("=")
+        pairs.append(f"{name}=***" if sep and is_volatile_query_name(urllib.parse.unquote(name)) else pair)
+    return urllib.parse.urlunsplit((parts.scheme, parts.netloc.rsplit("@", 1)[-1], path, "&".join(pairs), ""))
+
+
 def public_task(task: dict[str, Any], scrub: Callable[[Any], Any] = lambda value: value) -> dict[str, Any]:
-    """What a page needs; never the temp folder or the full local output path."""
+    """What a page needs; never the temp folder, the full local output path or a token of the link."""
     item = {name: scrub(task.get(name)) for name in _PUBLIC_FIELDS}
+    item["url"] = public_url(task["url"]) if task.get("url") else task.get("url")
     item["title"] = task.get("desired_name") or task.get("original_title")
     item["output_name"] = Path(task["output_path"]).name if task.get("output_path") else None
     item["entries"] = task.get("entries") if task.get("state") == "NEEDS_CHOICE" else None
@@ -76,6 +98,9 @@ def public_task(task: dict[str, Any], scrub: Callable[[Any], Any] = lambda value
         "extractor": probe.get("extractor"), "height": verify.get("height") or probe.get("height"),
         "video_codec": verify.get("video_codec") or probe.get("video_codec"),
         "audio_codec": verify.get("audio_codec") or probe.get("audio_codec"),
+        # A source provider's public part (download_source_types.ResolvedSource.public); None for yt-dlp.
+        "provider": probe.get("provider"), "transport": probe.get("transport"),
+        "source_label": probe.get("source_label"),
     }
     return item
 

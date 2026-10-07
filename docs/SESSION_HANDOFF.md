@@ -1,5 +1,116 @@
 # BiliFlow session handoff
 
+## Source providers in `main`; real Control Center restarted; the user's real test passed — 2026-10-06
+
+- **Merged at the user's request.** `main` was fast-forwarded `84a5db1` → `a3b69f0`: `5056d94` (source providers) and `a3b69f0` (merge of `main` into `feat/download-source-providers`). Pushed at the user's request with this record (`origin/main` `84a5db1..bd4d019`). The two sections below marked "(uncommitted)" are in `main` now; their "no merge, push or production Control Center restart" lines are historical.
+- **The main folder's uncommitted documents.** AGENTS.md, CHANGELOG.md, docs/PROJECT_STATUS.md, docs/SESSION_HANDOFF.md and docs/VIDEO_DOWNLOAD_PLAN.md held an older draft of the downloader scope update. They were backed up with their diff in `temp\main-folder-backup-20261006-214658`, then restored to `HEAD` before the fast-forward. The branch has all of their text, with three statements of the draft already updated ("providers are not yet implemented", "Chưa thay đổi runtime/backend ở đợt cập nhật tài liệu này.", "Các provider mới chưa được triển khai"). The same folder keeps copies of `state\control-center.sqlite3` and `state\downloads.sqlite3`, taken while the Control Center was stopped, before the new code added its columns to `download_tasks`.
+- **Local config.** `config\download_providers.local.json` was copied from the worktree into the install, where none existed. It is Git-ignored (`.gitignore:35`). The registry built from the install: `player-hls`, `article-mp4` and `embedded-media` with 2 exact hosts each, then `direct`; no config problems. Playwright 1.63.0 is in `.venv`; `embedded-media` launches the installed Edge headless.
+- **Checks on `a3b69f0` in the main folder** (`TEMP` = `<install>\temp`, the project FFmpeg):
+  - `test_download*`: 453 tests OK, including the five headless Edge tests.
+  - `test_dashboard_v2*`: 95 OK (1 skipped: the phone review browser check needs Node Playwright). Node gates: `verify.cjs` 36/36, `verify-adapter.cjs` 33/33, `verify-download.cjs` 22/22, `verify-review.cjs` 31/31.
+  - `test_control_center*`: 55 OK.
+  - Tool audit (`python -m biliflow.download_tools audit`): 0 blocked. Model license audit (`scripts\run.ps1 license-audit`): 9 allowed, 0 blocked.
+  - The full suite ran on the same tree before the fast-forward: 1858 tests OK (26 skipped) in an isolated copy with a synthetic clip in `input\`. In the worktree: 1858 tests, and the only errors were the 28 known `input\*.mp4` `StopIteration` errors.
+- **Real Control Center.** It was already stopped when checked: no listener on 8765, no state file, last start 20:39, clean stop at about 21:34 (not by this session; nothing recorded the cause). It was idle: no job or stage running, no download running, no source archive or cleanup row. The phone mode was off (last event `PHONE_MODE_DISABLED` at 20:37) and stays off.
+  - Started at 21:52:47 with `scripts\Start-BiliFlow.ps1` (existing database, `--no-import-existing`), PID 55128, from `E:\DungChung\BiliFlow` on `main` `a3b69f0`. Its err log is empty.
+  - Checked with GET only: `/healthz` ok (0.7.24); `/api/status` started, 0 recovered jobs; `/api/phone-mode` off; `/api/downloads` has no `worker_error` and nothing running. Task #4 (FAILED, `UNSUPPORTED`, attempt 2) is unchanged and now has the new fields (`progress_basis`, `transfer_stage`, `media.provider`).
+  - An offline check, with no request sent, shows that task #4's link now goes to `embedded-media` instead of yt-dlp.
+- **The user's real test passed** ("Phim tải oke rồi bạn"). The user retried task #4 and added four more links on the dashboard; this session sent nothing to `/api/downloads*`.
+  - The task counter went from 4 to 8. Five videos reached `input\` and became jobs 70–74 (43–48 minutes, 279–357 MB each), imported between 22:26:56 and 22:28:46.
+  - Job 70 is task #4's episode: 311,090,096 bytes, the size of the earlier probe of that link (see "Headless embedded-player adapter" below).
+  - The user then removed the five rows from the downloads list (before 30 days only the `remove` action deletes a row), so the provider of the other four is no longer recorded.
+  - At 22:45: job 70 reviewed and queued for export (`render`), 71–73 `WAITING_REVIEW`, 74 scanning. The downloader's temp is empty, there is no `worker_error` and the err log is empty.
+- Opening `state\*.sqlite3` with `mode=ro` while the Control Center was stopped left empty `-wal`/`-shm` files beside them. They are harmless (SQLite reuses them). Next time use the API, or `immutable=1` on a copy.
+- The test Control Center on port 8797 (root `temp\try-source-downloads-_jrilqlm`) still runs from the worktree.
+
+## Headless embedded-player adapter — 2026-10-06 (uncommitted)
+
+- The user approved adding Playwright. Installed/pinned Playwright 1.63.0, pyee 13.0.1 and greenlet 3.5.6; uses the existing Microsoft Edge, with no browser download. Dependency licenses are recorded in download_tools.json (Apache-2.0, MIT, MIT AND PSF-2.0); tool audit has zero blockers and the equivalent standard model license audit has 9 allowed, zero blocked.
+- Native `embedded-media` is registered alongside `player-hls`, `article-mp4`, and `direct`. Exact real hosts are enabled in the Git-ignored local config. It runs Edge headless in a fresh profile under the task directory, closes the browser and removes the profile on completion/error/stop; it never uses a user's profile or calls an outside extraction script.
+- Page requests are intercepted and fulfilled via SafeHttp only; no browser route continues unchecked. Service workers, WebSockets, popups and browser downloads are blocked. Cookies/auth headers are not forwarded. Media itself is aborted in the browser and fetched by the existing native transfers after identifying the designated player subtree. Internal browser URLs do not make HTTP requests. Signed links remain private.
+- Verified real HTTPS source probe: the user-provided episode source has H.264/AAC, duration 2634.19 seconds and size 311090096 bytes; resolving again produces the same identity. No browser profile remained. This was probe-only under an isolated temporary root, not a full episode download or production API write.
+- Five synthetic browser tests passed: nested movie iframe versus ads, actual headless launch, no cookies forwarded, private-address refusal, stop during page read/profile cleanup, missing library error, and the real download worker publishing a verified synthetic MP4. Full downloader regression: 453 tests OK (7 conditional skips); includes the five browser tests. git diff --check clean; local host config is Git-ignored.
+- Worktree remains `temp\wt-download-source-providers`, branch `feat/download-source-providers`, uncommitted. No merge, push or production Control Center restart. Earlier notes about pending browser approval are historical and superseded here.
+
+## Native page adapters — 2026-10-06 (uncommitted)
+
+- Worktree `temp\wt-download-source-providers`, branch `feat/download-source-providers`. The existing common downloader is preserved. No merge, push, or restart of the production Control Center.
+- `player-hls` reads only the designated player iframe, its episode JSON and the public literal URL transform. It resolves a fresh HLS link on every probe/download/resume. PNG cover removal is opt-in for this adapter, bounded and CRC checked; ordinary HLS still rejects PNG responses. Every stored TS packet is validated before ordered FFmpeg remux.
+- `article-mp4` reads the page's public article API through bounded checked POST. It ignores main/trailer and advertising sources, unwraps the outer media parameter exactly once, requires video/audio and at least 600 seconds, and asks for a version when several exist. The chosen version is resolved and probed before downloading. A moov index at the end of an MP4 is read through bounded byte ranges; ffprobe receives only a local sample.
+- Both adapters run inside the backend and reuse queue, progress, cancellation, resume, verification and publishing. They call no external extraction/download script. Exact real hosts are enabled only in the Git-ignored local config. Signed media URLs are not stored in public identities.
+- Verified with synthetic fixtures and the downloader regression tests. Real HTTPS probes of the two user-provided sources succeeded: fresh identities matched, an HLS sample of three segments (12.02 seconds) passed video/audio/head/tail validation, and the API source reported H.264/AAC and about 125 minutes. These checks used an isolated temp root and did not download the complete films or submit tasks to production.
+- Final checks: all 448 downloader tests OK (7 conditional skips), including 14 native-adapter tests; dashboard download gate 22/22; `git diff --check` clean. Local host config is confirmed Git-ignored and the active registry is `player-hls`, `article-mp4`, `direct`.
+- Browser-based page extraction remains pending approval to add Playwright to BiliFlow (not currently installed). The two HTTP adapters add no package or tool dependency.
+- The common-only scope notes below describe the earlier implementation phase; the native adapters above supersede their statements that no site provider exists.
+
+## Downloader scope update — 2026-10-06
+
+At the user's request, AGENTS.md and VIDEO_DOWNLOAD_PLAN.md now permit providers that resolve media from public page/player data for user-pasted links. The earlier no-site-specific-extraction boundary has been removed; descriptions of D0–D5 below describe the current yt-dlp implementation, not a ban on new providers. DRM/paywall circumvention, user cookies/logins, CAPTCHA/challenge bypass and browser impersonation to bypass blocks remain out of scope. Public-repository hygiene and the isolated-test Control Center rules are unchanged. This is a documentation change only: no new provider has been implemented, no real download was started and the running Control Center was not restarted.
+
+## Current work — 2026-10-06 direct links and source providers (branch `feat/download-source-providers`, not committed)
+
+- **Where it is.**
+  - Worktree `E:\DungChung\BiliFlow\temp\wt-download-source-providers`, branch `feat/download-source-providers`.
+  - Made from `main` `6dc2210` together with the scope documents that were uncommitted there.
+  - All changes are uncommitted in the worktree, and the user decides about commits.
+  - The main folder stays on `main` and runs the real Control Center, which was not restarted.
+  - No merge and no push.
+- **What it is.** The provider interface, plus one generic provider, `direct`. It covers links to a video file and VOD MPEG-TS HLS playlists. BiliFlow downloads them itself through the existing queue, Stop, Resume, Cancel and Retry.
+  - Architecture, rules and limits: `docs/VIDEO_DOWNLOAD_PLAN.md` section 4.11.
+  - Checks: CHANGELOG.
+- **The host dispatcher is `SourceRegistry` (reviewed and completed 2026-10-06; there is no second one).**
+  - A link's host is read by `check_link`, using `urlsplit`, lower case, IDNA and no trailing dot.
+  - It must equal exactly one host that `config/download_providers.local.json` lists for a provider of the code. The registry checks this itself before it asks the provider's `claims`. Then that provider resolves the link, and its `transport` picks the file or HLS transfer.
+  - Everything else keeps yt-dlp. Configured hosts are checked by `check_host`.
+  - Hosts with a character that Python's IDNA reads otherwise than a browser are refused, with a hint to give the `xn--` form: `ß`, `ς`, ZWJ/ZWNJ, U+1806, or any character added after Unicode 3.2. So are IP shorthands such as `127.1`.
+  - The config never names code or a command. Its mistakes appear once on the downloads page, as the worker's last error, each skipped entry with its reason. Of a link pasted there, the page shows only the scheme and the host, and a lone surrogate is shown as its escape.
+  - `SafeHttp` sends a provider's Referer as a browser does by default (strict-origin-when-cross-origin): the whole page link only to the page's own origin, only its origin to any other host (a CDN or a redirect), nothing from https to http.
+  - A host listed for an id without a provider is only recognized: such a link goes to yt-dlp, with a `SOURCE_NOT_IMPLEMENTED` note, and that note joins the reason when yt-dlp finds nothing.
+  - Recognizing a domain does not mean BiliFlow can download from it.
+  - Registered and working providers: only `direct`. `SITE_PROVIDERS` is empty.
+- **The user's test, 2026-10-06, on the 8797 test dashboard.**
+  - The user downloaded `demo.mp4` (direct MP4) and `slow.mp4` (the 60-segment slow HLS). Both completed and played with picture and sound.
+  - The user did not report trying Stop, Resume or Cancel. Only the agent's scripted run and the automated tests covered those.
+- **Full suite in a worktree: not green, and why.**
+  - The 28 errors are `StopIteration` of `test_job_pipeline` and `test_job_ocr_option`, which need a `.mp4` in the checkout's `input\`.
+    - The baseline `6dc2210` has the same 28.
+    - With a synthetic clip in an isolated copy, they pass: the whole suite was OK there (1837 tests, 26 skipped). The last worktree run: 1837 tests, 28 errors.
+  - `test_adult_verification.test_model_failure_raises_without_writing` sometimes fails with WinError 32. The cause is the `BackgroundSha256` thread, which still holds the source when the test cleans up. That is detector code, identical on `main`, and it is not changed.
+  - Details: CHANGELOG.
+  - Never put a real video into a worktree's `input` for this. To rerun, use a copy under `temp\` with a self-made clip.
+- **Out of scope, declined.** Readers for the three film sites of the reference document: their link obfuscation, PNG-wrapped segments, private API and browser page reading. No site provider exists.
+- **How to try it without the network.** Run from the worktree, in PowerShell. Nothing needs to be set: the script uses its own `src`, the install's `temp` and the project FFmpeg.
+  ```
+  E:\DungChung\BiliFlow\.venv\Scripts\python.exe -m tests.try_source_downloads --port 8797
+  ```
+  - Then open `http://127.0.0.1:8797/dashboard-v2/#downloads`, paste the printed `https://media.example/...` links (or their `http://` forms) and tick the rights box.
+  - It is a test Control Center on a new temporary root under `temp\`. It refuses port 8765 and any busy port.
+  - The HTTPS fixtures use a throwaway test CA that only that process trusts. Real links on that page go out through real DNS and Windows' certificates.
+  - The slow fixtures leave time to press Dừng or Hủy: `/clips/long.mp4` takes about 30 s, `/slow/index.m3u8` about 1 min.
+  - `--check-input <root>` lists the input files with their video and audio streams.
+  - `--probe <url>` resolves one link the user gives, as PROBING does: no Control Center, no download.
+  - Ctrl+C stops it and lists its input. Delete its `temp\try-source-downloads-*` folder afterwards.
+  - 2026-10-06: a test Control Center for the user was started on 8797 (root `temp\try-source-downloads-25mzgbq6`).
+- **Rules for agents.**
+  - Provider tests use `tests/source_fixtures.py`: self-made clips, a local server, and `*.example` names mapped to it.
+  - Never access a real site from a test.
+  - Real hosts of a later site provider go only in the gitignored `config/download_providers.local.json`.
+  - Never POST to `/api/downloads*` on the real Control Center.
+- **Open.**
+  - The user's review and a commit decision.
+  - The User-Agent decision: it is now the common browser string yt-dlp also sends, and changing it is `download_http.USER_AGENT`.
+  - A real check with an allowed direct link, only on a test Control Center with a link the user gives. Use `--probe` first.
+  - If the user wants it: trying Stop, Resume and Cancel on the 8797 dashboard.
+  - A separate decision: the `BackgroundSha256` race (join the hash thread on the error path).
+  - Site providers for the user's long-term sites are not started, and nothing of them is written or run. They would be classes in `SITE_PROVIDERS` plus their hosts in the local config.
+  - The 8797 test Control Center was still running at handoff. To stop it:
+    - find the PID that listens on 8797 with `(Get-NetTCPConnection -LocalPort 8797 -State Listen).OwningProcess`;
+    - stop that python with `Stop-Process`;
+    - delete `temp\try-source-downloads-25mzgbq6`.
+
+    Never stop the PID of port 8765.
+  - The review notes left open (CHANGELOG): one shared last-error slot on the downloads page, two link-error classes, and `DirectMediaProvider.claims` reading `urlsplit`.
+
 Updated: 2026-10-06 (Asia/Bangkok)
 
 This is the short, authoritative starting point for a new Codex account or chat. It complements the detailed history in `PROJECT_STATUS.md` and `CHANGELOG.md`.
@@ -12,8 +123,9 @@ This is the short, authoritative starting point for a new Codex account or chat.
   - The main folder is on `main`, and the Control Center runs it.
   - 2026-10-06: at the user's request `main` was pushed to `origin` (with the U4 fix below). Push again only when the user asks.
   - The user asked on 2026-10-06 to use `main` as the working line from now on. The feature branches and the test branch are kept.
-- 2026-10-06/07: branch `feat/phone-tailscale` (worktree `temp\wt-phone-tailscale`, not committed) opens the phone mode over Tailscale too, and BiliFlow installs and manages Tailscale from Cài đặt. The user's real test is set for 2026-10-08. See "Current work — 2026-10-06 phone mode over Tailscale" below.
-- 2026-10-06: **Dashboard V2 is the dashboard.** `/` on the PC redirects to `/dashboard-v2/` (the phone already did). The classic page is off behind `CLASSIC_DASHBOARD = False` in `src/biliflow/control_center.py`; set it to `True` and restart the Control Center to bring it back (then `test_the_classic_dashboard_is_off_by_default` must change too). While the phone mode is on, V2 on the PC shows "Đang mở cho điện thoại" (H3), as the classic page did. Made on the short branch `feat/v2-default-dashboard` (worktree `temp\wt-v2-flicker`), then fast-forwarded into `main` and pushed. It applies at the next Control Center start.
+- 2026-10-06/07: branch `feat/phone-tailscale` (worktree `temp\wt-phone-tailscale`; committed `e949c52` on 2026-10-07 at the user's request, `main` merged in, not pushed) opens the phone mode over Tailscale too, and BiliFlow installs and manages Tailscale from Cài đặt. On 2026-10-07 the user asked to run the real test right away. See "Current work — 2026-10-06 phone mode over Tailscale" below.
+- 2026-10-06, about 21:50, at the user's request: `main` was fast-forwarded `84a5db1` → `a3b69f0` (the video downloader's source providers; see "Source providers in `main`" above), and the real Control Center was restarted on it. Pushed at the user's request: `origin/main` `84a5db1..bd4d019`.
+- 2026-10-06: **Dashboard V2 is the dashboard.** `/` on the PC redirects to `/dashboard-v2/` (the phone already did). The classic page is off behind `CLASSIC_DASHBOARD = False` in `src/biliflow/control_center.py`; set it to `True` and restart the Control Center to bring it back (then `test_the_classic_dashboard_is_off_by_default` must change too). While the phone mode is on, V2 on the PC shows "Đang mở cho điện thoại" (H3), as the classic page did. Made on the short branch `feat/v2-default-dashboard` (worktree `temp\wt-v2-flicker`), then fast-forwarded into `main` and pushed. The real Control Center was restarted at 20:37:51 (`Stop-BiliFlow` + `Start-BiliFlow`) and `/` opens V2; the user confirmed. Its phone mode is off until the user turns it on. `Start-BiliFlow.cmd` alone reuses a running Control Center, so after a code change stop it first.
 - Branch `fix/v2-list-flicker` (from `main` `6dc2210`, worktree `temp\wt-v2-flicker`, 2026-10-06): the Dashboard V2 list no longer blinks on every refresh (U4). It is in `main` and pushed. See "Current work — 2026-10-06 U4" below.
 - Branch `feat/dashboard-v2` (from `main` f6996bb, pushed 2026-10-03) holds the Dashboard V2 prototype and its integration plan.
   - 2026-10-05: it also holds the V2 review dialog (batches R0–R4 of `docs/DASHBOARD_V2_REVIEW_PLAN.md`) and the local commit `0334f8c` (stronger logo cover in exports). See "Current work — 2026-10-05" below.
@@ -42,17 +154,17 @@ Since 2026-10-03 local `main` also holds everything from `improve/scan-performan
 
 Always confirm this section with `git status` and `git log` because it becomes stale after new work.
 
-## Current work — 2026-10-06 phone mode over Tailscale (branch `feat/phone-tailscale`, not committed)
+## Current work — 2026-10-06 phone mode over Tailscale (branch `feat/phone-tailscale`, committed, not pushed)
 
 - Request: open BiliFlow on the phone from outside the home Wi-Fi. The user chose Tailscale and "same as on the home Wi-Fi" (permanent deletes allowed). Cloudflare Tunnel and port forwarding were offered and not chosen.
-- Worktree `temp\wt-phone-tailscale`, branch `feat/phone-tailscale` from `main` `b96a09f`. The main folder was not touched (it keeps another session's uncommitted docs: AGENTS.md, CHANGELOG.md, PROJECT_STATUS.md, SESSION_HANDOFF.md, VIDEO_DOWNLOAD_PLAN.md, so a fast-forward needs care).
-- 2026-10-07: **BiliFlow now installs and manages Tailscale** (the user's request and choices: `C:\Program Files\Tailscale` (chosen after the security review instead of `runtime\tailscale`), auto-update, unattended, BiliFlow starts the service when needed, "Gia hạn" from the phone over Tailscale). Plan and batch status: `docs/TAILSCALE_PLAN.md` (T1–T5 done; the user's real test is set for 2026-10-08); guide `docs/DASHBOARD_V2_PHONE.md` section 8; details in CHANGELOG. Tests: manager and phone Tailscale 57 OK, V2/phone/contract 123 OK, node gates 37/37, full suite 1646 tests (after the security fixes and the Program Files change) with only the 28 known input-video errors. Security review: no CRITICAL; fixes applied; the HIGH (a SYSTEM service in `E:\DungChung\BiliFlow`, which every local account can modify) was settled by the user on 2026-10-07: install into `C:\Program Files\Tailscale`.
+- Worktree `temp\wt-phone-tailscale`, branch `feat/phone-tailscale` from `main` `b96a09f`. On 2026-10-07 the main folder was clean on `main` `75aae1a`.
+- 2026-10-07: **BiliFlow now installs and manages Tailscale** (the user's request and choices: `C:\Program Files\Tailscale` (chosen after the security review instead of `runtime\tailscale`), auto-update, unattended, BiliFlow starts the service when needed, "Gia hạn" from the phone over Tailscale). Plan and batch status: `docs/TAILSCALE_PLAN.md` (T1–T5 done); guide `docs/DASHBOARD_V2_PHONE.md` section 8; details in CHANGELOG. Tests: manager and phone Tailscale 57 OK, V2/phone/contract 123 OK, node gates 37/37, full suite 1646 tests (after the security fixes and the Program Files change) with only the 28 known input-video errors. Security review: no CRITICAL; fixes applied; the HIGH (a SYSTEM service in `E:\DungChung\BiliFlow`, which every local account can modify) was settled by the user on 2026-10-07: install into `C:\Program Files\Tailscale`.
 - Tailscale is not installed on the PC (checked 2026-10-07). Agents never press install, firewall, sign-in or connect on the real Control Center and never run `scripts/tailscale-setup.ps1` (AGENTS.md); the user does it in Cài đặt.
-- The branch is at `b96a09f`; `main` and `origin/main` are at `75aae1a` (source providers and docs). Merge current `main` into the branch before running it on the real Control Center.
-- Next (moved to 2026-10-08 at the user's request: a video was being processed on 2026-10-07):
-  1. With the user's consent and no job running, merge `main`, then restart the real Control Center from this branch's code (the Python part loads at start).
+- 2026-10-07, at the user's request ("Commit đi bạn"): committed `e949c52`, then `main` `75aae1a` merged in (conflicts only in AGENTS.md, CHANGELOG.md, PROJECT_STATUS.md and this file; both sides kept). Not pushed; `main` unchanged.
+- Next (2026-10-07 about 07:40 the user asked to go ahead: "Bạn làm tiếp đi nhé, hiện k có job nào chạy"; checked: the Control Center was not running, no job running or queued):
+  1. Put the main folder on the merge (detached, as for the earlier tests) and start the real Control Center (the Python part loads at start).
   2. The user presses "Cài và cấu hình Tailscale" (UAC), "Đăng nhập Tailscale", installs the phone app with the same account, then "Mở cho điện thoại ngoài nhà", opens the link on 4G and tries "Gia hạn thêm 8 giờ" on the phone.
-  3. Commit, merge into `main` and push only when the user asks.
+  3. Merge into `main` and push only when the user asks.
 
 ## Current work — 2026-10-06 U4: the Dashboard V2 list blinked on every refresh (in `main`, pushed)
 
@@ -111,7 +223,7 @@ Always confirm this section with `git status` and `git log` because it becomes s
   - The V2 page `#downloads` takes links from any public site, on the PC or from the phone.
   - yt-dlp probes each page first. "Chưa hỗ trợ" means it cannot read a video there.
   - The download is checked, then moves into `input\` under a unique name; the watcher picks it up; no auto scan.
-  - No cookies, logins, DRM work-arounds or site-specific code.
+  - The current D0–D5 implementation has no site-specific code. New public-source providers are now allowed by the scope update above; cookies, logins and DRM work-arounds remain out of scope.
 - Rules for agents (also in `AGENTS.md`):
   - Never start, resume or retry a download on the user's real Control Center, and never POST to `/api/downloads*` there.
   - Real checks use a test Control Center: `python -m biliflow --project-root <temp root> control-center --port 8797 --no-import-existing`, with a copied `config\` and `tools\` and links the user gave.

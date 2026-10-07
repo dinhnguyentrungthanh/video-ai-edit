@@ -6,6 +6,10 @@ checked with FFmpeg and is renamed into ``input\\`` under a free name (never
 overwriting). The watcher then sees it like a file the user copied in; nothing
 is scanned, exported or published automatically. Deletes stay inside
 ``temp\\downloads``.
+
+A link a source provider claims (``download_sources``: a direct media file or
+HLS playlist) is fetched by BiliFlow itself (``download_source_steps``); every
+other link, and every link a provider declines, goes to yt-dlp.
 """
 from __future__ import annotations
 
@@ -26,9 +30,12 @@ from biliflow.download_files import (
     unique_target,
     verify_video,
 )
+from biliflow.download_http import SafeHttp
 from biliflow.download_probe import ProbeEntry, choose
-from biliflow.download_runner import ProcessControl, SizeGuard, YtDlpRunner
+from biliflow.download_runner import ProcessControl, Progress, SizeGuard, YtDlpRunner, mask_line
 from biliflow.download_links import DownloadBatchError, Resolver, default_resolver, validate_batch
+from biliflow.download_source_steps import SOURCE_DECLINED, DownloadSourceSteps, with_reader_note
+from biliflow.download_sources import SourceRegistry, SourceTransfers, default_registry, describe_config_problems
 from biliflow.download_store import FINAL_STATES, SLOT_STATES, STATES, DownloadStore
 from biliflow.download_upkeep import DownloadUpkeep
 from biliflow.storage import GIB, storage_status
@@ -56,7 +63,8 @@ _RESET_FIELDS = {
     "estimated_bytes": None, "downloaded_bytes": 0, "total_bytes": None, "speed": None, "eta": None,
     "error_code": None, "error_message": None, "temp_dir": None, "temp_file": None, "output_path": None,
     "output_sha256": None, "output_size": None, "verify": None, "name_locked": 0, "pid": None,
-    "pid_created": None,
+    "pid_created": None, "progress_basis": None, "fragments_done": None, "fragments_total": None,
+    "transfer_stage": None,
 }
 
 SpaceProbe = Callable[[Path], tuple[int, int]]
@@ -80,19 +88,25 @@ def _gb(value: int | float) -> str:
     return f"{value / GIB:.1f}"
 
 
-class DownloadWorker(DownloadUpkeep):
+class DownloadWorker(DownloadSourceSteps, DownloadUpkeep):
     def __init__(self, root: Path, store: DownloadStore, *, runner: YtDlpRunner | None = None,
                  ffmpeg: Path | None = None, ffprobe: Path | None = None,
                  space_probe: SpaceProbe = default_space, verifier: Callable[..., Any] = verify_video,
                  resolver: Resolver = default_resolver, poll_seconds: float = 1.0,
                  space_retry_seconds: float = SPACE_RETRY_SECONDS, sweep_seconds: float = SWEEP_SECONDS,
-                 cache_pruner: Callable[[Path], Any] = prune_download_caches):
+                 cache_pruner: Callable[[Path], Any] = prune_download_caches,
+                 sources: SourceRegistry | None = None, http: SafeHttp | None = None,
+                 transfers: SourceTransfers | None = None):
         self.root = root.resolve(strict=True)
         self.store = store
         self.runner = runner or YtDlpRunner(self.root)
         tools = self.root / "tools" / "ffmpeg" / "bin"
         self.ffmpeg = ffmpeg or tools / "ffmpeg.exe"
         self.ffprobe = ffprobe or tools / "ffprobe.exe"
+        # Links BiliFlow fetches itself; the HTTP client checks every host with the same resolver.
+        self.sources = sources if sources is not None else default_registry(self.root)
+        self.http = http or SafeHttp(resolver=resolver)
+        self.transfers = transfers or SourceTransfers(self.http, ffmpeg=self.ffmpeg, ffprobe=self.ffprobe)
         self.input_dir = self.root / "input"
         self.downloads_dir = self.root / "temp" / "downloads"
         self.space_probe = space_probe
@@ -106,6 +120,9 @@ class DownloadWorker(DownloadUpkeep):
         self.cancel_retry_seconds = CANCEL_RETRY_SECONDS
         self.last_error: str | None = None
         self.last_error_at: str | None = None
+        ignored = describe_config_problems(self.sources.config_problems)
+        if ignored:  # a mistake in the provider config shows on the downloads page instead of passing unseen
+            self._note_error(ignored)
         self._cancel_retry_at: dict[int, float] = {}
         self._lock = threading.RLock()
         self._publish_lock = threading.Lock()
@@ -225,7 +242,7 @@ class DownloadWorker(DownloadUpkeep):
         except Exception as error:
             try:
                 self._fail(task_id, RUNNING | {"PUBLISHING"}, "INTERNAL_ERROR",
-                           f"Lỗi nội bộ: {type(error).__name__}: {error}")
+                           mask_line(f"Lỗi nội bộ: {type(error).__name__}: {error}"))
             except Exception as failure:  # noqa: BLE001 - the database failed; _reconcile settles it later
                 self._note_error(f"{type(failure).__name__}: {failure}")
         finally:
@@ -337,19 +354,26 @@ class DownloadWorker(DownloadUpkeep):
             return None
         task_dir = self._task_dir(task_id)
         self.store.update_fields(task_id, temp_dir=str(task_dir))
+        provider = self.sources.provider_for(task["url"])
+        if provider is not None:
+            result = self._probe_source(task, provider, control)
+            if result is not SOURCE_DECLINED:
+                return result
+        note = self._note_recognized_host(task)
         outcome = self.runner.probe(task["url"], task_dir, control, on_start=self._pid_recorder(task_id))
         self.store.update_fields(task_id, pid=None, pid_created=None)
         if control.requested:
             return self._end_requested(task_id, control)
         if not outcome.ok:
-            return self._fail(task_id, {"PROBING"}, outcome.code, outcome.message)
+            return self._fail(task_id, {"PROBING"}, outcome.code, with_reader_note(outcome.code, outcome.message, note))
         info = outcome.info or {}
         choice = choose(info)
         entries = [entry.as_dict() for entry in choice.entries]
         page = {"extractor": info.get("extractor_key") or info.get("extractor"),
                 "page_title": str(info.get("title") or "")[:300], "entry_count": max(1, len(entries))}
         if choice.kind == "FAILED":
-            return self._fail(task_id, {"PROBING"}, choice.code, choice.message, entries=entries, probe=page)
+            return self._fail(task_id, {"PROBING"}, choice.code, with_reader_note(choice.code, choice.message, note),
+                              entries=entries, probe=page)
         if choice.kind == "NEEDS_CHOICE":
             moved = self.store.transition(task_id, {"PROBING"}, "NEEDS_CHOICE", entries=entries, probe=page,
                                           error_message=choice.message)
@@ -420,14 +444,14 @@ class DownloadWorker(DownloadUpkeep):
     def _download(self, task: dict[str, Any], control: ProcessControl) -> dict[str, Any] | None:
         task_id, attempt = task["id"], task["attempt"]
         probe = task["probe"] or {}
+        if probe.get("provider"):
+            return self._download_source(task, control)
         if not self._still_allowed(task, "DOWNLOADING"):
             return None
         self._event(task, "DOWNLOADING", "Bắt đầu tải.")
         outcome = self.runner.download(
             task["url"], self._task_dir(task_id), control,
-            on_progress=lambda item: self.store.update_progress(
-                task_id, attempt, downloaded_bytes=item.downloaded_bytes, total_bytes=item.total_bytes,
-                speed=item.speed, eta=item.eta),
+            on_progress=self._progress_writer(task_id, attempt),
             on_log=lambda lines: self.store.append_log(task_id, attempt, lines),
             on_start=self._pid_recorder(task_id),
             playlist_item=probe.get("playlist_item"), max_filesize=task.get("max_filesize"),
@@ -441,6 +465,13 @@ class DownloadWorker(DownloadUpkeep):
             return self._fail(task_id, {"DOWNLOADING"}, outcome.code, outcome.message)
         return self.store.transition(task_id, {"DOWNLOADING"}, "VERIFYING",
                                      temp_file=str(outcome.final_path), speed=None, eta=None)
+
+    def _progress_writer(self, task_id: int, attempt: int) -> Callable[[Progress], None]:
+        """Progress of this attempt only; ``downloaded_bytes`` is always bytes, fragments are counted apart."""
+        return lambda item: self.store.update_progress(
+            task_id, attempt, downloaded_bytes=item.downloaded_bytes, total_bytes=item.total_bytes,
+            speed=item.speed, eta=item.eta, progress_basis=item.basis, fragments_done=item.fragments_done,
+            fragments_total=item.fragments_total, transfer_stage=item.stage)
 
     def _size_guard(self, task: dict[str, Any]) -> SizeGuard | None:
         budget = task.get("max_bytes")
@@ -677,8 +708,17 @@ class DownloadWorker(DownloadUpkeep):
             match = next((item for item in task["entries"] or [] if item.get("index") == entry_index), None)
             if match is None:
                 raise DownloadActionError("Mục này không có trong danh sách.", 400)
-            moved = self._ready(task_id, {"NEEDS_CHOICE"}, ProbeEntry(**match), task["entries"],
-                                task["probe"] or {}, "QUEUED")
+            probe = task["probe"] or {}
+            if probe.get("provider_choice"):
+                selections = probe.get("provider_choices") or []
+                if not 1 <= entry_index <= len(selections):
+                    raise DownloadActionError("Bản phim không còn trong danh sách.", 400)
+                moved = self.store.transition(task_id, {"NEEDS_CHOICE"}, "QUEUED",
+                    chosen_entry=entry_index, probe={**probe, "selection": selections[entry_index - 1],
+                                                    "ready": False}, error_code=None, error_message=None)
+            else:
+                moved = self._ready(task_id, {"NEEDS_CHOICE"}, ProbeEntry(**match), task["entries"],
+                                    probe, "QUEUED")
             if moved:
                 self._event(moved, "CHOSEN", f"Đã chọn: {match.get('title')}")
         self._wake.set()
