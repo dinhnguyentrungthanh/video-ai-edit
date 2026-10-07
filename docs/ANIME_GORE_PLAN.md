@@ -24,7 +24,23 @@
     - bằng chứng fp16 thật lệch bản chấm lại tối đa 1.9e-4.
     - Ở ngưỡng C1, số thẻ bị chuyển và điểm Golden trùng lượt offline.
     - Thẻ báo nhầm `fee07d624ddb` nằm dưới ngưỡng máu 0.0716 đúng 2.9e-5. Nếu nó vượt ngưỡng thì chỉ ở lại danh sách chính, nên vẫn an toàn.
-  - Còn lại: cổng 4.6 (người dùng trả lời trên trang kiểm), cổng 4.7 (phim thứ ba), rồi quyết định bật C1.
+  - Phim thứ ba (cổng 4.7): người dùng không có phim anime nên nhờ tải một phim nhẹ.
+    - Đã dùng phim hoạt hình 3D mở bản quyền (CC-BY) từng dùng ngày 21/09, đặt trong `temp\gore-c1\film3`, không vào `input\`.
+    - Kết quả quét: 13 thẻ máu me, **C1 không chuyển thẻ nào**, vì tag xác bật ở mọi thẻ (0.021–0.33).
+    - Năm thẻ có điểm máu dưới 0.15 (128.0, 490.0, 518.5, 553.0 và 876.0 giây) chỉ được giữ nhờ tag xác. Nếu thẻ nào trong đó có máu thật thì cổng 4.7 trượt điều kiện biên.
+    - Phim 3D không thay được hẳn một phim anime 2D. Tuy vậy, C1 áp cho mọi job `animation`, nên phép thử này vẫn có ý nghĩa.
+  - Người dùng trả lời trang kiểm tối 07/10, đủ 24/24 mục (bản sao trong `reports\benchmarks\gore-triage-20261007-gpu\gate46-answers.json`).
+    - **Cổng 4.6 qua.** C1 chuyển 14 thẻ (7 + 7), cả 14 đều là báo nhầm, đúng số dự kiến:
+      - 5 thẻ có nhãn Golden `false_positive`;
+      - 8 thẻ người dùng chọn "chỉ vết xước, vết bầm";
+      - 1 thẻ người dùng chọn "cảnh bình thường".
+    - **Cổng 4.7 không trượt, nhưng phim thứ ba chưa đủ điều kiện.**
+      - C1 không chuyển thẻ nào. Thẻ máu thật duy nhất có điểm máu 0.82, và hai thẻ xác có tag xác 0.078 và 0.25.
+      - Người dùng chỉ thấy 1 thẻ máu thật, trong khi mục 4.7 cần ít nhất 3 cảnh, có máu khô hoặc máu nhỏ.
+      - Trên phim 3D, điểm máu của tagger không đáng tin: 6 thẻ có điểm máu từ 0.27 đến 0.62 mà không có máu.
+      - Vì vậy **C1 vẫn tắt**, cho tới khi có một phim anime 2D đủ điều kiện.
+    - Câu hỏi 3: người dùng trả lời cả hai mục `1146488859a3` và `cb1c14ac71a7` **không phải xác**. Chúng đang ở danh sách chính chỉ nhờ ngưỡng xác. Muốn nới ngưỡng xác thì phải đo lại với 5 mục "xác không máu" của Golden; chưa làm.
+  - Còn lại: một phim anime 2D cho cổng 4.7, rồi quyết định bật C1.
 - **Mốc mã:** nhánh `improve/scan-performance-metrics`, commit `68a5a7e`. Phiên khác đã commit `177c412` và `68a5a7e` lúc 09:31, khi nghiên cứu này đang chạy. Nghiên cứu không tạo commit nào.
 - **Phạm vi:** chỉ nhóm máu me của anime tagger (`wd_vit_tagger_v3`, `src/biliflow/animation_safety_scanner.py`) trên Conan 20 và Conan 21.
   - Golden v1 r469 + v1.1 r115. Verdict máu me trùng scorecard r108.

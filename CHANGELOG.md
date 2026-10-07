@@ -52,10 +52,18 @@ The user asked to finish part 1 of the anime gore work and to keep it out of the
     - Only the never-shipped 5-decimal sensitivity variant changed. Golden false alarm `review-fee07d624ddb` (C21) now has blood 0.071571, under its 0.07158 line, so that variant moves 7 instead of 6 C21 cards.
     - That card sits 2.9e-5 under the shipped 0.0716 line. It is a false alarm, so a flip would only keep it in the main list.
   - Time: the scan stage took 207.1 s and 207.8 s, against 234.4 s and 204.9 s in production (−5.6 % for the two films together; C21 alone +1.4 %). The time is reported, not gated, because it depends on what else the PC runs.
-- Not done (needs the user, plan §4.6–4.7):
-  - the user's answers on the gate 4.6 sheet (`temp\gore-c1\gate46`: 9 moved cards without a Golden verdict and the two "corpse?" items);
-  - a third animation film ("Chưa có, để sau");
-  - then whether to turn C1 on.
+- User check sheet, gates 4.6 and 4.7 (2026-10-07 evening). The page showed no tagger hint or score, and the user answered all 24 items.
+  - Gate 4.6 passed. All 14 cards C1 moves are false alarms:
+    - 5 Golden `false_positive`;
+    - 8 "scratch/bruise without blood";
+    - 1 "normal scene", an answer added at the user's suggestion.
+  - Third film. The user asked us to download a light one. With the user's OK we used a CC-BY open 3D film (720p, published MD5 checked), kept in `temp` and not in `input\`; branch scan in `reports\benchmarks\gore-triage-film3-20261007`.
+    - 13 gore cards; C1 moved none, because the corpse tag fires on every card (0.021–0.33).
+    - The user found 1 real-blood card (blood 0.82) and 2 corpses (corpse 0.078 and 0.25).
+    - Gate 4.7 therefore did not fail, but the film does not qualify: §4.7 needs at least 3 real-blood scenes, including dried or small blood.
+    - On 3D the blood score is unreliable: 6 cards with blood 0.27–0.62 had no blood.
+  - Plan question 3: both items are not corpses.
+- Not done: a qualifying 2D anime film for gate 4.7, then whether to turn C1 on. C1 stays off.
 
 # Unreleased — over Tailscale, the PC's own Tailscale account needs no access code — 2026-10-07
 

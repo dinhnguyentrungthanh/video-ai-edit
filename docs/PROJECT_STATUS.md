@@ -4,7 +4,10 @@
 - Scan caches: `cli.py` and `intervals.py` are not touched, so only the `animation_safety`, `gore` and `violence` stages get a new cache key. Those stages run for animation videos with a safety group and for live-action videos that select only one of gore and violence. OCR, logo, 18+ and `live_safety` (live action with both groups) caches stay valid.
 - Checks: gore tests 19 OK; focused tests 236 OK; node gates 32/38/37/22; offline C1 gates passed with the same numbers as on 2026-10-02 (`temp\gore-c1\gates-d1296a7`). Full suite 1947 OK (35 skipped). Details in CHANGELOG.
 - GPU rescan of both Golden animation films, 2026-10-07: `reports\benchmarks\gore-triage-20261007-gpu`. Gates 4.4 and 4.5 passed: every interval is unchanged, and the real fp16 evidence is within 1.9e-4 of the re-score. At the C1 thresholds the results equal the offline run.
-- Open, all waiting for the user: the gate 4.6 answers, a third animation film (gate 4.7), and the decision to turn C1 on.
+- User check sheet, 2026-10-07 evening:
+  - Gate 4.6 passed: all 14 cards C1 moves are false alarms.
+  - Gate 4.7 was tried on an open 3D film (`reports\benchmarks\gore-triage-film3-20261007`). C1 moved nothing there and no real blood sat near the line, but the film had only one real-blood card, so it does not qualify.
+  - C1 stays off. Open: a 2D anime film for gate 4.7, then the decision to turn C1 on.
 - At the user's request it stays out of the main folder while jobs run. Merging, committing and the Control Center restart (Stop, then Start) wait for the user. Turning C1 on needs plan gates 4.6 and 4.7.
 
 ## Tailscale managed by BiliFlow (2026-10-07) — in `main` and pushed; the user's real tests passed

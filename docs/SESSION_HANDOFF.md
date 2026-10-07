@@ -5,7 +5,9 @@
 - **Request:** after a status check the user asked to do part 1 of the remaining Gore C1 work, but not to bring it into the main folder while their jobs run ("Làm tiếp mục 1 đi bạn nhưng khoan đưa vào mục chính do tôi đang chạy job").
   - The real Control Center was busy at the time: job 81 in `localize_logo`, 9 jobs queued, all live action with advertising only.
   - Part 1 = the 2026-10-02 patch brought onto today's `main`, with C1 kept off. Part 2 (turning C1 on) needs the user: plan gates 4.6 and 4.7.
-- **Where:** worktree `temp\wt-gore-c1`, branch `feat/gore-c1-hints` from `main` `d1296a7`. Not committed (commit only when the user says so), not merged into `main`, Control Center not restarted.
+- **Where:** worktree `temp\wt-gore-c1`, branch `feat/gore-c1-hints` from `main` `d1296a7`.
+  - The code was committed at the user's request ("Thôi cứ commit đi bạn") as `8d709d0`. The check-sheet results below were recorded after that commit.
+  - Not merged into `main`; Control Center not restarted.
   - The old worktree `temp\wt-gore` (detached `68a5a7e`) and `temp\gore-c1.patch` are unchanged. Remove that worktree only when the user asks.
 - **What changed against the 2026-10-02 patch:**
   - `cli.py` and `intervals.py` are identical to `main`, so scan caches are kept:
@@ -54,10 +56,23 @@
     - Output: `reports\benchmarks\gore-triage-20261007-gpu`; gate output in `temp\gore-c1\gpu-rescan\gates-gore-triage-20261007-gpu`.
     - Gates 4.4 and 4.5 passed: intervals identical; real fp16 evidence within 1.9e-4 of the re-score.
     - At the C1 thresholds everything equals the offline run (details in CHANGELOG).
-  - Still open:
-    - the gate 4.6 answers. The user stopped the sheet's server to save resources ("Tạm thời tắt đi..."); start it again only when the user asks.
-    - gate 4.7;
-    - the decision to turn C1 on.
+  - **Third film (gate 4.7).** The user has no anime film and asked us to download a light one: "Tôi nghĩ bạn tải một video nhẹ theo yêu cầu bạn cần và chạy trước đi giờ k có video đâu bạn".
+    - After the user chose its 720p release, we downloaded the CC-BY open 3D animation film used on 2026-09-21 from its publisher's server.
+    - Where it lives: `temp\gore-c1\film3`, with the published MD5 checked. It was not put in `input\` and the Control Center downloader was not used.
+    - Scan with the branch scanner: GPU, 35 s, fp16 (`temp\gore-c1\film3\scan.ps1`, output `reports\benchmarks\gore-triage-film3-20261007`).
+    - `analyze.py`: 24 gore intervals, 13 cards. **C1 moves none.** Every card has `corpse_max` above 0.0104 (0.021–0.33): the corpse tag fires widely on 3D.
+    - Five cards have blood below 0.15: 128.0, 490.0, 518.5, 553.0 and 876.0 s. If any of them shows real blood, gate 4.7 fails its margin condition, because only the corpse tag kept such a card.
+    - The 13 cards are part 2 of the check sheet (`temp\gore-c1\gate46`, rebuilt: 9 + 13 + 2 cards). The server is off until the user asks.
+  - **Sheet answered and graded** on 2026-10-07 evening.
+    - The user answered all 24 items; copies are with the benchmark evidence (`gate46-answers.json`). At the user's suggestion the sheet gained the answer "Cảnh bình thường, không có gì" (`normal`), which counts as "no blood" like "none".
+    - Gate 4.6 passed. All 14 cards C1 moves are false alarms: 5 Golden `false_positive`, 8 "scratch/bruise without blood" and 1 normal scene.
+    - Gate 4.7 did not fail, but the film does not qualify.
+      - C1 moved nothing. The only real-blood card has blood 0.82; the two corpse cards have corpse 0.078 and 0.25.
+      - The film has 1 real-blood card, and §4.7 needs at least 3 scenes including dried or small blood.
+      - A frame check of the five low-blood cards agreed with the user.
+    - Plan question 3: both items are not corpses.
+    - **C1 stays off** until a qualifying 2D anime film passes gate 4.7.
+  - Still open: a 2D anime film for gate 4.7, then the decision to turn C1 on. The sheet's server is off.
 
 ## Source providers in `main`; real Control Center restarted; the user's real test passed — 2026-10-06
 
