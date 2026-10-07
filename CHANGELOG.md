@@ -1,4 +1,24 @@
-# Unreleased — anime gore evidence and card hint; rule C1 re-merged, still off — 2026-10-07 (in `main` since 2026-10-07, not pushed)
+# Unreleased — anime gore rule C1 turned on — 2026-10-07 (`main`, not pushed)
+
+The user turned it on and asked to remove the temporary files: "Xoá hết những gì liên quan đi bạn code cứ commit và cứ bật đi bạn để trong đó cũng vậy, vậy thì bật luôn done phần này".
+
+- `GORE_TRIAGE_LEVEL = "no_blood_no_corpse"` (`gore_triage.py`).
+  - An undecided gore card of an animation job moves to "Ứng viên phụ" when the tagger saw no blood (≤ 0.0716) and no corpse (≤ 0.0104) in every interval of the card.
+  - Only calibrated scans count: wd-vit-tagger-v3 at 2 fps in fp16, the "Quét nhanh" mode.
+  - Nothing moves for live-action jobs, fp32 scans, or reports made before this code (they have no tag evidence).
+  - `gore_triage.py` is in no scan cache key, so nothing is rescanned. A running Control Center needs Stop then Start.
+- Like the 18+ triage, moved cards do not block an export. For animation in a style not measured below, glance at "Ứng viên phụ" before exporting.
+- Gate 4.7, measured before turning C1 on:
+  - **Episode of the same series as the two Golden films.** The user gave a link from its official channel; it was downloaded in 720p to `temp`, not via the Control Center.
+    - The scanner found 3 gore cards. The user marked all 3 as real blood: dried stains (blood 0.305), a bloody hand (0.774), small spatter (0.444). A frame check agrees.
+    - C1 moved none.
+  - **Open 3D film:** C1 moved none of its 13 cards.
+  - **Result:** no real blood was moved on any of the four sources, and new real blood scored at least 0.30.
+  - The episode had no scratch-only card, so the gain on new material is not measured.
+- Checks: focused tests 218 OK; full suite 1948 OK (35 skipped).
+- Evidence kept: `reports\benchmarks\gore-triage-20261007-gpu` (rescan, gates, the user's answers, the offline gate summary), `…-film3-20261007` and `…-film4-20261007`, plus the plan's research data in `temp\next\anime-gore`. The temporary tools, clips and test videos were deleted at the user's request.
+
+# Anime gore evidence and card hint; rule C1 re-merged, still off — 2026-10-07 (in `main` since 2026-10-07, not pushed)
 
 - Brought into `main` at the user's request: "nếu mọi thứ đã tốt hết rồi thì đưa vào main đi bạn".
   - Fast-forward `d1296a7` → `927006c`, after the full suite (1947 OK, 35 skipped) and the node gates passed on `927006c`.

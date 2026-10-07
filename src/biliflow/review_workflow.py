@@ -3297,7 +3297,7 @@ def build_review_queue(
     ``triage_adult_items`` move weak 18+ candidates to the optional list. Callers
     that omit it (older scripts, benchmarks) get the queue without that triage.
     ``adult_triage_level`` overrides ``ADULT_TRIAGE_LEVEL`` for measurements.
-    ``gore_triage_level`` overrides ``GORE_TRIAGE_LEVEL`` (off by default); only
+    ``gore_triage_level`` overrides ``GORE_TRIAGE_LEVEL`` (C1 since 2026-10-07); only
     an ``animation`` job lets ``triage_anime_gore_items`` move gore cards.
     ``use_studio_logo_memory`` routes cards repeating a user-confirmed studio
     logo (``state/studio-logo-memory.json``) to the optional list. It is off by

@@ -1,5 +1,22 @@
 # BiliFlow session handoff
 
+## Anime gore rule C1 turned on; temporary files removed — 2026-10-07 (`main`, not pushed)
+
+- **Request:** "Xoá hết những gì liên quan đi bạn code cứ commit và cứ bật đi bạn để trong đó cũng vậy, vậy thì bật luôn done phần này".
+- **Code:** `GORE_TRIAGE_LEVEL = "no_blood_no_corpse"`, with its tests (`test_default_level_is_c1`, `test_level_off_still_moves_nothing`). Focused tests 218 OK; full suite 1948 OK (35 skipped).
+- **Gate 4.7.** The user gave an official-channel episode link of the same series; it was downloaded to `temp` and was not run as a job.
+  - The scanner found 3 gore cards, which the user marked as real blood: dried stains, a bloody hand, small spatter.
+  - C1 moved none; the lowest blood was 0.305.
+  - The open 3D film (13 cards) had nothing moved either.
+- **Removed at the user's request:**
+  - `temp\gore-c1` (tools, clips, sheets, both test videos);
+  - `temp\gore-c1.patch`;
+  - worktrees `temp\wt-gore-c1` and `temp\wt-gore` (the superseded 2026-10-02 patch);
+  - branch `feat/gore-c1-hints`.
+
+  Paths to `temp\gore-c1` in the sections below no longer exist. Their results are in `reports\benchmarks\gore-triage-20261007-gpu`, `…-film3-20261007` and `…-film4-20261007`. The research data `temp\next\anime-gore` is kept.
+- **Control Center:** it was stopped. Its next start serves C1. Only new "Quét nhanh" animation scans have the evidence C1 needs.
+
 ## Anime gore evidence and card hint in `main` (C1 off) — 2026-10-07
 
 - **In `main` since 2026-10-07**, at the user's request: "nếu mọi thứ đã tốt hết rồi thì đưa vào main đi bạn".

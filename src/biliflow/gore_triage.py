@@ -41,12 +41,13 @@ GORE_TRIAGE_LEVELS: dict[str, dict[str, Any] | None] = {
         "rule": "C1", "blood_family_max": 0.0716, "corpse_max": 0.0104,
     },
 }
-# OFF by default (plan §6 step 3): enable only after the user's decisions on the
-# queues of the two Golden animation films (gate 4.6) and a third anime film
-# (gate 4.7) pass and the user agrees. Measurements override it through
-# ``build_review_queue(gore_triage_level=...)``; there is no CLI flag, because
-# ``cli.py`` is in the cache key of every scan stage.
-GORE_TRIAGE_LEVEL = "off"
+# ON since 2026-10-07 at the user's request, after gates 4.1-4.7 passed (plan §6
+# step 3): the user's blind check of every card C1 moves on the two Golden
+# animation films (gate 4.6) and further animation (gate 4.7: no real blood moved,
+# real blood >= 0.30). Moved cards stay in "Ứng viên phụ", which does not block an
+# export. Measurements override it through ``build_review_queue(gore_triage_level=...)``;
+# there is no CLI flag, because ``cli.py`` is in the cache key of every scan stage.
+GORE_TRIAGE_LEVEL = "no_blood_no_corpse"
 GORE_TRIAGE_EVIDENCE = (
     "docs/ANIME_GORE_PLAN.md; temp/next/anime-gore/plan-whatif.json; "
     "temp/next/anime-gore/items-ff.csv; temp/next/anime-gore/lone-shots.csv"

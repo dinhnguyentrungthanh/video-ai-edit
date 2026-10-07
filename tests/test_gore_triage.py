@@ -376,16 +376,25 @@ class GoreTriageTests(unittest.TestCase):
     def starts(items, category="gore"):
         return sorted(item["start_seconds"] for item in items if item["category"] == category)
 
-    def test_default_level_is_off(self):
-        self.assertEqual(GORE_TRIAGE_LEVEL, "off")
-        self.assertEqual(normalize_gore_triage_level(None), "off")
+    def test_default_level_is_c1(self):
+        # The user turned C1 on 2026-10-07 after gates 4.1-4.7 (docs/ANIME_GORE_PLAN.md).
+        self.assertEqual(GORE_TRIAGE_LEVEL, "no_blood_no_corpse")
+        self.assertEqual(normalize_gore_triage_level(None), "no_blood_no_corpse")
         self.assertEqual(GORE_TRIAGE_LEVELS["no_blood_no_corpse"],
                          {"rule": "C1", "blood_family_max": 0.0716, "corpse_max": 0.0104})
         with self.assertRaises(ValueError):
             normalize_gore_triage_level("aggressive")
         self.write()
-        queue = build_review_queue(project_root=self.root, report_paths=[self.gore, self.violence],
-                                   queue_path=self.queue, content_style="animation")
+        default = build_review_queue(project_root=self.root, report_paths=[self.gore, self.violence],
+                                     queue_path=self.queue, content_style="animation")
+        explicit = self.build()
+        self.assertTrue(self.starts(default["advisory_items"]))
+        self.assertEqual(self.starts(default["advisory_items"]), self.starts(explicit["advisory_items"]))
+        self.assertEqual(default["gore_triage"]["level"], "no_blood_no_corpse")
+
+    def test_level_off_still_moves_nothing(self):
+        self.write()
+        queue = self.build(level="off")
         self.assertEqual(self.starts(queue["advisory_items"]), [])
         self.assertEqual((queue["gore_triage"]["level"], queue["gore_triage"]["reason"]), ("off", "level_off"))
         self.assertFalse(any("gore_triage" in item for item in queue["items"]))

@@ -1,7 +1,10 @@
 # Kế hoạch giảm báo nhầm máu me hoạt hình (Conan), không để lọt máu thật
 
 - **Ngày lập:** 02/10/2026.
-- **Trạng thái:** đề xuất. **Chưa có luật nào nên bật.** Người dùng cần trả lời câu hỏi 1 (mục 7) trước khi viết code cho bước 3.
+- **Trạng thái (tối 07/10/2026):** **C1 đã bật** theo yêu cầu của người dùng ("cứ bật đi bạn… bật luôn done phần này"), sau khi qua cổng 4.1–4.7.
+  - Cổng 4.7 chạy trên một tập phim cùng loạt, lấy từ kênh chính thức: 3 thẻ máu thật, C1 không chuyển thẻ nào, điểm máu thấp nhất 0.305 (vết máu khô).
+  - Thẻ bị chuyển nằm ở "Ứng viên phụ", không chặn việc xuất. Với anime nét vẽ chưa đo, nên xem lướt danh sách này trước khi xuất.
+- **Trạng thái ban đầu (02/10):** đề xuất; chưa có luật nào nên bật. Người dùng cần trả lời câu hỏi 1 (mục 7) trước khi viết code cho bước 3.
 - **Cập nhật 07/10/2026:**
   - Bước 1 và bước 3 (C1 tắt) đã được ghép lại lên `main` `d1296a7`, trên nhánh `feat/gore-c1-hints` (worktree `temp\wt-gore-c1`). Đã vào `main` tối 07/10 (`927006c`, chưa push), C1 vẫn tắt.
   - Khác bản ngày 02/10:
