@@ -67,6 +67,9 @@ PHONE_POSTS_LITERAL = (
     r"/api/downloads/\d+/(?:rename|choose|stop|resume|cancel|retry|remove)",
     r"/api/downloads/settings",
     r"/api/downloads/cleanup-temp",
+    # Source accounts M4 (docs/SOURCE_ACCOUNTS_PLAN.md 9.14): choosing episodes and an episode group's actions.
+    r"/api/downloads/\d+/episodes/(?:draft|confirm)",
+    r"/api/downloads/groups/\d+/(?:stop|resume|cancel|retry|remove)",
     # "Xóa video gốc", "Xóa video" and "Dọn video mất gốc" from the phone too (the user's choice, 2026-10-06).
     r"/api/source-cleanup",
     r"/api/job-delete",
@@ -77,7 +80,8 @@ PHONE_POSTS_LITERAL = (
 # 63 with the 13 "Tải video" endpoints of the video download plan (D3, a28b19df…), 52 with deletePreview and delete
 # of "Xóa video" (delete flow, 071106c5…), 65 with both (test/download-delete, 489eca65…), and 75 with phoneExtend
 # and the 9 Tailscale endpoints of Cài đặt → Tailscale (docs/TAILSCALE_PLAN.md).
-ENDPOINTS_SHA256 = "4ae7acd9b60fa311b03c7b323fdf091276437f5471b43c702c8759a988e02a7c"
+# Source accounts M5 (docs/SOURCE_ACCOUNTS_PLAN.md 9.17) added the episode, group and account endpoints on purpose.
+ENDPOINTS_SHA256 = "771b4282b11c9524c4dfba5f72cba14cb7c28e67d7d10cf5bd57d3dcaccd7e90"
 
 
 def node(script: str) -> str:

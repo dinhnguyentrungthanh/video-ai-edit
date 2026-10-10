@@ -52,6 +52,7 @@ class DownloadUpkeep:
                     continue  # still held: stays as it is, the next clean tries again
                 moved = self.store.transition(task["id"], TEMP_CLEANABLE, "EXPIRED", temp_file=None)
                 if moved:
+                    self.tickets.revoke(task["id"])  # the part is gone: Thử lại starts with a new ticket
                     count += 1
                     self._event(moved, "EXPIRED", "Đã dọn file tạm theo yêu cầu; thử lại sẽ tải từ đầu.")
         return {"tasks": count, "freed_bytes": freed}
@@ -72,7 +73,11 @@ class DownloadUpkeep:
                         level="WARNING")
 
     def recover(self) -> dict[str, int]:
-        """Settle tasks a previous Control Center left running; never restart a download."""
+        """Settle tasks a previous Control Center left running; never restart a download. Then the group actions
+        the user gave that a previous run did not finish (``_settle_groups``: a cancelled group's episodes are
+        cancelled, a stored Dừng / Tiếp tục nhóm reaches its stopped or queued episodes) before anything
+        dispatches; it never queues a task that was running (only WAITING_SPACE, which has no part file yet, goes
+        back to QUEUED)."""
         counts: Counter[str] = Counter()
         for task in self.store.tasks_in(SLOT_STATES):  # every running state, PUBLISHING, CANCELLING
             try:
@@ -82,6 +87,10 @@ class DownloadUpkeep:
                 continue
             if moved:
                 counts[f"{task['state']}->{moved['state']}"] += 1
+        try:
+            self._settle_groups()
+        except Exception as error:  # noqa: BLE001 - every dispatch pass settles them first anyway
+            self._note_error(f"Nhóm tập: {type(error).__name__}: {error}")
         return dict(counts)
 
     def _recover_one(self, task: dict[str, Any]) -> dict[str, Any] | None:
@@ -145,11 +154,13 @@ class DownloadUpkeep:
                         continue
                     moved = self.store.transition(task["id"], TEMP_CLEANABLE, "EXPIRED", temp_file=None)
                     if moved:
+                        self.tickets.revoke(task["id"])
                         summary["expired"] += 1
                         self._event(moved, "EXPIRED", "Quá 7 ngày: đã dọn file tạm; thử lại sẽ tải từ đầu.")
             for task in self.store.tasks_in(CLOSED):
                 summary["freed_bytes"] += self._remove_temp(task)
                 if self._since(task) <= now - KEEP_ROWS:
+                    self.tickets.revoke(task["id"])
                     self.store.delete_task(task["id"])
                     summary["deleted"] += 1
             if self.downloads_dir.is_dir():

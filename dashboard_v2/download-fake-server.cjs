@@ -3,29 +3,35 @@
  * Control Center). Run: node dashboard_v2/download-fake-server.cjs [port] [--phone]
  * then open http://127.0.0.1:<port>/dashboard-v2/#downloads (light and dark, 375 / 390 / 1440 px).
  * --phone answers /api/phone-mode like the phone listener ({remote: true}). Domains are .example only.
- * A link on a host starting with "chua-ho-tro." is added as a page yt-dlp cannot read (FAILED, UNSUPPORTED). */
+ * A link on a host starting with "chua-ho-tro." is added as a page yt-dlp cannot read (FAILED, UNSUPPORTED).
+ * Source accounts (M5): download-fake-accounts.cjs adds sources, series pages, groups of episodes and their routes;
+ * --accounts=none (no source configured), --accounts=old (a backend without them) or --accounts=problem. */
 const fs = require('fs');
 const http = require('http');
 const path = require('path');
+const Accounts = require('./download-fake-accounts.cjs');
 
 const ROOT = __dirname;
 const TOKEN = 'download-fake-token';
 const TYPES = {'.css': 'text/css', '.js': 'text/javascript', '.svg': 'image/svg+xml', '.html': 'text/html'};
 const ASSETS = new Set(['styles.css', 'theme.css', 'review.css', 'contracts.js', 'adapter.js', 'download-demo.js', 'download-core.js',
-  'download-view.js', 'download-live.js', 'review-core.js', 'review-detail.js', 'review-media.js', 'review-cards.js', 'review.js',
+  'download-view.js', 'download-episodes.js', 'download-live.js', 'review-core.js', 'review-detail.js', 'review-media.js', 'review-cards.js', 'review.js',
   'app.js', ...fs.readdirSync(path.join(ROOT, 'assets')).map(f => 'assets/' + f)]);
 const UNSUPPORTED = url => 'Trang này chưa được hỗ trợ: yt-dlp không tìm thấy video nào đọc được trong trang. ' +
   '(ERROR: Unsupported URL: ' + url + ')';
 const GB = 1073741824, MB = 1048576;
 const LONG = 'Video mẫu có tên rất dài để thử xuống dòng trên điện thoại – tập 12 phần cuối (bản đầy đủ, phụ đề tiếng Việt)';
 
-function seed() {
+function row(id, state, extra = {}) {
   const now = new Date().toISOString();
-  const t = (id, state, extra = {}) => ({id, url: 'https://clips.example/watch/v' + id, state, attempt: 1,
+  return {id, url: 'https://clips.example/watch/v' + id, state, attempt: 1,
     desired_name: null, original_title: 'Video mẫu ' + id, title: 'Video mẫu ' + id, duration_seconds: 1440, estimated_bytes: 900 * MB,
     downloaded_bytes: 0, total_bytes: null, speed: null, eta: null, error_code: null, error_message: null, chosen_entry: null,
     name_locked: false, created_at: now, state_since: now, finished_at: null, queued_at: now, output_name: null, entries: null,
-    entry_count: 0, media: {extractor: 'generic', height: null, video_codec: null, audio_codec: null}, ...extra});
+    entry_count: 0, media: {extractor: 'generic', height: null, video_codec: null, audio_codec: null}, ...extra};
+}
+function seed() {
+  const t = row;
   return [
     t(1, 'DOWNLOADING', {downloaded_bytes: 700 * MB, total_bytes: 1.2 * GB, speed: 5.2 * MB, eta: 105}),
     t(2, 'DOWNLOADING', {url: 'https://media.example/show/index.m3u8', downloaded_bytes: 230 * MB, speed: 3.1 * MB, eta: 240,
@@ -42,7 +48,7 @@ function seed() {
     t(7, 'VERIFYING', {downloaded_bytes: 820 * MB, total_bytes: 820 * MB}),
     t(8, 'COMPLETED', {downloaded_bytes: 1.1 * GB, total_bytes: 1.1 * GB, output_name: 'Video mẫu 8.mp4', name_locked: true,
       media: {extractor: 'generic', height: 1080, video_codec: 'h264', audio_codec: 'aac'}}),
-    t(9, 'FAILED', {error_code: 'LOGIN_REQUIRED', error_message: 'Trang cần đăng nhập. BiliFlow không dùng cookie hay tài khoản.'}),
+    t(9, 'FAILED', {error_code: 'LOGIN_REQUIRED', error_message: 'Trang cần đăng nhập. Chỉ nguồn có trong "Tài khoản nguồn phim" mới dùng phiên đăng nhập.'}),
     t(10, 'STOPPED', {downloaded_bytes: 400 * MB, total_bytes: GB}),
     t(11, 'INTERRUPTED', {downloaded_bytes: 120 * MB, total_bytes: 900 * MB, error_message: 'Control Center tắt khi đang tải. Bấm Tiếp tục để tải nối.'}),
     t(12, 'CANCELLED'),
@@ -59,9 +65,13 @@ function seed() {
 function create(options = {}) {
   let tasks = seed(), slots = 2, nextId = 18;
   const posts = [];
+  const accounts = Accounts.create({task: row, tasks: () => tasks, push: added => { tasks = [...tasks, added]; },
+    removeTasks: ids => { tasks = tasks.filter(x => !ids.has(x.id)); }, nextId: () => nextId++, phone: !!options.phone,
+    accounts: options.accounts});
+  if (options.accounts !== 'old') { tasks = [...tasks, ...accounts.seed()]; nextId = 40; }
   const RUN = ['PROBING', 'WAITING_SPACE', 'DOWNLOADING', 'VERIFYING', 'PUBLISHING', 'CANCELLING'];
   const cleanable = () => tasks.filter(x => ['FAILED', 'STOPPED', 'INTERRUPTED'].includes(x.state));
-  const snapshot = () => ({tasks, counts: tasks.reduce((c, x) => ({...c, [x.state]: (c[x.state] || 0) + 1}), {}),
+  const snapshot = () => ({...accounts.snapshotExtras(), tasks: tasks.map(accounts.decorate), counts: tasks.reduce((c, x) => ({...c, [x.state]: (c[x.state] || 0) + 1}), {}),
     settings: {slots, max_slots: 3}, space: {free_bytes: 412 * GB, reserve_bytes: 100 * GB},
     temp: {tasks: cleanable().length, bytes: 520 * MB, ids: cleanable().map(x => x.id), total_temp_bytes: 1.4 * GB},
     running: tasks.filter(x => RUN.includes(x.state)).map(x => x.id), worker_error: null, worker_error_at: null});
@@ -76,15 +86,25 @@ function create(options = {}) {
   }
   const set = (task, state, extra = {}) => Object.assign(task, {state, state_since: new Date().toISOString()}, extra);
   const ACTIONS = {
-    stop: [['QUEUED', 'PROBING', 'WAITING_SPACE', 'DOWNLOADING'], t => set(t, 'STOPPED', {speed: null, eta: null})],
+    stop: [['QUEUED', 'PROBING', 'WAITING_SPACE', 'DOWNLOADING', 'WAITING_LOGIN'], t => set(t, 'STOPPED', {speed: null, eta: null})],
     resume: [['STOPPED', 'INTERRUPTED'], t => set(t, 'QUEUED', {error_message: null})],
-    cancel: [['QUEUED', 'PROBING', 'NEEDS_CHOICE', 'WAITING_SPACE', 'DOWNLOADING', 'VERIFYING', 'STOPPED', 'FAILED', 'INTERRUPTED', 'CANCELLING'],
+    cancel: [['QUEUED', 'PROBING', 'NEEDS_CHOICE', 'WAITING_SPACE', 'DOWNLOADING', 'VERIFYING', 'STOPPED', 'FAILED', 'INTERRUPTED', 'CANCELLING',
+      'WAITING_LOGIN'],
       t => set(t, 'CANCELLED', {downloaded_bytes: 0})],
     retry: [['FAILED', 'INTERRUPTED', 'STOPPED', 'CANCELLED', 'EXPIRED'], t => set(t, 'QUEUED', {attempt: t.attempt + 1, downloaded_bytes: 0,
       total_bytes: null, error_code: null, error_message: null})],
   };
 
   function handlePost(p, body, res) {
+    const own = accounts.handlePost(p, body);
+    // Done on the server, the answer lost on the way. 'cut': the body stops after the headers (a browser never resends
+    // then; the page sees a network error); 'reset': no answer at all (Chromium may resend it by itself on a reused socket).
+    if (own && own.drop === 'cut') { // destroyed only once the headers are out: a destroy right away drops them
+      res.writeHead(200, {'Content-Type': 'application/json', 'Content-Length': '400'});
+      return res.write('{"gro', () => setTimeout(() => res.destroy(), 50));
+    }
+    if (own && own.drop) return res.destroy();
+    if (own) return send(res, own[0], own[1]);
     if (p === '/api/downloads') {
       const urls = Array.isArray(body.urls) ? body.urls : [];
       if (body.rights_confirmed !== true) return send(res, 400, {error: 'Cần xác nhận bạn có quyền tải và chỉnh sửa các video này.'});
@@ -119,6 +139,8 @@ function create(options = {}) {
     const t = m && tasks.find(x => x.id === Number(m[1]));
     if (!m) return send(res, 404, {error: 'Không tìm thấy'});
     if (!t) return send(res, 404, {error: 'Không thấy lượt tải.'});
+    const refused = accounts.guard(t, m[2]);
+    if (refused) return send(res, refused[0], refused[1]);
     if (m[2] === 'remove') {
       if (!['COMPLETED', 'CANCELLED', 'FAILED', 'STOPPED', 'INTERRUPTED', 'EXPIRED'].includes(t.state)) return send(res, 409, {error: 'Lượt đang chạy.'});
       tasks = tasks.filter(x => x !== t);
@@ -132,16 +154,20 @@ function create(options = {}) {
     if (m[2] === 'choose') {
       if (t.state !== 'NEEDS_CHOICE') return send(res, 409, {error: 'Lượt không chờ chọn video.'});
       set(t, 'QUEUED', {chosen_entry: body.entry_index, entries: null});
-      return send(res, 200, {task: t});
+      return send(res, 200, {task: accounts.decorate(t)});
     }
     const [allowed, apply] = ACTIONS[m[2]];
     if (!allowed.includes(t.state)) return send(res, 409, {error: 'Trạng thái đã đổi: ' + t.state + '.'});
     apply(t);
-    return send(res, 200, {task: t});
+    return send(res, 200, {task: accounts.decorate(t)});
   }
 
   const server = http.createServer((req, res) => {
     const url = new URL(req.url, 'http://127.0.0.1'), p = url.pathname;
+    if (p.startsWith('/__fake/')) { // the browser check's hooks, never a dashboard request
+      const hook = accounts.fakeControl(p, url.searchParams);
+      return hook ? send(res, hook[0], hook[1]) : send(res, 404, {error: 'no hook'});
+    }
     if (req.method === 'POST') {
       let raw = '';
       req.setEncoding('utf8');
@@ -164,8 +190,10 @@ function create(options = {}) {
     if (p === '/api/ai') return send(res, 200, {ready: false, config: {enabled: false}, message: 'tắt'});
     if (p === '/api/downloads') return send(res, 200, snapshot());
     if (p === '/api/storage-summary') return send(res, 200, storage);
+    const own = accounts.handleGet(p);
+    if (own) return send(res, own[0], own[1]);
     const detail = p.match(/^\/api\/downloads\/(\d+)$/), t = detail && tasks.find(x => x.id === Number(detail[1]));
-    if (detail) return t ? send(res, 200, {task: t, events: [{kind: 'QUEUED', message: 'Đã xếp hàng.', level: 'INFO'},
+    if (detail) return t ? send(res, 200, {task: accounts.decorate(t), events: [{kind: 'QUEUED', message: 'Đã xếp hàng.', level: 'INFO'},
       {kind: t.state, message: 'Trạng thái: ' + t.state, level: 'INFO'}], log: ['[download] Destination: <BiliFlow>\\temp\\downloads\\' + t.id + '\\a.mp4',
       '[download]  42.0% of ~1.20GiB at 5.20MiB/s ETA 01:45']}) : send(res, 404, {error: 'Không thấy lượt tải.'});
     return send(res, 404, {error: 'Không tìm thấy'});
@@ -175,7 +203,8 @@ function create(options = {}) {
 
 if (require.main === module) {
   const port = Number(process.argv.find(a => /^\d+$/.test(a))) || 8798;
-  const fake = create({phone: process.argv.includes('--phone')});
+  const mode = (process.argv.find(a => a.startsWith('--accounts=')) || '').slice('--accounts='.length) || undefined;
+  const fake = create({phone: process.argv.includes('--phone'), accounts: mode});
   fake.server.listen(port, '127.0.0.1', () => process.stdout.write('download fake: http://127.0.0.1:' + port + '/dashboard-v2/#downloads\n'));
 }
 module.exports = {create};

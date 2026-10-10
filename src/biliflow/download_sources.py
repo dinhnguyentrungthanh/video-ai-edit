@@ -22,36 +22,65 @@ The config only switches providers of the code on for hosts: it never names code
 run. Hosts it lists for an id that no provider of the code has are recognized, not supported: those links
 go to yt-dlp like any other, and the task says that BiliFlow has no reader for them
 (``SourceRegistry.recognized_without_provider``).
+
+Source accounts (``config/download_accounts.local.json``, docs/SOURCE_ACCOUNTS_PLAN.md) get one provider each
+(``download_account_sources.AccountSourceProvider``, id = the source id), asked first and only about links of
+that source's own exact hosts. It claims all of them, so such a link never goes to yt-dlp or an anonymous
+provider, with or without a session: without the Control Center's account manager (``accounts``, wired in
+M4) or a page reader for the source it ends with a clear reason instead. A source the account config left
+out keeps its hosts (``dropped_account``): a link of one is refused when pasted, with the reason, unless a
+public provider keeps the host (then it goes the anonymous way, without any session).
 """
 from __future__ import annotations
 
 import errno
-import json
-import re
 from pathlib import Path
-from typing import Callable, Iterable, Mapping, Protocol, Sequence
+from typing import TYPE_CHECKING, Callable, Mapping, Protocol, Sequence
 from urllib.parse import urlsplit
 
 from biliflow.download_hls import SEGMENT_WORKERS, HlsTransfer, resolve_hls
 from biliflow.download_http import HttpError, SafeHttp, Scope
-from biliflow.download_links import LinkRejected, check_host, check_link
 from biliflow.download_media_file import FileTransfer, PlaylistLink, resolve_file
+# The ids, host lists and config helpers live in a leaf module that the source accounts share (no import cycle);
+# they are imported here under their old names.
+from biliflow.download_provider_config import (  # noqa: F401 - names other modules import from here
+    LOCAL_CONFIG,
+    PROVIDER_ID,
+    SHOWN_ITEMS,
+    SHOWN_REASON_CHARS,
+    SHOWN_VALUE_CHARS,
+    HostList,
+    _cut,
+    _listing,
+    _shown,
+    _skipped,
+    _without_link_parts,
+    describe_config_problems,
+    read_provider_config,
+)
 from biliflow.download_runner import DownloadOutcome, Progress, ProcessControl, SizeGuard, stop_reason
 from biliflow.download_source_types import ResolveContext, ResolvedSource, SourceError
-from biliflow.download_transfer import LogBuffer, ProgressMeter, finished_media, mark_finished, read_json
+from biliflow.download_transfer import LogBuffer, ProgressMeter, finished_media, mark_finished
+
+if TYPE_CHECKING:
+    from biliflow.download_account_config import DroppedSource
+    from biliflow.download_accounts import AccountManager
 
 MEDIA_SUFFIXES = (".mp4", ".m4v", ".mov", ".mkv", ".webm", ".ts")
 PLAYLIST_SUFFIX = ".m3u8"
-LOCAL_CONFIG = Path("config") / "download_providers.local.json"
-PROVIDER_ID = re.compile(r"[a-z0-9](?:[a-z0-9-]{0,38}[a-z0-9])?")  # the id a provider class carries
-SHOWN_ITEMS = 5  # of a list in a message of the downloads page
-# Of one config value, and of the reason it was skipped: every fixed reason of the host check fits whole (the
-# longest, with its "xn--" hint, is 148 characters); only one that names a long host is cut.
-SHOWN_VALUE_CHARS, SHOWN_REASON_CHARS = 60, 160
-_SCHEME = re.compile(r"[A-Za-z][A-Za-z0-9+.-]*")  # what may come before "://" in a link
-_AFTER_HOST = re.compile(r"[/?#\\]")  # where the host of a link ends
 # After the retries, these leave a good part on disk: the task ends INTERRUPTED and "Tiếp tục" continues it.
 RESUMABLE_CODES = frozenset({"NETWORK", "SERVER_BUSY", "DNS_FAILED"})
+# A provider's own passing failures while it fetches a fresh link, before or during the transfer (its hidden browser
+# did not start or run, a source account's state could not be read, a ticket page was slow): the part on disk is as
+# it was, so the task ends INTERRUPTED too instead of FAILED, where only "Thử lại" (from byte 0) was left.
+RESUMABLE_SOURCE_CODES = frozenset({"BROWSER_FAILED", "BROWSER_UNAVAILABLE", "ACCOUNT_STATE_ERROR", "TICKET_TIMEOUT"})
+
+
+def resumable_error(error: Exception) -> bool:
+    """A failure after which the part on disk is still good and "Tiếp tục" continues it."""
+    if isinstance(error, HttpError):
+        return error.code in RESUMABLE_CODES
+    return type(error) is SourceError and error.code in RESUMABLE_SOURCE_CODES
 
 
 class SourceProvider(Protocol):
@@ -63,121 +92,6 @@ class SourceProvider(Protocol):
 
     def resolve(self, url: str, ctx: ResolveContext) -> ResolvedSource:
         """The media of ``url``; raises SourceDeclined (back to yt-dlp) or SourceError (FAILED)."""
-
-
-class HostList:
-    """Exact host names, checked and normalized like the host of a pasted link (lower case, IDNA, no trailing
-    dot); an entry that is not a bare host name (a wildcard, a port, a URL, an IP address) is skipped. A link
-    matches its own host only, never a suffix, a substring or a subdomain."""
-
-    def __init__(self, hosts: Iterable[str]):
-        names, skipped = set(), []
-        for host in hosts:
-            try:
-                names.add(check_host(host))
-            except LinkRejected as error:
-                skipped.append((host, error.message))
-        self.hosts = frozenset(names)
-        self.skipped = tuple(skipped)  # (entry, why) of each entry that is not a bare host name
-
-    def matches(self, url: str) -> bool:
-        """The host is read by the link check itself (``check_link``, which uses ``urlsplit``), so a link it
-        refuses, such as one with an account or a port, matches nothing, and the host that matched is the
-        host the download connects to."""
-        try:
-            _url, host, _port = check_link(url)
-        except LinkRejected:
-            return False
-        return host in self.hosts
-
-
-def _without_link_parts(entry: str) -> str:
-    """What of a link stays on the page (an account, a path or a query may hold a token):
-    ``https://user:pw@video.example/watch?sig=1`` gives ``https://…@video.example/…``."""
-    scheme, sep, rest = entry.partition("://")
-    if not sep or not _SCHEME.fullmatch(scheme):  # "video.example/?next=https://…" has no scheme
-        scheme, sep, rest = "", "", entry
-    authority = _AFTER_HOST.split(rest, maxsplit=1)[0]
-    tail = rest[len(authority):]
-    shown = scheme + sep + ("…@" if "@" in authority else "") + authority.rpartition("@")[2]
-    return shown + (tail if tail in ("", "/") else "/…")
-
-
-def _cut(text: str, limit: int) -> str:
-    return text if len(text) <= limit else text[:limit - 3] + "…"
-
-
-def _shown(value: object) -> str:
-    """A config value as the downloads page may show it: JSON text cut short, a link without its account, path
-    or query, a list or an object only named, and a lone surrogate escaped (the page's JSON is UTF-8)."""
-    if isinstance(value, (list, dict)):
-        return "[…]" if isinstance(value, list) else "{…}"
-    if isinstance(value, str):
-        value = _without_link_parts(value)
-    text = json.dumps(value, ensure_ascii=False).encode("utf-8", "backslashreplace").decode("utf-8")
-    return _cut(text, SHOWN_VALUE_CHARS)
-
-
-def _listing(values: Sequence[object], limit: int = SHOWN_ITEMS) -> str:
-    """The first few config values as the downloads page may show them (``_shown``)."""
-    more = f" và {len(values) - limit} mục khác" if len(values) > limit else ""
-    return ", ".join(_shown(value) for value in values[:limit]) + more
-
-
-def _skipped(entries: Sequence[tuple[object, str]]) -> str:
-    """The first few skipped entries, grouped by why: '"a", "b" (why); "c" (why) và 2 mục khác'."""
-    groups: dict[str, list[object]] = {}
-    for entry, why in entries[:SHOWN_ITEMS]:
-        groups.setdefault(why, []).append(entry)
-    more = f" và {len(entries) - SHOWN_ITEMS} mục khác" if len(entries) > SHOWN_ITEMS else ""
-    return "; ".join(f"{_listing(group)} ({_cut(why.rstrip('.'), SHOWN_REASON_CHARS)})"
-                     for why, group in groups.items()) + more
-
-
-def read_provider_config(root: Path) -> tuple[dict[str, HostList], tuple[str, ...]]:
-    """The host lists of ``{"providers": {"<id>": {"hosts": [...]}}}`` in the local, Git-ignored config ({}
-    without the file), and what of it is ignored, in Vietnamese for the downloads page.
-
-    Only the host lists are read: an entry never names code to load or a command to run (a provider's class
-    comes from SITE_PROVIDERS), its other keys are ignored, and so is an id that no provider could carry."""
-    path = root / LOCAL_CONFIG
-    try:
-        present = path.is_file()
-    except OSError:  # not even its attributes can be read: reported below as a file that cannot be read
-        present = True
-    if not present:
-        return {}, ()
-    try:
-        providers = read_json(path).get("providers")
-    except RecursionError:  # absurdly nested JSON
-        providers = None
-    if not isinstance(providers, dict):
-        return {}, ('Không đọc được file (cần JSON dạng {"providers": {"<id>": {"hosts": [...]}}}), '
-                    "nên chưa bật bộ đọc nguồn nào.",)
-    result: dict[str, HostList] = {}
-    problems: list[str] = []
-    for provider_id, entry in providers.items():
-        hosts = entry.get("hosts") if isinstance(entry, dict) else None
-        if not PROVIDER_ID.fullmatch(provider_id):
-            problems.append(f"Bỏ qua id {_listing([provider_id])}: chỉ dùng chữ thường, số và gạch nối.")
-        elif not isinstance(hosts, list):
-            problems.append(f'Bỏ qua "{provider_id}": thiếu danh sách "hosts".')
-        else:
-            listed = HostList(host for host in hosts if isinstance(host, str))
-            result[provider_id] = listed
-            skipped = [*listed.skipped, *((host, "không phải chuỗi") for host in hosts if not isinstance(host, str))]
-            if skipped:
-                problems.append(f'"{provider_id}" bỏ qua {_skipped(skipped)}: mỗi host là một tên miền trần, '
-                                "ví dụ video.example.")
-    return result, tuple(problems)
-
-
-def describe_config_problems(problems: Sequence[str]) -> str | None:
-    """One line for the downloads page about what the local config ignored; None when nothing was."""
-    if not problems:
-        return None
-    more = f" (và {len(problems) - SHOWN_ITEMS} lỗi khác)" if len(problems) > SHOWN_ITEMS else ""
-    return f"{LOCAL_CONFIG.as_posix()}: " + " ".join(problems[:SHOWN_ITEMS]) + more
 
 
 class DirectMediaProvider:
@@ -206,19 +120,28 @@ from biliflow.download_embedded_source import EmbeddedMediaProvider
 
 SITE_PROVIDERS: tuple[type, ...] = (PlayerHlsProvider, ArticleMp4Provider, EmbeddedMediaProvider)
 
+# Source accounts: one provider per configured source (see the module docstring).
+from biliflow.download_account_config import read_account_config
+from biliflow.download_account_sources import AccountSourceProvider
+
 
 class SourceRegistry:
     def __init__(self, providers: Sequence[SourceProvider], *, site_hosts: Mapping[str, HostList] | None = None,
-                 recognized: Mapping[str, HostList] | None = None, config_problems: Sequence[str] = ()):
+                 recognized: Mapping[str, HostList] | None = None, config_problems: Sequence[str] = (),
+                 account_problems: Sequence[str] = (), dropped: Sequence[DroppedSource] = ()):
         ids = [provider.id for provider in providers]
         if len(set(ids)) != len(ids):
             raise ValueError(f"Duplicate provider ids: {ids}")
         self._providers = tuple(providers)
         self.config_problems = tuple(config_problems)  # what the local config ignored (read_provider_config)
+        self.account_problems = tuple(account_problems)  # what the account config left out (shown from M5)
         # The exact hosts of each site provider: it is only asked about links of those hosts.
         self._site_hosts = {key: hosts for key, hosts in (site_hosts or {}).items() if key in ids}
         # Hosts the local config lists for an id that none of these providers has.
         self._recognized = {key: hosts for key, hosts in (recognized or {}).items() if key not in ids}
+        # Sources the account config left out: their reason and hosts (refused at paste, see dropped_account).
+        self._dropped = tuple((item.reason, HostList(item.hosts)) for item in dropped)
+        self._public_ids = frozenset(provider.id for provider in providers if not hasattr(provider, "login_gate"))
 
     @property
     def ids(self) -> tuple[str, ...]:
@@ -236,22 +159,40 @@ class SourceRegistry:
     def get(self, provider_id: str | None) -> SourceProvider | None:
         return next((provider for provider in self._providers if provider.id == provider_id), None)
 
+    def dropped_account(self, url: str) -> tuple[str, bool] | None:
+        """For a link of a source the account config left out: its reason, and True when a public provider of the
+        local config keeps that host (the link then goes the anonymous way, as before). None otherwise."""
+        for reason, hosts in self._dropped:
+            if hosts.matches(url):
+                kept = any(listed.matches(url) for key, listed in self._site_hosts.items() if key in self._public_ids)
+                return reason, kept
+        return None
+
     def recognized_without_provider(self, url: str) -> str | None:
         """The id the local config lists this link's host under when the code has no provider of that id:
         BiliFlow recognizes the host but has no reader for it (the link still goes to yt-dlp)."""
         return next((key for key, hosts in self._recognized.items() if hosts.matches(url)), None)
 
 
-def default_registry(root: Path, *, site_providers: Sequence[type] = SITE_PROVIDERS) -> SourceRegistry:
-    """Site providers that have hosts in the local config (exact hosts first), then the direct links; the
-    hosts of every other configured id are only recognized (``recognized_without_provider``)."""
+def default_registry(root: Path, *, site_providers: Sequence[type] = SITE_PROVIDERS,
+                     accounts: AccountManager | None = None) -> SourceRegistry:
+    """The account sources' providers (their exact hosts), then site providers that have hosts in the local
+    config (exact hosts), then the direct links; the hosts of every other configured id are only recognized
+    (``recognized_without_provider``). ``accounts``: the Control Center's account manager (M4); its config is
+    used when given, else the account config is read here and its providers refuse every link."""
     for factory in site_providers:
         if not isinstance(factory.id, str) or not PROVIDER_ID.fullmatch(factory.id):
             raise ValueError(f"Provider id {factory.id!r} does not match {PROVIDER_ID.pattern}")
     hosts, problems = read_provider_config(root)
     sites = [factory(hosts[factory.id]) for factory in site_providers if factory.id in hosts]
-    return SourceRegistry([*sites, DirectMediaProvider()], site_hosts={site.id: hosts[site.id] for site in sites},
-                          recognized=hosts, config_problems=problems)
+    account_config = accounts.config if accounts is not None else read_account_config(root, provider_hosts=hosts)
+    taken = {DirectMediaProvider.id, *(site.id for site in sites)}
+    owned = [AccountSourceProvider(source, accounts) for source in account_config.sources.values()
+             if source.id not in taken]
+    site_hosts = {**{site.id: hosts[site.id] for site in sites}, **{owner.id: owner.hosts for owner in owned}}
+    return SourceRegistry([*owned, *sites, DirectMediaProvider()], site_hosts=site_hosts, recognized=hosts,
+                          config_problems=problems, account_problems=account_config.problems,
+                          dropped=account_config.dropped)
 
 
 class SourceTransfers:
@@ -301,10 +242,8 @@ class SourceTransfers:
             return DownloadOutcome(False, *stop_reason(control))
         if guard is not None and guard.tripped:
             return DownloadOutcome(False, "TOO_LARGE", guard.message())
-        if isinstance(error, SourceError):
-            return DownloadOutcome(False, error.code, error.message)
-        if isinstance(error, HttpError):
-            return DownloadOutcome(False, error.code, error.message, resumable=error.code in RESUMABLE_CODES)
+        if isinstance(error, (SourceError, HttpError)):
+            return DownloadOutcome(False, error.code, error.message, resumable=resumable_error(error))
         if isinstance(error, OSError):  # the parts already written stay intact: these can be continued
             if error.errno == errno.ENOSPC or getattr(error, "winerror", None) == 112:
                 return DownloadOutcome(False, "DISK_FULL", "Ổ đĩa hết chỗ khi ghi file tạm.", resumable=True)

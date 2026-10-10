@@ -12,7 +12,7 @@ import subprocess
 import unittest
 from pathlib import Path
 
-from biliflow import control_center, download_api, logo_memory_admin
+from biliflow import control_center, download_api, logo_memory_admin, phone_access
 
 ROOT = Path(__file__).resolve().parents[1]
 CONTRACTS = ROOT / "dashboard_v2" / "contracts.js"
@@ -67,7 +67,7 @@ class EndpointContractTests(unittest.TestCase):
         self.assertGreater(len(post_routes), 8)
         missing = []
         for name, (method, template) in endpoints.items():
-            concrete = template.replace("{id}", "7").replace("{path}", "reports/a.jpg")
+            concrete = template.replace("{id}", "7").replace("{path}", "reports/a.jpg").replace("{source}", "phim-a")
             routes = get_routes if method == "GET" else post_routes
             if not any(re.fullmatch(pattern, concrete) for pattern in routes):
                 missing.append(f"{name}: {method} {template}")
@@ -79,12 +79,30 @@ class EndpointContractTests(unittest.TestCase):
         get_routes, post_routes = _routes()
         wrong = []
         for name, (method, template) in endpoints.items():
-            concrete = template.replace("{id}", "7").replace("{path}", "x")
+            concrete = template.replace("{id}", "7").replace("{path}", "x").replace("{source}", "phim-a")
             other = post_routes if method == "GET" else get_routes
             if any(re.fullmatch(pattern, concrete) for pattern in other) and \
                     template not in ("/api/source-archive/restore", "/api/phone-mode", "/api/downloads"):
                 wrong.append(f"{name}: {method} {template} also matches the other method")
         self.assertEqual(wrong, [])
+
+    def test_source_account_writes_are_pc_only_on_the_phone_listener(self) -> None:
+        """M5: the page's PC-only reason is the phone listener's; the episode and group writes stay allowed there."""
+        contract = json.loads(_node(
+            "const c=require('./dashboard_v2/contracts.js');"
+            "console.log(JSON.stringify({e:c.endpoints,ops:c.accountOps,reason:c.PC_ONLY_ACCOUNT_REASON}))"))
+        self.assertEqual(contract["reason"], phone_access.PC_ONLY_SOURCE_ACCOUNTS)
+        for operation in contract["ops"].values():
+            with self.subTest(operation=operation):
+                method, template = contract["e"][operation]
+                concrete = template.replace("{source}", "phim-a")
+                self.assertEqual(method, "POST")
+                self.assertEqual(phone_access.pc_only_reason(concrete), phone_access.PC_ONLY_SOURCE_ACCOUNTS)
+        for operation in ("downloadEpisodesDraft", "downloadEpisodesConfirm", "downloadGroupStop", "downloadGroupRemove"):
+            with self.subTest(operation=operation):
+                concrete = contract["e"][operation][1].replace("{id}", "7")
+                self.assertIsNone(phone_access.pc_only_reason(concrete))
+                self.assertTrue(any(p.fullmatch(concrete) for p in phone_access.PHONE_ALLOWED_POSTS))
 
     def test_known_real_routes_are_not_forgotten_by_the_contract(self) -> None:
         """Informational guard: real routes V2 never calls are listed on purpose."""

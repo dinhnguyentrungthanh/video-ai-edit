@@ -9,7 +9,9 @@ is scanned, exported or published automatically. Deletes stay inside
 
 A link a source provider claims (``download_sources``: a direct media file or
 HLS playlist) is fetched by BiliFlow itself (``download_source_steps``); every
-other link, and every link a provider declines, goes to yt-dlp.
+other link, and every link a provider declines, goes to yt-dlp. A link of a
+source account waits for the user's sign-in without a slot (WAITING_LOGIN), and
+a series page becomes a group of episode tasks (``download_account_tasks``).
 """
 from __future__ import annotations
 
@@ -30,13 +32,23 @@ from biliflow.download_files import (
     unique_target,
     verify_video,
 )
+from biliflow.download_account_tasks import DownloadAccountSteps
+from biliflow.download_episode_names import group_target
 from biliflow.download_http import SafeHttp
 from biliflow.download_probe import ProbeEntry, choose
 from biliflow.download_runner import ProcessControl, Progress, SizeGuard, YtDlpRunner, mask_line
 from biliflow.download_links import DownloadBatchError, Resolver, default_resolver, validate_batch
-from biliflow.download_source_steps import SOURCE_DECLINED, DownloadSourceSteps, with_reader_note
+from biliflow.download_source_steps import RESUME_NOTE, SOURCE_DECLINED, DownloadSourceSteps, with_reader_note
 from biliflow.download_sources import SourceRegistry, SourceTransfers, default_registry, describe_config_problems
-from biliflow.download_store import FINAL_STATES, SLOT_STATES, STATES, DownloadStore
+from biliflow.download_transfer import finished_media
+from biliflow.download_store import (
+    CLOSED_STATES,
+    FINAL_STATES,
+    MAX_UNFINISHED_TASKS,
+    SLOT_STATES,
+    STATES,
+    DownloadStore,
+)
 from biliflow.download_upkeep import DownloadUpkeep
 from biliflow.storage import GIB, storage_status
 
@@ -51,13 +63,20 @@ PUBLISH_ATTEMPTS = 20
 PUBLISH_LOCK_RETRIES = 5  # a scanner or the indexer holding the new file
 PUBLISH_LOCK_WAIT_SECONDS = 2.0
 CANCEL_RETRY_SECONDS = 30.0  # a temp file still held after a cancel
+NO_INPUT_MESSAGE = ("Không thấy thư mục input của BiliFlow nên chưa chuyển file vào input. File đã tải xong được giữ; "
+                    "tạo lại thư mục input trong thư mục BiliFlow rồi bấm Tiếp tục (file được kiểm tra lại trước khi "
+                    "chuyển).")
 
 RUNNING = frozenset({"PROBING", "WAITING_SPACE", "DOWNLOADING", "VERIFYING"})
-STOPPABLE = frozenset({"QUEUED", "PROBING", "WAITING_SPACE", "DOWNLOADING"})
+STOPPABLE = frozenset({"QUEUED", "PROBING", "WAITING_SPACE", "DOWNLOADING", "WAITING_LOGIN"})
 RESUMABLE = frozenset({"STOPPED", "INTERRUPTED"})
-CANCELLABLE = frozenset(set(STATES) - {"PUBLISHING", "COMPLETED", "EXPIRED", "CANCELLED"})
+# A run that ended in these keeps its source account link in memory (download_account_tickets); QUEUED and
+# WAITING_SPACE: a slot or space wait handed back (shutdown clears every link anyway).
+KEEPS_TICKET = frozenset({"STOPPED", "INTERRUPTED", "QUEUED", "WAITING_SPACE"})
+# EXPANDED (a page split into an episode group) is ended, cancelled and removed through its group only.
+CANCELLABLE = frozenset(set(STATES) - {"PUBLISHING", "COMPLETED", "EXPIRED", "CANCELLED", "EXPANDED"})
 RETRYABLE = frozenset({"FAILED", "INTERRUPTED", "STOPPED", "CANCELLED", "EXPIRED"})
-RENAMABLE = frozenset(set(STATES) - {"PUBLISHING", "COMPLETED"})
+RENAMABLE = frozenset(set(STATES) - {"PUBLISHING", "COMPLETED", "EXPANDED"})
 _RESET_FIELDS = {
     "entries": None, "probe": None, "chosen_entry": None, "video_id": None, "duration_seconds": None,
     "estimated_bytes": None, "downloaded_bytes": 0, "total_bytes": None, "speed": None, "eta": None,
@@ -88,7 +107,7 @@ def _gb(value: int | float) -> str:
     return f"{value / GIB:.1f}"
 
 
-class DownloadWorker(DownloadSourceSteps, DownloadUpkeep):
+class DownloadWorker(DownloadSourceSteps, DownloadAccountSteps, DownloadUpkeep):
     def __init__(self, root: Path, store: DownloadStore, *, runner: YtDlpRunner | None = None,
                  ffmpeg: Path | None = None, ffprobe: Path | None = None,
                  space_probe: SpaceProbe = default_space, verifier: Callable[..., Any] = verify_video,
@@ -132,6 +151,7 @@ class DownloadWorker(DownloadSourceSteps, DownloadUpkeep):
         self._wake = threading.Event()
         self._loop: threading.Thread | None = None
         self._last_sweep: float | None = None
+        self._init_accounts()
 
     # ----------------------------------------------------------------- lifecycle
     def start(self) -> dict[str, int]:
@@ -152,6 +172,7 @@ class DownloadWorker(DownloadSourceSteps, DownloadUpkeep):
         deadline = time.monotonic() + timeout
         self._stopping.set()
         self._wake.set()
+        self.tickets.clear()  # links live in this process only; a resolve still running is never kept
         with self._lock:
             controls = list(self._controls.values())
         killers = [threading.Thread(target=control.request, args=("shutdown",), daemon=True) for control in controls]
@@ -160,6 +181,11 @@ class DownloadWorker(DownloadSourceSteps, DownloadUpkeep):
         self.wait_idle(max(0.0, deadline - time.monotonic()))
         if self._loop is not None and self._loop is not threading.current_thread():
             self._loop.join(max(0.0, deadline - time.monotonic()))
+
+    def finished(self) -> bool:
+        """After ``shutdown``: no task thread and no dispatch loop is left that could still use the store."""
+        loop = self._loop
+        return self.wait_idle(0) and (loop is None or not loop.is_alive() or loop is threading.current_thread())
 
     def wait_idle(self, timeout: float = 30.0) -> bool:
         deadline = time.monotonic() + timeout
@@ -211,12 +237,20 @@ class DownloadWorker(DownloadSourceSteps, DownloadUpkeep):
             if self._stopping.is_set():  # checked under the lock: shutdown() sees every thread
                 return started
             self._reconcile()
+            self._settle_groups()  # first: a cancelled group's episodes never start or wake
+            self._account_upkeep()  # episode tasks while there is room; tasks whose sign-in landed
             busy = len(self.store.tasks_in(SLOT_STATES))
+            cancelled, skipped = self.groups.cancelled_group_ids(), set()
             while busy < self.slots():
                 # A task whose previous thread is still ending waits for the next pass.
-                task = self.store.next_queued(exclude=self._controls)
+                task = self.store.next_queued(exclude=set(self._controls) | skipped)
                 if task is None:
                     break
+                if task.get("group_id") in cancelled:  # its cancel failed this pass; it never starts
+                    skipped.add(task["id"])
+                    continue
+                if self._park_for_login(task):  # waits for a sign-in without taking the slot
+                    continue
                 ready = bool(task["probe"] and task["probe"].get("ready"))
                 claimed = self.store.transition(task["id"], {"QUEUED"}, "WAITING_SPACE" if ready else "PROBING")
                 if claimed is None:
@@ -253,10 +287,24 @@ class DownloadWorker(DownloadSourceSteps, DownloadUpkeep):
                 except Exception as error:  # noqa: BLE001 - _reconcile settles it on a later pass
                     self._note_error(f"{type(error).__name__}: {error}")
                 finally:
+                    self._settle_ticket(task_id)
                     if self._controls.get(task_id) is control:
                         del self._controls[task_id]
                         self._threads.pop(task_id, None)
             self._wake.set()
+
+    def _settle_ticket(self, task_id: int) -> None:
+        """At the end of a run (worker lock held): a task that stopped, was interrupted or went back to the queue
+        keeps its link, idle from now (the next run checks it first); any other end forgets it, and so does a task
+        whose file is already finished (``temp_file``: the next run only checks and moves it, with no link)."""
+        try:
+            task = self.store.get(task_id)
+        except Exception:  # noqa: BLE001 - the state is unknown: never keep a link on a guess
+            task = None
+        if task is not None and task["state"] in KEEPS_TICKET and not task["temp_file"]:
+            self.tickets.idle(task_id)
+        else:
+            self.tickets.revoke(task_id)
 
     def _settle(self, task_id: int, control: ProcessControl) -> None:
         """A task thread never leaves its task in a running state."""
@@ -330,11 +378,11 @@ class DownloadWorker(DownloadSourceSteps, DownloadUpkeep):
         elif control.reason == "stop":
             moved = self.store.transition(task_id, RUNNING, "STOPPED", speed=None, eta=None, pid=None)
             if moved:
-                self._event(moved, "STOPPED", "Đã dừng; giữ file tạm để tải tiếp.")
+                self._event(moved, "STOPPED", f"Đã dừng; file tạm được giữ; {RESUME_NOTE}")
         elif self.store.transition(task_id, {"WAITING_SPACE"}, "QUEUED", error_message=None) is None:
             moved = self.store.transition(task_id, RUNNING, "INTERRUPTED", speed=None, eta=None, pid=None)
             if moved:
-                self._event(moved, "INTERRUPTED", "Control Center tắt giữa chừng; bấm Tiếp tục để tải tiếp.")
+                self._event(moved, "INTERRUPTED", f"Control Center tắt giữa chừng; {RESUME_NOTE}")
         return None
 
     def _still_allowed(self, task: dict[str, Any], state: str) -> bool:
@@ -359,6 +407,8 @@ class DownloadWorker(DownloadSourceSteps, DownloadUpkeep):
             result = self._probe_source(task, provider, control)
             if result is not SOURCE_DECLINED:
                 return result
+        elif self._orphan_account_task(task):  # never to yt-dlp
+            return None
         note = self._note_recognized_host(task)
         outcome = self.runner.probe(task["url"], task_dir, control, on_start=self._pid_recorder(task_id))
         self.store.update_fields(task_id, pid=None, pid_created=None)
@@ -404,6 +454,10 @@ class DownloadWorker(DownloadSourceSteps, DownloadUpkeep):
         return total
 
     def _wait_for_space(self, task: dict[str, Any], control: ProcessControl) -> dict[str, Any] | None:
+        if not control.requested and self._finished_file(task) is not None:
+            # Already on disk: its check and its move (a rename within the root) need no new space.
+            return self.store.transition(task["id"], {"WAITING_SPACE"}, "DOWNLOADING", error_message=None,
+                                         speed=None, eta=None)
         announced = False
         while True:
             if control.requested:
@@ -491,21 +545,30 @@ class DownloadWorker(DownloadSourceSteps, DownloadUpkeep):
         digest, size = sha256_file(path), path.stat().st_size
         if control.requested:
             return self._end_requested(task["id"], control)
+        recorded = task.get("output_sha256")
+        if task.get("reused_finished") and recorded and digest != recorded:
+            # A finished file kept after an earlier check (stopped while moved, no input folder…): checked again in
+            # full above, and it must still be the very bytes that check passed, never trusted from its record.
+            return self._fail(task["id"], {"VERIFYING"}, "FILE_CHANGED", "File đã tải xong khác với lần kiểm tra "
+                              "trước (bị thay hoặc sửa) nên không chuyển vào input; bấm Thử lại để tải lại từ đầu.",
+                              verify=result.as_dict())
         return self.store.transition(task["id"], {"VERIFYING"}, "PUBLISHING", verify=result.as_dict(),
                                      output_sha256=digest, output_size=size, name_locked=1)
 
     def _publish(self, task: dict[str, Any], control: ProcessControl) -> None:
         task_id = task["id"]
         if not self.input_dir.is_dir():
-            return self._fail(task_id, {"PUBLISHING"}, "NO_INPUT_DIR", "Không thấy thư mục input của BiliFlow.")
+            return self._no_input(task_id)
         source = Path(task["temp_file"])
         stem = sanitize_name(task["desired_name"] or task["original_title"] or "",
                              fallback=task["video_id"] or f"video-{task_id}")
         # yt-dlp merges and remuxes to mp4; another container keeps its own extension.
         suffix = source.suffix.lower() if source.suffix.lower() in VIDEO_EXTENSIONS else OUTPUT_SUFFIX
+        place = self.groups.naming(task)  # an episode of a group: "NNN - <film> - <code>"
         with self._publish_lock:
             for _ in range(PUBLISH_ATTEMPTS):
-                target = unique_target(self.input_dir, stem, suffix)
+                target = (group_target(self.input_dir, place["ordinal"], place["width"], place["film"], place["code"],
+                                       suffix) if place else unique_target(self.input_dir, stem, suffix))
                 # Recorded first so a crash during the rename can be settled at the next start.
                 self.store.update_fields(task_id, output_path=str(target))
                 try:
@@ -524,6 +587,8 @@ class DownloadWorker(DownloadSourceSteps, DownloadUpkeep):
                                     "Bấm Tiếp tục để thử lại.", level="WARNING")
                     return None
                 except OSError as error:
+                    if not self.input_dir.is_dir():  # input went away during the move: the file is still here
+                        return self._no_input(task_id)
                     return self._fail(task_id, {"PUBLISHING"}, "PUBLISH_FAILED",
                                       f"Không chuyển được file vào input: {error}", output_path=None)
                 break
@@ -536,6 +601,15 @@ class DownloadWorker(DownloadSourceSteps, DownloadUpkeep):
             self._event(moved, "COMPLETED", f"Đã chuyển vào input: {target.name}",
                         payload={"name": target.name, "size_bytes": moved["output_size"]})
             self._remove_temp(moved)
+        return None
+
+    def _no_input(self, task_id: int, states: frozenset[str] | set[str] = frozenset({"PUBLISHING"})) -> None:
+        """No input folder: the checked file stays (Thử lại would delete it); Tiếp tục checks it again and moves it
+        once the folder is back. The folder is never made here: a missing input is the user's to restore."""
+        moved = self.store.transition(task_id, states, "INTERRUPTED", output_path=None, name_locked=0,
+                                      error_code="NO_INPUT_DIR", error_message=NO_INPUT_MESSAGE)
+        if moved:
+            self._event(moved, "INTERRUPTED", NO_INPUT_MESSAGE, level="WARNING", payload={"code": "NO_INPUT_DIR"})
         return None
 
     def _rename(self, source: Path, target: Path, control: ProcessControl) -> None:
@@ -553,6 +627,14 @@ class DownloadWorker(DownloadSourceSteps, DownloadUpkeep):
 
     def _temp_path(self, task_id: int) -> Path:
         return self.downloads_dir / str(int(task_id))
+
+    def _finished_file(self, task: dict[str, Any]) -> Path | None:
+        """A provider source's file an earlier run finished (stopped while it was checked or moved, no input
+        folder…): the task only needs its check and its move, so it waits for neither a sign-in nor free space."""
+        probe = task.get("probe") or {}
+        if not probe.get("provider") or not probe.get("ready"):
+            return None
+        return finished_media(self._temp_path(task["id"]), probe.get("identity") or "")
 
     def _remove_temp(self, task: dict[str, Any], *, report: bool = True) -> int:
         """Delete the task's temp folder; afterwards ``_temp_gone`` says whether it is really gone."""
@@ -592,9 +674,11 @@ class DownloadWorker(DownloadSourceSteps, DownloadUpkeep):
     def add(self, urls: list[str], *, rights_confirmed: bool) -> list[dict[str, Any]]:
         if rights_confirmed is not True:
             raise DownloadActionError("Cần tick xác nhận có quyền tải và chỉnh sửa video.", 400)
-        tasks = self.store.add_tasks(validate_batch(urls, resolver=self.resolver))
+        links = validate_batch(urls, resolver=self.resolver)
+        tasks = self.store.add_tasks(links, self._account_owners(links))
         for task in tasks:
             self._event(task, "QUEUED", "Đã thêm vào hàng đợi.")
+            self._note_ignored_account(task)
         self._wake.set()
         return tasks
 
@@ -603,10 +687,11 @@ class DownloadWorker(DownloadSourceSteps, DownloadUpkeep):
             thread.join(ACTION_WAIT_SECONDS)
         return self.store.get(task_id)
 
-    def stop(self, task_id: int) -> dict[str, Any]:
+    def stop(self, task_id: int, *, wait: bool = True) -> dict[str, Any]:
         with self._lock:
             task = self._require(task_id)
             if task["state"] == "STOPPED":
+                self._clear_member_intent(task)
                 return task
             if task["state"] not in STOPPABLE:
                 raise DownloadActionError("Lượt này không ở trạng thái dừng được.")
@@ -616,37 +701,45 @@ class DownloadWorker(DownloadSourceSteps, DownloadUpkeep):
                 if moved is None:
                     raise DownloadActionError("Trạng thái vừa đổi; thử lại.")
                 self._event(moved, "STOPPED", "Đã dừng.")
+                self._clear_member_intent(moved)
                 return moved
+            self._clear_member_intent(task)  # its thread is asked below; a crash ends that thread anyway
         control.request("stop")
-        return self._wait_for(task_id, thread)
+        return self._wait_for(task_id, thread) if wait else self.store.get(task_id)
 
-    def cancel(self, task_id: int) -> dict[str, Any]:
+    def cancel(self, task_id: int, *, wait: bool = True) -> dict[str, Any]:
         with self._lock:
             task = self._require(task_id)
             if task["state"] == "CANCELLED":
+                self._clear_member_intent(task)
                 return task
             moved = task if task["state"] == "CANCELLING" else self.store.transition(
                 task_id, CANCELLABLE, "CANCELLING")
             if moved is None:
                 raise DownloadActionError("Lượt này đã (hoặc đang) chuyển vào input; không hủy được.")
+            self.tickets.revoke(task_id)  # also refuses the link of a resolve still running
+            self._clear_member_intent(moved)
             control, thread = self._controls.get(task_id), self._threads.get(task_id)
             if control is None:
                 self._finish_cancel(moved)
                 return self.store.get(task_id)
         control.request("cancel")
-        return self._wait_for(task_id, thread)
+        return self._wait_for(task_id, thread) if wait else self.store.get(task_id)
 
     def resume(self, task_id: int) -> dict[str, Any]:
         with self._lock:
             task = self._require(task_id)
             if task["state"] == "QUEUED" or task["state"] in SLOT_STATES:
+                self._clear_member_intent(task)
                 return task
             if task["state"] not in RESUMABLE:
                 raise DownloadActionError("Chỉ tiếp tục được lượt đã dừng hoặc bị ngắt.")
+            self._refuse_in_cancelled_group(task)
             moved = self.store.transition(task_id, RESUMABLE, "QUEUED", error_code=None, error_message=None,
                                           queued_at=self.store.clock().isoformat())
             if moved:
                 self._event(moved, "RESUMED", "Tiếp tục: tải nối phần đã có nếu trang hỗ trợ.")
+                self._clear_member_intent(moved)
         self._wake.set()
         return moved or self.store.get(task_id)
 
@@ -654,18 +747,29 @@ class DownloadWorker(DownloadSourceSteps, DownloadUpkeep):
         with self._lock:
             task = self._require(task_id)
             if task["state"] == "QUEUED" or task["state"] in SLOT_STATES:
+                self._clear_member_intent(task)
                 return task
             if task["state"] not in RETRYABLE:
                 raise DownloadActionError("Lượt này không thử lại được.")
+            self._refuse_in_cancelled_group(task)
+            if self.groups.item_taken(task.get("item_key"), task_id):
+                raise DownloadActionError("Tập này đã có một lượt tải khác đang chờ hoặc đang tải.", 409)
+            if task["state"] in CLOSED_STATES and self.store.unfinished_count() >= MAX_UNFINISHED_TASKS:
+                raise DownloadActionError(f"Danh sách đã có {MAX_UNFINISHED_TASKS} lượt chưa xong; thử lại lượt "
+                                          "này khi bớt lượt.", 409)
+            self.tickets.revoke(task_id)  # Thử lại starts from byte 0 with a new ticket, never a kept link
             self._remove_temp(task)
             if not self._temp_gone(task_id):  # never mix old part files into a fresh download
                 raise DownloadActionError("Chưa xóa được file tạm của lần trước (file đang bị giữ); thử lại sau.")
             attempt = int(task["attempt"]) + 1
+            # An episode of a group starts again from its chosen file (its place and name in the group stay).
             moved = self.store.transition(task_id, RETRYABLE, "QUEUED", attempt=attempt,
-                                          queued_at=self.store.clock().isoformat(), **_RESET_FIELDS)
+                                          queued_at=self.store.clock().isoformat(),
+                                          **{**_RESET_FIELDS, "probe": self._member_probe(task)})
             if moved:
                 self.store.drop_attempts_before(task_id, attempt)
                 self._event(moved, "RETRY", f"Thử lại lần {attempt}: tải lại từ đầu.")
+                self._clear_member_intent(moved)
         self._wake.set()
         return moved or self.store.get(task_id)
 
@@ -675,8 +779,14 @@ class DownloadWorker(DownloadSourceSteps, DownloadUpkeep):
             task = self.store.get(task_id)
             if task is None:
                 return {"id": task_id, "removed": True, "freed_bytes": 0}
+            if task["state"] == "EXPANDED":  # a page split into episodes goes with its whole group
+                group = self.groups.group_of_parent(task_id)
+                if group is not None:
+                    return self._remove_group(group)
+                # Its group is already gone: only the page row and the temp folder of its probe are left (below).
             if task["state"] not in FINAL_STATES or task_id in self._controls:
                 raise DownloadActionError("Chỉ xóa được lượt đã kết thúc; dừng hoặc hủy trước.")
+            self.tickets.revoke(task_id)
             freed = self._remove_temp(task)
             if not self._temp_gone(task_id):  # the row stays with its folder; nothing is left unaccounted
                 raise DownloadActionError("Chưa xóa được file tạm của lượt này (file đang bị giữ); thử lại sau.")
@@ -705,6 +815,9 @@ class DownloadWorker(DownloadSourceSteps, DownloadUpkeep):
                 if task["chosen_entry"] == entry_index and task["state"] != "FAILED":
                     return task
                 raise DownloadActionError("Lượt này không chờ chọn video.")
+            self.tickets.revoke(task_id)  # a new choice never meets a link of another one
+            if (task["probe"] or {}).get("choice_kind") == "episodes":
+                raise DownloadActionError("Phim nhiều tập: chọn tập rồi bấm Tải N tập.")
             match = next((item for item in task["entries"] or [] if item.get("index") == entry_index), None)
             if match is None:
                 raise DownloadActionError("Mục này không có trong danh sách.", 400)

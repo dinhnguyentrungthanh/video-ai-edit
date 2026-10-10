@@ -16,7 +16,7 @@ const D=window.BFDownload;
 let downloadDraft={url:'',error:''},downloadQueue=D.createQueue(),downloadFilter='all',downloadTimer=null;
 const $=s=>document.querySelector(s), esc=value=>String(value??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 /* Live "Tải video" (download-live.js) keeps its own page state; the demo keeps the simulation below. */
-const DL=LIVE&&window.BFDownloadLive?window.BFDownloadLive.create({store,view:window.BFDownloadView,core:window.BFDownloadCore,$,icon:id=>icon(id),toast:(message,error)=>toast(message,error),showModal:(...args)=>showModal(...args),openCleanable:()=>changeFilter('completed'),dom:{morph,parse:parseHtml,patch:patchHtml}}):null;
+const DL=LIVE&&window.BFDownloadLive?window.BFDownloadLive.create({store,view:window.BFDownloadView,core:window.BFDownloadCore,episodes:window.BFDownloadEpisodes,contracts:C,$,icon:id=>icon(id),toast:(message,error)=>toast(message,error),showModal:(...args)=>showModal(...args),openCleanable:()=>changeFilter('completed'),dom:{morph,parse:parseHtml,patch:patchHtml}}):null;
 const icons={
 overview:'<rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/>',
 videos:'<rect x="3" y="5" width="18" height="14" rx="3"/><path d="m10 9 5 3-5 3z"/>',
@@ -77,6 +77,8 @@ function nav(){
   if($('#breadcrumb').textContent!==labels[view])$('#breadcrumb').textContent=labels[view];
 }
 function scenarioOptions(){return [['normal','Hoạt động bình thường'],['rendering','Đang kiểm tra bản xuất'],['offline','Mất kết nối'],['bin_full','Thùng rác gần đầy'],['busy','Đang quản lý video gốc'],['conflict','Xung đột dữ liệu 409']].map(([id,label])=>'<option value="'+id+'" '+(state.scenario===id?'selected':'')+'>'+label+'</option>').join('');}
+// Tải video badge: the page's mode comes only from /api/phone-mode's answer (unknown until it says PC or phone).
+function dlModeText(){return state.remote?'Qua điện thoại':state.device==='pc'?'Control Center':'Chưa rõ PC hay điện thoại';}
 function heading(title,subtitle,actions){return '<div class="page-heading"><div><h1>'+title+'</h1><p>'+subtitle+'</p></div><div class="heading-actions">'+(actions||'<span class="live-status"><span class="live-dot"></span> '+(state.scheduler_paused?'Hàng đợi tạm dừng':'Một GPU · xử lý tuần tự')+'</span><button class="secondary small" data-action="scheduler" '+(state.offline?'disabled':'')+'>'+(state.scheduler_paused?'Tiếp tục hàng đợi':'Tạm dừng hàng đợi')+'</button>')+'</div></div>';}
 function visibleJobs(){return state.jobs.filter(j=>!C.hidden(j));}
 function kpis(){
@@ -183,7 +185,7 @@ function downloadRow(t){
   return '<article class="download-item" data-download-id="'+t.id+'"><div class="download-item-top"><div class="download-item-name"><span class="download-item-number">'+t.id+'</span><h3>'+esc(t.name)+'</h3></div><span class="badge '+(failed?'red':done?'':active?'blue':'grey')+'">'+label+'</span></div><p class="download-source">'+esc(t.url)+'</p><div class="download-item-progress"><span>'+(place?'Lượt chờ #'+place:done?'Mô phỏng hoàn tất':t.state==='VERIFYING'?'Kiểm tra trước khi vào input':Math.round(t.progress*3.2)+' / 320 MB mẫu')+'</span><strong>'+t.progress+'%</strong></div><div class="meter download-meter" role="progressbar" aria-label="Tiến độ lượt '+t.id+'" aria-valuemin="0" aria-valuemax="100" aria-valuenow="'+t.progress+'"><i style="width:'+t.progress+'%"></i></div>'+(failed?'<p class="download-item-error">'+esc(t.error)+'</p>':'')+'<div class="download-item-actions">'+(active?control('pause','Tạm dừng',q.paused):paused?control('resume','Tiếp tục',q.paused||q.items.filter(D.active).length>=q.parallel):'')+(['QUEUED','DOWNLOADING','VERIFYING','PAUSED'].includes(t.state)?control('cancel','Hủy'):['FAILED','CANCELLED'].includes(t.state)&&t.code!=='UNSUPPORTED'?control('retry','Thử lại'):'')+'</div><details class="download-log" data-log-id="'+t.id+'"><summary>Nhật ký lượt tải</summary><ol>'+t.logs.map(line=>'<li>'+esc(line)+'</li>').join('')+'</ol>'+(active?control('fail','Giả lập lỗi'):'')+'</details></article>';
 }
 function downloadsView(){
-  if(DL)return heading('Tải video','Dán link, theo dõi từng lượt. File tải xong vào thư mục input để bạn quét như mọi video.','<span class="badge blue" id="dl-mode">'+(state.remote?'Qua điện thoại':'Control Center')+'</span>')+DL.html();
+  if(DL)return heading('Tải video','Dán link, theo dõi từng lượt. File tải xong vào thư mục input để bạn quét như mọi video.','<span class="badge blue" id="dl-mode">'+dlModeText()+'</span>')+DL.html();
   // Live page without download-live.js (a script failed to load): say so, never fall back to the simulation.
   if(LIVE)return heading('Tải video','Dán link, theo dõi từng lượt.')+'<div class="notice" role="alert" id="download-unavailable">Không tải được phần Tải video của trang. Tải lại trang rồi thử lại.</div>';
   const sample='https://video.example/watch?v=video-demo';
@@ -757,7 +759,7 @@ function liveChrome(){
 }
 function onSnapshot(){
   state=store.snapshot();liveChrome();review.updateJob();tailscaleToast();
-  if(view==='downloads'&&DL){if(topNotice()!==shownNotice||!DL.refresh())render();else{nav();const mode=$('#dl-mode'),text=state.remote?'Qua điện thoại':'Control Center';if(mode&&mode.textContent!==text)mode.textContent=text;}return;}
+  if(view==='downloads'&&DL){if(topNotice()!==shownNotice||!DL.refresh())render();else{nav();const mode=$('#dl-mode'),text=dlModeText();if(mode&&mode.textContent!==text)mode.textContent=text;}return;}
   // Cài đặt keeps an AI form being edited; a focused button (e.g. after a click) no longer freezes its panels.
   const editing=document.activeElement&&$('#main').contains(document.activeElement)&&/^(INPUT|SELECT|TEXTAREA)$/.test(document.activeElement.tagName);
   if(view==='downloads'||view==='settings'&&(aiDirty||editing)){nav();return;}

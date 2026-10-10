@@ -1,0 +1,15 @@
+{
+  "_comment": "Copy to the Git-ignored download_accounts.local.json. One entry per film source the user signs in to themself (docs/SOURCE_ACCOUNTS_PLAN.md). The adapter must exist in BiliFlow; login_url must be https on a portal host; hosts are exact bare names. Never a password, cookie, token, module or command. Tracked files use example hosts only.",
+  "sources": {
+    "demo-portal": {
+      "adapter": "ticket-files",
+      "label": "Nguồn mẫu",
+      "login_url": "https://portal.example/login",
+      "hosts": {
+        "portal": ["portal.example"],
+        "tickets": ["tickets.example"],
+        "files": ["files.example"]
+      }
+    }
+  }
+}

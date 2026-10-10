@@ -12,7 +12,9 @@ A provider (``download_sources``) turns a pasted link into a ``ResolvedSource``:
 
 ``SourceDeclined`` sends the link back to yt-dlp unchanged (a form the provider does not handle);
 ``SourceError`` ends the task (refused, DRM, live, login, network policy). Nothing here falls back to
-yt-dlp after an auth, DRM or policy error.
+yt-dlp after an auth, DRM or policy error. ``SourceLoginRequired`` (a source account whose session is
+missing, expired or refused by the source) names the source and the session generation; the queue moves
+that task to WAITING_LOGIN (no slot) until the user signs in to that source (M4).
 """
 from __future__ import annotations
 
@@ -46,7 +48,8 @@ CODEC_NAMES = {"avc1": "h264", "avc3": "h264", "hvc1": "hevc", "hev1": "hevc", "
 
 
 class SourceError(Exception):
-    """The task ends FAILED with ``code`` and a Vietnamese ``message`` (never a link)."""
+    """The task ends FAILED with ``code`` and a Vietnamese ``message`` (never a link). While a task downloads, a
+    code of ``download_sources.RESUMABLE_SOURCE_CODES`` ends it INTERRUPTED instead, with its part kept."""
 
     def __init__(self, code: str, message: str):
         super().__init__(message)
@@ -60,6 +63,21 @@ class SourceChanged(SourceError):
     def __init__(self, detail: str):
         super().__init__("SOURCE_CHANGED", f"Nguồn đã đổi so với lúc thăm dò ({detail}); không tải nối vào phần cũ. "
                          "Bấm Thử lại từ đầu để tải theo nguồn mới.")
+
+
+class SourceLoginRequired(SourceError):
+    """A source account needs the user to sign in again (download_account_sources): ``source_id``, the
+    ``generation`` of the session that was missing or refused (None when there was none) and the account's
+    ``reason`` code (NOT_CONNECTED, SESSION_EXPIRED, SESSION_REJECTED…). No secret is kept. Its code is
+    SOURCE_LOGIN_REQUIRED, never LOGIN_REQUIRED (a file server's 401 through SafeHttp, which uses no session):
+    only this error may send a task to wait for a sign-in."""
+
+    def __init__(self, source_id: str, generation: int | None, reason: str, label: str | None = None):
+        super().__init__("SOURCE_LOGIN_REQUIRED", f"Cần đăng nhập lại nguồn {label or source_id} (bấm Đăng nhập ở trang "
+                         "Tải video trên PC); BiliFlow không tự mở cửa sổ đăng nhập.")
+        self.source_id = source_id
+        self.generation = generation
+        self.reason = reason
 
 
 class SourceDeclined(Exception):
@@ -103,7 +121,8 @@ def describe_change(old: Mapping[str, Any] | None, new: Mapping[str, Any]) -> st
     """Which identity fields differ, for the SOURCE_CHANGED message (never a link)."""
     names = {"kind": "loại nguồn", "count": "số đoạn", "duration": "thời lượng", "segments": "danh sách đoạn",
              "variant": "chất lượng đã chọn", "size": "dung lượng", "etag": "phiên bản file",
-             "last_modified": "ngày sửa file", "url": "đường dẫn file", "item": "mục đã chọn"}
+             "last_modified": "ngày sửa file", "url": "đường dẫn file", "item": "mục đã chọn",
+             "source": "nguồn", "film": "phim", "episode": "tập", "version": "phiên bản file"}
     if not old:
         return "thiếu thông tin lúc thăm dò"
     changed = [names.get(key, key) for key in sorted(set(old) | set(new)) if old.get(key) != new.get(key)]
@@ -133,6 +152,16 @@ def codec_names(codecs: str | None) -> tuple[str | None, str | None]:
 
 
 @dataclass(frozen=True)
+class TicketIssuer:
+    """The session that issued a source account's ticket: its manager (``owner``: project root, Windows account),
+    the source and the generation of the lease the hidden run used (download_account_tickets keeps a task's
+    link only for that session)."""
+    owner: tuple[str, str] = field(repr=False)
+    source_id: str
+    generation: int
+
+
+@dataclass(frozen=True)
 class ResolvedSource:
     provider: str
     transport: str
@@ -149,6 +178,8 @@ class ResolvedSource:
     height: int | None = None
     fragments: int | None = None
     plan: Any = field(default=None, repr=False, compare=False)
+    # Only a source account's file has one (its ticket's session); never in ``public()``.
+    issuer: TicketIssuer | None = field(default=None, repr=False, compare=False)
 
     def __post_init__(self) -> None:
         if self.transport not in TRANSPORTS:
@@ -168,10 +199,13 @@ class ResolvedSource:
 @dataclass(frozen=True)
 class ResolveContext:
     """What a provider may use: the checked HTTP client, the task's control, its own temp folder,
-    ffprobe for a header check (None on a refresh) and the identity stored after the probe."""
+    ffprobe for a header check (None on a refresh) and the identity stored after the probe. ``notice``
+    (code, Vietnamese message): a warning the task's events show, such as rotated cookies of a source
+    account that could not be saved (M4); never a link, a ticket or a cookie."""
     http: SafeHttp
     control: Interruptible
     task_dir: Path
     ffprobe: Path | None = None
     previous: Mapping[str, Any] | None = None
     log: Callable[[str], None] = field(default=lambda line: None)
+    notice: Callable[[str, str], None] | None = None

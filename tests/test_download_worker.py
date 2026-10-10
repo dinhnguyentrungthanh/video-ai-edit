@@ -271,7 +271,12 @@ class SpaceTests(WorkerCase):
         self.scenario(probe={"json": video(size=40 * GB)})
         task, = self.add()
         self.worker.dispatch()
-        self.assertTrue(wait_for(lambda: self.state(task["id"]) == "WAITING_SPACE"))
+
+        def waiting_with_message():  # the worker writes the message right after the WAITING_SPACE state
+            row = self.store.get(task["id"])
+            return row["state"] == "WAITING_SPACE" and "Chờ chỗ trống" in (row["error_message"] or "")
+
+        self.assertTrue(wait_for(waiting_with_message), self.store.get(task["id"]))
         self.assertIn("Chờ chỗ trống", self.store.get(task["id"])["error_message"])
         self.assertEqual(self.calls("download"), [])
         self.space = [300 * GB, 100 * GB]

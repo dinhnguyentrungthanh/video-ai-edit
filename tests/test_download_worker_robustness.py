@@ -148,6 +148,27 @@ class PublishTests(WorkerCase):
         self.assertTrue((self.root / "temp" / "downloads" / str(task["id"]) / "abc.mp4").is_file())
         self.assertEqual(list((self.root / "input").iterdir()), [])
 
+    def test_a_missing_input_folder_keeps_the_file_and_a_yt_dlp_resume_may_bring_new_bytes(self):
+        self.scenario(probe={"json": video("Phim")}, download={"id": "abc"})
+        (self.root / "input").rmdir()
+        task, = self.add()
+        self.run_all()
+        held = self.store.get(task["id"])
+        self.assertEqual((held["state"], held["error_code"]), ("INTERRUPTED", "NO_INPUT_DIR"))
+        self.assertTrue((self.root / "temp" / "downloads" / str(task["id"]) / "abc.mp4").is_file())
+        self.assertFalse((self.root / "input").exists())  # never made by BiliFlow
+        (self.root / "input").mkdir()
+
+        def other_bytes(url, task_dir, control, **kwargs):  # yt-dlp runs again and writes its file anew
+            final = task_dir / "abc.mp4"
+            final.write_bytes(b"another fake video")
+            return _Outcome(final)
+        self.worker.resume(task["id"])
+        with mock.patch.object(self.worker.runner, "download", other_bytes):
+            self.run_all()
+        self.assertEqual(self.state(task["id"]), "COMPLETED")  # the finished-file check is the providers' only
+        self.assertEqual((self.root / "input" / "Phim.mp4").read_bytes(), b"another fake video")
+
     def test_another_container_keeps_its_extension(self):
         self.scenario(probe={"json": video("Phim")})
         task, = self.add()
@@ -175,11 +196,22 @@ class SharedSpaceTests(WorkerCase):
         self.assertTrue(wait_for(lambda: pid_file.exists() and self.state(first["id"]) == "DOWNLOADING"))
         second, = self.add(OTHER)
         self.worker.dispatch()
-        self.assertTrue(wait_for(lambda: self.state(second["id"]) == "WAITING_SPACE"))
+
+        def waiting_for_the_first():  # the worker writes the message right after the WAITING_SPACE state
+            row = self.store.get(second["id"])
+            return row["state"] == "WAITING_SPACE" and "dành cho lượt đang tải" in (row["error_message"] or "")
+
+        self.assertTrue(wait_for(waiting_for_the_first), self.store.get(second["id"]))
         self.assertIn("dành cho lượt đang tải", self.store.get(second["id"])["error_message"])
+        self.assertEqual(self.state(first["id"]), "DOWNLOADING")
+        self.assertEqual(self.downloaded_urls(), [CLIP])  # the second one waits: no download of its own yet
         self.worker.cancel(first["id"])
         self.assertTrue(self.worker.wait_idle(20))
         self.assertEqual(self.state(second["id"]), "COMPLETED")
+        self.assertEqual(self.downloaded_urls(), [CLIP, OTHER])
+
+    def downloaded_urls(self):
+        return [call["argv"][call["argv"].index("--") + 1] for call in self.calls("download")]
 
 
 class LinkRecheckTests(WorkerCase):

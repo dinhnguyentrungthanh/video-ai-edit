@@ -35,7 +35,7 @@ const tests = [];
 const test = (name, fn) => tests.push([name, fn]);
 
 test('every state has a label, a tone and exactly one filter group', () => {
-  assert.equal(new Set(K.STATES).size, 14);
+  assert.equal(new Set(K.STATES).size, 16);
   const groups = K.FILTERS.map(f => f[0]).filter(f => f !== 'all');
   for (const s of K.STATES) {
     assert.ok(K.LABELS[s], 'label ' + s);
@@ -44,8 +44,8 @@ test('every state has a label, a tone and exactly one filter group', () => {
     assert.equal(groups.filter(g => K.matches({state: s}, g)).length, 1, s);
   }
   const counted = K.counts(K.STATES.map((s, i) => ({id: i, state: s})));
-  assert.equal(counted.all, 14);
-  assert.equal(groups.reduce((sum, g) => sum + counted[g], 0), 14);
+  assert.equal(counted.all, 16);
+  assert.equal(groups.reduce((sum, g) => sum + counted[g], 0), 16);
 });
 
 test('buttons follow the backend sets; offline locks every write', () => {
@@ -108,6 +108,18 @@ test('an HLS link counts segments; bytes stay bytes; joining has no percent; 100
   const joining = V.row(hls({fragments_done: 40, transfer_stage: 'remuxing'}), V.createUi(), ctx());
   assert.match(joining, /Đang ghép các đoạn thành MP4/);
   assert.ok(!joining.includes('aria-valuenow'));
+  // A fresh link is being fetched (a source account's ticket): the kept bytes and percent, a stage, no speed.
+  const file = extra => task(1, 'DOWNLOADING', {downloaded_bytes: 500 * 1048576, total_bytes: 1000 * 1048576, ...extra});
+  p = K.progress(file({transfer_stage: 'resolving', speed: 9, eta: 9}));
+  assert.equal(p.percent, 50); assert.equal(p.stage, 'Đang lấy link tải mới từ nguồn');
+  assert.equal(p.speed, ''); assert.equal(p.eta, '');
+  assert.match(V.row(file({transfer_stage: 'resolving'}), V.createUi(), ctx()), /Đang lấy link tải mới từ nguồn/);
+  assert.equal(K.progress({...file({transfer_stage: 'resolving'}), state: 'STOPPED'}).stage, '', 'only while downloading');
+  // A kept part compared with a fresh link's answer from byte 0: those bytes are not new, so no speed and no change of bytes.
+  p = K.progress(file({transfer_stage: 'comparing', speed: 9, eta: 9}));
+  assert.equal(p.percent, 50); assert.equal(p.sizeText, '500 MB / 1.000 MB'); assert.equal(p.stage, 'Đang so phần đã tải với link mới');
+  assert.equal(p.speed, ''); assert.equal(p.eta, '');
+  assert.match(V.row(file({transfer_stage: 'comparing'}), V.createUi(), ctx()), /Đang so phần đã tải với link mới/);
   const labelled = V.row(hls({fragments_done: 3, media: {source_label: 'Link HLS trực tiếp <b>'}}), V.createUi(), ctx());
   assert.match(labelled, /Nguồn: Link HLS trực tiếp &lt;b&gt;/);
   assert.ok(!V.row(task(2, 'DOWNLOADING'), V.createUi(), ctx()).includes('Nguồn:'), 'a yt-dlp link has no source line');
@@ -355,6 +367,7 @@ test('the form: no source to pick, any site; the box is read-only while a batch 
   assert.match(tools, /id="dl-slots"[^>]* disabled/);
 });
 
+process.exitCode = 1; // a run that ends without its summary line (a promise nothing settles) fails
 (async () => {
   for (const [name, fn] of tests) {
     try { await fn(); } catch (error) { error.message = name + ': ' + error.message; throw error; }
@@ -362,6 +375,7 @@ test('the form: no source to pick, any site; the box is read-only while a batch 
     process.stdout.write('OK ' + name + '\n');
   }
   process.stdout.write(JSON.stringify({passed, failed: 0}) + '\n');
+  process.exitCode = 0;
 })().catch(error => {
   process.stderr.write(String(error && error.stack || error) + '\n', () => process.exit(1));
 });

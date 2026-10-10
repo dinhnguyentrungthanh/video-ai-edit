@@ -140,7 +140,8 @@ def remove_tree(path: Path) -> None:
 # ---------------------------------------------------------------------------------------- server
 @dataclass
 class Reply:
-    """One answer of the fixture server. ``cut_after``: close the socket after that many body bytes."""
+    """One answer of the fixture server. ``cut_after``: close the socket after that many body bytes.
+    ``length``: False sends no Content-Length (the server speaks HTTP/1.0: the body ends when it closes)."""
 
     body: bytes = b""
     status: int = 200
@@ -151,6 +152,7 @@ class Reply:
     delay: float = 0.0
     chunk: int = 64 * 1024
     cut_after: int | None = None
+    length: bool = True
 
 
 @dataclass(frozen=True)
@@ -256,7 +258,8 @@ class FixtureServer:
         if_range = seen.headers.get("if-range")
         if 200 <= status < 300 and reply.ranges:
             headers["Accept-Ranges"] = "bytes"
-            if wanted and (if_range is None or if_range == reply.etag):
+            # If-Range names the version by its ETag or by its Last-Modified date (as servers compare them).
+            if wanted and (if_range is None or if_range in (reply.etag, reply.headers.get("Last-Modified"))):
                 start = int(wanted.group(1))
                 end = min(int(wanted.group(2)) if wanted.group(2) else len(body) - 1, len(body) - 1)
                 if start >= len(body):
@@ -266,7 +269,8 @@ class FixtureServer:
                     status = 206
                     headers["Content-Range"] = f"bytes {start}-{end}/{len(reply.body)}"
                     body = body[start:end + 1]
-        headers["Content-Length"] = str(len(body))
+        if reply.length:
+            headers["Content-Length"] = str(len(body))
         handler.send_response(status)
         for name, value in headers.items():
             handler.send_header(name, value)

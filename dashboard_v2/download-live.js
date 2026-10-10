@@ -10,6 +10,13 @@
 })(typeof window === 'undefined' ? this : window, function () {
   'use strict';
   const OPERATIONS = {stop: 'downloadStop', resume: 'downloadResume', cancel: 'downloadCancel', retry: 'downloadRetry', remove: 'downloadRemove'};
+  /* Groups of episodes and "Tài khoản nguồn phim" (docs/SOURCE_ACCOUNTS_PLAN.md 9.14). */
+  const GROUP_OPERATIONS = {stop: 'downloadGroupStop', resume: 'downloadGroupResume', cancel: 'downloadGroupCancel', retry: 'downloadGroupRetry',
+    remove: 'downloadGroupRemove'};
+  const GROUP_DONE = {stop: 'Đã gửi lệnh dừng nhóm; phần đã tải được giữ.', resume: 'Đã xếp lại các tập đã dừng của nhóm.',
+    retry: 'Đã xếp lại các tập lỗi để tải lại.', cancel: 'Đã hủy nhóm; các tập chưa xong đang được dọn.', remove: 'Đã xóa nhóm khỏi danh sách.'};
+  const GROUP_CONFIRM_LABELS = {cancel: 'Hủy nhóm', remove: 'Xóa nhóm', retry: 'Thử lại tập lỗi'};
+  const MEMBERS_REFRESH_MS = 4000;
   const DONE = {stop: 'Đã dừng; phần đã tải được giữ.', resume: 'Đã xếp lại vào hàng đợi; tải tiếp phần đã có.',
     cancel: 'Đã gửi lệnh hủy.', retry: 'Đã xếp lại để tải từ đầu.', remove: 'Đã xóa khỏi danh sách.'};
   const LOG_REFRESH_MS = 4000;
@@ -23,26 +30,49 @@
      * survive the 2 s refresh. Task rows match by data-download-id; add() clears the link box on purpose. */
     const {morph, parse, patch} = o.dom;
     const loading = new Set(), loadedAt = new Map(), loadedState = new Map();
+    const membersLoading = new Set(), membersSeen = new Map(); // group id → the summary its members were loaded for
     let watching = false, reveal = null; // reveal: the first task of the last add, brought into view once
+    let revealGroup = null; // a group to bring into view once its card is on the page (after "Tải N tập" or "Xem nhóm")
+    let revealUntil = 0; // …for this long only
+    const REVEAL_MS = 10000;
     const snap = () => o.store.snapshot();
     const data = () => snap().downloads;
     const ctx = () => {
       const s = snap();
-      return {icon: o.icon, offline: !!s.offline, remote: !!s.remote, error: s.downloads_error || '', storageError: s.storage_error || ''};
+      // device: 'pc' | 'phone' from an answer of /api/phone-mode only, null while unknown (adapter.js). The account
+      // buttons need 'pc': an error or a missing answer is never taken for the PC.
+      const device = s.device === 'pc' || s.device === 'phone' ? s.device : null;
+      return {icon: o.icon, offline: !!s.offline, remote: !!s.remote || device === 'phone', device, deviceChecking: !!s.device_checking,
+        deviceError: s.device_error || '', error: s.downloads_error || '', storageError: s.storage_error || '', data: s.downloads, now: Date.now()};
     };
     const task = id => ((data() || {}).tasks || []).find(t => t.id === Number(id));
+    const groupById = id => V.groupOf(data(), id);
+    /* The episode dialog (download-episodes.js): its own <dialog>, patched in place; the list poll only tells it what
+     * changed elsewhere. Its writes skip the list refresh except "Tải N tập". */
+    const EP = o.episodes ? o.episodes.create({
+      store: o.store, dom: o.dom, toast: o.toast, offline: () => ctx().offline, task,
+      groupOfPage: id => (V.groupOfPage(data(), id) || {}).id || null,
+      sourceLabel: id => { const t = task(id); return t && t.media && t.media.source_label || ''; },
+      showGroup: id => showGroup(id),
+      random: n => window.crypto.getRandomValues(new Uint8Array(n)),
+    }) : null;
 
     function html() { return V.page(data(), snap().storage_summary, ui, ctx()); }
     function watch(on) {
       if (on === watching) return;
       watching = on;
       o.store.watchDownloads(on, 2000);
+      if (!on && EP) EP.close();
     }
     function forget() {
       if (!data()) return;
       const known = new Map((data().tasks || []).map(t => [t.id, t]));
       [ui.open, ui.details, ui.renames].forEach(m => [...m.keys()].forEach(id => { if (!known.has(id)) m.delete(id); }));
       [...ui.choices.keys()].forEach(id => { if (!known.has(id) || known.get(id).state !== 'NEEDS_CHOICE') ui.choices.delete(id); });
+      const groups = new Set((data().groups || []).map(g => g.id));
+      [ui.groupsOpen, ui.members, membersSeen].forEach(m => [...m.keys()].forEach(id => { if (!groups.has(id)) m.delete(id); }));
+      const sources = data().accounts && Array.isArray(data().accounts.sources) ? data().accounts.sources : [];
+      if (ui.account !== null && !sources.some(item => item.id === ui.account)) ui.account = null;
     }
     /* A new answer: every part is patched in place (see morph). */
     function refresh() {
@@ -52,6 +82,9 @@
       const d = data(), c = ctx();
       patch(progress, d ? V.list(d, ui, c) : '<p class="muted">Đang tải danh sách…</p>');
       revealAdded(progress);
+      revealGroupCard(progress);
+      const accounts = o.$('#dl-accounts-root');
+      if (accounts) patch(accounts, V.accountsPanel(d, ui, c));
       const notices = o.$('#dl-notices');
       if (notices) patch(notices, V.notices(d, c));
       const storage = o.$('#storage-root');
@@ -59,10 +92,52 @@
       const form = o.$('.download-form');
       if (form) morph(form, parse(V.form(d, ui, c)).firstElementChild);
       reloadOpenLogs();
+      reloadOpenGroups();
+      if (EP) EP.sync();
       return true;
     }
+    function revealGroupCard(progress) {
+      const card = revealGroup === null ? null : progress.querySelector('#dl-group-' + Number(revealGroup));
+      if (!card) {
+        if (revealGroup !== null && Date.now() > revealUntil) revealGroup = null;
+        return;
+      }
+      revealGroup = null;
+      card.scrollIntoView({block: 'nearest'});
+      if (!document.querySelector('dialog[open]')) card.focus({preventScroll: true});
+    }
+    function showGroup(id) {
+      revealGroup = Number(id);
+      revealUntil = Date.now() + REVEAL_MS;
+      if (!refresh()) revealGroup = null;
+    }
+    /* The episodes of an open group: loaded when opened, again when its summary changes or every 4 s while it runs. */
+    const signature = g => JSON.stringify([g.state, g.done, g.counts, g.percent]);
+    function reloadOpenGroups() {
+      ui.groupsOpen.forEach(id => {
+        const g = groupById(id), seen = membersSeen.get(id), loaded = ui.members.get(id);
+        if (!g) return;
+        const old = !loaded || Date.now() - (loaded.at || 0) > MEMBERS_REFRESH_MS;
+        if (!seen || seen !== signature(g) || (old && (!g.finished || (loaded && loaded.error)))) loadMembers(id);
+      });
+    }
+    async function loadMembers(id) {
+      if (membersLoading.has(id)) return;
+      membersLoading.add(id);
+      const g = groupById(id);
+      try {
+        const detail = await o.store.loadGroup(id);
+        ui.members.set(id, {members: Array.isArray(detail.members) ? detail.members : [], at: Date.now()});
+      } catch (error) {
+        ui.members.set(id, {members: [], error: 'Không tải được danh sách tập: ' + error.message, at: Date.now()});
+      } finally {
+        membersLoading.delete(id);
+        if (g) membersSeen.set(id, signature(g));
+        if (ui.groupsOpen.has(id)) refresh();
+      }
+    }
     function revealAdded(progress) {
-      const row = reveal === null ? null : progress.querySelector('[data-download-id="' + reveal + '"]');
+      const row = reveal === null ? null : progress.querySelector('[data-download-id="' + Number(reveal) + '"]');
       if (!row) return;
       reveal = null;
       const list = row.closest('.download-list');
@@ -145,9 +220,13 @@
       catch (error) { o.toast(error.message, true); return null; }
       finally { ui.busy.delete(key); refresh(); keepFocus(prefer); }
     }
+    function scopeOf(t) {
+      return t.group && t.group.group_id ? groupById(t.group.group_id) : t.state === 'EXPANDED' ? V.groupOfPage(data(), t.id) : null;
+    }
     function op(id, operation) {
-      const t = task(id), a = t && K.actions(t, ctx()).find(x => x.id === operation);
+      const t = task(id), a = t && K.actions(t, {...ctx(), group: scopeOf(t)}).find(x => x.id === operation);
       if (!a || !a.enabled) return;
+      if (operation === 'episodes') { if (EP) EP.open(t.id); return; }
       const go = () => run(operation + t.id, DONE[operation], () => o.store.downloadAction(OPERATIONS[operation], t.id, {}), rowButton(t.id));
       if (!a.confirm) { go(); return; }
       const label = CONFIRM_LABELS[operation] || a.label;
@@ -174,6 +253,54 @@
         return result;
       }, rowButton(t.id));
     }
+    function groupOp(groupId, operation) {
+      const g = groupById(groupId), a = g && K.groupActions(g, ctx()).find(x => x.id === operation);
+      if (!a || !a.enabled) return;
+      const prefer = '#dl-group-' + g.id + ' button:not([disabled])';
+      const go = () => run('group-' + operation + g.id, GROUP_DONE[operation], async () => {
+        const result = await o.store.downloadAction(GROUP_OPERATIONS[operation], g.id, {});
+        if (ui.groupsOpen.has(g.id)) loadMembers(g.id);
+        return result;
+      }, prefer);
+      if (!a.confirm || operation === 'stop' || operation === 'resume') { go(); return; }
+      const label = GROUP_CONFIRM_LABELS[operation] || a.label;
+      o.showModal(label + ' · nhóm N' + g.id, '<p><strong>' + esc(g.title || 'Nhóm tập') + '</strong></p><p>' + esc(a.confirm) + '</p>',
+        async () => { await go(); return true; }, label);
+    }
+    /* "Tài khoản nguồn phim": only a press on the PC posts; the panel then follows the list poll (never the 202). */
+    function accountOp(operation) {
+      const source = V.selectedSource((data() || {}).accounts, ui), a = source && K.accountActions(source, ctx()).find(x => x.id === operation);
+      if (!a || !a.enabled) return;
+      const label = source.label || source.id;
+      const done = {login: 'Đã mở cửa sổ đăng nhập ' + label + ' trên PC. Đăng nhập trên trang chính thức của nguồn; trạng thái tự cập nhật khi xong.',
+        'cancel-login': 'Đã gửi lệnh hủy đăng nhập ' + label + '.', disconnect: 'Đã ngắt kết nối ' + label + '.'}[operation];
+      const go = () => run('account-' + operation, done, () => o.store.accountAction(o.contracts.accountOps[operation], source.id),
+        '#dl-accounts button:not([disabled])');
+      if (operation !== 'disconnect') { go(); return; }
+      const waiting = Number(source.waiting_tasks) || 0;
+      o.showModal('Ngắt kết nối · ' + label, '<p>Xóa phiên đăng nhập đã lưu của <strong>' + esc(label) + '</strong> trên máy này?</p><p>Các lượt ' +
+        'tải sau của nguồn này, và lượt nào cần lấy vé mới, sẽ chờ bạn đăng nhập lại' + (waiting ? ' (hiện đã có ' + waiting +
+        ' lượt chờ đăng nhập)' : '') + '. File đang truyền không bị ngắt: việc truyền file không dùng phiên đăng nhập.</p>',
+        async () => { await go(); return true; }, 'Ngắt kết nối');
+    }
+    /* "Kiểm tra lại" while the page's mode is unknown: GET /api/phone-mode only, never an account POST; the panel
+     * follows the answer (one check at a time: the store shares a request in flight). */
+    function checkMode() {
+      if (ui.busy.has('mode-check')) return;
+      ui.busy.add('mode-check');
+      refresh();
+      o.store.loadPhone().finally(() => { ui.busy.delete('mode-check'); refresh(); });
+    }
+    function showAccount(sourceId) {
+      ui.account = String(sourceId);
+      refresh();
+      const panel = o.$('#dl-accounts');
+      if (!panel) return;
+      panel.scrollIntoView({block: 'nearest'});
+      // The source box, not Đăng nhập: a held Enter or a double click on the row's button must never open a sign-in window.
+      const target = panel.querySelector('#dl-account-source');
+      if (target) target.focus({preventScroll: true});
+    }
     /* The ids the dialog listed go with the request: a task stopped meanwhile keeps its part. */
     function cleanup() {
       const temp = (data() || {}).temp || {}, ids = Array.isArray(temp.ids) ? temp.ids.map(Number) : null;
@@ -190,7 +317,13 @@
 
     /* Returns true when the action was a download one (handled here). */
     function click(el, action, event) {
+      if (EP && EP.click(el, action)) return true;
       if (action === 'dl-add') add();
+      else if (action === 'dl-group-op') groupOp(el.dataset.group, el.dataset.op);
+      else if (action === 'dl-group-show') showGroup(el.dataset.group);
+      else if (action === 'dl-account') accountOp(el.dataset.op);
+      else if (action === 'dl-account-show') showAccount(el.dataset.source);
+      else if (action === 'dl-mode-check') checkMode();
       else if (action === 'dl-op') op(el.dataset.id, el.dataset.op);
       else if (action === 'dl-rename') rename(el.dataset.id);
       else if (action === 'dl-choose') choose(el.dataset.id);
@@ -202,7 +335,9 @@
       return true;
     }
     function change(el) {
+      if (EP && EP.change(el)) return true;
       if (el.id === 'dl-rights') ui.rights = el.checked;
+      else if (el.id === 'dl-account-source') { ui.account = el.value; refresh(); }
       else if (el.id === 'dl-slots') {
         const value = Number(el.value);
         run('slots', 'Tải đồng thời ' + value + ' video. Lượt đang chạy không bị ngắt.',
@@ -231,6 +366,14 @@
     /* <details> toggle does not bubble: listen in the capture phase. */
     document.addEventListener('toggle', event => {
       const el = event.target;
+      if (el.matches && el.matches('.download-group-members[data-group-members]')) {
+        const id = Number(el.dataset.groupMembers);
+        if (!el.open) { ui.groupsOpen.delete(id); return; }
+        ui.groupsOpen.add(id);
+        refresh();
+        if (!ui.members.has(id) || ui.members.get(id).error) loadMembers(id);
+        return;
+      }
       if (!el.matches || !el.matches('.download-log[data-log-id]')) return;
       const id = Number(el.dataset.logId);
       if (!el.open) { ui.open.delete(id); return; }
@@ -239,7 +382,7 @@
       if (!detail || detail.error) loadLog(id);
     }, true);
 
-    return {html, watch, refresh, click, change, input, key, ui};
+    return {html, watch, refresh, click, change, input, key, ui, episodes: EP};
   }
   return {create};
 });

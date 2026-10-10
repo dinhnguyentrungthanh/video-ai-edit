@@ -158,8 +158,9 @@ class ProcessControl:
 @dataclass(frozen=True)
 class Progress:
     """``downloaded_bytes`` is always real bytes. A segmented transfer counts its own unit in
-    ``fragments_done``/``fragments_total`` (``basis`` "fragments"); ``stage`` is "downloading" or
-    "remuxing" for a source transfer (None for yt-dlp)."""
+    ``fragments_done``/``fragments_total`` (``basis`` "fragments"); ``stage`` is "downloading",
+    "comparing" (a strict part compared with a fresh link, no new bytes) or "remuxing" for a source transfer
+    (None for yt-dlp)."""
     downloaded_bytes: int
     total_bytes: int | None
     speed: float | None

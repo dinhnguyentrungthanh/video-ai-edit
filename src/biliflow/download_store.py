@@ -3,6 +3,13 @@
 Kept apart from ``control-center.sqlite3``: the downloader never writes job,
 review or cleanup rows. Every state change is a compare-and-set so an API call
 and a worker thread can never both move the same task.
+
+Source accounts (docs/SOURCE_ACCOUNTS_PLAN.md 9.14) add WAITING_LOGIN (a task of
+an account source waits for the user's sign-in: no slot, no thread, its part
+kept) and EXPANDED (a pasted film page split into an episode group: final, no
+file of its own, its link released), the episode preview of a page
+(``download_previews``) and the groups (``download_groups``,
+``download_group_members``; download_groups.py writes them).
 """
 from __future__ import annotations
 
@@ -18,16 +25,16 @@ from biliflow.download_links import DownloadBatchError
 STATES = (
     "QUEUED", "PROBING", "NEEDS_CHOICE", "WAITING_SPACE", "DOWNLOADING", "VERIFYING",
     "PUBLISHING", "COMPLETED", "STOPPED", "FAILED", "CANCELLING", "CANCELLED",
-    "INTERRUPTED", "EXPIRED",
+    "INTERRUPTED", "EXPIRED", "WAITING_LOGIN", "EXPANDED",
 )
 # A task in one of these states holds a download slot.
 SLOT_STATES = frozenset({"PROBING", "WAITING_SPACE", "DOWNLOADING", "VERIFYING", "PUBLISHING",
                          "CANCELLING"})
 # No process runs for these; they may be removed from the list.
-FINAL_STATES = frozenset({"COMPLETED", "CANCELLED", "FAILED", "STOPPED", "INTERRUPTED", "EXPIRED"})
+FINAL_STATES = frozenset({"COMPLETED", "CANCELLED", "FAILED", "STOPPED", "INTERRUPTED", "EXPIRED", "EXPANDED"})
 # Rows that no longer count toward the limit or block the same link.
-CLOSED_STATES = frozenset({"COMPLETED", "CANCELLED", "EXPIRED"})
-RELEASED_LINK_STATES = frozenset({"CANCELLED", "EXPIRED"})
+CLOSED_STATES = frozenset({"COMPLETED", "CANCELLED", "EXPIRED", "EXPANDED"})
+RELEASED_LINK_STATES = frozenset({"CANCELLED", "EXPIRED", "EXPANDED"})
 MAX_UNFINISHED_TASKS = 100
 LOG_LINES_PER_TASK = 200
 _JSON_FIELDS = {"entries": "entries_json", "probe": "probe_json", "verify": "verify_json"}
@@ -37,10 +44,76 @@ _COLUMNS = frozenset({
     "total_bytes", "speed", "eta", "error_code", "error_message", "temp_dir", "temp_file",
     "output_path", "output_sha256", "output_size", "verify_json", "name_locked", "pid",
     "pid_created", "progress_basis", "fragments_done", "fragments_total", "transfer_stage",
+    "group_id", "member_id", "item_key", "account_owner", "login_source", "login_generation", "login_reason",
 })
-# Added after D5 (source providers); older databases get them on open (ALTER TABLE ADD COLUMN, no data change).
+# Added after D5 (source providers) and M4 (source accounts); older databases get them on open (ALTER TABLE ADD
+# COLUMN, no data change).
 _ADDED_COLUMNS = {"progress_basis": "TEXT", "fragments_done": "INTEGER", "fragments_total": "INTEGER",
-                  "transfer_stage": "TEXT"}
+                  "transfer_stage": "TEXT", "group_id": "INTEGER", "member_id": "INTEGER", "item_key": "TEXT",
+                  "account_owner": "TEXT", "login_source": "TEXT", "login_generation": "INTEGER",
+                  "login_reason": "TEXT"}
+# The episode preview of a pasted film page and the episode groups (download_groups.py).
+_GROUP_SCHEMA = """
+CREATE UNIQUE INDEX IF NOT EXISTS download_tasks_member ON download_tasks(member_id) WHERE member_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS download_tasks_item ON download_tasks(item_key) WHERE item_key IS NOT NULL;
+CREATE TABLE IF NOT EXISTS download_previews (
+    task_id INTEGER PRIMARY KEY REFERENCES download_tasks(id) ON DELETE CASCADE,
+    source_id TEXT NOT NULL,
+    listing_json TEXT NOT NULL,
+    fingerprint TEXT NOT NULL,
+    draft_json TEXT,
+    revision INTEGER NOT NULL DEFAULT 0,
+    summary_json TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS download_groups (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    parent_task_id INTEGER UNIQUE,
+    source_id TEXT NOT NULL,
+    source_label TEXT NOT NULL,
+    account_owner TEXT,
+    film TEXT NOT NULL,
+    title TEXT NOT NULL,
+    url TEXT NOT NULL,
+    fingerprint TEXT NOT NULL,
+    mode TEXT NOT NULL,
+    complete INTEGER NOT NULL,
+    reasons_json TEXT,
+    note TEXT,
+    total INTEGER NOT NULL,
+    width INTEGER NOT NULL,
+    request_key TEXT NOT NULL UNIQUE,
+    request_hash TEXT NOT NULL,
+    state TEXT NOT NULL,
+    existing_json TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS download_group_members (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    group_id INTEGER NOT NULL REFERENCES download_groups(id) ON DELETE CASCADE,
+    ordinal INTEGER NOT NULL,
+    item_key TEXT NOT NULL,
+    selection_json TEXT NOT NULL,
+    season_number INTEGER,
+    season_label TEXT,
+    episode_number INTEGER,
+    episode_label TEXT NOT NULL,
+    special INTEGER NOT NULL DEFAULT 0,
+    variant_label TEXT NOT NULL,
+    code TEXT NOT NULL,
+    status TEXT NOT NULL,
+    task_id INTEGER,
+    last_state TEXT,
+    intent TEXT,
+    UNIQUE (group_id, ordinal),
+    UNIQUE (group_id, item_key)
+);
+CREATE INDEX IF NOT EXISTS download_group_members_status ON download_group_members(status, group_id, ordinal);
+CREATE INDEX IF NOT EXISTS download_group_members_item ON download_group_members(item_key);
+CREATE INDEX IF NOT EXISTS download_group_members_task ON download_group_members(task_id);
+"""
 
 
 def utc_now() -> datetime:
@@ -140,6 +213,16 @@ class DownloadStore:
             if name not in columns:
                 self._connection.execute(f"ALTER TABLE download_tasks ADD COLUMN {name} {kind}")
         self._connection.commit()
+        self._connection.executescript(_GROUP_SCHEMA)
+        previews = {row[1] for row in self._connection.execute("PRAGMA table_info(download_previews)")}
+        if "summary_json" not in previews:  # a preview table of an earlier M4 build (test roots only)
+            self._connection.execute("ALTER TABLE download_previews ADD COLUMN summary_json TEXT")
+        members = {row[1] for row in self._connection.execute("PRAGMA table_info(download_group_members)")}
+        if "intent" not in members:  # the stored Dừng/Tiếp tục of a group, added by the M4 review fix
+            self._connection.execute("ALTER TABLE download_group_members ADD COLUMN intent TEXT")
+        self._connection.execute("CREATE INDEX IF NOT EXISTS download_group_members_intent "
+                                 "ON download_group_members(intent) WHERE intent IS NOT NULL")
+        self._connection.commit()
 
     def _now(self) -> str:
         return self.clock().isoformat()
@@ -167,12 +250,17 @@ class DownloadStore:
                 raise ValueError(f"Unknown download task field: {key!r}")
         return columns
 
-    def add_tasks(self, urls: list[str]) -> list[dict[str, Any]]:
-        """Insert a validated batch; a listed link or the 100-task cap rejects it all."""
+    def add_tasks(self, urls: list[str], owners: list[str | None] | None = None) -> list[dict[str, Any]]:
+        """Insert a validated batch; a listed link or the 100-task cap rejects it all. An episode task of a
+        group (``item_key``) never blocks its film page's link: episodes share it. ``owners``: the Windows
+        account (SID) of each link an account source claims, else None."""
+        if owners is not None and len(owners) != len(urls):
+            raise ValueError("One owner per link")
         with self._lock:
+            marks = ", ".join("?" for _ in RELEASED_LINK_STATES)
             open_rows = {
                 row["url"]: row["id"] for row in self._connection.execute(
-                    "SELECT id, url FROM download_tasks WHERE state NOT IN (?, ?)",
+                    f"SELECT id, url FROM download_tasks WHERE state NOT IN ({marks}) AND item_key IS NULL",
                     tuple(sorted(RELEASED_LINK_STATES)),
                 )
             }
@@ -183,10 +271,7 @@ class DownloadStore:
             ]
             if errors:
                 raise DownloadBatchError("Lô bị từ chối: có link đã nằm trong danh sách.", errors)
-            unfinished = self._connection.execute(
-                "SELECT COUNT(*) FROM download_tasks WHERE state NOT IN (?, ?, ?)",
-                tuple(sorted(CLOSED_STATES)),
-            ).fetchone()[0]
+            unfinished = self.unfinished_count()
             if unfinished + len(urls) > MAX_UNFINISHED_TASKS:
                 message = (f"Tối đa {MAX_UNFINISHED_TASKS} lượt chưa xong; đang có {unfinished}, "
                            f"lô này thêm {len(urls)}.")
@@ -194,14 +279,22 @@ class DownloadStore:
             now = self._now()
             ids = []
             with self._connection:
-                for url in urls:
+                for url, owner in zip(urls, owners or [None] * len(urls)):
                     cursor = self._connection.execute(
                         "INSERT INTO download_tasks (url, state, created_at, updated_at, "
-                        "queued_at, state_since) VALUES (?, 'QUEUED', ?, ?, ?, ?)",
-                        (url, now, now, now, now),
+                        "queued_at, state_since, account_owner) VALUES (?, 'QUEUED', ?, ?, ?, ?, ?)",
+                        (url, now, now, now, now, owner),
                     )
                     ids.append(int(cursor.lastrowid))
             return [self.get(task_id) for task_id in ids]
+
+    def unfinished_count(self) -> int:
+        """Rows that count toward MAX_UNFINISHED_TASKS (every state but the closed ones)."""
+        marks = ", ".join("?" for _ in CLOSED_STATES)
+        with self._lock:
+            return int(self._connection.execute(
+                f"SELECT COUNT(*) FROM download_tasks WHERE state NOT IN ({marks})", tuple(sorted(CLOSED_STATES)),
+            ).fetchone()[0])
 
     def get(self, task_id: int) -> dict[str, Any] | None:
         with self._lock:
@@ -354,7 +447,11 @@ class DownloadStore:
             )
 
     def delete_task(self, task_id: int) -> None:
+        """Drop a row; an episode of a group keeps its last state in its member row (the group's count)."""
         with self._lock, self._connection:
+            self._connection.execute(
+                "UPDATE download_group_members SET last_state = (SELECT state FROM download_tasks WHERE id = ?) "
+                "WHERE task_id = ?", (task_id, task_id))
             self._connection.execute("DELETE FROM download_tasks WHERE id = ?", (task_id,))
 
     def setting(self, key: str, default: str | None = None) -> str | None:

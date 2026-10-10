@@ -31,8 +31,23 @@
     downloadAdd:['POST','/api/downloads'],downloadSettings:['POST','/api/downloads/settings'],downloadCleanup:['POST','/api/downloads/cleanup-temp'],
     downloadRename:['POST','/api/downloads/{id}/rename'],downloadChoose:['POST','/api/downloads/{id}/choose'],downloadStop:['POST','/api/downloads/{id}/stop'],
     downloadResume:['POST','/api/downloads/{id}/resume'],downloadCancel:['POST','/api/downloads/{id}/cancel'],downloadRetry:['POST','/api/downloads/{id}/retry'],
-    downloadRemove:['POST','/api/downloads/{id}/remove']
+    downloadRemove:['POST','/api/downloads/{id}/remove'],
+    /* Source accounts (docs/SOURCE_ACCOUNTS_PLAN.md 9.14): {id} is the series page task or the group id; {source} is a
+     * configured source id. The episode and group routes work on the phone like the other download actions. */
+    downloadEpisodes:['GET','/api/downloads/{id}/episodes'],downloadEpisodesDraft:['POST','/api/downloads/{id}/episodes/draft'],
+    downloadEpisodesConfirm:['POST','/api/downloads/{id}/episodes/confirm'],downloadGroup:['GET','/api/downloads/groups/{id}'],
+    downloadGroupStop:['POST','/api/downloads/groups/{id}/stop'],downloadGroupResume:['POST','/api/downloads/groups/{id}/resume'],
+    downloadGroupCancel:['POST','/api/downloads/groups/{id}/cancel'],downloadGroupRetry:['POST','/api/downloads/groups/{id}/retry'],
+    downloadGroupRemove:['POST','/api/downloads/groups/{id}/remove'],
+    /* PC only (127.0.0.1 + token; the phone listener answers 403 pc_only): the page never offers them on the phone. */
+    accountLogin:['POST','/api/download-accounts/{source}/login'],accountCancelLogin:['POST','/api/download-accounts/{source}/cancel-login'],
+    accountDisconnect:['POST','/api/download-accounts/{source}/disconnect']
   };
+  /* A configured source id (download_account_api.ACCOUNT_ACTION): the only value a {source} placeholder takes. */
+  const SOURCE_ID = /^[a-z0-9][a-z0-9-]{0,39}$/;
+  /* "Tài khoản nguồn phim": action → contract operation; PC only (phone_access.PC_ONLY_SOURCE_ACCOUNTS is the reason). */
+  const accountOps = {login:'accountLogin','cancel-login':'accountCancelLogin',disconnect:'accountDisconnect'};
+  const PC_ONLY_ACCOUNT_REASON = 'Chỉ làm trên PC: đăng nhập, hủy đăng nhập và ngắt kết nối tài khoản nguồn phim chỉ làm trên PC.';
   const cleaned = j => !!j && (!!j.source_cleaned || ['PENDING','RECYCLED'].includes(j.source_cleanup?.state));
   const archived = j => !!j && (!!j.source_archived || ['PENDING','ARCHIVED','RESTORING'].includes(j.source_archive?.state));
   const hidden = j => j.state === 'CANCELLED' && !!j.hidden_at;
@@ -222,10 +237,11 @@
     const ep = endpoints[id];
     if (!ep) throw new Error('Thao tác không có trong hợp đồng.');
     if (ep[1].includes('{id}') && (!Number.isInteger(job?.id) || job.id<=0)) throw new Error('Thiếu job id hợp lệ.');
-    let path = ep[1].replace('{id}',job?.id);
+    if (ep[1].includes('{source}') && !(typeof job?.source === 'string' && SOURCE_ID.test(job.source))) throw new Error('Thiếu mã nguồn hợp lệ.');
+    let path = ep[1].replace('{id}',job?.id).replace('{source}',job?.source);
     const pairs = Object.entries(query||{}).filter(([,v]) => v!==undefined && v!==null).map(([k,v]) => encodeURIComponent(k)+'='+encodeURIComponent(String(v)));
     if (pairs.length) path += '?'+pairs.join('&');
     return {operation:id,method:ep[0],path,body:body||{}};
   }
-  return {pcOnlyOps,permanentOps,DELETE_NOTE,lostIds,PC_ONLY_REASON,phoneNotice,tailscaleOps,TAILSCALE_LABELS,tailscaleStep,tailscaleActions,tailscaleLoginUrl,SOURCE_MISSING_MESSAGE,sourceLine,formatStamp,formatBytes,detectors,tabs,labels,scanning,pausable,rerunnable,endpoints,cleaned,archived,hidden,locked,inFlight,eligible,reviewStats,tab,phase,overviewLabels,overviewMatch,operations,primary,validateScan,exportSelection,EXPORT_GATE_MESSAGE,EXPORT_SIZE_OPTIONS,EXPORT_CUSTOM_GB,exportDescription,exportConfirmText,exportPolicyChoice,OUTPUT_MOVED_REASON,reexportState,resourceItems,request};
+  return {accountOps,PC_ONLY_ACCOUNT_REASON,SOURCE_ID,pcOnlyOps,permanentOps,DELETE_NOTE,lostIds,PC_ONLY_REASON,phoneNotice,tailscaleOps,TAILSCALE_LABELS,tailscaleStep,tailscaleActions,tailscaleLoginUrl,SOURCE_MISSING_MESSAGE,sourceLine,formatStamp,formatBytes,detectors,tabs,labels,scanning,pausable,rerunnable,endpoints,cleaned,archived,hidden,locked,inFlight,eligible,reviewStats,tab,phase,overviewLabels,overviewMatch,operations,primary,validateScan,exportSelection,EXPORT_GATE_MESSAGE,EXPORT_SIZE_OPTIONS,EXPORT_CUSTOM_GB,exportDescription,exportConfirmText,exportPolicyChoice,OUTPUT_MOVED_REASON,reexportState,resourceItems,request};
 });

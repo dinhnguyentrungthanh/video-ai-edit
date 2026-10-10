@@ -136,6 +136,13 @@ PC_ONLY_POSTS = {
 PC_ONLY_TAILSCALE = "Chỉ làm trên PC: cài, đăng nhập và điều khiển Tailscale chỉ làm trên PC."
 TAILSCALE_ACTIONS = ("install", "start-service", "firewall", "login", "up", "down", "logout", "remote-on")
 PC_ONLY_POSTS.update({f"/api/tailscale/{action}": PC_ONLY_TAILSCALE for action in TAILSCALE_ACTIONS})
+# "Tài khoản nguồn phim" (docs/SOURCE_ACCOUNTS_PLAN.md 9.14): signing in to a source, cancelling it and
+# disconnecting are PC only; their paths carry the source id, so they are matched as patterns (full match).
+PC_ONLY_SOURCE_ACCOUNTS = ("Chỉ làm trên PC: đăng nhập, hủy đăng nhập và ngắt kết nối tài khoản nguồn phim chỉ làm "
+                           "trên PC.")
+PC_ONLY_PATTERNS = (
+    (re.compile(r"/api/download-accounts/[^/]+/(?:login|cancel-login|disconnect)"), PC_ONLY_SOURCE_ACCOUNTS),
+)
 # The user's choice (2026-10-06): "Gia hạn thêm 8 giờ" also from the phone, only while it is open over Tailscale.
 EXTEND_TAILSCALE_ONLY = ("Gia hạn từ điện thoại chỉ có khi chế độ điện thoại mở qua Tailscale; "
                          "ở Wi-Fi nhà, gia hạn trên PC.")
@@ -157,6 +164,10 @@ PHONE_ALLOWED_POSTS = tuple(re.compile(pattern) for pattern in (
     r"/api/downloads/\d+/(?:rename|choose|stop|resume|cancel|retry|remove)",
     r"/api/downloads/settings",
     r"/api/downloads/cleanup-temp",
+    # Source accounts (docs/SOURCE_ACCOUNTS_PLAN.md 9.14): choosing episodes and driving an episode group are
+    # download actions like the ones above; signing in to a source is not (PC_ONLY_PATTERNS).
+    r"/api/downloads/\d+/episodes/(?:draft|confirm)",
+    r"/api/downloads/groups/\d+/(?:stop|resume|cancel|retry|remove)",
     # "Xóa video gốc", "Xóa video" and "Dọn video mất gốc" (the user's choice, 2026-10-06): the same
     # preview_id + confirm_permanent request as on the PC; archive, restore and the bin check stay PC only.
     r"/api/source-cleanup",
@@ -268,6 +279,9 @@ def post_policy(path: str) -> tuple[bool, str | None, bool]:
         return True, None, True
     if path in PC_ONLY_POSTS:
         return False, PC_ONLY_POSTS[path], True
+    for pattern, reason in PC_ONLY_PATTERNS:
+        if pattern.fullmatch(path):
+            return False, reason, True
     return False, PC_ONLY_DEFAULT, False
 
 

@@ -439,3 +439,75 @@ code { font-size: 12px; color: #304b70; background: #edf2f9; }
 .phone-panel .phone-link { font-size: 15px; overflow-wrap: anywhere; user-select: all; }
 .phone-panel .phone-code { font-size: 26px; letter-spacing: 4px; font-weight: 700; user-select: all; }
 .pc-only-note { color: var(--amber); font-size: 12px; }
+
+/* Source accounts (M5): "Tài khoản nguồn phim", groups of episodes and the episode dialog. Theme variables only, so
+   light and dark need no extra rules; no backdrop-filter (R4-B3). */
+.download-side { display: flex; flex-direction: column; gap: 22px; min-width: 0; }
+.download-accounts .field { margin-bottom: 12px; }
+.download-accounts select { width: 100%; min-height: 38px; padding: 6px 10px; }
+.dl-account-state { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 0 0 8px; }
+.dl-account-state .badge { font-size: 12px; }
+.dl-account-waiting { font-size: 12px; color: var(--amber); }
+.download-accounts .key-value { grid-template-columns: 130px 1fr; font-size: 13px; margin: 6px 0; }
+.dl-account-line { margin: 8px 0 0; font-size: 13px; line-height: 1.6; overflow-wrap: anywhere; }
+.dl-account-warn { color: var(--amber); }
+.download-accounts .pc-only-note { margin: 12px 0 0; line-height: 1.6; }
+.dl-mode-unknown { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 12px 0 0; }
+.download-accounts .dl-mode-unknown .pc-only-note { margin: 0; flex: 1 1 220px; }
+.dl-section-title { font-size: 13px; color: var(--muted); font-weight: 600; margin: 4px 0 10px; }
+.download-groups { margin: 0 0 18px; }
+.download-group { padding: 16px; margin: 0 0 12px; border: 1px solid var(--line); border-radius: 11px; background: var(--panel-up); }
+.download-group:focus-visible { outline: 2px solid var(--mint); outline-offset: 2px; }
+.download-group .download-item-number { width: auto; min-width: 26px; padding: 0 5px; }
+.dl-chips { display: flex; flex-wrap: wrap; gap: 5px; }
+.dl-chip { font-size: 11px; padding: 2px 7px; border: 1px solid var(--line); border-radius: 999px; background: var(--panel); color: var(--muted); white-space: nowrap; }
+.dl-chip-running,.dl-chip-queued { color: var(--blue); }
+.dl-chip-waiting_login,.dl-chip-failed,.dl-chip-interrupted,.dl-chip-attention { color: var(--amber); }
+.dl-chip-completed { color: var(--text); font-weight: 600; }
+.dl-members { list-style: none; margin: 8px 0; padding: 0; max-height: 340px; overflow: auto; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); }
+.dl-members li { display: grid; grid-template-columns: auto minmax(0,1fr) auto auto; align-items: center; gap: 8px; padding: 8px 10px; border-top: 1px solid var(--line); font-size: 12px; }
+.dl-members li:first-child { border-top: 0; }
+.dl-member-name { overflow-wrap: anywhere; }
+.dl-member-error { grid-column: 2 / -1; color: var(--amber); overflow-wrap: anywhere; }
+.dl-members .badge { font-size: 11px; }
+.dl-place { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.dl-link { min-height: 28px; padding: 3px 9px; font-size: 12px; }
+dialog.dl-episodes { width: min(880px, calc(100vw - 28px)); }
+.dl-ep-body fieldset { border: 1px solid var(--line); border-radius: 9px; padding: 8px 12px 12px; margin: 0 0 12px; min-width: 0; }
+.dl-ep-body legend { padding: 0 6px; font-size: 13px; font-weight: 600; }
+.dl-ep-body fieldset label { display: flex; align-items: flex-start; gap: 8px; padding: 6px 0; font-size: 13px; cursor: pointer; }
+.dl-ep-body input[type=radio],.dl-ep-body input[type=checkbox] { flex-shrink: 0; width: 17px; height: 17px; margin: 2px 0 0; accent-color: var(--mint); }
+.dl-ep-body select { max-width: 100%; min-height: 36px; padding: 5px 8px; font-size: 13px; }
+.dl-ep-tools,.dl-ep-season-tools { display: flex; flex-wrap: wrap; gap: 6px; }
+.dl-ep-tools { margin: 0 0 12px; }
+.dl-ep-season { margin: 0 0 14px; }
+.dl-ep-season-head { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; margin: 0 0 8px; }
+.dl-ep-season-head h3 { font-size: 14px; margin: 0; }
+.dl-ep-season-head small { font-weight: 400; }
+.dl-ep-list { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 6px; }
+.dl-ep-row { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 8px; padding: 7px 9px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel-up); font-size: 13px; min-width: 0; }
+.dl-ep-row.picked { border-color: var(--mint); }
+.dl-ep-row label { display: flex; align-items: flex-start; gap: 8px; cursor: pointer; min-width: 0; flex: 1 1 auto; }
+.dl-ep-name { overflow-wrap: anywhere; }
+.dl-ep-row select { flex: 1 1 100%; }
+.dl-ep-flag { color: var(--red); font-weight: 600; }
+.dl-ep-incomplete { overflow-wrap: anywhere; }
+.dl-ep-existing { margin: 12px 0; padding: 12px; border: 1px solid var(--line); border-radius: 9px; background: var(--panel-up); font-size: 13px; }
+.dl-ep-existing ul { margin: 6px 0 10px; padding-left: 18px; max-height: 160px; overflow: auto; }
+.dl-ep-body .modal-error ul { margin: 6px 0 0; padding-left: 18px; }
+/* Opaque (the shared foot is 96 %): the episode tiles scroll under it and must not show through. */
+.modal-foot.dl-ep-foot { flex-direction: column; align-items: stretch; gap: 6px; background: var(--panel); z-index: 1; }
+.dl-ep-plan { margin: 0; font-size: 13px; font-weight: 600; overflow-wrap: anywhere; }
+.dl-ep-why { margin: 0; font-size: 12px; }
+.dl-ep-problems { margin: 0; padding-left: 18px; font-size: 12px; color: var(--red); max-height: 90px; overflow: auto; }
+.dl-ep-scope { margin: 2px 0; }
+.dl-ep-buttons { display: flex; justify-content: flex-end; flex-wrap: wrap; gap: 9px; }
+@media(max-width:700px) {
+  .download-side { gap: 15px; }
+  .download-accounts .key-value { grid-template-columns: 110px 1fr; }
+  .dl-members li { grid-template-columns: auto minmax(0,1fr); }
+  .dl-members li > small,.dl-members li > .badge { grid-column: 2; justify-self: start; }
+  .dl-ep-list { grid-template-columns: minmax(0,1fr); }
+  .dl-mode-unknown button,.dl-account-actions button,.download-group .download-item-actions button,.dl-ep-body button,.dl-ep-buttons button,.dl-link { min-height: 40px; }
+  .dl-ep-buttons button { flex: 1 1 auto; }
+}

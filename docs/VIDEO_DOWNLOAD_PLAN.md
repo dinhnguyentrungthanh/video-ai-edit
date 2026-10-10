@@ -2,6 +2,8 @@
 
 **2026-10-06 — phạm vi provider được người dùng mở rộng:** giới hạn cũ không viết extractor riêng đã được bỏ ở mục 2 và AGENTS.md. Các đoạn D0–D5 bên dưới ghi hành vi đã triển khai của đường yt-dlp; chúng không cấm việc triển khai provider mới.
 
+**2026-10-07 — tài khoản nguồn phim (đang làm, chưa dùng được):** người dùng chọn cho phép kết nối tài khoản do chính họ bấm Đăng nhập. Ở nhánh `feat/download-source-accounts` (worktree `temp\wt-download-source-accounts`) có kế hoạch và tài liệu phạm vi (M0), thư viện cấu hình, kho phiên mã hóa và session manager (M1), lớp mạng của trình duyệt có phiên (M2a) và thư viện điều phối cửa sổ đăng nhập (M2b; chưa nguồn thật nào có bộ xác nhận đăng nhập) và provider đọc danh sách tập, lấy vé đúng file (M3; chưa nguồn thật nào có bộ đọc trang); chưa có hàng đợi, route hay giao diện gọi tới, nên tính năng chưa dùng được. Xem mục 2, mục 4.14 và `docs/SOURCE_ACCOUNTS_PLAN.md`. Đường yt-dlp và các provider ẩn danh vẫn không dùng cookie hay tài khoản.
+
 **2026-10-06 — P1, nhánh `feat/download-source-providers` (worktree `temp\wt-download-source-providers`):** đã có khung provider và provider chung `direct` (link thẳng tới file video và playlist HLS, BiliFlow tự tải), xem mục 4.11. Chưa có provider riêng cho trang nào; bộ đọc riêng cho ba trang phim trong tài liệu tham khảo không làm. Chưa merge, chưa push; Control Center đang chạy vẫn dùng `main`.
 
 Cập nhật: 2026-10-05. Nhánh `feat/video-download` (tách từ `feat/dashboard-v2` a7d8f18), worktree `E:\DungChung\BiliFlow\temp\wt-video-download`.
@@ -28,7 +30,21 @@ Trang `#downloads` của Dashboard V2 hiện chỉ là mô phỏng (`dashboard_v
 
 - **Cập nhật phạm vi theo yêu cầu người dùng ngày 2026-10-06:** cho phép provider riêng đọc dữ liệu/trình phát công khai để lấy đúng nguồn media từ link người dùng dán, kể cả khi yt-dlp không tìm được phim hoặc chỉ thấy quảng cáo/trailer. Không hạ ngưỡng chống quảng cáo của đường yt-dlp Generic; chỉ tải nguồn đã được provider xác minh đúng video/tập/phiên bản. Đã có provider chung `direct` (mục 4.11); chưa có provider riêng cho trang nào.
 - Provider có thể dùng trình duyệt thông thường với context ẩn danh riêng nếu cần; không dùng profile/cookie của người dùng hoặc vượt CAPTCHA/challenge. URL phát sinh/redirect phải chịu kiểm tra mạng và log không lộ URL ký/token.
-- Không vượt DRM, không dùng cookie, tài khoản hay `--cookies-from-browser`, không giả trình duyệt (curl_cffi) để lách chặn.
+- Không vượt DRM, không dùng cookie, tài khoản hay `--cookies-from-browser`, không giả trình duyệt (curl_cffi) để lách chặn. Ngoại lệ duy nhất về tài khoản là tài khoản nguồn phim ở gạch đầu dòng dưới, chỉ cho nguồn được cấu hình cho việc đó.
+- **Cập nhật phạm vi theo lựa chọn của người dùng ngày 2026-10-07: tài khoản nguồn phim.** Chưa dùng được (M1–M3 mới có thư viện, mục 4.14); kế hoạch ở `docs/SOURCE_ACCOUNTS_PLAN.md`.
+  - Ai đăng nhập: người dùng chọn nguồn trong combobox của trang Tải video rồi bấm Đăng nhập trên PC. Chỉ khi đó BiliFlow mới mở cửa sổ của context trình duyệt riêng (không phải profile Edge hay Chrome cá nhân), và người dùng tự đăng nhập trên trang chính thức của nguồn.
+  - Không có mật khẩu trong BiliFlow: không có form nhập mật khẩu, không lưu mật khẩu, kể cả trong cấu hình.
+  - Phiên: BiliFlow giữ phiên riêng cho từng nguồn, chỉ gồm trạng thái xác thực của context, mã hóa DPAPI theo tài khoản Windows hiện tại, trong thư mục riêng có ACL chỉ cho tài khoản đó. Phiên chỉ dùng headless cho host của chính nguồn đó, để đọc danh sách file, lấy vé và thăm dò file.
+  - Hết hạn: chưa kiểm tra được phiên thật thì yêu cầu đăng nhập lại sau 3.600 giây kể từ lần đăng nhập thành công gần nhất. Mốc này không ngắt file đang tải.
+  - Lỗi: chỉ lỗi xác thực đưa tác vụ của đúng nguồn sang WAITING_LOGIN (không giữ slot). Vé hết hạn được làm mới trước. Lỗi mạng, máy chủ, file không còn và thiếu dung lượng giữ mã lỗi riêng.
+  - Vẫn cấm:
+    - vượt DRM hay paywall: chỉ tải thứ tài khoản đã đăng nhập vốn được tải;
+    - vượt CAPTCHA hay anti-bot: người dùng tự trả lời trong cửa sổ;
+    - đổi fingerprint trình duyệt;
+    - lấy cookie hay phiên từ trình duyệt cá nhân, trình duyệt của agent hay phiên Codex;
+    - đưa cookie, phiên, vé, link ký hay thân yêu cầu đăng nhập vào log, API (kể cả API trạng thái) hay Git.
+  - Mạng: mọi yêu cầu của trình duyệt có xác thực vẫn chịu kiểm tra mạng của bộ tải: chỉ địa chỉ công khai, redirect được kiểm, đọc có giới hạn. Cookie chỉ tới host của đúng nguồn.
+  - yt-dlp vẫn chạy với `--no-cookies`, và provider ẩn danh không bao giờ nhận phiên.
 - Không tự quét, tự xuất hay tự đăng sau khi tải. Watcher nhận file như khi người dùng tự chép vào.
 - Không tự cập nhật yt-dlp. Cập nhật là lệnh người dùng bấm, khóa phiên bản, chạy lại `license-audit`.
 - Repo công khai: tên miền trong code, test và tài liệu chỉ là mục ví dụ (`*.example`). Tên miền thật của trang người dùng dùng, link và tên video thật không vào repo, log commit hay tài liệu.
@@ -260,7 +276,7 @@ Luật:
 - Trang: `url` che giá trị tham số kiểu chữ ký và phần đường dẫn trông như token; thêm `media.provider`, `media.transport`, `media.source_label` ("Nguồn: …").
 - Cơ sở dữ liệu: 4 cột mới (`progress_basis`, `fragments_done`, `fragments_total`, `transfer_stage`), thêm bằng `ALTER TABLE ADD COLUMN` khi mở; dòng cũ giữ nguyên.
 - User-Agent: chuỗi trình duyệt phổ biến giống yt-dlp gửi; không giả TLS hay fingerprint, không cookie. Muốn UA riêng của BiliFlow thì đổi `download_http.USER_AGENT` (có thể bị vài CDN chặn).
-- Thêm provider trang sau này: viết lớp theo `SourceProvider`, thêm vào `SITE_PROVIDERS`, ghi host thật vào `config/download_providers.local.json`. Provider chỉ đọc dữ liệu công khai qua `ResolveContext.http`; DRM, paywall, đăng nhập, cookie, challenge vẫn ngoài phạm vi.
+- Thêm provider trang sau này: viết lớp theo `SourceProvider`, thêm vào `SITE_PROVIDERS`, ghi host thật vào `config/download_providers.local.json`. Provider chỉ đọc dữ liệu công khai qua `ResolveContext.http`; DRM, paywall, đăng nhập, cookie, challenge vẫn ngoài phạm vi. Ngoại lệ duy nhất (2026-10-07, chưa có adapter nào) là adapter tài khoản nguồn phim (mục 4.14): adapter riêng dùng phiên người dùng tự tạo. `SafeHttp` và các provider ẩn danh vẫn không cookie.
 - Định tuyến theo tên miền (dispatcher, rà lại và bổ sung 2026-10-06; không phải hệ thống thứ hai, vẫn là `SourceRegistry`):
   1. Host của link do `check_link` đọc (`urllib.parse.urlsplit`; chữ thường, IDNA, bỏ dấu chấm cuối; từ chối tài khoản trong link, cổng riêng, IP, tên nội bộ). `HostList.matches` đọc host bằng chính `check_link` (trước đây đọc `urlsplit` riêng), nên link mà kiểm tra link từ chối không khớp gì, ví dụ `http://evil.example\@video.example/` (`urlsplit` đọc ra `video.example`, trình duyệt đọc ra `evil.example`), `http://video.example:8080/`, `//video.example/`; host đã khớp là host lượt tải nối tới. Trong hàng đợi, link đã được chuẩn hóa từ lúc thêm nên lỗ này chưa từng dùng được; nay bộ so khớp không còn dựa vào điều đó.
   2. So khớp đúng tên host với danh sách của từng provider trong `config/download_providers.local.json`; không khớp chuỗi con, phần đuôi hay tên miền con (`www.video.example` phải ghi riêng). Chính registry so khớp: `provider_for` chỉ hỏi provider trang về link có host trong danh sách của nó; `claims` của provider chỉ thu hẹp thêm (ví dụ chỉ trang xem phim), không mở rộng. Mỗi host trong file phải là tên miền trần, kiểm bằng `check_host` (cùng luật với host của link); ký tự đại diện, cổng, URL, IP bị bỏ qua.
@@ -303,6 +319,27 @@ User-approved Playwright 1.63.0 plus pinned pyee/greenlet are installed and audi
 Every HTTP page/script/API request is intercepted and fulfilled through SafeHttp (the browser never uses route.continue_ or its own network fetch). Popups, WebSockets, service workers and browser downloads are blocked. Request headers exclude cookies/auth. Local schemes are aborted without HTTP. The adapter reads only video elements and observed HLS playlists in the designated player subtree, so advertising frames elsewhere are not movie candidates. Media requests are blocked in the browser; the resolved source uses the existing HTTP/HLS transfers, bounded local ffprobe metadata, identity checks, progress and final verification.
 
 Real HTTPS probe-only validation of the user's episode succeeded (2634.19 seconds, H.264/AAC, 311090096 bytes) and a second resolution matched identity. Synthetic tests cover headless launch, nested player selection, private-address refusal, stop/cleanup, dependency errors and actual worker publication. The old pending browser-dependency notes in 4.12 are superseded; no production Control Center was restarted.
+
+### 4.14 Tài khoản nguồn phim (kế hoạch 2026-10-07; M1–M3 có thư viện, chưa dùng được)
+
+Kế hoạch đầy đủ, thiết kế M0 và các điểm phải kiểm chứng nằm ở `docs/SOURCE_ACCOUNTS_PLAN.md`. Ranh giới nằm ở mục 2.
+
+Tóm tắt luồng dự kiến:
+1. Người dùng đăng nhập trong cửa sổ BiliFlow mở khi họ bấm nút.
+2. Bộ đọc headless của nguồn đọc danh sách file. Nhiều tập hay nhiều chất lượng thì dùng NEEDS_CHOICE có sẵn.
+3. Ngay trước khi dùng slot tải, bộ đọc lấy vé và bắt link Tải xuống.
+4. `FileTransfer` có sẵn tải file qua `SafeHttp` (Range/If-Range).
+5. Thiếu phiên hoặc phiên hết hạn thì tác vụ sang WAITING_LOGIN (trạng thái mới, không giữ slot).
+
+M1 (2026-10-07) đã có thư viện: đọc cấu hình nguồn, kho phiên mã hóa DPAPI với ACL riêng, bảng `source_account_state` (mỗi tài khoản Windows và nguồn một dòng) và session manager (TTL, generation, lượt đăng nhập). Chưa nối vào bộ tải: chưa có trạng thái tác vụ, route hay giao diện; bảng chỉ được tạo khi thư viện được gọi, hiện chỉ có test gọi trên root tạm. Chi tiết ở mục 9.8 của `docs/SOURCE_ACCOUNTS_PLAN.md`.
+
+M2a (2026-10-07/08) chọn phương án B của 9.4 và làm lớp mạng cho context Edge có phiên (`download_account_browser.py`, `download_account_http.py`): mọi yêu cầu của trình duyệt được trả lời bằng một lượt trao đổi đã kiểm (https, đúng host của nguồn, địa chỉ công khai với DNS ghim, TLS, giới hạn byte và thời gian cho từng yêu cầu); redirect thành trang chuyển tiếp để bước sau được kiểm lại; những gì không đi qua lớp chặn (yêu cầu của shared worker, socket của worker, lưu lượng nền của Edge) dừng ở hố đen proxy, vì cờ khởi chạy (không QUIC, không tự phân giải DNS) và một tùy chọn ghi sẵn vào profile mới (WebRTC không được dùng UDP ngoài proxy; Edge bỏ qua cờ dòng lệnh tương ứng) không để lối ra nào khác. Edge chạy có sandbox. `SafeHttp` không đổi và vẫn không cookie. Chi tiết ở mục 9.9 của `docs/SOURCE_ACCOUNTS_PLAN.md`.
+
+M2b (2026-10-08) thêm thư viện điều phối cửa sổ đăng nhập (`download_account_login.py`). Chỉ `LoginCoordinator.start`, cho nút Đăng nhập của người dùng, mới mở được trình duyệt có giao diện; mọi lượt ẩn vẫn headless. Cửa sổ dùng cùng profile riêng, lớp mạng, sandbox và cách dọn của M2a, tắt trình quản lý mật khẩu và tự điền. Phiên chỉ được lưu khi bộ xác nhận của adapter thấy bằng chứng từ nguồn; cookie, URL đổi, HTTP 200 hay đóng cửa sổ không đủ. Chưa nguồn thật nào có bộ xác nhận, nên đăng nhập nguồn thật bị từ chối trước khi mở cửa sổ. Test chạy headless với fixture; cửa sổ có giao diện chưa được người dùng kiểm. Chưa nối route, giao diện hay hàng đợi. Chi tiết ở mục 9.11 của `docs/SOURCE_ACCOUNTS_PLAN.md`.
+
+M3 (2026-10-08) thêm provider của nguồn tài khoản (`download_account_sources.py`, `download_account_pages.py`, `download_account_listing.py`, `download_account_runs.py`). Với link trang phim đã dán, nó đọc danh sách phim, mùa, tập và bản bằng phiên (headless, mỗi nguồn một lượt một lúc, một hạn chung, Edge treo của đúng lượt bị kết thúc), báo rõ khi danh sách chưa đủ, bỏ trailer và quảng cáo theo cấu trúc, và có kiểu lựa chọn cho "Tải tất cả các tập đang có" / "Chọn tập" (một bản cho mỗi tập, tập thiếu bản được báo). Vé chỉ được xin cho đúng một file đã chọn; trang vé phải là của đúng tập và file, quảng cáo bị bỏ, thời gian chờ của trang được giữ, challenge không được vượt. File được thăm dò và tải bằng `SafeHttp` không cookie; phần đã tải chỉ được nối khi link mới cho đúng validator của phiên bản đã tải, không thì tải lại từ đầu. Mọi host của nguồn đã cấu hình thuộc provider tài khoản, nên không sang yt-dlp; chưa nối manager thì bị từ chối. Chưa nguồn thật nào có bộ đọc trang. Test dùng trang tự làm trên Edge headless thật. Chi tiết ở mục 9.12 của `docs/SOURCE_ACCOUNTS_PLAN.md`.
+
+M4 (2026-10-08) nối nguồn tài khoản vào hàng đợi và API, chưa có giao diện (M5). Control Center tạo manager của đúng root và tài khoản Windows (`download_account_api.py`), dọn lượt đăng nhập bị ngắt và hồ sơ trình duyệt tạm lúc khởi động, không tự mở cửa sổ. Hai trạng thái mới: WAITING_LOGIN (chờ đăng nhập, không giữ slot, giữ phần đã tải; chỉ phiên mới hơn của đúng nguồn và tài khoản Windows đánh thức) và EXPANDED (trang phim nhiều tập đã tách thành nhóm tập). Trang phim nhiều tập chờ chọn với danh sách công khai được lưu; "Tải N tập" tạo nhóm và các tập trong một transaction, chống tạo trùng bằng khóa yêu cầu, tạo tác vụ dần khi danh sách còn chỗ dưới 100, đặt tên `NNN - <phim> - <mã tập>` (`download_groups.py`, `download_account_tasks.py`, `download_episode_names.py`). Route đăng nhập/hủy/ngắt kết nối chỉ trên PC; route chọn tập và điều khiển nhóm dùng được trên điện thoại. Chi tiết và hợp đồng API cho M5 ở mục 9.14 của `docs/SOURCE_ACCOUNTS_PLAN.md`.
 
 ## 5. API
 
@@ -448,7 +485,7 @@ Control Center thử: `python -m biliflow --project-root <temp>\vd-d4-root contr
 
 ## 9. Dừng lại và hỏi người dùng khi
 
-- Một trang cần cookie, đăng nhập hoặc giả trình duyệt mới tải được.
+- Một trang cần cookie, đăng nhập hoặc giả trình duyệt mới tải được. Riêng nguồn đã được cấu hình cho tài khoản nguồn phim (mục 4.14, người dùng chọn ngày 2026-10-07) thì người dùng đã quyết: dùng phiên họ tự đăng nhập, không giả trình duyệt.
 - `license-audit` không đạt, hoặc một phụ thuộc kéo theo giấy phép ngoài danh sách.
 - Video tải về có codec mà bước quét hay xuất của BiliFlow không giải mã được (ví dụ AV1). Khi đó cân nhắc ép H.264 khi có, hoặc chuyển mã: là quyết định của người dùng.
 - Cần đụng `input\`, `output\`, `archive\` thật, hoặc POST vào Control Center thật.

@@ -33,6 +33,8 @@ config/app.yaml
 config/download_sources.local.json
 # Real host names of the downloader's site providers (download_sources.py); see the .example file.
 config/download_providers.local.json
+# Real hosts and sign-in links of the source accounts (download_account_config.py); see the .example file.
+config/download_accounts.local.json
 .env
 .env.*
 !.env.example

@@ -30,7 +30,18 @@
       this.preview = extra && extra.preview || null; // 409 body.preview when the list changed
       this.operation = extra && extra.operation || null;
       this.errors = extra && Array.isArray(extra.errors) ? extra.errors : []; // 400 BATCH_REJECTED: one per link
+      this.detail = extra && extra.detail || {}; // the episode and group refusals: the fields of ERROR_DETAIL only
     }
+  }
+  /* Fields of a refused episode or group request the page may show or act on (docs/SOURCE_ACCOUNTS_PLAN.md 9.14):
+   * NOT_WAITING {group_id, state}, STALE_DRAFT {revision}, ITEMS_EXIST {existing, existing_count}, VARIANT_* {episodes,
+   * episode_count}, SCOPE_NOT_CONFIRMED {count, confirm_label}, GROUP_TOO_LARGE {count}, BAD_SELECTION {unknown}. */
+  const ERROR_DETAIL = ['group_id', 'state', 'revision', 'existing', 'existing_count', 'episodes', 'episode_count', 'count',
+    'confirm_label', 'unknown'];
+  function errorDetail(body) {
+    const out = {};
+    if (body && typeof body === 'object') ERROR_DETAIL.forEach(name => { if (body[name] !== undefined) out[name] = body[name]; });
+    return out;
   }
 
   const MESSAGES = {
@@ -70,7 +81,7 @@
     const reason = body && typeof body.error === 'string' && body.error ? body.error : (MESSAGES[status] || ('HTTP ' + status));
     const message = status === 409 ? reason + (body && body.code ? ' (' + body.code + ')' : '') : reason;
     return new AdapterError(status, message, {code: body && body.code, preview: body && body.preview, operation,
-      errors: body && body.errors});
+      errors: body && body.errors, detail: errorDetail(body)});
   }
 
   function create(options) {
@@ -233,6 +244,9 @@
         return body;
       },
       loadDownload: id => get(C.request('downloadTask', {id: Number(id)}).path),
+      /* A series page's stored episode list, its draft and plan (no browser, no ticket); a group and its members. */
+      loadEpisodes: id => get(C.request('downloadEpisodes', {id: Number(id)}).path),
+      loadGroup: id => get(C.request('downloadGroup', {id: Number(id)}).path),
       /* "Dung lượng": read-only; refresh asks the server to compute again (it answers at once with the last value). */
       loadStorage: refresh => get(C.endpoints.storageSummary[1] + (refresh ? '?refresh=1' : '')),
       loadAI: () => get(C.endpoints.ai[1]),
@@ -314,6 +328,12 @@
       phone: previous.phone || null,
       tailscale: previous.tailscale || null, // Cài đặt → Tailscale (GET /api/tailscale, PC only)
       remote: !!previous.remote,
+      // The page's listener (plan 9.18): 'pc' or 'phone' only from an answer of /api/phone-mode with a boolean `remote`;
+      // null while unknown (pending, an error, a timeout, an answer without it). The PC-only account buttons need 'pc'.
+      // An error never changes what an earlier answer said: a page never moves to another listener.
+      device: previous.device === 'pc' || previous.device === 'phone' ? previous.device : null,
+      device_checking: !!previous.device_checking,
+      device_error: previous.device_error || null,
       // "Tải video" polls on its own (only while #downloads is open); /api/status keeps its last answer.
       downloads: previous.downloads || null,
       downloads_error: previous.downloads_error || null,
@@ -324,12 +344,21 @@
     };
   }
 
+  /* /api/phone-mode (and the phone-mode writes) answer {remote: false} on the PC listener and {remote: true} on the
+   * phone listener. Anything else keeps what an earlier answer said (null when none did). */
+  const deviceOf = (body, known) => body && typeof body.remote === 'boolean' ? (body.remote ? 'phone' : 'pc') : known || null;
+  const deviceProblem = error => error.status === 0 ? 'mất kết nối hoặc quá thời gian chờ'
+    : error.status === 404 ? 'Control Center không có mục này (404), có thể là bản cũ' : 'Control Center trả lỗi ' + error.status;
+  const PC_UNCONFIRMED = 'Chưa xác định được trang này mở trên PC nên chưa gửi. Bấm Kiểm tra lại trong khung Tài khoản nguồn phim.';
+  const PHONE_RETRIES = 5; // the poll asks /api/phone-mode again at most this often while the mode is unknown
+
   /* Live store: same interface as BFDemoStore, backed by the adapter. */
   function createLiveStore(adapter, options) {
     options = options || {};
-    let snap = {mode: 'live', jobs: [], logos: [], active: null, queue: {length: 0, paused: false}, resources: {cpu_percent: 0, memory: {percent: 0}, disk: {}, gpu: null}, ai: {ready: false, config: {}, message: 'Đang tải…'}, offline: false, loading: true, requests: []};
+    let snap = {mode: 'live', jobs: [], logos: [], active: null, queue: {length: 0, paused: false}, resources: {cpu_percent: 0, memory: {percent: 0}, disk: {}, gpu: null}, ai: {ready: false, config: {}, message: 'Đang tải…'}, offline: false, loading: true, requests: [], device: null, device_checking: false, device_error: null};
     const listeners = new Set();
     let ai = null, memory = null, timer = null, phone = null, paused = false, downloadTimer = null, statusPolling = null;
+    let phoneRequest = null, phoneRetries = 0;
     let tailscale = null, tailscaleWatch = false, tailscalePolling = null;
     // A listener that throws (a render bug) must not turn a finished request into a failed one: reported apart.
     const emit = () => listeners.forEach(fn => { try { fn(snap); } catch (error) { setTimeout(() => { throw error; }); } });
@@ -361,7 +390,9 @@
       try {
         const status = await adapter.loadStatus();
         if (status === null) return snap; // an older poll answered late
+        const wasOffline = snap.offline;
         snap = normalizeSnapshot(status, ai, memory, snap);
+        if (wasOffline && !snap.device) phoneRetries = 0; // back online: an unknown mode is asked again a few times
       } catch (error) {
         snap = {...snap, offline: true, loading: false, error: error.message};
       }
@@ -382,7 +413,9 @@
       if (paused || (typeof document !== 'undefined' && document.hidden)) return; // paused: the review dialog polls its own queue (Q7)
       pollStatus();
       if (ai && ai.login_running) loadAI();
-      if (phone && phone.enabled && !phone.remote) loadPhone(); // failed attempts / lock on the PC panel
+      if (snap.device === 'pc' && phone && phone.enabled) loadPhone(); // failed attempts / lock on the PC panel
+      // The page's mode is still unknown (an error or a timeout): asked again a few times, GET only.
+      if (!snap.device && !phoneRequest && phoneRetries < PHONE_RETRIES) { phoneRetries++; loadPhone(); }
       // Cài đặt open on the PC, or a Tailscale task still running (its end may have turned the phone mode on).
       if (!snap.remote && (tailscaleWatch || (tailscale && tailscale.task && tailscale.task.running))) loadTailscale();
     }
@@ -390,16 +423,28 @@
     async function loadAI() {
       try { ai = await adapter.loadAI(); snap = {...snap, ai}; emit(); } catch (_) { /* the settings page shows the last state */ }
     }
-    async function loadPhone() {
-      try {
-        phone = await adapter.loadPhone();
-        snap = {...snap, phone, remote: phone.remote === true};
+    /* One request at a time. Only an answer with a boolean `remote` sets the page's mode (deviceOf); an error, a
+     * timeout or an answer without it leaves the mode as it was (unknown at first: no PC-only account button). Only the
+     * first check shows "Đang kiểm tra"; a retry after an error keeps that error on the page until it has an answer
+     * (Kiểm tra lại shows its own progress). `fresh`: a request already on its way may have left before what the caller
+     * waits for (a Tailscale task's end), so it is asked again once that one ends. */
+    function loadPhone(options) {
+      if (phoneRequest) return options && options.fresh ? phoneRequest.then(() => loadPhone()) : phoneRequest;
+      if (!snap.device && !snap.device_error) { snap = {...snap, device_checking: true}; emit(); }
+      const request = (async () => {
+        try {
+          phone = await adapter.loadPhone();
+          const device = deviceOf(phone, snap.device);
+          snap = {...snap, phone, device, remote: device === 'phone', device_checking: false,
+            device_error: device ? null : 'câu trả lời của Control Center thiếu thông tin này'};
+        } catch (error) { /* an older Control Center has no phone mode: the panel says so */
+          snap = {...snap, phone: {unavailable: true}, device_checking: false, device_error: deviceProblem(error)};
+        }
         emit();
-      } catch (_) { /* an older Control Center has no phone mode: the panel says so */
-        snap = {...snap, phone: {unavailable: true}};
-        emit();
-      }
-      return snap;
+        return snap;
+      })().finally(() => { if (phoneRequest === request) phoneRequest = null; });
+      phoneRequest = request;
+      return request;
     }
     /* One request at a time (the server runs sc.exe and `tailscale status` for it). An older Control Center
      * (404) shows the panel's restart note; another error keeps the last state. */
@@ -415,7 +460,7 @@
         snap = {...snap, tailscale};
         emit();
         // "Mở cho điện thoại ngoài nhà" turns the phone mode on at the end of its task.
-        if (wasRunning && !(tailscale.task && tailscale.task.running)) await loadPhone();
+        if (wasRunning && !(tailscale.task && tailscale.task.running)) await loadPhone({fresh: true});
         return snap;
       })().finally(() => { if (tailscalePolling === request) tailscalePolling = null; });
       tailscalePolling = request;
@@ -455,6 +500,8 @@
       loadDownloads,
       loadStorage,
       loadDownload: id => adapter.loadDownload(id),
+      loadEpisodes: id => adapter.loadEpisodes(id),
+      loadGroup: id => adapter.loadGroup(id),
       /* #downloads open: its list every intervalMs (and "Dung lượng" while the server computes it); closed: nothing.
        * One poll at a time (a slow link never piles requests up), none while the tab is hidden; after a
        * "Dung lượng" error it waits for "Tính lại". */
@@ -478,6 +525,29 @@
           await loadDownloads();
         }
       },
+      /* The episode dialog's draft: no list refresh (the dialog keeps its own plan); one at a time (download-episodes.js). */
+      async episodeDraft(id, body) {
+        return (await adapter.dispatch('downloadEpisodesDraft', {id: Number(id)}, body)).body;
+      },
+      /* "Tải N tập": the list is refreshed after it (the new group), also after a refusal. */
+      async episodeConfirm(id, body) {
+        try {
+          return (await adapter.dispatch('downloadEpisodesConfirm', {id: Number(id)}, body)).body;
+        } finally {
+          await loadDownloads();
+        }
+      },
+      /* "Tài khoản nguồn phim" (PC only): login answers 202 at once; the result is read from the next list
+       * (accounts.sources[].state / last_login), never from the answer. The list is refreshed also after a refusal. */
+      async accountAction(operation, source) {
+        // Never sent before /api/phone-mode said this page is the PC (download-core.accountActions shows no button then).
+        if (snap.device !== 'pc') throw new Error(PC_UNCONFIRMED);
+        try {
+          return (await adapter.dispatch(operation, {source: String(source)}, {})).body;
+        } finally {
+          await loadDownloads();
+        }
+      },
       /* Review dialog open: /api/status polling pauses; on close it refreshes at once and resumes. */
       pause() { paused = true; },
       resume() { if (!paused) return; paused = false; refresh(); },
@@ -485,9 +555,21 @@
       async dispatch(operation, job, body) {
         const result = await adapter.dispatch(operation, job, body);
         if (['aiConfig', 'aiCheck', 'aiLogin'].includes(operation)) { ai = result.body; snap = {...snap, ai}; }
-        if (operation === 'phoneMode') { phone = result.body; snap = {...snap, phone, remote: false}; emit(); return result; }
+        if (operation === 'phoneMode') {
+          phone = result.body;
+          const device = deviceOf(result.body, snap.device);
+          snap = {...snap, phone, device, remote: device === 'phone'};
+          emit();
+          return result;
+        }
         // "Gia hạn thêm 8 giờ": the PC gets its full status back, the phone (over Tailscale) only the new time.
-        if (operation === 'phoneExtend') { phone = {...(phone || {}), ...result.body}; snap = {...snap, phone, remote: result.body.remote === true}; emit(); return result; }
+        if (operation === 'phoneExtend') {
+          phone = {...(phone || {}), ...result.body};
+          const device = deviceOf(result.body, snap.device);
+          snap = {...snap, phone, device, remote: device === 'phone'};
+          emit();
+          return result;
+        }
         // tailscaleInstall … tailscaleRemoteOn: the answer is the panel state with the task just started.
         if (/^tailscale[A-Z]/.test(operation)) { tailscale = result.body; snap = {...snap, tailscale}; emit(); return result; }
         if (operation === 'shutdown') { snap = {...snap, offline: true, stopping: true}; emit(); return result; }

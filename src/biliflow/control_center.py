@@ -126,7 +126,7 @@ DASHBOARD_V2_DIR = Path(__file__).resolve().parents[2] / "dashboard_v2"
 DASHBOARD_V2_PAGE = "live.html"
 DASHBOARD_V2_FILES = frozenset({
     "styles.css", "theme.css", "contracts.js", "adapter.js", "download-demo.js", "app.js",
-    "download-core.js", "download-view.js", "download-live.js",
+    "download-core.js", "download-view.js", "download-episodes.js", "download-live.js",
     "review.css", "review-core.js", "review-detail.js", "review-media.js", "review-cards.js", "review.js",
     "assets/mark.svg", "assets/poster-amber.svg", "assets/poster-blue.svg",
     "assets/poster-rose.svg", "assets/poster-sage.svg", "assets/poster-violet.svg",
@@ -233,6 +233,17 @@ def _review_page_for_phone(html: str) -> str:
     head, rest = html.split("</head>", 1)
     body, tail = rest.rsplit("</body>", 1)
     return head + REVIEW_PHONE_STYLE + "</head>" + body + REVIEW_PHONE_SCRIPT + "</body>" + tail
+
+
+def _account_answer(center: Any, source_id: str, action: str) -> tuple[int, Any]:
+    """"Tài khoản nguồn phim": sign in, cancel it or disconnect (download_account_api). The handler has already
+    checked Host, the token and that the request came over 127.0.0.1; the body is never read for it."""
+    service = getattr(center, "downloads", None)
+    accounts = getattr(service, "accounts", None)
+    if accounts is None:
+        error = getattr(center, "downloads_error", None) or "chưa khởi tạo"
+        return 503, {"error": download_api.UNAVAILABLE_MESSAGE.format(error=error), "code": "ACCOUNT_NOT_READY"}
+    return accounts.handle_post(source_id, action)
 
 
 def _download_answer(center: Any, method: str, path: str, value: Any) -> tuple[int, Any] | None:
@@ -2377,6 +2388,15 @@ def _handler_class(center: ControlCenter) -> type[BaseHTTPRequestHandler]:
                                 size_mode=str(body.get("size_mode") or "default"),
                                 max_output_gb=body.get("max_output_gb"),
                             )
+                elif match := re.fullmatch(r"/api/download-accounts/([a-z0-9][a-z0-9-]{0,39})/(login|cancel-login|disconnect)", path):
+                    # "Tài khoản nguồn phim": 127.0.0.1 + token only, never the phone (PC_ONLY_PATTERNS); only a
+                    # configured source id; nothing of the body is used (no URL, cookie, password or command).
+                    if not self.loopback_client():
+                        self.send_json(403, {"error": phone_access.PC_ONLY_SOURCE_ACCOUNTS, "code": "pc_only"})
+                        return
+                    status, result = _account_answer(center, match.group(1), match.group(2))
+                    if status != 200:
+                        self.send_json(status, result); return
                 elif (download := _download_answer(center, "POST", path, body)) is not None:
                     # "Tải video" (download_api.POST_ROUTES). Host and token were checked above;
                     # the worker never touches input files other than its own new ones.
