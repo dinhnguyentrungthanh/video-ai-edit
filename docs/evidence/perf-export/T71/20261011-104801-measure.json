@@ -83,7 +83,7 @@
     "logical_cpus": 12,
     "platform": "Windows-10-10.0.26300-SP0",
     "python": "3.11.16",
-    "ffmpeg": "ffmpeg version 9.0.1-essentials_build-www.gyan.dev Copyright (c) 2000-2026 the FFmpeg developers"
+    "ffmpeg": "9.0.1"
   },
   "copy": {
     "duration_seconds": 2594.132021,

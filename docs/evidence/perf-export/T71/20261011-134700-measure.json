@@ -1,0 +1,193 @@
+{
+  "schema_version": 1,
+  "name": "T71",
+  "started_at": "2026-10-11T13:47:00+07:00",
+  "steps": {
+    "render": {
+      "tag": "measure-20261011-134700",
+      "total_seconds": 768.946,
+      "events": [
+        {
+          "step": "sha256_source_before",
+          "seconds": 0.769,
+          "bytes": 350044866
+        },
+        {
+          "step": "ffprobe",
+          "seconds": 0.039
+        },
+        {
+          "step": "ffmpeg_render",
+          "seconds": 741.808
+        },
+        {
+          "step": "ffprobe",
+          "seconds": 0.043
+        },
+        {
+          "step": "ffmpeg_decode_validation",
+          "seconds": 24.254
+        },
+        {
+          "step": "sha256_output",
+          "seconds": 1.252,
+          "bytes": 568387266
+        },
+        {
+          "step": "sha256_source_after",
+          "seconds": 0.772,
+          "bytes": 350044866
+        }
+      ],
+      "output_sha256": "437c60cc8dda369ef1baf1bc9222e8953cdf975cab72506df19e97994c3a83a5",
+      "output_bytes": 568387266,
+      "output_duration_seconds": 2594.027,
+      "manifest_elapsed_seconds": 741.808,
+      "manifest_decode_validation_seconds": 24.254,
+      "manifest_video_seconds_per_processing_second": 3.497
+    }
+  },
+  "code": {
+    "src_sha256": "b08e5ea5ca89ac1a39d6d26fd48067e70abdac45106e6a370ecfe55147b96fcc",
+    "tracked": false
+  },
+  "machine": {
+    "cpu": "Intel64 Family 6 Model 165 Stepping 2, GenuineIntel",
+    "logical_cpus": 12,
+    "platform": "Windows-10-10.0.26300-SP0",
+    "python": "3.11.16",
+    "ffmpeg": "9.0.1"
+  },
+  "copy": {
+    "duration_seconds": 2594.132021,
+    "bytes": 350044866,
+    "width": 1280,
+    "height": 534,
+    "video_codec": "h264",
+    "pix_fmt": "yuv420p",
+    "frame_rate": "25/1",
+    "video_bit_rate": "1014001",
+    "audio_codec": "aac",
+    "file": "input/source.mp4"
+  },
+  "origin": {
+    "job_id": 71,
+    "segment": null,
+    "synthetic": null
+  },
+  "operations": [
+    {
+      "type": "blur",
+      "start_seconds": 0.0,
+      "end_seconds": 2594.132,
+      "region": {
+        "x": 37,
+        "y": 35,
+        "width": 208,
+        "height": 59
+      },
+      "blur": {
+        "sigma": 35,
+        "edge_feather_pixels": 2,
+        "edge_feather_mode": "all_edges",
+        "method": "delogo_blur_v1"
+      }
+    },
+    {
+      "type": "blur",
+      "start_seconds": 0.0,
+      "end_seconds": 2594.132,
+      "region": {
+        "x": 383,
+        "y": 489,
+        "width": 516,
+        "height": 34
+      },
+      "blur": {
+        "sigma": 28,
+        "edge_feather_pixels": 2,
+        "edge_feather_mode": "all_edges",
+        "method": "delogo_blur_v1"
+      }
+    },
+    {
+      "type": "blur",
+      "start_seconds": 8.0,
+      "end_seconds": 13.08,
+      "region": {
+        "x": 469,
+        "y": 179,
+        "width": 318,
+        "height": 168
+      },
+      "blur": {
+        "sigma": 101,
+        "edge_feather_pixels": 4,
+        "edge_feather_mode": "all_edges",
+        "method": "delogo_blur_v1"
+      }
+    },
+    {
+      "type": "blur",
+      "start_seconds": 2589.88,
+      "end_seconds": 2593.88,
+      "region": {
+        "x": 377,
+        "y": 203,
+        "width": 538,
+        "height": 108
+      },
+      "blur": {
+        "sigma": 65,
+        "edge_feather_pixels": 4,
+        "edge_feather_mode": "all_edges",
+        "method": "delogo_blur_v1"
+      }
+    }
+  ],
+  "render_command_shape": [
+    "ffmpeg",
+    "-hide_banner",
+    "-loglevel",
+    "error",
+    "-stats_period",
+    "1",
+    "-progress",
+    "<bench>/temp/render-progress/3e322e84e6d65dce1fd5.progress",
+    "-nostats",
+    "-i",
+    "<bench>/input/source.mp4",
+    "-filter_complex",
+    "<graph 2710 chars, 37 chains>",
+    "-map",
+    "[vout]",
+    "-map",
+    "[aout]",
+    "-map_metadata",
+    "0",
+    "-c:v",
+    "libx264",
+    "-preset",
+    "veryfast",
+    "-crf",
+    "20",
+    "-maxrate",
+    "9487509",
+    "-bufsize",
+    "18975018",
+    "-b:v",
+    "1166101",
+    "-pix_fmt",
+    "yuv420p",
+    "-c:a",
+    "aac",
+    "-b:a",
+    "384000",
+    "-movflags",
+    "+faststart",
+    "-max_muxing_queue_size",
+    "2048",
+    "<bench>/output/render-measure-20261011-134700.partial.mp4"
+  ],
+  "finished_at": "2026-10-11T13:59:49+07:00"
+}

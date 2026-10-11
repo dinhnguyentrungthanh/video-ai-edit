@@ -22,9 +22,12 @@ final-render slot; measure and gate also hold <install>/state/final-render.lock.
            and SHA-256 calls timed one by one; the other steps reuse the exact
            FFmpeg command it ran.
   gate     --name N --baseline-src DIR --candidate-src DIR [--framemd5-only]
+           [--baseline-twice] [--baseline-mp4-sha256 HEX]
            For both code trees: framemd5 of [vout] (and [aout]) of the export
            filter graph, then the real render_final_output mp4. Exit 0 only when
-           both framemd5 files and both mp4 SHA-256 are identical.
+           both framemd5 files and both mp4 SHA-256 are identical (and, with
+           --baseline-twice, the two baseline runs too). --framemd5-only skips
+           the mp4: a match exits 2 and records "passed": null, never a pass.
 """
 from __future__ import annotations
 
@@ -35,6 +38,7 @@ import importlib
 import json
 import os
 import platform
+import re
 import shutil
 import sqlite3
 import subprocess
@@ -153,10 +157,12 @@ def _git_state(src: Path) -> dict:
 
 def _machine(ffmpeg: Path) -> dict:
     version = subprocess.run([str(ffmpeg), "-hide_banner", "-version"], capture_output=True, text=True)
+    # Only the version number: the banner also names the build's vendor site.
+    number = re.match(r"ffmpeg version (\d+(?:\.\d+)*)", version.stdout or "")
     return {
         "cpu": platform.processor(), "logical_cpus": os.cpu_count(),
         "platform": platform.platform(), "python": platform.python_version(),
-        "ffmpeg": version.stdout.splitlines()[0] if version.stdout else None,
+        "ffmpeg": number.group(1) if number else None,
     }
 
 
@@ -201,6 +207,21 @@ def _job_operations(install_root: Path, job_id: int) -> tuple[Path, list[dict], 
         "export_video_seconds_per_processing_second": manifest["encoding"].get("video_seconds_per_processing_second"),
     }
     return source, list(manifest.get("operations") or []), facts
+
+
+def _size_policy(renderer, render: dict | None) -> dict:
+    """A job's export size limits, as the scheduler passes them to render-final."""
+    render = render or {}
+    maximum = render.get("max_output_bytes", renderer.DEFAULT_MAX_OUTPUT_BYTES)
+    target = render.get("target_output_bytes", renderer.DEFAULT_TARGET_OUTPUT_BYTES)
+    if maximum is None:  # "unlimited": --no-output-size-limit, CRF only
+        return {"max_output_bytes": None, "target_output_bytes": None}
+    return {"max_output_bytes": int(maximum), "target_output_bytes": int(target)}
+
+
+def _size_arguments(bench: Path) -> dict:
+    """render_final_output's size arguments of a bench (benches prepared before used the defaults)."""
+    return dict(_read_json(bench / "prepared.json").get("size_policy") or {})
 
 
 def _probe(ffprobe: Path, path: Path) -> dict:
@@ -349,6 +370,8 @@ def command_prepare(args: argparse.Namespace) -> int:
         "copy": {**facts, "file": copy.relative_to(bench).as_posix()},
         "operations": _operation_summary(operations),
         "graph_frame_size": [facts["width"], facts["height"]],
+        # Job J's own size limits, so the bench runs the x264 command its export ran.
+        "size_policy": _size_policy(renderer, _job_row(install_root, args.job)[2]),
         "renderer_module": Path(renderer.__file__).relative_to(args.src.resolve().parent).as_posix(),
     }
     _write_json(bench / "prepared.json", prepared)
@@ -428,7 +451,7 @@ def _render_once(renderer, bench: Path, ffmpeg: Path, ffprobe: Path, tag: str) -
     with probe.installed():
         manifest = renderer.render_final_output(
             project_root=bench, plan_path=plan_path, output_path=output_path,
-            ffmpeg_path=ffmpeg, ffprobe_path=ffprobe,
+            ffmpeg_path=ffmpeg, ffprobe_path=ffprobe, **_size_arguments(bench),
         )
     total = time.perf_counter() - started
     # render_final_output hashes the source, then the output, then the source again.
@@ -527,7 +550,7 @@ def command_measure(args: argparse.Namespace) -> int:
         "schema_version": 1, "name": args.name, "started_at": _now(), "steps": {},
         "code": _git_state(src), "machine": _machine(ffmpeg),
         "copy": prepared["copy"], "origin": prepared["origin"],
-        "operations": prepared["operations"],
+        "operations": prepared["operations"], "size_policy": prepared.get("size_policy"),
     }
     tag = _stamp()
     with _install_render_lock(install_root):
@@ -601,6 +624,11 @@ def command_measure(args: argparse.Namespace) -> int:
         if render_output is not None and not args.keep_outputs:
             render_output.unlink(missing_ok=True)
     results["finished_at"] = _now()
+    # Steps that start a new interpreter (cli_import) import the code as it is then.
+    code_at_end = _git_state(src)
+    if code_at_end != results["code"]:
+        results["code_changed_during_run"] = code_at_end
+        print("warning: the code in --src changed during the run", flush=True)
     path = bench / "results" / f"{tag}-measure.json"
     _write_json(path, results)
     print(json.dumps(results["steps"], indent=2))
@@ -631,7 +659,7 @@ def _recorded_command(renderer, bench: Path, ffmpeg: Path, ffprobe: Path, tag: s
     try:
         renderer.render_final_output(
             project_root=bench, plan_path=plan_path, output_path=output_path,
-            ffmpeg_path=ffmpeg, ffprobe_path=ffprobe,
+            ffmpeg_path=ffmpeg, ffprobe_path=ffprobe, **_size_arguments(bench),
         )
     except _StopBeforeFfmpeg:
         pass
@@ -734,28 +762,37 @@ def command_gate(args: argparse.Namespace) -> int:
         mp4_identical = baseline["render"]["output_sha256"] == candidate["render"]["output_sha256"]
     summary = {
         "schema_version": 1, "name": args.name, "tag": tag, "finished_at": _now(),
+        "scope": "framemd5_only" if args.framemd5_only else "full",
         "machine": _machine(_tools(install_root)[0]), "origin": prepared["origin"],
         "copy": prepared["copy"], "operations": prepared["operations"],
+        "size_policy": prepared.get("size_policy"),
         "graph_changed": baseline["graph_sha256"] != candidate["graph_sha256"],
         "framemd5_identical": framemd5_identical, "mp4_sha256_identical": mp4_identical,
         "sides": results,
     }
+    repeats_identical = True
     if args.baseline_twice:
         summary["baseline_repeat_framemd5_identical"] = framemd5("baseline") == framemd5("baseline-repeat")
+        repeats_identical = summary["baseline_repeat_framemd5_identical"]
         if not args.framemd5_only:
             summary["baseline_repeat_mp4_identical"] = (
                 results["baseline-repeat"]["render"]["output_sha256"] == baseline["render"]["output_sha256"])
-    passed = framemd5_identical and mp4_identical is not False
-    summary["passed"] = passed
+            repeats_identical = repeats_identical and summary["baseline_repeat_mp4_identical"]
+    # Only a full gate passes; a framemd5-only check that matched is reported as such (exit 2).
+    checks_identical = framemd5_identical and repeats_identical and mp4_identical is not False
+    summary["passed"] = checks_identical if not args.framemd5_only else None
+    summary["framemd5_check_passed"] = checks_identical
     path = bench / "results" / f"{tag}-gate.json"
     _write_json(path, summary)
     print(json.dumps({key: summary[key] for key in (
-        "graph_changed", "framemd5_identical", "mp4_sha256_identical", "passed")}, indent=2))
+        "scope", "graph_changed", "framemd5_identical", "mp4_sha256_identical", "passed")}, indent=2))
     for label, side in results.items():
         print(label, "framemd5_seconds", side["framemd5_seconds"],
               "render_ffmpeg_seconds", (side.get("render") or {}).get("manifest_elapsed_seconds"))
     print(f"results: {path}")
-    return 0 if passed else 1
+    if not checks_identical:
+        return 1
+    return 2 if args.framemd5_only else 0
 
 
 # --------------------------------------------------------------------------- main

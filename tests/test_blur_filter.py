@@ -195,22 +195,25 @@ class BlurGatingEquivalenceTests(unittest.TestCase):
 
     SIZE = (320, 180)
     SECONDS = 6.0
+    # Regions are 64 rows high: FFmpeg's gblur gives wrong, run-dependent pixels when a plane
+    # has fewer rows than its threads (yuv420p chroma: half the region), so shorter regions would
+    # make both graphs unstable on machines with many CPUs (docs/evidence/perf-export/gblur-threads.md).
     CASES = {
         # Range ends on frame times (25 fps): between() includes both ends.
-        "cover_feather": [blur(1.0, 2.0, box(100, 50, 80, 40), method=COVER_METHOD, feather=4, sigma=28)],
+        "cover_feather": [blur(1.0, 2.0, box(100, 50, 80, 64), method=COVER_METHOD, feather=4, sigma=28)],
         "gblur_two_ranges_at_the_frame_edge": [
-            blur(0.5, 1.02, box(0, 0, 60, 30)), blur(4.0, 4.4, box(0, 0, 60, 30)),
+            blur(0.5, 1.02, box(0, 0, 60, 64)), blur(4.0, 4.4, box(0, 0, 60, 64)),
         ],
-        "gblur_feather_vertical_only": [blur(3.0, 5.0, box(200, 100, 100, 60), feather=3, mode="vertical_only")],
-        "cover_whole_clip": [blur(0.0, 6.0, box(40, 120, 150, 40), method=COVER_METHOD, sigma=28)],
+        "gblur_feather_vertical_only": [blur(3.0, 5.0, box(200, 100, 100, 64), feather=3, mode="vertical_only")],
+        "cover_whole_clip": [blur(0.0, 6.0, box(40, 110, 150, 64), method=COVER_METHOD, sigma=28)],
         "cut_and_blurs_across_it": [
             {"id": "cut", "type": "cut", "start_seconds": 2.2, "end_seconds": 2.6},
-            blur(0.0, 6.0, box(10, 10, 120, 30), method=COVER_METHOD, feather=2),
-            blur(2.0, 3.0, box(150, 80, 60, 60)),
+            blur(0.0, 6.0, box(10, 10, 120, 64), method=COVER_METHOD, feather=2),
+            blur(2.0, 3.0, box(150, 80, 60, 64)),
         ],
         "full_frame_and_cover_at_the_end": [
             {**blur(5.0, 5.5, "FULL_FRAME"), "region_source_pixels": "FULL_FRAME"},
-            blur(5.2, 6.0, box(60, 60, 100, 50), method=COVER_METHOD, feather=2, sigma=30),
+            blur(5.2, 6.0, box(60, 60, 100, 64), method=COVER_METHOD, feather=2, sigma=30),
         ],
     }
     ENCODE = [

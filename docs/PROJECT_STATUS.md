@@ -1,3 +1,7 @@
+## Faster export, perf plan session A (2026-10-11) — branch `perf/export-speed`, not merged; waits for G1
+
+- A0 measured each export step (blur filters about half of the render, post-export checks about 3 %); A1a runs waiting exports before waiting scans at the next stage boundary (one worker); A2 gates delogo, gblur and geq by the blur times: output byte-identical on four benches, FFmpeg render T74 631.7 → 330.5 s, T71 741.8 → 451.4 s. A3/A4 not started. Found: FFmpeg gblur is wrong on planes with fewer rows than filter threads (no past export affected; fix waits for the user). Details in `docs/handoff/A-export.md`.
+
 ## Disk cleanup of `temp` (2026-10-11)
 
 - Extra worktrees and merged local branches removed; evidence cited from `temp` triaged: 75 clean text files tracked in `docs/evidence/` (README maps the old paths), 185 sensitive or unique files kept locally in `reports/evidence/`, about 2.6 GB of bulk sent to the Recycle Bin. No production code changed; the scan cache stays valid. Details in `docs/SESSION_HANDOFF.md`.
