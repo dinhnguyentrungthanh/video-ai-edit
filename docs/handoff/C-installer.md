@@ -1,7 +1,9 @@
 # Bàn giao C – Bộ cài, phần code thuần
 - Nhánh: `feat/installer` (từ `origin/main` `40a0125`) · Commit cuối: xem `git log -1` · Cập nhật: 2026-10-11 (PC)
-- Chạy ở: PC (tiếp quản ngày 2026-10-11; session cloud C đã dừng, từ giờ chỉ session C trên PC commit vào nhánh này) · Trạng thái: Phase 1 xong; chờ người dùng (sửa script lock, xem "Bước tiếp theo" 1) và chờ G1
-- **feat/installer sẵn sàng cho G1 tại commit `c0d2bc3`** (code + test; commit bàn giao này nằm ngay trên và chỉ sửa file này; G1 gộp đầu nhánh). Còn mở: `config/models.lock.json` chưa commit (6 dòng `!`) và 1 test chỉ fail trên Windows, lỗi nằm ở test chứ không ở code (mục "PC tiếp quản" bên dưới). G1 gộp được C2, C6-lõi, C1-script ngay; lock vào sau khi sửa.
+- Chạy ở: PC (tiếp quản ngày 2026-10-11; session cloud C đã dừng, từ giờ chỉ session C trên PC commit vào nhánh này) · Trạng thái: Phase 1 xong, chờ G1 (Phase 2 chờ prompt của người dùng sau G1)
+- **feat/installer sẵn sàng cho G1 tại commit `ddb0301`** (code, test và `config/models.lock.json`). Commit bàn giao nằm ngay trên và chỉ sửa file này; G1 gộp đầu nhánh. Không còn việc mở của Phase 1:
+  - lock có 0 dòng `!`;
+  - 8 module test của C qua hết trên Windows.
 
 ## Đã xong
 - **C0:** soạn đề xuất sửa `AGENTS.md`, `LICENSE`, `THIRD_PARTY_NOTICES.md` (mục "Đề xuất C0" bên dưới). **Chưa sửa** `AGENTS.md`, chưa tạo `LICENSE`, chưa sửa `THIRD_PARTY_NOTICES.md`. Không có test (chỉ tài liệu).
@@ -37,9 +39,7 @@
       4. `.gitkeep`: "không thấy trong easyocr/config.py". Hệ quả của dòng 1.
       5. `latin_g2.pth`: "không thấy trong easyocr/config.py". **Lỗi script:** `parse_easyocr_config` gọi `ast.literal_eval` trên cả dict `recognition_models`. Dòng 101 trong `config.py` của EasyOCR 1.7.2 dùng `''.join(separator_char) + …`, nên `literal_eval` hỏng và cả dict bị bỏ; chỉ đọc được `detection_models`. Vì vậy lock thiếu URL của `latin_g2.pth` và `download_models.py` không tải được file này.
       6. `florence_2_base/__pycache__/processing_florence2.cpython-311.pyc`: bytecode do Python tự sinh (2026-09-23) khi nạp code `trust_remote_code` của Florence, không phải file model.
-    - **Lock chưa commit:** người dùng quyết định còn dòng `!` thì chưa commit.
-      - File đã sinh vẫn nằm trong worktree, **chưa được Git theo dõi**: `config/models.lock.json` (30.863 byte; không có đường dẫn cục bộ, tên phim hay link).
-      - Không `git add` file này trước khi sửa script và chạy lại ("Bước tiếp theo" 1).
+    - Lock của lần chạy này không được commit (người dùng quyết: còn dòng `!` thì chưa commit). Cả 6 nguyên nhân đã sửa ở `ddb0301` (mục "Sửa C1" dưới đây).
   - **Test trên Windows:**
     - Môi trường: Python 3.11.16, `.venv` của thư mục cài, `PYTHONPATH` = `src` của worktree; đã kiểm `biliflow` được nạp từ worktree.
     - 8 module: `test_install_paths`, `test_activation`, `test_models_lock`, `test_recycle_bin`, `test_job_delete`, `test_source_cleanup`, `test_download_tools`, `test_performance_report`. Kết quả: **216 test, 1 fail, 3 skip**, 21 s.
@@ -55,22 +55,39 @@
       - Fixture ghi `manifest.json` bằng `write_text`; trên Windows `\n` thành `\r\n`.
       - Test so `manifest_text` với `read_text`, vốn đổi `\r\n` về `\n`.
       - Script giữ nguyên văn từng byte (`\r\n`), đúng như thiết kế.
-      - Cách sửa: fixture ghi bằng `write_bytes(json.dumps(...).encode("utf-8"))`, hoặc test so với `read_bytes().decode("utf-8")`. Chưa sửa (chờ người dùng).
+      - Đã sửa ở `ddb0301`: test so với `read_bytes().decode("utf-8")`.
+  - **Sửa C1 (`ddb0301`, người dùng đồng ý ngày 2026-10-11):**
+    - `scripts/models_lock.py`:
+      - SHA-256 của manifest được so không phân biệt hoa/thường; kích thước đọc từ `bytes` hoặc `size_bytes`. Lock luôn ghi digest chữ thường do script tính; `manifest_text` vẫn giữ nguyên từng byte.
+      - `easyocr/config.py` được đọc theo từng mục bằng `ast` (không import): mỗi dict con chỉ lấy `filename`/`url`/`md5sum` khi chúng là chuỗi hằng. Giá trị tính toán như `characters` không còn che các mục khác; mục có `url` tính toán thì bỏ qua.
+      - `.gitkeep`, `__pycache__/`, `*.pyc`, `*.pyo` không phải file model nên không vào lock (cùng với `manifest.json` và `.cache` như trước).
+    - `tests/test_models_lock.py`:
+      - dòng 114 so byte, nên đúng cả với CRLF;
+      - `EASYOCR_CONFIG` mô phỏng `config.py` 1.7.2 (một `characters` dùng `''.join(...)`, một `url` tính toán);
+      - 2 test mới: manifest kiểu EasyOCR (CRLF, SHA-256 chữ hoa, `size_bytes`, cả trường hợp lệch kích thước); file không phải model bị loại.
+      - Chạy với script cũ thì 3 test này fail (đỏ); với script mới thì qua (xanh).
+    - **Test trên Windows sau khi sửa** (8 module như trên): **218 test OK, 3 skip** (cùng 3 skip), 30 s. `test_models_lock`: 13 test OK.
+    - **Chạy lại `models_lock.py --replace` (chỉ đọc):**
+      - 62 s, mã thoát 0, **0 dòng `!`**.
+      - easyocr 2 file (có URL bản phát hành và md5 gốc của `craft_mlt_25k.pth`, `latin_g2.pth`); florence_2_base 11 file (không còn `.pyc`); 7 model kia giữ nguyên số file; `not_locked` trống.
+      - `models\` không đổi: 137 file, đường dẫn, kích thước và mtime trước và sau giống hệt, và giống hệt ảnh chụp đầu tiên (tổng 6.918.082.446 byte).
+    - **Kiểm nội dung lock trước khi commit:**
+      - Không có đường dẫn máy: không khớp mẫu ổ đĩa/UNC, không có `DungChung`, `Users`, `ADMIN`.
+      - Không có tên phim, tên file nguồn hay link phim.
+      - Chỉ có tên file model, URL model (huggingface.co, bản phát hành EasyOCR trên GitHub) và các trường metadata của manifest: giấy phép, revision, nhãn, `downloaded_at`.
+      - Git lưu file với xuống dòng LF (cảnh báo CRLF→LF). Chuỗi `manifest_text` trong JSON giữ `\r\n` dưới dạng ký tự thoát nên nội dung không đổi.
 
 ## Đang dở
-- (trống). `config/models.lock.json` có trong worktree nhưng chưa được Git theo dõi; xem "PC tiếp quản" ở trên.
+- (trống)
 
 ## Bước tiếp theo
-1. **Khi người dùng đồng ý** (họ quyết: còn dòng `!` thì chưa commit lock):
-   - Sửa `scripts/models_lock.py`:
-     - so SHA-256 không phân biệt hoa/thường, và đọc kích thước từ cả `bytes` lẫn `size_bytes`;
-     - bỏ `.gitkeep`, `__pycache__/` và `*.pyc` khỏi danh sách file;
-     - đọc `easyocr/config.py` theo từng mục: đi qua cây AST, lấy `filename`/`url`/`md5sum` là hằng ở từng dict con, bỏ qua giá trị không phải hằng như `characters`.
-   - Kiểm `download_models.py` cũng bỏ qua `__pycache__` khi so thư mục model đã có.
-   - Sửa test chỉ fail trên Windows (ở trên) và thêm test cho 3 trường hợp này.
-   - Chạy lại script với `--replace` (chỉ đọc). Không còn `!` thì commit script + lock; còn `!` thì liệt kê từng dòng cho người dùng, chưa commit.
-2. G1 áp dụng C0 đã duyệt (mục "Đề xuất C0" bên dưới, chép nguyên văn).
-3. Sau G1 (chờ prompt Phase 2 của người dùng): lock có hash cho `.venv` (cu126, CPU), lock và cách dựng lại `runtime\florence-python`, C4, bản nháp C5. C3 thuộc B1, C6-nối thuộc Phase 3.
+1. G1 gộp `feat/installer` và áp dụng C0 đã duyệt (mục "Đề xuất C0" bên dưới, chép nguyên văn).
+2. Sau G1 (chờ prompt Phase 2 của người dùng):
+   - lock có hash cho `.venv` (cu126, CPU);
+   - lock và cách dựng lại `runtime\florence-python`;
+   - C4, bản nháp C5;
+   - cho `download_models.py` dùng cùng bộ lọc "không phải file model" khi so thư mục model đã có. Hiện `__pycache__` hay `.gitkeep` trong thư mục cũ bị coi là "file lạ" và bị từ chối; lúc lên bản mới (C5), Florence đã chạy thì sẽ có `__pycache__`.
+   - C3 thuộc B1, C6-nối thuộc Phase 3.
 
 ## Cách kiểm
 - PC, cả 8 module của C (chạy trong `temp\wt-installer`):
@@ -83,9 +100,25 @@
 ## Chờ người dùng
 - ~~Duyệt C0~~: **đã duyệt 2026-10-11** (chi tiết ở mục "Đề xuất C0"). G1 áp dụng.
 - Repo phải Private trước bản build đầu tiên (C7).
-- Đồng ý sửa `scripts/models_lock.py` và test chỉ fail trên Windows ("Bước tiếp theo" 1). Lock chỉ được commit khi không còn dòng `!`.
 - Quyết định `annotations/text_semantics_seed_v1.json` có đóng gói không (C1).
 - C6: người dùng tự chạy `keygen\issue_key.py init --private-key <ngoài Git và ngoài BiliFlow>` trên PC, sao lưu file + mật khẩu, rồi đưa khóa công khai (hex) vào `RELEASE_PUBLIC_KEY_HEX` (lúc C6-nối). Agent không chạy bước này.
+
+## Cho B1 (khóa cache quét)
+
+Người dùng yêu cầu ghi lại ngày 2026-10-11. Session C không sửa `stage_cache.py` (thuộc B1).
+
+- **Hiện trạng:** `stage_cache._tree_fingerprint` (`stage_cache.py:86-98`) đưa **mọi file** dưới `models\` vào khóa cache của mọi stage, không lọc gì.
+  - File ≤ 128 KiB, `manifest.json` và `config.json` được hash nội dung; file lớn hơn chỉ được tính kích thước + mtime.
+  - Vòng lặp mã nguồn ngay trên (`stage_cache.py:63`) thì đã bỏ `.pyc`/`__pycache__`; vòng lặp `models\` thì không.
+- **Trên PC (2026-10-11), 76/137 file trong `models\` không phải file model** nhưng vẫn nằm trong khóa:
+  - `florence_2_base\__pycache__\processing_florence2.cpython-311.pyc` (52.327 byte, được hash nội dung). Python ghi lại file này khi code `trust_remote_code` của Florence được biên dịch lại, ví dụ khi file `.py` của model đổi hay khi chạy bằng bản Python khác (tên `cpython-3xx` đổi). Lúc đó khóa của **mọi stage** đổi và cache quét bị tính lại, dù model không đổi.
+  - `easyocr\.gitkeep` (1 byte).
+  - 74 file trong `<model>\.cache\huggingface\` của 8 model Hugging Face: `.gitignore`, `CACHEDIR.TAG`, `download\*.metadata`, `trees\*.json`. huggingface_hub ghi lại các file này khi nó đụng vào thư mục.
+- **Đề xuất cho B1:**
+  - Bỏ những file đó khỏi khóa cache, dùng đúng bộ lọc của `scripts/models_lock.py` (`_not_a_model_file`: `.cache`, `__pycache__`, `*.pyc`/`*.pyo`, `.gitkeep`).
+  - Tốt hơn nữa: chỉ tính các file model có trong manifest / `config/models.lock.json`.
+  - Gộp với mục B1 "khóa cache chỉ tính model mà stage dùng".
+  - Sửa này làm khóa của mọi stage đổi **một lần**, nên phải đi trong đợt B1 duy nhất (người dùng duyệt), không làm riêng.
 
 ## Lưu ý cho người tiếp quản
 - PC chạy Python 3.11 (`pyproject.toml`: `>=3.11,<3.12`): không dùng cú pháp 3.12+.
@@ -103,9 +136,7 @@
 **Đã duyệt 2026-10-11** (người dùng trả lời trên PC). Điều phối G1 chép nguyên văn các khối dưới đây, trong một commit riêng:
 - **A1, A2, A4:** đồng ý nguyên văn.
 - **A3:** đồng ý, có thêm một gạch đầu dòng cuối (đã chèn vào khối A3).
-- **B (`LICENSE`):** đồng ý. Tên chủ sở hữu: **Endmin** (đã điền vào khối B).
-  - Văn bản C0 người dùng dán còn chỗ giữ chỗ `<TÊN CỦA BẠN…>` chưa điền. Tên lấy từ câu trả lời riêng cho câu hỏi "tên chủ sở hữu".
-  - G1 nên hỏi lại người dùng một câu trước khi tạo `LICENSE`.
+- **B (`LICENSE`):** đồng ý. Tên chủ sở hữu: **Endmin**, người dùng xác nhận lại trong tin nhắn sau ("LICENSE: chủ sở hữu là Endmin"). Tên đã điền vào khối B.
 - **C (`THIRD_PARTY_NOTICES.md`):** đồng ý, kèm cách xử lý FFmpeg người dùng chọn (đã sửa vào khối C):
   - bộ cài **tải FFmpeg lúc cài** từ trang phát hành chính thức của bên build, ghim phiên bản và SHA-256;
   - `ffmpeg -version` xác định bên build;
