@@ -724,6 +724,96 @@ Báo kết quả cho tôi. Chỉ push main, và chỉ cập nhật thư mục ch
 [D – Cloud hoặc PC] Sau G3. Nhánh refactor/shared-helpers. Đọc AGENTS.md, docs/PERF_INSTALL_PLAN.md mục 1–3, 8, 9, 13. Hỏi tôi định dạng giờ trước khi đổi. Không sửa cli.py, stage_cache.py, __init__.py, pyproject.toml (đã đi theo B1). Bàn giao theo mục 13 (docs/handoff/D-refactor.md). Cloud: push nhánh của mình sau mỗi bước; không bao giờ push main.
 ```
 
+### 12.5 Phase 2: thứ tự, session nào dùng lại
+
+**Thứ tự:**
+1. **Trước G1:**
+   - người dùng duyệt C0 và cho tên chủ sở hữu ghi vào `LICENSE`;
+   - session C-spike được **dùng lại làm "C trên PC"**: chạy script khóa model chỉ đọc và chạy test của C trên Windows. Session cloud C **dừng hẳn** từ đây, để chỉ một nơi commit vào `feat/installer`.
+2. **G1:** session điều phối **mới**.
+3. **Sau G1, chạy song song:** A (A3), E (E3), B (B1), C trên PC (C4, khóa thư viện có hash, bản nháp C5).
+4. **G2:** session điều phối **mới**. G2 có B1, nên toàn bộ cache quét bị tính lại **một lần** sau khi người dùng khởi động lại Control Center.
+
+| Việc Phase 2 | Session | Dùng lại hay tạo mới |
+|---|---|---|
+| C trên PC (khóa model, test Windows, rồi C4, C5) | **C-spike** | Dùng lại: đã cài và hiểu Nuitka |
+| Điều phối G1 | Mới | Việc ngắn, cần nhìn `main` mới |
+| A3 NVENC | **A** | Dùng lại |
+| E3 + đóng băng hồ sơ theo job | **E** | Dùng lại |
+| B1 (đợt sửa khóa cache duy nhất, gồm C3) | **B0** | Dùng lại: đã có số đo nền và bản phác B1 |
+| Session cloud C | — | **Dừng.** Chỉ dùng lại nếu còn credit và cho việc chỉ viết tài liệu |
+| Điều phối G2 | Mới | |
+
+Nếu ngữ cảnh của session cũ đã quá dài (`/context` cho thấy hơn khoảng một nửa), thì tạo session mới và dán đúng prompt đó. Session mới tự đọc file bàn giao.
+
+**Ai sửa file nào ở Phase 2:**
+- `scheduler.py`, `job_pipeline.py`, module quét: **E**;
+- `cli.py`, `stage_cache.py`, `cache_dependencies.py`, `__init__.py`, `pyproject.toml`: **B** (B1);
+- `final_renderer.py`, `blur_filter.py`: **A**;
+- `scripts/` build, `installer/`, các file lock: **C**.
+
+```text
+[C trên PC – dùng lại session C-spike, trước và sau G1] Từ giờ bạn là session C (bộ cài) trên PC. Session cloud C đã dừng; chỉ bạn commit vào feat/installer.
+1) Ghi kết quả spike cuối vào docs/handoff/C-spike-nuitka.md, commit trên spike/nuitka.
+2) git fetch origin; git worktree add temp\wt-installer -b feat/installer origin/feat/installer (nhánh local đã có thì dùng nó). Đọc AGENTS.md, docs/PERF_INSTALL_PLAN.md mục 1–3, 7, 9, 12.5, 13 và docs/handoff/C-installer.md.
+3) Chạy script chỉ đọc: .\.venv\Scripts\python.exe temp\wt-installer\scripts\models_lock.py --root E:\DungChung\BiliFlow --out temp\wt-installer\config\models.lock.json. Báo tôi các dòng "!" trước khi commit lock. Không sửa gì trong models\.
+4) Chạy test của C trên Windows (.venv của thư mục cài, PYTHONPATH trỏ vào src của worktree): test_install_paths, test_activation, test_models_lock, test_recycle_bin, test_job_delete, test_source_cleanup, test_download_tools, test_performance_report. Ghi kết quả vào file bàn giao. Báo tôi là đã sẵn sàng cho G1.
+5) Sau khi tôi báo G1 xong (git merge origin/main vào nhánh): C4 dây chuyền biên dịch Nuitka chế độ module (theo kết quả spike), lock có hash cho .venv cu126 và CPU, lock và cách dựng lại runtime\florence-python, bản nháp C5 (.iss). Không làm C3 (thuộc B1 của session B) và C6-nối (Phase 3).
+Không sửa: scheduler.py, final_renderer.py, job_pipeline.py, module quét, control_center.py, cli.py, __main__.py, __init__.py, run.ps1, env.ps1, stage_cache.py, cache_dependencies.py, pyproject.toml, models\. Hỏi tôi trước khi tải công cụ (uv, Inno Setup…). Bàn giao theo mục 13. Commit trong worktree; chưa push hay merge.
+```
+
+```text
+[Điều phối G1 – PC, session mới] Làm việc trong E:\DungChung\BiliFlow. Đọc AGENTS.md, docs/PERF_INSTALL_PLAN.md mục 9.5, 11, 12.5, 13 và docs/handoff/*.md trên các nhánh local: feat/installer (đã có models.lock.json), feat/hardware-profile, perf/export-speed, perf/scan-baseline, spike/nuitka.
+1) Đọc file bàn giao để kiểm từng nhánh đã đạt cổng. Nhánh chưa đạt thì để sang G2 và báo tôi.
+2) git worktree add temp\wt-merge-g1 -b merge/g1 origin/main. Gộp (git merge --no-ff, không rebase) theo thứ tự: feat/installer → feat/hardware-profile → perf/export-speed → perf/scan-baseline (chỉ tài liệu) → spike/nuitka (chỉ tài liệu). Sau mỗi nhánh chạy test liên quan.
+3) Xác nhận khóa cache của mọi stage KHÔNG đổi so với origin/main (so stage_source_paths + SHA-256 từng file, như C2 đã làm). Nếu có stage đổi: dừng và báo tôi.
+4) Áp dụng đề xuất C0 mà tôi đã duyệt (docs/handoff/C-installer.md, mục "Đề xuất C0": khối A vào AGENTS.md, khối B thành LICENSE với tên chủ sở hữu tôi đưa, khối C vào THIRD_PARTY_NOTICES.md) trong một commit riêng. Khối nào tôi chưa duyệt thì bỏ qua.
+5) Chạy cả bộ test (clip tổng hợp 1 s trong input\ của worktree, xóa sau). Cập nhật bảng trạng thái mục 11, CHANGELOG.md, docs/PROJECT_STATUS.md, docs/SESSION_HANDOFF.md.
+6) Báo kết quả. Chỉ khi tôi đồng ý mới đưa merge/g1 vào main và push main. Chỉ khi Control Center thật không có job và tôi đồng ý mới cập nhật thư mục chính; tôi tự khởi động lại Control Center.
+```
+
+```text
+[A – dùng lại session A, sau G1] G1 đã vào main. Trong worktree temp\wt-export-speed: git fetch origin; git merge origin/main (không rebase). Đọc lại docs/PERF_INSTALL_PLAN.md mục 3, 5 (A3, A1b, A4), 9, 12.5 và docs/handoff/A-export.md.
+Việc: A3. Encoder chọn theo hồ sơ phần cứng (đọc qua hardware_profile; lưu trong cài đặt render hoặc edit plan; không thêm cờ cli.py). NVENC dùng -rc vbr -cq với maxrate/bufsize, và tự encode lại bằng x264 nếu vượt kiểm tra dung lượng. Manifest ghi encoding.encoder và validation_method. NVENC CHỈ chạy trong root tạm. Đo SSIM (và VMAF nếu có) cùng dung lượng trên 3 tập so với x264, và đo VRAM của NVENC khi Qwen2-VL đang chạy (khung giờ GPU, khi Control Center thật rảnh). Trình tôi số đo để duyệt; x264 vẫn là mặc định.
+Chưa làm A1b (chờ duyệt A3 và số đo VRAM) và A4 (chỉ khi A0 cho thấy đáng làm; cần tôi duyệt và sửa AGENTS.md).
+Không sửa: scheduler.py (thuộc E ở Phase 2), job_pipeline.py, cli.py, stage_cache.py, cache_dependencies.py, config/*, models\. Bàn giao theo mục 13. Chưa push hay merge.
+```
+
+```text
+[E – dùng lại session E, sau G1] G1 đã vào main. Trong worktree temp\wt-hardware-profile: git fetch origin; git merge origin/main (không rebase). Đọc lại docs/PERF_INSTALL_PLAN.md mục 3.4, 4 (E3), 9, 12.5 và docs/handoff/E-hardware.md.
+Trước khi code: hỏi tôi chọn cách xử lý luật C1 trên CPU (đo lại ngưỡng cho fp32, hay ghi chú "chưa hiệu chỉnh" trên thẻ).
+Việc: E3.
+(1) Đóng băng lựa chọn hồ sơ theo job lúc configure_and_queue (setting hw:{id}, giống fast_scan:{id}). Job cũ không có hw:{id} giữ đúng hành vi hiện tại. device/precision luôn nằm trên dòng lệnh. Stage không bao giờ tự quay về CPU.
+(2) Đường chạy CPU: bỏ cờ fp16 khi chạy CPU, autocast theo thiết bị thật, sửa lỗi ép float16 của Florence, không lấy khóa GPU khi chạy CPU.
+(3) job_pipeline lấy tham số từ lựa chọn đã đóng băng; hằng số chỉ còn là dự phòng.
+CỔNG: trên PC (RTX 2060), dòng lệnh của mọi stage phải GIỐNG HỆT hôm nay. Báo trước cho tôi stage nào sẽ bị tính lại cache vì E3 sửa module quét.
+Không sửa: cli.py, stage_cache.py, cache_dependencies.py, run.ps1, final_renderer.py, config/*, models\. Test trên Control Center thử (root tạm, cổng riêng). Bàn giao theo mục 13. Chưa push hay merge.
+```
+
+```text
+[B – dùng lại session B0, sau G1] G1 đã vào main. git fetch origin; git worktree add temp\wt-scan-speed -b perf/scan-decode origin/main. Đọc AGENTS.md, docs/PERF_INSTALL_PLAN.md mục 3, 6, 7 (C3), 8, 9, 12.5 và docs/handoff/B0-scan-baseline.md, C-installer.md, C-spike-nuitka.md.
+1) Chốt danh sách B1 (mục 6, B1 mục 1–8):
+   - nạp thư viện khi cần trong cli.py;
+   - cli.py:47 dùng install_root();
+   - C3: khóa cache cho bản build, từ chối an toàn khi thiếu cả .py lẫn manifest build;
+   - tool_path() cho FFmpeg (đặt trong install_paths.py) ở cli.py/stage_cache.py;
+   - số phiên bản một nguồn; khai báo numpy/opencv trong pyproject.toml;
+   - cờ CLI mà B2/B3 cần; STAGE_MODULES của B3;
+   - bỏ các tham số cho kết quả giống hệt khỏi khóa cache;
+   - khóa cache chỉ tính model mà stage dùng.
+   Trình tôi danh sách kèm ước lượng thời gian quét lại cache, và CHỜ tôi duyệt.
+2) Sau khi tôi duyệt: làm B1, chạy test liên quan và cả bộ test, đo lại thời gian khởi động stage so với B0.
+Không làm B2–B4 ở Phase 2. Không sửa: job_pipeline.py, module quét, scheduler.py (thuộc E), final_renderer.py, models\. Bàn giao docs/handoff/B-scan.md. Chưa push hay merge.
+```
+
+```text
+[Điều phối G2 – PC, session mới] Làm việc trong E:\DungChung\BiliFlow. Đọc AGENTS.md, docs/PERF_INSTALL_PLAN.md mục 3.5, 9, 11, 12.5, 13 và docs/handoff/*.md của perf/scan-decode (B1), feat/hardware-profile (E3), perf/export-speed (A3, nếu tôi đã duyệt NVENC), feat/installer (C4, các lock).
+Worktree temp\wt-merge-g2 -b merge/g2 từ origin/main. Gộp --no-ff theo thứ tự B1 → E3 → A3 → C; sau mỗi nhánh chạy test liên quan; cuối cùng chạy cả bộ test.
+Kiểm: trên PC, dòng lệnh các stage giống hôm nay (trừ phần B1 đã được duyệt).
+Báo tôi rõ: sau khi cập nhật thư mục chính và khởi động lại Control Center, toàn bộ cache quét sẽ bị tính lại MỘT lần.
+Cập nhật mục 11, CHANGELOG.md, docs/PROJECT_STATUS.md, docs/SESSION_HANDOFF.md. Chỉ push main và cập nhật thư mục chính khi tôi đồng ý và Control Center không có job.
+```
+
 ## 13. Bàn giao: để không mất việc khi session dừng (nhất là cloud hết credit)
 
 ### 13.1 Quy tắc
