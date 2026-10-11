@@ -1,6 +1,16 @@
 # Bàn giao A – Xuất video nhanh hơn
 - Nhánh: `perf/export-speed` (worktree `temp\wt-export-speed`, tách từ `origin/main` `7d8b8bc`) · Commit cuối: xem `git log -1` của nhánh · Cập nhật: 2026-10-11
-- Chạy ở: PC · Trạng thái: xong A0, A1a, A2; chờ điểm gộp G1. Chưa push, chưa merge. Chưa làm A3/A4 (theo lệnh người dùng).
+- Chạy ở: PC · Trạng thái: xong A0, A1a, A2 trên `perf/export-speed` (`05653c9`, giữ nguyên cho G1). Phase 2 đang làm trên `perf/export-speed-p2`, nhánh này gộp sau G1. Chưa push, chưa merge. Chưa làm A3/A4 (theo lệnh người dùng).
+
+## Quyết định của người dùng (2026-10-11, sau khi A2 xong)
+- Duyệt sửa lỗi gblur.
+- Không squash commit `wip:` (`db0a139`).
+- Giữ `perf/export-speed` nguyên cho G1.
+- Phase 2 làm trên nhánh mới `perf/export-speed-p2`, tách từ `05653c9`, theo thứ tự:
+  1. sửa gblur. Cổng: vùng đang đúng giữ nguyên byte, vùng đang sai được sửa, chạy 2 lần cùng hash;
+  2. mặt nạ viền mềm tính một lần. Cổng: giống hệt từng byte;
+  3. đồ thị bộ lọc truyền qua file.
+- Chưa làm A3. Commit và cập nhật bàn giao sau mỗi bước. Nhánh `-p2` gộp sau G1. Chưa push hay merge.
 
 ## Đã xong
 
