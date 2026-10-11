@@ -80,8 +80,10 @@ PHONE_POSTS_LITERAL = (
 # 63 with the 13 "Tải video" endpoints of the video download plan (D3, a28b19df…), 52 with deletePreview and delete
 # of "Xóa video" (delete flow, 071106c5…), 65 with both (test/download-delete, 489eca65…), and 75 with phoneExtend
 # and the 9 Tailscale endpoints of Cài đặt → Tailscale (docs/TAILSCALE_PLAN.md).
-# Source accounts M5 (docs/SOURCE_ACCOUNTS_PLAN.md 9.17) added the episode, group and account endpoints on purpose.
-ENDPOINTS_SHA256 = "771b4282b11c9524c4dfba5f72cba14cb7c28e67d7d10cf5bd57d3dcaccd7e90"
+# Source accounts M5 (docs/SOURCE_ACCOUNTS_PLAN.md 9.17) added the episode, group and account endpoints on purpose
+# (87 endpoints, 771b4282…). Session E2 added the 4 Cài đặt → Phần cứng endpoints (91; docs/HARDWARE_PROFILE.md 6.1):
+# hardwareProfile, hardwareRemeasure, hardwareCpuOnly and hardwareUntestedFast, all PC only (PHONE_POSTS_LITERAL unchanged).
+ENDPOINTS_SHA256 = "c3fef73b5e5c610de96e1113b3a8448454812a4b8e588c76a84486f5b014f1a2"
 
 
 def node(script: str) -> str:

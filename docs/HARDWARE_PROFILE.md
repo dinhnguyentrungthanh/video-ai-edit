@@ -333,7 +333,7 @@ File hỏng không bao giờ bị tự xóa. Lần "Đo lại" sau ghi đè nó,
   - `untested_fast`: null (tắt) hoặc `{gpu_name, compute_capability, enabled_at}`, công tắc "Chế độ nhanh trên card chưa qua cổng" (mục 5.6). Nó **gắn với card** lúc bật: chỉ có hiệu lực khi card trong hồ sơ có đúng tên và compute capability đó.
 - Mọi khóa đều bắt buộc, khóa lạ làm file không hợp lệ (`hardware_schema._parse_override`).
 - Thiếu file nghĩa là cả hai công tắc đều tắt.
-- File hỏng cho `OVERRIDE_INVALID` và **từ chối** job mới. Công tắc không bao giờ bị đoán theo hướng nào.
+- File hỏng cho `OVERRIDE_INVALID` và **từ chối** job mới. Công tắc không bao giờ bị đoán theo hướng nào: bấm một công tắc khi file hỏng thì ghi lại cả file, công tắc vừa bấm nhận giá trị mới và công tắc kia **tắt** (sự kiện ghi `replaced_invalid: true`, mục 6.1).
 - **Chỉ manager của Control Center ghi,** dưới khóa của nó, và mỗi lần ghi đủ cả hai công tắc: `write_override(root, *, cpu_only, untested_fast, now)`.
 - **E2 ghi ngay khi người dùng bật hay tắt.**
   - Hộp xác nhận của mỗi công tắc nói rõ: công tắc có hiệu lực cho **job mới từ Đợt 2** (nội dung hộp ở mục 6.2).
@@ -414,8 +414,13 @@ Các module được tách theo hai tiêu chí: chạm tới khóa cache tới �
 | `hardware_table.py` | `TABLE_VERSION`, `Match`, `Row`, `ROWS` (với `UNTESTED_ROW_ID`, `UNTESTED_FAST_ROW_ID`), `CUDA_DRIVER_MIN`, `UNTESTED_MIN_VRAM_MIB`, ba rủi ro của công tắc nhanh (mục 5.6), `EXPORT_ROW_ID`/`EXPORT_KNOBS`, bằng chứng | `hardware_profile` (kiểu và hàm dựng núm) | như trên |
 | `hardware_system.py` | E1: lớp truy cập Windows của `hardware_detect`, cửa duy nhất tới máy. Protocol `HardwareSystem` và bản thật `WindowsSystem`: chạy lệnh (danh sách argv, luôn có timeout, `shell=False`, `CREATE_NO_WINDOW`), NVML, adapter trong registry, CPU, RAM, ổ đĩa, nguồn điện, thông tin file, bản torch (`importlib.metadata`), OS và Python, thư mục System32. `pynvml`, `psutil`, `winreg`, `ctypes` chỉ được import bên trong hàm dùng chúng. Test truyền bản giả | stdlib và `hardware_schema` | như trên |
 | `hardware_detect.py` | E1: `detect()`, `observe()`, tiến trình cháu `python -B -m biliflow.hardware_detect torch-probe` (torch chỉ được import **bên trong** tiến trình đó). Mọi tiếp xúc với máy đi qua `hardware_system.HardwareSystem` | stdlib, `hardware_schema` và `hardware_system` | như trên |
-| `hardware_measure.py` | E2: `main()`; kiểm tham số, kiểm rảnh, khóa, clip, phép thử, lịch sử số đo, hàm ngưỡng trễ, ghi hồ sơ | `hardware_profile`, `hardware_detect`, `nvdec.input_arguments`/`sampling_filter` (đúng chuỗi lọc thật) | như trên |
-| `hardware_manager.py` | phía Control Center: `status()` có cache, `start("remeasure")`, `set_cpu_only()`, `set_untested_fast()` (hai công tắc, cùng khóa, mục 3.6), `close()`, `popen` thay được | `hardware_profile`; `hardware_detect.observe` được import trễ | như trên |
+| `hardware_measure.py` | E2: `main()`; kiểm tham số, các bước 2–9 của mục 6.3 theo thứ tự, lịch sử số đo, hàm ngưỡng trễ, ghi hồ sơ. Các phần lớn được tách ra bốn module dưới đây để mỗi file dưới 800 dòng | stdlib, `hardware_detect`, `hardware_idle`, `hardware_locks`, `hardware_schema`, `hardware_system`, `hardware_tools`, `hardware_trials`. `job_purge.allowed_project_root` được import trễ (kiểm root, I11). Không import `hardware_profile` | như trên |
+| `hardware_locks.py` | E2: mutex có tên (Win32 qua `WinDLL` riêng, không đụng `ctypes.windll` dùng chung), file khóa `final-render.lock` (`O_RDWR`, không `O_CREAT`), `acquire_export_locks` theo thứ tự toàn cục, `LockNames` (tên khóa không bao giờ lấy từ argv hay biến môi trường, I10) | chỉ stdlib | như trên |
+| `hardware_idle.py` | E2: kiểm rảnh của bước 3: đọc PID trong `control-center.json`, mở cơ sở dữ liệu `mode=ro` chỉ khi Control Center đang chạy, đếm tải xuống đang chiếm slot | stdlib; `job_store.IN_PROCESS_STATES` và `download_store.SLOT_STATES` được import trễ | như trên |
+| `hardware_tools.py` | E2: `RunGuard` (file hủy, ngân sách thời gian), `ToolRunner` (mỗi lần một lệnh, chờ `communicate(1)` để kiểm file hủy mỗi giây; quá giờ, hủy hay lỗi bất kỳ đều diệt cả cây tiến trình con), `GuardedSystem` | stdlib, `hardware_system`; `psutil` được import trễ | như trên |
+| `hardware_trials.py` | E2: clip tổng hợp, phép thử encoder, `nvdec_codecs`, chuỗi routing logo (bước 7–8) | stdlib, `nvdec` (`input_arguments`/`sampling_filter`, đúng chuỗi lọc thật), `hardware_detect.parse_encoders`, `hardware_schema`, `hardware_tools` | như trên |
+| `hardware_manager.py` | E2, phía Control Center: `status()` có cache, `can_remeasure()`, `start("remeasure")`, `set_cpu_only()`, `set_untested_fast()` (hai công tắc, cùng khóa, mục 3.6), `close()`; `popen`, `clock`, `observe`, `kill_tree` thay được | stdlib, `hardware_profile`, `hardware_status`, `hardware_schema`. `job_store`, `export_guards` và `hardware_detect.observe` được import trễ | như trên |
+| `hardware_status.py` | E2: dựng JSON của `GET /api/hardware-profile` (mục 6.1) từ `Resolution`, hồ sơ và công tắc; tách khỏi manager để mỗi file dưới 800 dòng | stdlib, `hardware_profile`, `hardware_schema` | như trên |
 
 - **Không làm gì lúc import** (không torch, subprocess, I/O hay luồng). Lý do: `cli.py:42` import `control_center` ngay đầu file, nên mọi tiến trình stage đều import theo. Vì vậy `control_center` chỉ import các module này **trễ**, bên trong `_hardware(center)`.
 - **Tránh import vòng:** kiểu nằm ở `hardware_profile` (kiểu của file và quan sát nằm ở `hardware_schema`). `hardware_table` và `hardware_resolve` import kiểu từ đó, còn `hardware_profile` chỉ import hai module này bên trong hàm.
@@ -813,14 +818,16 @@ Vì vậy bước 4 của mục 7.1 xét hai điều kiện đầu ở trên tr�
 | Route | Chặn | Kết quả |
 |---|---|---|
 | `GET /api/hardware-profile` | Kiểm `loopback_client()` ngay trong route; sai thì 403 `{error: PC_ONLY_HARDWARE, code: "pc_only"}`. Bắt buộc, vì cổng điện thoại không có danh sách GET được phép (`control_center.py:2585-2623`). Mẫu ở `:2098-2103` | JSON ở dưới |
-| `POST /api/hardware-profile/remeasure` | token + `loopback_client()` | Bỏ qua body. Trả 409 `busy` / `not_paused` / `not_idle`, hoặc bắt đầu việc đo |
+| `POST /api/hardware-profile/remeasure` | token + `loopback_client()` | Bỏ qua nội dung body; nhưng như mọi POST, body không phải JSON thì 400 (`do_POST` đọc body trước khi chọn route). Trả 409 `busy` (cả khi Control Center đang tắt) / `not_paused` / `not_idle`, hoặc bắt đầu việc đo và trả JSON của GET. Thêm sự kiện `HARDWARE_MEASURE_STARTED`, và `HARDWARE_MEASURE_FINISHED` khi xong (mức WARN nếu không thành công) |
 | `POST /api/hardware-profile/cpu-only` | token + `loopback_client()` | Body đúng `{"enabled": bool}` (`type(...) is bool`, không thêm khóa nào), sai thì 400. Ghi `hardware-override.json` (giữ nguyên `untested_fast`) và thêm sự kiện `HARDWARE_CPU_ONLY_CHANGED` |
 | `POST /api/hardware-profile/untested-fast` | token + `loopback_client()` | Body đúng `{"enabled": bool}` như trên, sai thì 400. Bật: chỉ khi trạng thái `resolve()` lúc đó là `ready_untested`; công tắc gắn với tên GPU và compute capability trong hồ sơ. Trạng thái khác thì 409 `not_untested`. Tắt: luôn được. Ghi `hardware-override.json` (giữ nguyên `cpu_only`) và thêm sự kiện `HARDWARE_UNTESTED_FAST_CHANGED` |
+
+- **File công tắc hỏng** (`override_invalid`): bấm một công tắc thì ghi lại cả file. Công tắc vừa bấm nhận giá trị mới, công tắc kia về **tắt**, như khi thiếu file; không bao giờ đoán từ file hỏng. Sự kiện ghi thêm `replaced_invalid: true` (mục 3.6).
 
 **GET, dạng trả về:**
 
 ```json
-{"status": "ready", "applies_to_jobs": false,
+{"status": "ready", "applies_to_jobs": false, "message": "…",
  "row": {"id": "nvidia-sm75-torch2.14.0+cu126", "status": "gated", "table_version": 1},
  "families": {"fast": {"family": "fast", "capped": false, "logo_decode": "nvdec", "tf32": "default", "refusal": null},
               "standard_ocr8": {"family": "standard_ocr8", "capped": false, "tf32": "default", "refusal": null},
@@ -830,16 +837,30 @@ Vì vậy bước 4 của mục 7.1 xét hai điều kiện đầu ở trên tr�
  "cpu_only": {"value": false, "valid": true},
  "untested_fast": {"value": false, "gpu": null, "applies": false},
  "profile": {"present": true, "source": "main", "written_at": "…", "result": "ok", "failure": null,
-             "power": {"battery_present": true, "ac_online": true}},
- "detection": {"gpu": "NVIDIA GeForce RTX 2060", "compute_capability": "7.5", "vram_mib": 6144,
+             "power": {"battery_present": true, "ac_online": true}, "launched_by": "control-center",
+             "main_state": "ok", "last_good_state": "ok"},
+ "detection": {"gpu": "NVIDIA GeForce RTX 2060", "compute_capability": "7.5", "vram_mib": 6144, "gpu_count": 1,
                "driver": "617.42", "torch": "2.14.0+cu126", "cpu": "…", "ram_gib": 15.8,
-               "ffmpeg": {"version": "9.0.1",
+               "ffmpeg": {"ok": true, "version": "9.0.1",
                           "encoders": {"libx264": "ok", "h264_nvenc": "ok", "hevc_nvenc": "ok", "av1_nvenc": "failed"},
                           "nvdec": {"trial": "ok", "framemd5_equal_cpu": true},
                           "nvdec_codecs": {"h264": "ok", "hevc": "ok", "av1": "not_run"}}},
+ "observed": {"nvml": "ok", "driver": "617.42", "torch": "2.14.0+cu126",
+              "gpus": [{"name": "NVIDIA GeForce RTX 2060", "compute_capability": "7.5", "vram_mib": 6144}],
+              "nvidia_pci_seen": true, "ffmpeg_found": true, "cpu": "…"},
  "task": null,
  "can_remeasure": {"ok": false, "reason": "not_paused", "text": "Hãy tạm dừng hàng đợi trước"}}
 ```
+
+- **`message`:** câu của `resolve()` cho trạng thái đó (lý do từ chối, hay câu ngắn khi sẵn sàng).
+- **`profile`:**
+  - `failure`: null, hoặc `{code, step, text, message}` (`text` là câu của mã lỗi ở mục 7.2, `message` là chi tiết đã làm sạch);
+  - `launched_by`: `control-center` hay `script` (mục 6.3);
+  - `main_state`, `last_good_state`: `ok`/`missing`/`invalid` của từng file, để trang phân biệt "chưa đo lần nào" với "hồ sơ hỏng". Khi không có hồ sơ dùng được, `profile` chỉ còn `{present: false, source: null, main_state, last_good_state}`.
+- **`detection.gpu_count`:** số GPU NVIDIA trong hồ sơ (trang nói rõ khi có nhiều GPU); **`detection.ffmpeg.ok`:** FFmpeg dùng được lúc đo (mục 3.2).
+- **`observed`:** quan sát nhẹ lúc này (mục 3.3), null nếu quan sát lỗi.
+- **`untested_fast.gpu`:** `{name, compute_capability, enabled_at}`.
+- **Khi dựng JSON bị lỗi** (một lỗi trong code): trả `status: "invalid"` kèm `message` "Lỗi nội bộ khi đọc hồ sơ phần cứng (<kiểu lỗi>)…", mọi họ bị từ chối; trang vẫn có trạng thái để hiện.
 
 - **`status`** là một trong: `ready`, `ready_last_good`, `ready_ungated`, `ready_untested`, `needs_measurement`, `invalid`, `cuda_unavailable`, `stale_gpu`, `stale_torch`, `no_gated_row`, `multi_gpu_unsupported`, `override_invalid`, `cpu_row_not_ready`, `arch_unsupported`, `driver_too_old`, `vram_too_small`.
 - **`families`:** mỗi họ mang `tf32` (`"default"` hay `"off"`). Trên card chưa qua cổng: `row.status` là `"untested"`, mọi họ `"off"`, và nếu công tắc không có hiệu lực thì `fast`, `standard_ocr8` cho `{"family": "standard", "capped": true}`.
@@ -847,9 +868,11 @@ Vì vậy bước 4 của mục 7.1 xét hai điều kiện đầu ở trên tr�
   - `value`: công tắc đang bật hay không;
   - `gpu`: `{"name", "compute_capability"}` của card đã gắn, null khi tắt;
   - `applies`: công tắc có hiệu lực cho card trong hồ sơ hay không.
-- **Các biến thể của `task`:**
-  - khi đang đo: `{"running": true, "step": "torch_probe", "index": 3, "total": 9, "started_at": "…"}`;
-  - khi đã xong: `{"running": false, "exit": 0, "outcome": "done", "message": "…", "finished_at": "…"}`.
+- **Các biến thể của `task`** (mọi biến thể đều có `previous_run`; việc do trang này bắt đầu có thêm `log`, đường dẫn tương đối của file log):
+  - vừa bắt đầu: `{"running": true, "previous_run": false, "step": "starting", "index": null, "total": null, "started_at": "…", "log": "logs/control-center/hardware-measure-<stamp>.log"}`;
+  - khi đang đo: `step`, `index`, `total` lấy từ `progress.json`, ví dụ `{"step": "torch_probe", "index": 7, "total": 13}` (13 bước: `idle`, `locks`, `nvml`, `nvidia_smi`, `adapters`, `system`, `torch_probe`, `ffmpeg`, `clip`, `encoders`, `nvdec_codecs`, `logo_routing`, `write`);
+  - khi đã xong: `{"running": false, "previous_run": false, "exit": 0, "outcome": "done", "message": "…", "finished_at": "…", "log": "…"}`. `outcome` theo mã thoát: `done` (0), `failed` (10), `refused` (64), `error` (70), `busy` (75), `timeout` (124), `unknown` (mã khác); ngoài ra `killed` (bị diệt sau 15 phút), `start_failed` (không chạy được lệnh) và `error` (lỗi khi theo dõi);
+  - lần đo của một Control Center trước (thấy qua mutex riêng): `{"running": true, "previous_run": true, "step": null, …, "message": "Đang đo (từ lần chạy trước)"}`, hoặc câu "Không kiểm tra được có lần đo nào đang chạy hay không" khi không thử được mutex. Khi mutex được nhả: `{"running": false, "previous_run": true, "exit": null, "outcome": "previous_done", "message": "…"}`; trang hiện câu này như thông tin, không như lỗi.
 - **`NEEDS_MEASUREMENT`:** `profile.present` là false, `detection` là null, và mỗi họ là `{"family": null, "refusal": "needs_measurement"}`.
 - **Quan sát nhẹ lỗi:** phần đó là null, kèm cảnh báo `not_observed`.
 - **Đường dẫn và chuỗi lỗi đi qua bộ làm sạch:** tiền tố của root, thư mục cài, thư mục code và hồ sơ người dùng được thay bằng `<root>`, `<install>`, `<code>`, `<user>`. Không có token.
@@ -912,17 +935,19 @@ Vì vậy bước 4 của mục 7.1 xét hai điều kiện đầu ở trên tr�
 ```
 powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File <thư mục code>\scripts\hardware-measure.ps1 ^
   -ProjectRoot <root> -GuardRoot <root> [-GuardRoot <thư mục cài thật>] -Python <python.exe>
-  [-FfmpegDir <thư mục>] [-Stamp <yyyyMMdd-HHmmss-xxxx>] [-WaitMinutes N]
+  [-FfmpegDir <thư mục>] [-Stamp <yyyyMMdd-HHmmss-xxxx>] [-WaitMinutes N] [-LaunchedBy control-center|script]
 ```
 
-- **`.ps1`** chỉ gồm ký tự ASCII. Nó làm ba việc rồi trả lại mã thoát:
+- **`-LaunchedBy`** điền `writer.launched_by` của hồ sơ: manager luôn truyền `control-center`; người chạy tay bỏ trống thì là `script`. Giá trị khác (kể cả `installer`, dành cho Đợt 2) bị từ chối với mã 64.
+- **`.ps1`** chỉ gồm ký tự ASCII. Nó làm bốn việc rồi trả lại mã thoát:
   - dot-source `env.ps1` (không sửa);
   - kiểm `-Python` là `.venv\Scripts\python.exe`;
+  - kiểm trước mọi tham số đường dẫn: tuyệt đối, không rỗng, không có `"` và không kết thúc bằng `\`, vì PowerShell 5.1 bỏ tham số rỗng và gộp tham số kế tiếp sau dấu `\` cuối (manager cũng kiểm như vậy trước khi chạy);
   - chạy `python -m biliflow.hardware_profile measure …` (`docs/PERF_INSTALL_PLAN.md:201`).
 
   Toàn bộ khóa nằm trong tiến trình Python: chỉ một cách làm, test được, và dùng chung cho đường chạy của Control Center. Đây là cách hiểu của "`.ps1` có khóa riêng" (`docs/PERF_INSTALL_PLAN.md:202`). Script không bao giờ thêm lệnh vào `run.ps1`.
 - **`-FfmpegDir`** mặc định là `<thư mục code>\tools\ffmpeg\bin`.
-  - Thư mục phải chứa `ffmpeg.exe` và `ffprobe.exe`. Chúng chỉ được đọc và chạy tại chỗ, không bao giờ bị ghi.
+  - Khi được truyền, nó phải là đường dẫn tuyệt đối tới một thư mục có sẵn (sai thì 64). Nội dung thư mục không được kiểm ở bước tham số: thiếu `ffmpeg.exe` thì lần đo vẫn chạy và ghi `detection.ffmpeg.ok` sai (bước 8). `ffmpeg.exe` và `ffprobe.exe` chỉ được đọc và chạy tại chỗ, không bao giờ bị ghi.
   - Hồ sơ ghi đường dẫn tuyệt đối của `ffmpeg.exe` đó, và quan sát nhẹ `stat` đúng file ấy.
 - **Thư mục chạy** `<ProjectRoot>\temp\hardware-measure-<stamp>\` chứa:
   - clip;
@@ -940,8 +965,9 @@ powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File <thư mục 
 1. **Kiểm tham số** (sai thì thoát 64, khi chưa lấy khóa, chưa chạy gì và chưa ghi gì):
    - `ProjectRoot` là đường dẫn tuyệt đối, tồn tại, và `allowed_project_root(ProjectRoot)` đúng (I11);
    - mỗi `GuardRoot` là đường dẫn tuyệt đối tới một thư mục;
-   - `FfmpegDir` hợp lệ;
-   - `Stamp` đúng mẫu `^\d{8}-\d{6}-[0-9a-f]{4}$`.
+   - `FfmpegDir`, nếu có, là thư mục tuyệt đối có sẵn;
+   - `Stamp` đúng mẫu `^[0-9]{8}-[0-9]{6}-[0-9a-f]{4}$` (chỉ chữ số ASCII), và thư mục chạy của nó, nếu đã có, là thư mục thường chỉ chứa `cancel` và `progress.json`;
+   - `WaitMinutes` từ 0 tới 60; `LaunchedBy` là `control-center` hay `script`.
 
    Dòng lệnh không có tùy chọn nào cho tên mutex hay file khóa (I10).
 2. **Khóa riêng:** mutex `Local\BiliFlowHardwareProfile`, chờ 0 s. Bị giữ thì thoát 75.
@@ -958,7 +984,7 @@ powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File <thư mục 
      - Không có scheduler nào chạy. Stage chạy tay và bản xuất đã được mutex và file khóa che.
      - Lý do không mở: hai database dùng WAL (`job_store.py:189`, `download_store.py:134`), và một kết nối chỉ-đọc vẫn có thể tạo `-wal`/`-shm` trong `state\` thật.
      - Cách này cũng tránh trường hợp dòng IN_PROCESS còn sót của một Control Center bị sập chặn phép đo mãi.
-   - **`--wait-minutes N`:** kiểm lại mỗi 30 s và **không giữ khóa nào** trong lúc chờ ("chờ, không chen ngang", `docs/PERF_INSTALL_PLAN.md:548`).
+   - **`--wait-minutes N`** (0–60): kiểm lại mỗi 30 s và **không giữ khóa GPU hay khóa xuất nào** trong lúc chờ ("chờ, không chen ngang", `docs/PERF_INSTALL_PLAN.md:548`). Chỉ mutex riêng của bước 2 được giữ, để hai lần đo chạy tay không cùng chờ rồi cùng chạy; vì vậy trong lúc chờ, Control Center hiện "Đang đo (từ lần chạy trước)" và khóa "Đo lại". Ngân sách 10 phút tính từ lúc hết chờ. (Lệch so với câu "không giữ khóa nào" của bản E0 đã duyệt; xem mục 11.)
 4. **Khóa theo thứ tự toàn cục:**
    - riêng → `Local\BiliFlowGpuInference` → `Local\BiliFlowFinalRender` → `<guard root>\state\final-render.lock`;
    - mỗi khóa thử tối đa 2 s; lấy đủ hoặc trả hết. `WAIT_ABANDONED` tính là lấy được, có ghi lại;
@@ -993,7 +1019,7 @@ powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File <thư mục 
    - mã hóa 5 s bằng libx264 (veryfast CRF 20), `h264_nvenc`, `hevc_nvenc`, `av1_nvenc`, theo kế hoạch mới (mục 4, E1: thử thật từng codec, không suy từ tên card). QSV và AMF chỉ ghi là "có trong danh sách";
    - giải mã NVDEC thử thật theo từng codec, ghi vào `detection.ffmpeg.nvdec_codecs`:
      - clip ngắn của mỗi codec tạo từ clip tổng hợp: `h264` bằng libx264, `hevc` bằng libx265, `av1` bằng một encoder AV1 phần mềm có trong danh sách (`libsvtav1`, `libaom-av1` hoặc `librav1e`);
-     - không có encoder để tạo clip thì phép thử của codec đó là `not_run`, kèm lý do;
+     - không có encoder để tạo clip, không tạo được clip, hoặc giải mã CPU của clip đó lỗi, thì phép thử của codec đó là `not_run`, kèm lý do; FFmpeg không có `cuda` trong `-hwaccels` thì cũng `not_run`;
      - mỗi phép giải mã NVDEC so framemd5 với giải mã CPU của cùng clip; khác nhau thì `failed`;
    - giải mã chuỗi routing logo bằng CPU và bằng NVDEC, qua `nvdec.input_arguments`/`sampling_filter` (`nvdec.py:25-33`); so framemd5 và đo thời gian. Đây là **phép tự kiểm rẻ** cho từng driver, không thay cổng cả phim.
    - Lỗi FFmpeg chỉ được ghi trong `detection.ffmpeg` và không bao giờ làm lần đo thất bại. Hệ quả tùy loại lỗi:
@@ -1003,6 +1029,7 @@ powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File <thư mục 
 9. **Ghi kết quả:**
    - nhả khóa GPU và khóa xuất;
    - ghi file chính theo bảng ở mục 3.5, rồi last-good nếu thành công. Mọi chuỗi lỗi đi qua bộ làm sạch (mục 6.1) và bị cắt ở 300 ký tự;
+   - nếu file chính đã ghi mà last-good không ghi được (ví dụ phần mềm diệt virus giữ file quá ba lần thử), bản last-good cũ được giữ nguyên, log có một dòng nói rõ, và mã thoát vẫn là 0: file chính đã mang hồ sơ mới, nên mã 70 luôn có nghĩa "không ghi gì";
    - nhả khóa riêng; xóa thư mục chạy.
    - Nếu dấu hiệu rảnh đổi trong lúc chạy (job vào trạng thái chạy, tải xuống hoạt động, rút điện), số đo mang `contended` hoặc `battery`. Kết quả nhận diện vẫn có giá trị.
 
@@ -1010,7 +1037,7 @@ powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File <thư mục 
 
 | Mã | Nghĩa | Ghi hồ sơ? |
 |---|---|---|
-| 0 | xong, lần đo `ok` | file chính và last-good |
+| 0 | xong, lần đo `ok` | file chính và last-good (last-good không ghi được thì giữ bản cũ, xem bước 9) |
 | 10 | xong, lần đo `failed` (mục 7.2) | chỉ file chính; last-good giữ nguyên |
 | 64 | sai tham số, hoặc root không được phép | không; chưa lấy khóa |
 | 70 | lỗi nội bộ | không |
@@ -1019,9 +1046,11 @@ powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File <thư mục 
 | khác | ví dụ PowerShell lỗi gán tham số (thoát 1), hay tiến trình bị diệt | manager báo "Lỗi không rõ (mã N)", rồi đọc lại file để biết có gì đã được ghi |
 
 **Manager và lúc Control Center dừng:**
-- Manager cho tối đa 15 phút: giới hạn 10 phút cộng thời gian ân hạn. Quá hạn thì ghi file hủy, chờ thêm, và **chỉ khi đó** mới diệt cả cây tiến trình.
+- Manager cho tối đa 15 phút (`MEASURE_LIMIT_SECONDS = 900`), tính từ lúc chạy lệnh: ngân sách 10 phút của lệnh đo cộng thời gian ân hạn. Quá hạn thì ghi file hủy, chờ thêm 60 s (`CANCEL_GRACE_SECONDS`) **tính từ lúc ghi file hủy** (một lần nhảy đồng hồ, ví dụ máy ngủ, không làm mất khoảng chờ này), và **chỉ khi đó** mới diệt cả cây tiến trình bằng `System32\taskkill.exe /PID <pid> /T /F` (không qua shell, timeout 30 s). Việc kết thúc với `outcome: "killed"`.
 - Khi Control Center dừng (`serve()` lẫn `stop()`, cạnh `self.tailscale.close()`, `control_center.py:1852-1853`, `:1888-1889`), `center.hardware.close()` ghi file hủy và **không bao giờ diệt** lần đo. Lần đo tự nhả khóa rồi thoát.
-- Lần khởi động sau, manager thấy một lần đo đang chạy nhờ thử mutex riêng (mở, chờ 0 s, nhả ngay nếu lấy được), và hiện "Đang đo (từ lần chạy trước)".
+  - Sau `close()`, "Đo lại" trả 409 `busy` ("Control Center đang tắt").
+  - `close()` chạy đúng lúc `start()` đang tạo tiến trình thì `start()` tự ghi file hủy cho lần đo vừa tạo; manager được tạo sau khi `stop()` đã chạy thì đóng ngay từ đầu.
+- Manager thấy một lần đo đang chạy của Control Center trước nhờ thử mutex riêng (mở, chờ 0 s, nhả ngay nếu lấy được; không bao giờ tạo mutex): một lần ngay khi manager được tạo, một lần trước mỗi "Đo lại", và lặp lại theo nhịp trong lúc GET hiện "Đang đo (từ lần chạy trước)". Khi mutex được nhả, việc chuyển sang `previous_done`.
 
 **Còn lại:**
 - Nếu ai đó bỏ tạm dừng giữa chừng (điện thoại làm được, `phone_access.py:157`), stage GPU kế tiếp chờ trong `run.ps1`, lâu nhất bằng thời gian đo.
@@ -1150,10 +1179,11 @@ Lỗi FFmpeg và lỗi phép thử encoder không làm lần đo thất bại (m
 ## 8. File và bằng chứng không đổi khóa cache
 
 **Tạo:**
-- `src/biliflow/hardware_schema.py`, `hardware_profile.py`, `hardware_resolve.py` (thứ tự quyết định của `resolve()`), `hardware_table.py`, `hardware_detect.py`, `hardware_system.py` (lớp truy cập Windows của `hardware_detect`), `hardware_measure.py`, `hardware_manager.py`;
+- `src/biliflow/hardware_schema.py`, `hardware_profile.py`, `hardware_resolve.py` (thứ tự quyết định của `resolve()`), `hardware_table.py`, `hardware_detect.py`, `hardware_system.py` (lớp truy cập Windows của `hardware_detect`) ở E1;
+- `src/biliflow/hardware_measure.py`, `hardware_locks.py`, `hardware_idle.py`, `hardware_tools.py`, `hardware_trials.py`, `hardware_manager.py`, `hardware_status.py` ở E2 (mục 4.1);
 - `scripts/hardware-measure.ps1`;
 - `dashboard_v2/hardware-view.js`;
-- `tests/test_hardware_profile.py`, `test_hardware_resolve.py`, `test_hardware_table.py`, `test_hardware_detect.py`, `test_hardware_system.py`, `test_hardware_torch_probe.py` (tiến trình cháu với torch giả), `test_hardware_measure.py`, `test_hardware_manager.py`, `test_hardware_routes.py` (ba route POST, gồm `untested-fast`), cùng file dữ liệu chung `tests/hardware_fixtures.py`;
+- `tests/test_hardware_profile.py`, `test_hardware_resolve.py`, `test_hardware_table.py`, `test_hardware_detect.py`, `test_hardware_system.py`, `test_hardware_torch_probe.py` (tiến trình cháu với torch giả) ở E1; `test_hardware_measure.py`, `test_hardware_measure_locks.py`, `test_hardware_measure_idle.py`, `test_hardware_measure_trials.py`, `test_hardware_measure_ps1.py`, `test_hardware_manager.py`, `test_hardware_routes.py` (ba route POST, gồm `untested-fast`) ở E2; cùng file dữ liệu chung `tests/hardware_fixtures.py`;
 - `docs/handoff/E-hardware.md`.
 
 **Sửa nhỏ:**
@@ -1164,10 +1194,11 @@ Lỗi FFmpeg và lỗi phép thử encoder không làm lần đo thất bại (m
   - `verify.cjs`, `verify-adapter.cjs`;
   - `browser-check.cjs`: ASSETS, mẫu trả lời cho `GET /api/hardware-profile` (READY, READY_UNTESTED, NEEDS_MEASUREMENT, đang đo), và ba đường POST trong danh sách `PC_ONLY` của nó;
   - danh sách ASSETS trong `download-fake-server.cjs` và `review-fake-server.cjs`. Hai server này trả 404 cho route mới, và trang hiện "không có" như với Control Center cũ;
-- test: `tests/test_dashboard_v2_review.py:84` (`ENDPOINTS_SHA256`), `tests/test_dashboard_v2_phone.py` (bảng route chỉ-PC), `tests/test_cache_dependencies.py:161-167` (thêm `hardware_*.py` vào `CONTROL_PLANE`);
+- `hardware_profile.py`: khối `__main__` chuyển sang `hardware_measure.main` (E2);
+- test: `tests/test_dashboard_v2_review.py:84` (`ENDPOINTS_SHA256`), `tests/test_dashboard_v2_phone.py` (bảng route chỉ-PC), `tests/test_dashboard_v2_phone_hardening.py` (phân loại route), `tests/test_dashboard_v2_contract.py` và `tests/test_dashboard_v2_route.py` (route và tài nguyên mới), `tests/test_cache_dependencies.py:161-171` (thêm 13 file `hardware_*.py` vào `CONTROL_PLANE`);
 - `CHANGELOG.md`, `docs/PROJECT_STATUS.md`, `docs/SESSION_HANDOFF.md`.
 
-**Ngoại lệ có chủ ý về độ dài file:** `control_center.py` (2.689 dòng) và `phone_access.py` (825 dòng) đã vượt trần 800 dòng từ trước. E2 chỉ thêm vào mỗi file vài dòng nối dây; mọi logic nằm trong `hardware_manager.py`.
+**Ngoại lệ có chủ ý về độ dài file:** `control_center.py` (2.689 dòng ở `40a0125`, 2.742 sau E2) và `phone_access.py` (825 dòng, 831 sau E2) đã vượt trần 800 dòng từ trước. E2 chỉ thêm vào mỗi file các dòng nối dây; mọi logic nằm trong `hardware_manager.py` và `hardware_status.py`. Mọi file mới đều dưới 800 dòng; `app.js` còn 795.
 
 **Không đụng:**
 - danh sách của bạn: `scheduler.py`, `job_store.py`, `job_pipeline.py`, mọi module quét, `cli.py`, `__main__.py`, `__init__.py`, `run.ps1`, `env.ps1`, `stage_cache.py`, `cache_dependencies.py`, `pyproject.toml`, `config/*`, `models\`;
@@ -1272,7 +1303,8 @@ Lỗi FFmpeg và lỗi phép thử encoder không làm lần đo thất bại (m
     - không đổi sau chỉ một lần;
     - bỏ số đo `contended` và `battery`;
     - dòng 2060 (`free_fields` rỗng) không bao giờ đổi;
-  - **các đường thoát:** quá giờ thì nhả khóa; file hủy; mã thoát; không ghi gì với 64/70/75/124; thoát 64 trước mọi khóa với root ngoài `allowed_project_root`;
+  - **các đường thoát:** quá giờ thì nhả khóa (cả file khóa của guard root); file hủy; mã thoát; không ghi gì với 64/70/75/124; thoát 64 trước mọi khóa với root ngoài `allowed_project_root`; kiểm rảnh lần hai diễn ra khi đã giữ mutex GPU và mutex xuất; last-good không ghi được thì giữ bản cũ và thoát 0; thiếu `ffmpeg.exe` thì vẫn đo và ghi `detection.ffmpeg.ok` sai;
+  - **tiến trình con:** quá giờ, file hủy, hết ngân sách hay một lỗi bất kỳ khi chờ (cả Ctrl+C) đều diệt tiến trình con trước khi nhả khóa;
   - **`.ps1`** chạy không quyền admin, chỉ trên các đường từ chối:
     - thiếu `ProjectRoot`, hay đường dẫn tương đối;
     - root không được phép;
@@ -1281,7 +1313,7 @@ Lỗi FFmpeg và lỗi phép thử encoder không làm lần đo thất bại (m
     - `Stamp` sai mẫu.
 
     Kiểm file chỉ có ASCII.
-- **E2, manager:** `can_remeasure`; mỗi lúc một việc; quá 15 phút thì ghi file hủy trước rồi mới diệt; `close()` chỉ ghi file hủy; lần khởi động sau thấy lần đo đang chạy; ghi công tắc dưới khóa, và ghi một công tắc thì giữ nguyên công tắc kia.
+- **E2, manager:** `can_remeasure`; mỗi lúc một việc; quá 15 phút thì ghi file hủy trước rồi mới diệt, sau đúng 60 s tính từ file hủy (cả khi đồng hồ nhảy qua cả hai mốc); `kill_process_tree` gọi `System32\taskkill.exe /T /F` không qua shell; `close()` chỉ ghi file hủy, kể cả khi chạy đúng lúc `start()` tạo tiến trình; manager tạo sau `stop()` đóng ngay; lần khởi động sau thấy lần đo đang chạy; ghi công tắc dưới khóa, và ghi một công tắc thì giữ nguyên công tắc kia.
 - **E2, route** (khung `tests/test_phone_tailscale.py:193-243`, cổng 0, `center.hardware` giả):
   - PC GET 200; điện thoại GET 403 `pc_only`; POST thiếu token 403; POST từ điện thoại (cả `untested-fast`) 403 trước khi đọc body;
   - 409 `not_paused`/`not_idle`/`busy`; body `cpu-only` hay `untested-fast` sai kiểu hoặc thừa khóa bị từ chối (400);
@@ -1297,7 +1329,8 @@ Lỗi FFmpeg và lỗi phép thử encoder không làm lần đo thất bại (m
   - `verify.cjs` (nhánh PC, điện thoại, demo; phần thân hai trang vẫn giống nhau); `verify-adapter.cjs` (404 → `unavailable`);
   - không `fetch(` ngoài `adapter.js`;
   - `browser-check` ở 375 px không tràn ở #settings, với mẫu trả lời READY, READY_UNTESTED và NEEDS_MEASUREMENT;
-  - công tắc "Chế độ nhanh trên card chưa qua cổng" chỉ hiện khi `status` là `ready_untested` hoặc công tắc đang bật; hộp xác nhận có đủ ba rủi ro và câu "có hiệu lực cho job mới từ Đợt 2".
+  - công tắc "Chế độ nhanh trên card chưa qua cổng" chỉ hiện khi `status` là `ready_untested` hoặc công tắc đang bật; hộp xác nhận có đủ ba rủi ro và câu "có hiệu lực cho job mới từ Đợt 2";
+  - lần đo của Control Center trước kết thúc (`previous_done`, không có mã thoát) hiện như thông tin, không như lỗi.
 - **Kiểm thật:**
   - Control Center thử ở cổng 8798: các hồ sơ mẫu đẩy trang Cài đặt qua từng trạng thái;
   - một lần đo thật ở khung GPU 3 (mục 6.4). Báo cáo chỉ ghi tóm tắt hồ sơ.
@@ -1397,6 +1430,14 @@ Các câu hỏi và phương án ban đầu được giữ dưới đây để t
 | `SCAN_PERFORMANCE.md:129-131` cho số 2,1e-5 (`:95`) | Số đó nằm ở `:152`; dòng 129-131 là 3,6e-6 | Sửa trích dẫn ở đợt tài liệu |
 | `SCAN_PERFORMANCE.md:93-95` "NVDEC chậm khi CPU rảnh" (`:206`) | Đoạn đó tả bản NVDEC cũ; số hiện tại ở `CLAUDE_SCAN_OPTIMIZATION_HANDOFF.md:446-457` | Kết luận không đổi |
 | "device và precision luôn trên dòng lệnh" (`:152`) | fp32 hôm nay là mặc định ngầm của CLI | Giữ ngầm để dòng lệnh giống từng byte; B1 quyết định |
+
+**Bản E0 đã duyệt so với code E2** (thêm khi xong E2, ngày 2026-10-12; **chờ người dùng duyệt** ở G1):
+
+| Bản E0 đã duyệt | Code E2 | Lý do |
+|---|---|---|
+| Mục 6.3 bước 3: `--wait-minutes` "không giữ khóa nào" trong lúc chờ | Giữ **mutex riêng** (`Local\BiliFlowHardwareProfile`) trong lúc chờ; không giữ mutex GPU, mutex xuất hay file khóa nào. Tối đa 60 phút; ngân sách 10 phút tính từ lúc hết chờ | Hai lần đo chạy tay cùng chờ sẽ cùng chạy khi hàng đợi rảnh; mutex riêng ngăn điều đó mà không chặn scan hay bản xuất nào. Cái giá: trong lúc chờ, Control Center hiện "Đang đo (từ lần chạy trước)" và khóa "Đo lại" |
+| Mục 6.3: `.ps1` "làm ba việc" | Thêm việc thứ tư: kiểm trước mọi tham số đường dẫn | PowerShell 5.1 bỏ tham số rỗng và gộp tham số kế tiếp sau dấu `\` cuối |
+| Mục 6.3: dòng lệnh không có `-LaunchedBy` | Có `-LaunchedBy`, nhận `control-center` hoặc `script` | Điền `writer.launched_by` (mục 3.2) cho đúng; `installer` để dành cho Đợt 2, bị từ chối |
 
 **Phát hiện cho session khác** (E không sửa; đã ghi vào file bàn giao):
 - **E3:** ở họ `standard` (OCR 1, fp32), stage text âm thầm chạy EasyOCR (`textscan.py:604-607`) và text-semantics (`text_semantics.py:61-74`) trên CPU khi CUDA lỗi, mà report vẫn ghi `device=cuda` (`textscan.py:864`).

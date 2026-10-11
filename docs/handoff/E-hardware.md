@@ -1,6 +1,6 @@
 # Bàn giao E – Hồ sơ phần cứng
-- Nhánh: `feat/hardware-profile` (từ `origin/main` `40a0125`, không theo dõi nhánh từ xa nào) · Commit cuối: xem `git log -1` · Cập nhật: 2026-10-11
-- Chạy ở: PC (`E:\DungChung\BiliFlow\temp\wt-hardware-profile`) · Trạng thái: **E0 đã duyệt, phương án D đã chọn, E1 xong (2026-10-11); tiếp theo E2**
+- Nhánh: `feat/hardware-profile` (từ `origin/main` `40a0125`, không theo dõi nhánh từ xa nào) · Commit cuối: xem `git log -1` · Cập nhật: 2026-10-12
+- Chạy ở: PC (`E:\DungChung\BiliFlow\temp\wt-hardware-profile`) · Trạng thái: **E0 đã duyệt, phương án D đã chọn, E1 xong (2026-10-11), E2 xong (2026-10-12) trừ lần đo thật ở khung GPU 3; chờ người dùng và G1**
 
 ## Đã xong
 - **Chuẩn bị:**
@@ -67,18 +67,41 @@
   - **Cả bộ test** (clip tổng hợp 1 s trong `input\` của worktree, đã xóa): 2838 test, 35 bỏ qua. Ba module E2E tài khoản nguồn lỗi ở `setUpModule` vì TEMP/TMP của shell nằm ngoài thư mục cài (lỗi môi trường, không do E1). Chạy lại với `TEMP=TMP=E:\DungChung\BiliFlow\temp`: 12 test qua.
   - **Cách làm:** workflow (cài song song, review bốn góc mỗi nhóm, mỗi phát hiện một bước kiểm chứng, sửa, tích hợp): 42 phát hiện, 20 được xác nhận và đã sửa; tài liệu được chỉnh theo code (mục 3.2, 4.1, 4.2, 6.3, 7.1, 8, 9).
 
+- **E2 xong (2026-10-12), trừ lần đo thật.** Module (mục 4.1 của `docs/HARDWARE_PROFILE.md`; không module nào nằm trong closure stage, khóa cache của 10 stage giống hệt `40a0125`):
+  - lệnh đo: `hardware_measure.py` (các bước 2–9 của mục 6.3), `hardware_locks.py` (mutex, file khóa, thứ tự toàn cục), `hardware_idle.py` (kiểm rảnh, `mode=ro`), `hardware_tools.py` (tiến trình con, file hủy, ngân sách), `hardware_trials.py` (clip, encoder, `nvdec_codecs`, routing logo); `scripts/hardware-measure.ps1` (chỉ ASCII); `hardware_profile.py` chuyển `__main__` sang `hardware_measure.main`;
+  - phía Control Center: `hardware_manager.py` (`can_remeasure`, "Đo lại", giới hạn 15 phút rồi file hủy, 60 s ân hạn, `taskkill /T /F`; hai công tắc; lần đo của Control Center trước) và `hardware_status.py` (JSON của GET);
+  - nối dây: `control_center.py` (`_hardware(center)` import trễ, GET và ba POST, `close()` khi dừng), `phone_access.py` (`PC_ONLY_HARDWARE`, ba POST chỉ-PC);
+  - trang: `dashboard_v2/hardware-view.js` (chỉ nạp trong `live.html`), `adapter.js`, `app.js` (795 dòng), `contracts.js`, các file kiểm và server giả.
+  - **Test:** 363 test `test_hardware_*` qua (cộng các test dashboard, phone, route, `test_cache_dependencies`, `test_job_purge`); `verify.cjs` 50/50, `verify-adapter.cjs` 42/42, `node --check` mọi file; cổng khóa cache `ALL_EQUAL True`.
+  - **Cả bộ test** (`TEMP=TMP=E:\DungChung\BiliFlow\temp`, clip tổng hợp 1 s trong `input\` của worktree, đã xóa): 3024 test trong 2863 s, 35 bỏ qua, **3 thất bại, không cái nào do E2**:
+    - `test_download_account_e2e…test_phone_views_accounts_but_drives_episodes_and_groups` và `test_download_account_e2e_flows…test_session_expiry_mid_group_…`: trang live chưa tải xong (`ERR_CONNECTION_REFUSED` ở `review-core.js`) khi máy đang bận; chạy riêng thì qua cả hai;
+    - `test_download_account_sources.SessionTest.test_cookies_rotated_before_a_cancel_are_kept`: test hủy sau đúng 4 s và cần trang đã đổi cookie trước đó; chạy riêng ba lần thì qua 2, hỏng 1 trên worktree, và **đúng như vậy trên code gốc `40a0125`** (giải nén vào `temp`, đã xóa). Test này phụ thuộc thời gian khởi động Edge, không liên quan E2.
+  - **Review:** hai agent review chỉ đọc (manager; lệnh đo). Không phát hiện mức nghiêm trọng, cao hay trung bình. Bảy phát hiện thấp, đã sửa và có test:
+    - ân hạn 60 s đếm từ lúc ghi file hủy, không từ mốc 15 phút (đồng hồ nhảy không làm mất ân hạn);
+    - `close()` chạy đúng lúc `start()` tạo tiến trình vẫn ghi file hủy; manager tạo sau `stop()` đóng ngay;
+    - Ctrl+C hay lỗi bất kỳ khi chờ một lệnh con thì diệt lệnh con trước khi nhả khóa;
+    - last-good không ghi được sau khi file chính đã ghi: giữ bản cũ, ghi log, thoát 0 (mã 70 luôn nghĩa "không ghi gì");
+    - thiếu `ffmpeg.exe` không còn bị từ chối (64): lần đo vẫn chạy và ghi `detection.ffmpeg.ok` sai, đúng bản E0 đã duyệt;
+    - hai test chưa đủ chặt (file khóa được nhả sau 124 và sau hủy; kiểm rảnh lần hai diễn ra khi đã giữ mutex);
+    - trang hiện `previous_done` (lần đo của Control Center trước đã xong, không có mã thoát) như thông tin, không như lỗi.
+  - **Tài liệu:** mục 3.6, 4.1, 6.1, 6.3, 8, 9 chỉnh theo code; ba chỗ lệch so với bản E0 đã duyệt ghi ở mục 11 (chờ duyệt, xem "Chờ người dùng").
+  - **Control Center thử** (root tạm `<worktree>\temp\hw-cc-20261012`, đã xóa sau khi kiểm; cổng 8798, `--no-import-existing`, đã dừng bằng PID):
+    - không có hồ sơ: "Chưa đo", "Đo lại" bị khóa với "Hãy tạm dừng hàng đợi trước";
+    - hồ sơ mẫu khớp máy này (RTX 2060, driver 617.42, torch 2.14.0+cu126, `ffmpeg.exe` của thư mục cài chỉ đọc `stat`): "Sẵn sàng", dòng `nvidia-sm75-torch2.14.0+cu126`, đủ ba họ, quan sát nhẹ thật;
+    - "Chỉ dùng CPU" bật rồi tắt qua hộp xác nhận: file công tắc ghi đúng, sự kiện `HARDWARE_CPU_ONLY_CHANGED` (INFO); khi bật: "CPU chưa sẵn sàng" (trước E3);
+    - file công tắc hỏng: "Công tắc hỏng", mọi họ bị từ chối; bấm công tắc thì ghi lại cả file, sự kiện có `replaced_invalid: true`;
+    - hồ sơ của card Ampere trên máy RTX 2060: "Card đã đổi", nêu cả hai card;
+    - không bấm "Đo lại" (lần đo thật chỉ ở khung GPU 3); không đụng `state\` thật.
+
 ## Đang dở
-- (trống)
+- **Lần đo thật ở khung GPU 3** (mục 6.4 của `docs/HARDWARE_PROFILE.md`): chờ người dùng chọn giờ và tự tạm dừng hàng đợi thật (hoặc tắt Control Center thật).
 
 ## Bước tiếp theo
-1. **E2:**
-   - `hardware_measure.py`, `hardware_manager.py`, `scripts/hardware-measure.ps1`;
-   - route, `phone_access`, `dashboard_v2/hardware-view.js` (chỉ nạp trong `live.html`);
-   - test;
-   - Control Center thử ở cổng 8798;
-   - một lần đo thật ở khung GPU 3, khi người dùng đã tạm dừng hàng đợi thật.
-
-   Xong thì commit, báo người dùng và chờ G1.
+1. **Lần đo thật** khi người dùng báo đã sẵn sàng:
+   - chép `ffmpeg.exe` và `ffprobe.exe` của thư mục cài vào `<worktree>\tools\ffmpeg\bin` (đã gitignore);
+   - chạy lệnh của mục 6.4 với `-ProjectRoot` là một root tạm trong `temp\` của worktree và `-GuardRoot E:\DungChung\BiliFlow`;
+   - báo cáo chỉ ghi tóm tắt hồ sơ (trạng thái, dòng, kết quả phép thử, thời gian); ghi vào file này và commit.
+2. **G1:** người dùng duyệt; C0 thêm route và lệnh đo vào `AGENTS.md` trước khi gộp.
 
 ## Cách kiểm
 - **Lệnh test:** `E:\DungChung\BiliFlow\.venv\Scripts\python.exe -m unittest discover -s tests -p "test_hardware_*.py" -v`, với `PYTHONPATH=<worktree>\src`.
@@ -99,7 +122,11 @@
 - **Hai câu nhỏ về nhãn và lời từ chối** (đã làm theo hợp đồng, đổi được):
   - card Turing chỉ khác bản torch hay driver cũng mang nhãn "Chưa qua cổng trên đời card này (sm_75)", vì mục 5.6 ghi "mọi lựa chọn trên đường này";
   - lần đo lỗi với bản torch chưa có trong `CUDA_DRIVER_MIN` giữ `cuda_unavailable` ở bước 4; bước 8 thì từ chối `driver_too_old` ("chưa biết driver tối thiểu").
-- Ở bước E2: chọn giờ cho khung GPU 3 và tạm dừng hàng đợi thật (agent không bao giờ POST `/api/scheduler`).
+- **Duyệt ba chỗ lệch của E2 so với bản E0 đã duyệt** (mục 11 của `docs/HARDWARE_PROFILE.md`; đã làm theo, đổi lại được):
+  1. `--wait-minutes` giữ **mutex riêng** trong lúc chờ (bản E0: "không giữ khóa nào"); không giữ mutex GPU, mutex xuất hay file khóa. Cái giá: trong lúc chờ, Control Center hiện "Đang đo (từ lần chạy trước)" và khóa "Đo lại";
+  2. `.ps1` kiểm trước mọi tham số đường dẫn (lỗi tham số rỗng và dấu `\` cuối của PowerShell 5.1);
+  3. thêm `-LaunchedBy control-center` hoặc `script`, để điền `writer.launched_by`.
+- **Lần đo thật E2:** chọn giờ cho khung GPU 3 và tự tạm dừng hàng đợi thật, hoặc tắt Control Center thật (agent không bao giờ POST `/api/scheduler`).
 - Trước Đợt 2 (không thuộc E0–E2): chạy lại cổng framemd5 cả phim L ở khung GPU 3 (câu hỏi 1, phương án b; người dùng đã cho phép đọc bản L cho lần chạy đó).
 
 ## Lưu ý cho người tiếp quản
@@ -119,6 +146,7 @@
   - manager gọi `observe()` với đúng `detection.ffmpeg.path` của hồ sơ, nếu không `ffmpeg_changed` sẽ báo sai;
   - `warnings` của GET ghép từ `Resolution.warnings`, `Resolution.caveats` và `FamilyOption.warnings`, bỏ trùng (`untested_fast_on` có ở cả hai chỗ đầu; `c1_off_fp32` chỉ nằm trong họ);
   - ghi chú chỉ-đọc cho E2 nằm trong scratchpad của session (`e2\read-*.md`), không nằm trong repo; session khác phải đọc lại code.
+- **"Đo lại" trên Control Center thử là một lần đo thật:** nó lấy mutex GPU và mutex xuất **thật** (tên toàn cục, không theo root), và khi chạy bằng `.venv` của thư mục cài thì còn canh cả thư mục cài (mục 6.3). Vì vậy không bao giờ bấm "Đo lại" trên Control Center thử ngoài khung GPU 3.
 - **Test không bao giờ giữ tên mutex thật** (`Local\BiliFlowGpuInference`, `Local\BiliFlowFinalRender`). Dùng `Local\BiliFlowTest-<uuid>`, truyền bằng tham số hàm, không bao giờ qua dòng lệnh hay biến môi trường.
 - **Control Center thử:**
   - lệnh: `python -m biliflow.control_entry --project-root <worktree>\temp\hw-cc-* --port 8798 --no-import-existing`, giống `Start-BiliFlow.ps1`. Không chạy qua `cli.py`, vì như vậy sẽ kéo torch vào;
@@ -135,4 +163,5 @@
     - `uv.lock` không có ở thư mục cài;
     - phiên bản 0.7.24 và 0.7.19 lệch nhau;
   - **E4:** cache ảnh DINO/SigLIP không tính thiết bị;
-  - **tài liệu:** hai trích dẫn sai trong `PERF_INSTALL_PLAN.md` và byte 0x08 ở `SCAN_PERFORMANCE.md:140-143`.
+  - **tài liệu:** hai trích dẫn sai trong `PERF_INSTALL_PLAN.md` và byte 0x08 ở `SCAN_PERFORMANCE.md:140-143`;
+  - **tải video (tài khoản nguồn):** `test_download_account_sources.SessionTest.test_cookies_rotated_before_a_cancel_are_kept` chập chờn cả trên `40a0125` (hủy cố định sau 4 s, trước khi Edge kịp tải trang khi máy bận).

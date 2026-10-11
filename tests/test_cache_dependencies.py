@@ -165,7 +165,9 @@ class RepositoryCacheScopeTests(unittest.TestCase):
         "source_archive.py", "source_archive_files.py", "source_archive_restore.py",
         "job_purge.py", "job_delete.py", "gore_triage.py",
         "hardware_schema.py", "hardware_profile.py", "hardware_resolve.py", "hardware_table.py",
-        "hardware_detect.py", "hardware_system.py",
+        "hardware_detect.py", "hardware_system.py", "hardware_measure.py", "hardware_locks.py",
+        "hardware_idle.py", "hardware_tools.py", "hardware_trials.py", "hardware_manager.py",
+        "hardware_status.py",
     )
 
     def test_control_plane_modules_are_in_no_scan_stage_key(self):

@@ -255,6 +255,8 @@
       loadPhone: () => get(C.endpoints.phoneStatus[1]),
       /* Cài đặt → Tailscale: PC only (the phone listener answers 403 pc_only). */
       loadTailscale: () => get(C.endpoints.tailscale[1]),
+      /* Cài đặt → Phần cứng: PC only (the phone listener answers 403 pc_only); the store asks only on the PC. */
+      loadHardware: () => get(C.endpoints.hardwareProfile[1]),
       health: () => get(C.endpoints.health[1]),
       review,
       /* Read-only preview right before a cleanup ("Xóa video gốc"), a delete ("Xóa video") or an archive. */
@@ -327,6 +329,7 @@
       memory_loaded: !!memory || !!previous.memory_loaded,
       phone: previous.phone || null,
       tailscale: previous.tailscale || null, // Cài đặt → Tailscale (GET /api/tailscale, PC only)
+      hardware: previous.hardware || null, // Cài đặt → Phần cứng (GET /api/hardware-profile, PC only)
       remote: !!previous.remote,
       // The page's listener (plan 9.18): 'pc' or 'phone' only from an answer of /api/phone-mode with a boolean `remote`;
       // null while unknown (pending, an error, a timeout, an answer without it). The PC-only account buttons need 'pc'.
@@ -350,6 +353,9 @@
   const deviceProblem = error => error.status === 0 ? 'mất kết nối hoặc quá thời gian chờ'
     : error.status === 404 ? 'Control Center không có mục này (404), có thể là bản cũ' : 'Control Center trả lỗi ' + error.status;
   const PC_UNCONFIRMED = 'Chưa xác định được trang này mở trên PC nên chưa gửi. Bấm Kiểm tra lại trong khung Tài khoản nguồn phim.';
+  const HW_PC_UNCONFIRMED = 'Chưa xác định được trang này mở trên PC nên chưa gửi. Tải lại trang rồi thử lại.';
+  /* Cài đặt → Phần cứng writes: "Đo lại" sends {} (the server ignores it); the two switches exactly {enabled: <bool>}. */
+  const HARDWARE_SWITCHES = ['hardwareCpuOnly', 'hardwareUntestedFast'];
   const PHONE_RETRIES = 5; // the poll asks /api/phone-mode again at most this often while the mode is unknown
 
   /* Live store: same interface as BFDemoStore, backed by the adapter. */
@@ -360,6 +366,7 @@
     let ai = null, memory = null, timer = null, phone = null, paused = false, downloadTimer = null, statusPolling = null;
     let phoneRequest = null, phoneRetries = 0;
     let tailscale = null, tailscaleWatch = false, tailscalePolling = null;
+    let hardware = null, hardwareWatch = false, hardwarePolling = null;
     // A listener that throws (a render bug) must not turn a finished request into a failed one: reported apart.
     const emit = () => listeners.forEach(fn => { try { fn(snap); } catch (error) { setTimeout(() => { throw error; }); } });
 
@@ -418,6 +425,8 @@
       if (!snap.device && !phoneRequest && phoneRetries < PHONE_RETRIES) { phoneRetries++; loadPhone(); }
       // Cài đặt open on the PC, or a Tailscale task still running (its end may have turned the phone mode on).
       if (!snap.remote && (tailscaleWatch || (tailscale && tailscale.task && tailscale.task.running))) loadTailscale();
+      // Cài đặt open on the PC, or a measurement still running (its end gets a toast); never before 'pc' is known.
+      if (snap.device === 'pc' && (hardwareWatch || (hardware && hardware.task && hardware.task.running))) loadHardware();
     }
     function onVisible() { if (!timer || document.hidden || paused) return; statusPolling = null; tick(); }
     async function loadAI() {
@@ -466,6 +475,26 @@
       tailscalePolling = request;
       return request;
     }
+    /* GET /api/hardware-profile, one request at a time, only once /api/phone-mode said this page is the PC (the route
+     * is PC only). An older Control Center (404) shows the panel's restart note; another error keeps the last state
+     * with load_error (a first failed read is never "not measured"). `fresh`: after a write, a request already on its
+     * way may have left before it, so it is asked again once that one ends. */
+    function loadHardware(options) {
+      if (snap.device !== 'pc') return Promise.resolve(snap);
+      if (hardwarePolling) return options && options.fresh ? hardwarePolling.then(() => loadHardware()) : hardwarePolling;
+      const request = (async () => {
+        try {
+          hardware = await adapter.loadHardware();
+        } catch (error) {
+          hardware = error.status === 404 ? {unavailable: true} : {...(hardware || {}), load_error: error.message};
+        }
+        snap = {...snap, hardware};
+        emit();
+        return snap;
+      })().finally(() => { if (hardwarePolling === request) hardwarePolling = null; });
+      hardwarePolling = request;
+      return request;
+    }
     async function loadMemory() {
       memory = await adapter.loadMemory();
       snap = {...snap, logos: normalizeLogos(memory), memory_sha256: memory.memory_sha256, memory_loaded: true};
@@ -487,8 +516,15 @@
         tailscaleWatch = !!on;
         if (tailscaleWatch && !snap.remote) loadTailscale();
       },
+      loadHardware,
+      /* Cài đặt open on the PC: the hardware panel follows every poll; closed: only while a measurement runs. */
+      watchHardware(on) {
+        hardwareWatch = !!on;
+        if (hardwareWatch && snap.device === 'pc') loadHardware();
+      },
       start(intervalMs) {
-        pollStatus(); loadAI(); loadPhone().then(s => { if (!s.remote) loadTailscale(); });
+        // Cài đặt may already be open: the hardware panel loads as soon as /api/phone-mode says this is the PC.
+        pollStatus(); loadAI(); loadPhone().then(s => { if (!s.remote) loadTailscale(); if (s.device === 'pc' && hardwareWatch) loadHardware(); });
         if (timer || !intervalMs) return;
         timer = setInterval(tick, intervalMs);
         if (typeof document !== 'undefined' && document.addEventListener) document.addEventListener('visibilitychange', onVisible);
@@ -546,6 +582,21 @@
           return (await adapter.dispatch(operation, {source: String(source)}, {})).body;
         } finally {
           await loadDownloads();
+        }
+      },
+      /* Cài đặt → Phần cứng (PC only): "Đo lại" (hardwareRemeasure, `enabled` unused) and the two switches. The
+       * panel is read again after the answer, also after a refusal (409 busy / not_paused / not_idle / not_untested),
+       * never /api/status. */
+      async hardwareAction(operation, enabled) {
+        // Never sent before /api/phone-mode said this page is the PC (the panel shows no button then).
+        if (snap.device !== 'pc') throw new Error(HW_PC_UNCONFIRMED);
+        const isSwitch = HARDWARE_SWITCHES.includes(operation);
+        if (operation !== 'hardwareRemeasure' && !isSwitch) throw new AdapterError(400, 'Thao tác phần cứng không hợp lệ.');
+        if (isSwitch && typeof enabled !== 'boolean') throw new AdapterError(400, 'Công tắc cần true hoặc false.');
+        try {
+          return (await adapter.dispatch(operation, null, isSwitch ? {enabled} : {})).body;
+        } finally {
+          await loadHardware({fresh: true});
         }
       },
       /* Review dialog open: /api/status polling pauses; on close it refreshes at once and resumes. */

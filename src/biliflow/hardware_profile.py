@@ -682,3 +682,8 @@ def _family_fits(family: str, knobs: ScanKnobs) -> bool:
     if family == "standard_ocr8":
         return form == "plain" and batch == 8
     return (form == "plain" and batch == 1) or form == "cpu"
+
+
+if __name__ == "__main__":  # "Đo lại" (section 6.3): the measurement lives in hardware_measure
+    from biliflow import hardware_measure
+    raise SystemExit(hardware_measure.main())

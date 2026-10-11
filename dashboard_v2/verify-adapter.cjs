@@ -75,6 +75,9 @@ test('Every operation of guide section 4 uses its real path and body', async () 
     ['phoneMode', null, {extend: true}, '/api/phone-mode'],
     ['phoneExtend', null, {}, '/api/phone-mode/extend'],
     ...Object.entries(C.tailscaleOps).map(([action, op]) => [op, null, {}, '/api/tailscale/' + action]),
+    ['hardwareRemeasure', null, {}, '/api/hardware-profile/remeasure'],
+    ['hardwareCpuOnly', null, {enabled: true}, '/api/hardware-profile/cpu-only'],
+    ['hardwareUntestedFast', null, {enabled: false}, '/api/hardware-profile/untested-fast'],
   ];
   for (const [op, target, body] of cases) await a.dispatch(op, target, body);
   const posts = f.posts();
@@ -324,6 +327,117 @@ test('Tailscale: the phone store never asks for /api/tailscale; the PC store doe
   local.start(0); await settle();
   assert.equal(pc.calls.filter(c => c.path === '/api/tailscale').length, 1);
   assert.equal(local.snapshot().tailscale.installed, false);
+});
+
+/* Cài đặt → Phần cứng (docs/HARDWARE_PROFILE.md 6.1-6.2): PC only, the GET too. */
+const PC_MODE = {status: 200, body: {remote: false, enabled: false}};
+const hwGets = f => f.calls.filter(c => c.method === 'GET' && c.path === '/api/hardware-profile').length;
+const hwCalls = f => f.calls.filter(c => c.path.startsWith('/api/hardware-profile')).length;
+const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
+
+test('Phần cứng: the PC store reads the panel once the mode is PC; writes send exactly their body and read the panel again, never /api/status', async () => {
+  const ready = {status: 'ready', task: null, cpu_only: {value: false, valid: true}};
+  const f = fake({'GET /api/phone-mode': PC_MODE,
+    'GET /api/hardware-profile': [{status: 200, body: ready}, {status: 200, body: {...ready, cpu_only: {value: true, valid: true}}}, {status: 200, body: ready}],
+    'POST /api/hardware-profile/remeasure': {status: 409, body: {error: 'Hãy tạm dừng hàng đợi trước', code: 'not_paused'}}});
+  const store = A.createLiveStore(adapterWith(f));
+  store.watchHardware(true);
+  assert.equal(hwGets(f), 0, 'not before /api/phone-mode said PC');
+  await store.loadPhone();
+  store.watchHardware(true);
+  await store.loadHardware();
+  assert.equal(hwGets(f), 1, 'one read: the watch and the call share it');
+  assert.deepEqual(store.snapshot().hardware, ready);
+  await store.hardwareAction('hardwareCpuOnly', true);
+  assert.equal(store.snapshot().hardware.cpu_only.value, true, 'read again after the write');
+  await assert.rejects(() => store.hardwareAction('hardwareRemeasure'),
+    e => e.status === 409 && e.code === 'not_paused' && e.message === 'Hãy tạm dừng hàng đợi trước (not_paused)');
+  assert.equal(hwGets(f), 3, 'a refusal reads the panel again too');
+  for (const [operation, value] of [['hardwareCpuOnly', '1'], ['hardwareCpuOnly', undefined], ['hardwareUntestedFast', 1], ['scheduler', true], ['hardwareProfile', true]])
+    await assert.rejects(() => store.hardwareAction(operation, value), String(operation) + ' ' + String(value));
+  assert.deepEqual(f.posts().map(p => [p.path, p.body]), [['/api/hardware-profile/cpu-only', {enabled: true}], ['/api/hardware-profile/remeasure', {}]]);
+  assert.equal(f.calls.filter(c => c.path === '/api/status').length, 0);
+  await store.refresh();
+  assert.deepEqual(store.snapshot().hardware, ready, 'a status poll keeps the panel');
+});
+
+test('Phần cứng: an older Control Center (404) is unavailable; a later error keeps the last state; a first error is never "not measured"', async () => {
+  const old = fake({'GET /api/phone-mode': PC_MODE, 'GET /api/hardware-profile': {status: 404, body: {error: 'Không tìm thấy'}}});
+  const legacy = A.createLiveStore(adapterWith(old));
+  await legacy.loadPhone(); await legacy.loadHardware();
+  assert.deepEqual(legacy.snapshot().hardware, {unavailable: true});
+  const good = {status: 'needs_measurement', task: null};
+  const flaky = A.createLiveStore(adapterWith(fake({'GET /api/phone-mode': PC_MODE,
+    'GET /api/hardware-profile': [{status: 200, body: good}, {status: 500, body: {error: 'boom'}}]})));
+  await flaky.loadPhone(); await flaky.loadHardware(); await flaky.loadHardware();
+  assert.equal(flaky.snapshot().hardware.status, 'needs_measurement');
+  assert.match(flaky.snapshot().hardware.load_error, /boom/);
+  const first = A.createLiveStore(adapterWith(fake({'GET /api/phone-mode': PC_MODE, 'GET /api/hardware-profile': {status: 500, body: {error: 'boom'}}})));
+  await first.loadPhone(); await first.loadHardware();
+  assert.deepEqual(first.snapshot().hardware, {load_error: 'boom'}, 'no status: the panel says it could not read');
+});
+
+test('Phần cứng: the phone store and an unknown mode never ask and never send; Cài đặt open at start loads once the mode is PC', async () => {
+  const phone = fake({'GET /api/phone-mode': {status: 200, body: {remote: true, enabled: true}}});
+  const remote = A.createLiveStore(adapterWith(phone));
+  remote.watchHardware(true); remote.start(0); await pause(20);
+  remote.watchHardware(false); remote.watchHardware(true); await remote.loadHardware();
+  await assert.rejects(() => remote.hardwareAction('hardwareCpuOnly', true), /trên PC/);
+  assert.equal(hwCalls(phone), 0);
+  const broken = fake({'GET /api/phone-mode': {status: 500, body: {error: 'boom'}}});
+  const unknown = A.createLiveStore(adapterWith(broken));
+  unknown.watchHardware(true); unknown.start(0); await pause(20);
+  assert.equal(unknown.snapshot().device, null);
+  await assert.rejects(() => unknown.hardwareAction('hardwareRemeasure'), /trên PC/);
+  assert.equal(hwCalls(broken), 0);
+  const pc = fake({'GET /api/phone-mode': PC_MODE, 'GET /api/hardware-profile': {status: 200, body: {status: 'needs_measurement'}}});
+  const local = A.createLiveStore(adapterWith(pc));
+  local.watchHardware(true); local.start(0); await pause(20); // app.js: route() runs before /api/phone-mode answers
+  assert.equal(hwGets(pc), 1);
+  assert.equal(local.snapshot().hardware.status, 'needs_measurement');
+  const closed = fake({'GET /api/phone-mode': PC_MODE});
+  const elsewhere = A.createLiveStore(adapterWith(closed));
+  elsewhere.start(0); await pause(20);
+  assert.equal(hwGets(closed), 0, 'Cài đặt closed: nothing to read');
+});
+
+test('Phần cứng: the poll follows Cài đặt, and a measurement still running after it closed, until its end', async () => {
+  const running = {status: 'ready', task: {running: true, step: 'torch_probe', index: 1, total: 9}};
+  const done = {status: 'ready', task: {running: false, exit: 0, message: 'Đo xong.'}};
+  const f = fake({'GET /api/phone-mode': PC_MODE,
+    'GET /api/hardware-profile': [{status: 200, body: running}, {status: 200, body: running}, {status: 200, body: done}]});
+  const store = A.createLiveStore(adapterWith(f));
+  await store.loadPhone();
+  store.watchHardware(true); await store.loadHardware(); store.watchHardware(false);
+  store.start(5);
+  try {
+    for (let i = 0; i < 200 && store.snapshot().hardware.task.running; i++) await pause(5);
+    assert.equal(store.snapshot().hardware.task.running, false);
+    const seen = hwGets(f);
+    assert.ok(seen >= 3, 'polled while it ran: ' + seen);
+    await pause(40);
+    assert.equal(hwGets(f), seen, 'no poll once it ended with Cài đặt closed');
+  } finally {
+    store.stop();
+  }
+});
+
+test('Phần cứng: one read at a time; a write waits for a read already on its way, then reads again', async () => {
+  let release;
+  const gate = new Promise(resolve => { release = resolve; });
+  const f = fake({'GET /api/phone-mode': PC_MODE,
+    'GET /api/hardware-profile': [() => gate.then(() => ({status: 200, body: {status: 'ready', cpu_only: {value: false}}})),
+      {status: 200, body: {status: 'ready', cpu_only: {value: true}}}]});
+  const store = A.createLiveStore(adapterWith(f));
+  await store.loadPhone();
+  const first = store.loadHardware(), second = store.loadHardware();
+  assert.equal(first, second, 'one request at a time');
+  const write = store.hardwareAction('hardwareCpuOnly', true);
+  await pause(5);
+  release();
+  await write;
+  assert.equal(hwGets(f), 2);
+  assert.equal(store.snapshot().hardware.cpu_only.value, true, 'the answer read after the write is the one kept');
 });
 
 test('"Gia hạn thêm 8 giờ": the PC gets its full status, the phone over Tailscale only the new time', async () => {

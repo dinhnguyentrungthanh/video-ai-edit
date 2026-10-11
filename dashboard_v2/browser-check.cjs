@@ -20,7 +20,8 @@ if (!pw) { process.stdout.write('SKIP browser-check: Playwright is not installed
 
 const ROOT = __dirname;
 const TOKEN = 'browser-token';
-const ASSETS = new Set(['styles.css', 'theme.css', 'contracts.js', 'adapter.js', 'download-demo.js', 'download-core.js', 'download-view.js', 'download-live.js', 'app.js',
+const ASSETS = new Set(['styles.css', 'theme.css', 'contracts.js', 'adapter.js', 'download-demo.js', 'download-core.js', 'download-view.js', 'download-episodes.js',
+  'download-live.js', 'hardware-view.js', 'app.js',
   'mock-data.js', 'demo-store.js',
   'review.css', 'review-core.js', 'review-detail.js', 'review-media.js', 'review-cards.js', 'review.js',
   ...fs.readdirSync(path.join(ROOT, 'assets')).map(f => 'assets/' + f)]);
@@ -47,7 +48,37 @@ const phoneStatus = () => remoteMode ? {remote: true, enabled: true} : {remote: 
   last_disabled_reason_text: phoneOn ? null : 'đến giờ tự tắt',
   events: phoneOn ? [{type: 'PHONE_CODE_WRONG', message: 'Thiết bị 192.168.1.50 nhập sai mã', at: 1789990000, ip: '192.168.1.50'}] : []};
 const PC_ONLY = ['/api/source-archive', '/api/source-archive/restore', '/api/source-recycle-check',
-  '/api/shutdown', '/api/ai/config', '/api/ai/login', '/api/logo-memory/class', '/api/logo-memory/delete', '/api/phone-mode'];
+  '/api/shutdown', '/api/ai/config', '/api/ai/login', '/api/logo-memory/class', '/api/logo-memory/delete', '/api/phone-mode',
+  '/api/hardware-profile/remeasure', '/api/hardware-profile/cpu-only', '/api/hardware-profile/untested-fast'];
+// Cài đặt → Phần cứng: GET /api/hardware-profile answers (docs/HARDWARE_PROFILE.md 6.1), PC only like the real route.
+const HW_DETECTION = {gpu: 'NVIDIA GeForce RTX 2060', compute_capability: '7.5', vram_mib: 6144, driver: '617.42', torch: '2.14.0+cu126',
+  cpu: 'CPU mẫu 8 nhân 16 luồng', ram_gib: 15.8, ffmpeg: {version: '9.0.1', encoders: {libx264: 'ok', h264_nvenc: 'ok', hevc_nvenc: 'ok', av1_nvenc: 'failed'},
+    nvdec: {trial: 'ok', framemd5_equal_cpu: true}, nvdec_codecs: {h264: 'ok', hevc: 'ok', av1: {trial: 'not_run', reason: 'không có encoder AV1 phần mềm'}}}};
+const HW_BASE = {applies_to_jobs: false, cpu_only: {value: false, valid: true}, untested_fast: {value: false, gpu: null, applies: false}, task: null};
+const HW_SAMPLES = {
+  ready: {...HW_BASE, status: 'ready', row: {id: 'nvidia-sm75-torch2.14.0+cu126', status: 'gated', table_version: 1},
+    families: {fast: {family: 'fast', capped: false, logo_decode: 'nvdec', tf32: 'default', refusal: null},
+      standard_ocr8: {family: 'standard_ocr8', capped: false, tf32: 'default', refusal: null}, standard: {family: 'standard', capped: false, tf32: 'default', refusal: null}},
+    reasons: [{code: 'row_match', text: 'RTX 2060 (7.5), torch 2.14.0+cu126, driver 617.42 ≥ 576.80'}],
+    warnings: [{code: 'c1_off_fp32', text: 'Họ fp32 (chuẩn, OCR 8) tắt luật máu anime C1: C1 chỉ hiệu chỉnh cho report fp16 ở 2 fps (gore_triage.py:65, :114-115).'}],
+    profile: {present: true, source: 'main', written_at: '2026-10-11T09:30:00+07:00', result: 'ok', failure: null, power: {battery_present: true, ac_online: true}},
+    detection: HW_DETECTION, can_remeasure: {ok: false, reason: 'not_paused', text: 'Hãy tạm dừng hàng đợi trước'}},
+  needs: {...HW_BASE, status: 'needs_measurement', row: null, reasons: [], warnings: [],
+    profile: {present: false, source: null, main_state: 'missing', last_good_state: 'missing'}, detection: null,
+    families: {fast: {family: null, refusal: 'needs_measurement'}, standard_ocr8: {family: null, refusal: 'needs_measurement'}, standard: {family: null, refusal: 'needs_measurement'}},
+    can_remeasure: {ok: true, reason: null, text: ''}},
+  untested: {...HW_BASE, status: 'ready_untested', row: {id: 'nvidia-untested', status: 'untested', table_version: 1},
+    families: {fast: {family: 'standard', capped: true, tf32: 'off', refusal: null}, standard_ocr8: {family: 'standard', capped: true, tf32: 'off', refusal: null},
+      standard: {family: 'standard', capped: false, tf32: 'off', refusal: null}},
+    reasons: [{code: 'untested_arch', text: 'NVIDIA GeForce RTX 3060 (8.6), torch 2.14.0+cu126 có sm_86'}],
+    warnings: [{code: 'untested_arch', text: 'Chưa qua cổng trên đời card này (sm_86)'}, {code: 'tf32_off', text: 'Tắt TF32: matmul và cuDNN chạy fp32 IEEE (cần cờ dòng lệnh của Đợt 2).'}],
+    profile: {present: true, source: 'main', written_at: '2026-10-11T09:30:00+07:00', result: 'ok', failure: null, power: {battery_present: false, ac_online: true}},
+    detection: {...HW_DETECTION, gpu: 'NVIDIA GeForce RTX 3060', compute_capability: '8.6', vram_mib: 12288}, can_remeasure: {ok: true, reason: null, text: ''}},
+};
+// A run of this Control Center: can_remeasure carries hardware_manager.BUSY_MESSAGE.
+HW_SAMPLES.running = {...HW_SAMPLES.needs, task: {running: true, previous_run: false, step: 'torch_probe', index: 3, total: 9, started_at: '2026-10-11T09:31:00+07:00'},
+  can_remeasure: {ok: false, reason: 'busy', text: 'Đang đo phần cứng; chờ lần đo xong rồi bấm lại.'}};
+let hwMode = 'ready', hwGets = 0;
 const status = () => ({version: '0.7.24', started: true, scheduler_paused: false, queue: {length: 2, paused: false},
   active: {job_id: 102, stage: 'visual_logo', pid: 1}, jobs, source_cleanup_running: false, detector_options: [],
   resources: {cpu_percent: 10 + (polls % 5), memory: {percent: 40, used_bytes: 1, total_bytes: 2}, disk: {percent: 60, free_bytes: 3e11, total_bytes: 1e12}, gpu: null}});
@@ -71,6 +102,10 @@ const server = http.createServer((req, res) => {
     // Cài đặt → Tailscale: not installed; the check below opens "Cài và cấu hình Tailscale" and cancels it.
     if (p === '/api/tailscale') return send(res, 200, {installed: false, cli: null, install_dir: 'C:\\Program Files\\Tailscale',
       service: 'missing', backend: null, peers: [], auth_url: null, firewall_rule: 'missing', task: null});
+    if (p === '/api/hardware-profile') {
+      hwGets++;
+      return remoteMode ? send(res, 403, {error: 'Chỉ làm trên PC: (giả)', code: 'pc_only'}) : send(res, 200, HW_SAMPLES[hwMode]);
+    }
     if (p === '/api/ai') return send(res, 200, {ready: true, config: {enabled: true, model: 'gpt-5.6-luna', reasoning_effort: 'medium'}, models: ['gpt-5.6-luna'], efforts: ['low', 'medium'], message: 'Đã kết nối (giả)'});
     if (p === '/api/logo-memory') return send(res, 200, {memory_sha256: 'c'.repeat(64), records: [{key: 'k1', labels: ['iQIYI'], memory_class: 'platform_logo', platform: 'iqiyi', frames: 1, frame_urls: []}], backups: []});
     if (/^\/review\/\d+$/.test(p)) return send(res, 200, '<!doctype html><title>review</title><h1>Trang duyệt cũ</h1>', 'text/html');
@@ -274,6 +309,13 @@ async function check(name, fn) { await fn(); passed++; results.push(name); proce
         await page.waitForTimeout(500);
         await noOverflow(view + ' 375');
       }
+      for (const mode of Object.keys(HW_SAMPLES)) { // Cài đặt with each hardware answer (a query forces a new load)
+        hwMode = mode;
+        await page.goto(base + '/dashboard-v2/?hw375-' + mode + '#settings');
+        await page.waitForSelector('#hw-panel .hw-status');
+        await noOverflow('settings 375 hardware ' + mode);
+      }
+      hwMode = 'ready';
       await page.goto(base + '/dashboard-v2/#videos');
       await page.waitForSelector('#search');
       await openJob(101);
@@ -357,6 +399,57 @@ async function check(name, fn) { await fn(); passed++; results.push(name); proce
       assert.equal(posts.length, before, 'no install without the confirm');
     });
 
+    await check('Hardware panel on the PC: READY, NEEDS_MEASUREMENT, a running measurement and READY_UNTESTED; each change asks first', async () => {
+      assert.deepEqual(Object.keys(HW_SAMPLES), ['ready', 'needs', 'untested', 'running'], 'every sample is shown below');
+      const remeasure = page.locator('#hw-panel [data-op="remeasure"]');
+      const reason = () => page.locator('#hw-panel .hw-remeasure-reason').textContent();
+      // One sample per page (a new query forces a fresh load, so the first GET answers with it); its badge proves which.
+      async function show(mode, tag, badge) {
+        hwMode = mode;
+        await page.goto(base + '/dashboard-v2/?hw-' + tag + '#settings');
+        await page.waitForSelector('#hw-panel .hw-status');
+        assert.equal(await page.locator('#hw-panel .hw-status').textContent(), badge, mode + ': the panel shows this sample');
+        assert.match(await page.locator('#hw-panel').textContent(), /Chưa áp dụng cho job – có hiệu lực sau Đợt 2/, mode);
+        assert.equal(await page.locator('#hw-panel input').count(), 0, mode + ': buttons, no checkbox');
+        assert.equal(await page.locator('#hw-panel [data-op="untested-fast"]').count() > 0, mode === 'untested', mode + ': the fast switch only on an untested card');
+      }
+      await show('ready', 'ready', 'Sẵn sàng');
+      assert.match(await page.locator('#hw-panel').textContent(), /NVIDIA GeForce RTX 2060/);
+      assert.equal(await remeasure.isDisabled(), true, 'ready: "Đo lại" follows can_remeasure');
+      assert.equal(await reason(), HW_SAMPLES.ready.can_remeasure.text);
+      await show('needs', 'needs', 'Chưa đo');
+      assert.equal(await page.locator('#hw-panel .hw-profile-none').textContent(), 'Chưa đo lần nào.');
+      assert.equal(await remeasure.isDisabled(), false, 'needs: "Đo lại" open');
+      assert.equal(await page.locator('#hw-panel .hw-remeasure-reason').count(), 0);
+      await show('running', 'running', 'Chưa đo');
+      assert.match(await page.locator('#hw-panel .hw-task').textContent(), /^Đang đoThử torch và CUDA \(bước 3\/9\)$/);
+      assert.equal(await remeasure.isDisabled(), true, 'running: "Đo lại" locked');
+      assert.equal(await reason(), HW_SAMPLES.running.can_remeasure.text, 'running: with can_remeasure.text');
+      await show('untested', 'untested', 'Card chưa qua cổng');
+      assert.equal(await remeasure.isDisabled(), false, 'untested: "Đo lại" open');
+      assert.match(await page.locator('#hw-panel .hw-untested').textContent(), /^Chưa qua cổng trên đời card này$/);
+      const before = posts.length;
+      await page.locator('#hw-panel [data-op="untested-fast"]').click();
+      await page.waitForSelector('#modal[open] #confirm-action');
+      assert.match(await page.locator('#modal').textContent(), /có hiệu lực cho job mới từ Đợt 2/);
+      assert.equal(await page.locator('#modal ol.help-steps li').count(), 3, 'the three risks');
+      await page.locator('#modal [data-action="close-modal"]').first().click();
+      await show('ready', 'ready-again', 'Sẵn sàng');
+      assert.match(await reason(), /Hãy tạm dừng hàng đợi trước/);
+      await page.locator('#hw-panel [data-op="cpu-only"]').click();
+      await page.waitForSelector('#modal[open] #confirm-action');
+      assert.match(await page.locator('#modal').textContent(), /Đường CPU chưa qua cổng \(E4\)/);
+      await page.locator('#modal [data-action="close-modal"]').first().click();
+      assert.equal(posts.length, before, 'no write without the confirm');
+      const reads = hwGets;
+      await page.locator('#hw-panel [data-op="cpu-only"]').click();
+      await page.waitForSelector('#modal[open] #confirm-action');
+      await page.locator('#confirm-action').click();
+      await page.waitForFunction(() => !document.getElementById('modal').open);
+      assert.deepEqual(posts.slice(before).map(x => [x.path, x.body]), [['/api/hardware-profile/cpu-only', {enabled: true}]]);
+      assert.ok(hwGets > reads, 'the panel is read again after the write');
+    });
+
     await check('Opened through the phone: PC-only actions are disabled with the reason, 375 px fits', async () => {
       remoteMode = true;
       await page.setViewportSize({width: 375, height: 800});
@@ -365,6 +458,10 @@ async function check(name, fn) { await fn(); passed++; results.push(name); proce
       assert.match(await page.locator('.phone-panel h2').textContent(), /Đang mở qua điện thoại/);
       assert.equal(await page.locator('[data-action="phone-toggle"]').count(), 0, 'no switch on the phone');
       assert.ok(!/abcd2345|wxyz6789/.test(await page.content()), 'the phone never sees the code');
+      const hwReads = hwGets;
+      await waitPoll();
+      assert.equal(await page.locator('#hw-panel').count(), 0, 'no hardware panel on the phone');
+      assert.equal(hwGets, hwReads, 'the phone never asks for /api/hardware-profile');
       for (const sel of ['[data-action="shutdown"]', '[data-action="ai-save"]', '[data-action="ai-login"]']) {
         const button = page.locator(sel).first();
         assert.equal(await button.isDisabled(), true, sel);

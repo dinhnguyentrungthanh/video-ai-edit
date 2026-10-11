@@ -250,6 +250,19 @@ class StateGroupTests(unittest.TestCase):
         self.assertEqual(out["phone"], [["cleanup", True, ""], ["delete", True, ""]])
         self.assertEqual(out["phone"], out["pc"])
 
+    def test_hardware_panel_texts_and_statuses_match_the_hardware_profile(self) -> None:
+        """E2 (docs/HARDWARE_PROFILE.md 5.6, 6.2): the fast switch's dialog states hardware_table's three risks word
+        for word, the other-card sentence is the backend's warning, and every status of resolve() has a badge."""
+        from biliflow import hardware_profile, hardware_table
+        panel = json.loads(_node(
+            "const h=require('./dashboard_v2/hardware-view.js');"
+            "console.log(JSON.stringify({risks:h.UNTESTED_FAST_RISKS,other:h.OTHER_CARD,statuses:Object.keys(h.STATUS),ops:h.OPS}))"))
+        self.assertEqual(panel["risks"], list(hardware_table.UNTESTED_FAST_RISKS))
+        self.assertEqual(panel["other"], hardware_profile.WARNING_TEXTS["untested_fast_other_card"])
+        self.assertEqual(set(panel["statuses"]), set(hardware_profile.STATUSES))
+        self.assertEqual(panel["ops"], {"remeasure": "hardwareRemeasure", "cpu-only": "hardwareCpuOnly",
+                                        "untested-fast": "hardwareUntestedFast"})
+
     def test_the_presenter_no_longer_claims_a_missing_source_is_in_input(self) -> None:
         app = (ROOT / "dashboard_v2" / "app.js").read_text(encoding="utf-8")
         self.assertIn("j.source_present===false?'Không còn video gốc trong input'", app)

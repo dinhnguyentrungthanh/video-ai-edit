@@ -126,7 +126,7 @@ DASHBOARD_V2_DIR = Path(__file__).resolve().parents[2] / "dashboard_v2"
 DASHBOARD_V2_PAGE = "live.html"
 DASHBOARD_V2_FILES = frozenset({
     "styles.css", "theme.css", "contracts.js", "adapter.js", "download-demo.js", "app.js",
-    "download-core.js", "download-view.js", "download-episodes.js", "download-live.js",
+    "download-core.js", "download-view.js", "download-episodes.js", "download-live.js", "hardware-view.js",
     "review.css", "review-core.js", "review-detail.js", "review-media.js", "review-cards.js", "review.js",
     "assets/mark.svg", "assets/poster-amber.svg", "assets/poster-blue.svg",
     "assets/poster-rose.svg", "assets/poster-sage.svg", "assets/poster-violet.svg",
@@ -148,6 +148,7 @@ PHONE_LOGIN_CSP = (
 )
 _PHONE_ACCESS_LOCK = threading.Lock()
 _TAILSCALE_LOCK = threading.Lock()
+_HARDWARE_LOCK = threading.Lock()
 # The classic review page as served by the phone listener (user decision, plan §8 question 10):
 # added after its own styles, so 127.0.0.1:8765 serves the page byte for byte as before.
 # (a) an arrow at the right edge of the filter chips, (b) no "phím N" hints on touch screens,
@@ -308,6 +309,33 @@ def _tailscale(center: Any) -> tailscale_manager.TailscaleManager:
 
             value = tailscale_manager.TailscaleManager(center.root, phone_enable=phone_enable, on_event=store_event)
             center.tailscale = value
+        return value
+
+
+def _hardware(center: Any) -> Any:
+    """The center's hardware manager (Dashboard V2 → Cài đặt → Phần cứng), created on first use.
+
+    hardware_manager is imported here and never at module level: importing control_center loads
+    no hardware_* module (docs/HARDWARE_PROFILE.md I2). All of its logic lives in that module.
+    """
+    with _HARDWARE_LOCK:
+        value = getattr(center, "hardware", None)
+        if value is None:
+            from biliflow import hardware_manager
+            store = getattr(center, "store", None)
+
+            def store_event(event_type: str, message: str, payload: dict[str, Any]) -> None:
+                if store is not None:
+                    store.add_event(None, event_type, message, level="WARN" if payload.get("ok") is False else "INFO",
+                                    payload=payload or None)
+
+            value = hardware_manager.HardwareManager(
+                center.root, store_event=store_event,
+                scheduler_view=lambda: hardware_manager.queue_view(center.store, center.scheduler))
+            center.hardware = value
+            stopping = getattr(center, "_stopping", None)
+            if stopping is not None and stopping.is_set():
+                value.close()  # created after stop() closed the managers: born closed
         return value
 
 
@@ -1851,6 +1879,8 @@ class ControlCenter:
                     self.phone.disable("stopped")
                 if getattr(self, "tailscale", None) is not None:
                     self.tailscale.close()  # a waiting `tailscale login` ends with the Control Center
+                if getattr(self, "hardware", None) is not None:
+                    self.hardware.close()  # writes the cancel file only; never kills the measurement
                 self.stop_ai_audits()
                 self.stop_ai_login()
                 self.watcher.shutdown()
@@ -1887,6 +1917,8 @@ class ControlCenter:
             self.phone.disable("stopped")  # the phone code dies with the Control Center
         if getattr(self, "tailscale", None) is not None:
             self.tailscale.close()  # Tailscale itself keeps running; only BiliFlow's helper stops
+        if getattr(self, "hardware", None) is not None:
+            self.hardware.close()  # a running measurement gets its cancel file; close() never raises or kills
         try:
             self.stop_ai_audits()
             self.stop_ai_login()
@@ -2101,6 +2133,13 @@ def _handler_class(center: ControlCenter) -> type[BaseHTTPRequestHandler]:
                         self.send_json(403, {"error": phone_access.PC_ONLY_TAILSCALE, "code": "pc_only"})
                     else:
                         self.send_json(200, _tailscale(center).status())
+                elif path == "/api/hardware-profile":
+                    # Cài đặt → Phần cứng; PC only. The phone listener has no GET allow-list (it hands every
+                    # other GET to this handler), so this check is the refusal. Never part of /api/status (I8).
+                    if not self.loopback_client():
+                        self.send_json(403, {"error": phone_access.PC_ONLY_HARDWARE, "code": "pc_only"})
+                    else:
+                        self.send_json(200, _hardware(center).status())
                 elif path == "/healthz":
                     self.send_json(200, {"status": "ok", "version": __version__})
                 elif path == "/api/session":
@@ -2306,6 +2345,20 @@ def _handler_class(center: ControlCenter) -> type[BaseHTTPRequestHandler]:
                         self.send_json(403, {"error": phone_access.PC_ONLY_TAILSCALE, "code": "pc_only"})
                         return
                     result = _tailscale(center).start(match.group(1))
+                elif match := re.fullmatch(r"/api/hardware-profile/(remeasure|cpu-only|untested-fast)", path):
+                    # "Đo lại" and the two switches of Cài đặt → Phần cứng: 127.0.0.1 + token only (the phone
+                    # listener refuses them before the body). A conflict is an ActionConflict (409).
+                    if not self.loopback_client():
+                        self.send_json(403, {"error": phone_access.PC_ONLY_HARDWARE, "code": "pc_only"})
+                        return
+                    if match.group(1) == "remeasure":
+                        result = _hardware(center).start("remeasure")  # the body is ignored
+                    else:
+                        if set(body) != {"enabled"} or type(body["enabled"]) is not bool:
+                            raise ValueError('Cần đúng {"enabled": true} hoặc {"enabled": false}')
+                        hardware = _hardware(center)
+                        switch = hardware.set_cpu_only if match.group(1) == "cpu-only" else hardware.set_untested_fast
+                        result = switch(body["enabled"])
                 elif match := re.fullmatch(r"/api/jobs/(\d+)/(hide|unhide)", path):
                     result = center.set_job_hidden(int(match.group(1)), match.group(2) == "hide")
                 elif match := re.fullmatch(r"/api/jobs/(\d+)/(start|resume|pause|stop-after-stage|cancel|retry|rerun|skip|unskip|ai-audit)", path):
