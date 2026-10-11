@@ -146,7 +146,8 @@ class CacheKeyTest(unittest.TestCase):
     def test_no_scan_stage_reads_the_files_of_this_change(self):
         source = REPO_ROOT / "src" / "biliflow"
         changed = {source / name for name in (
-            "install_paths.py", "recycle_bin.py", "job_purge.py", "download_tools.py", "performance_report.py",
+            "install_paths.py", "activation.py", "recycle_bin.py", "job_purge.py", "download_tools.py",
+            "performance_report.py",
         )}
         for stage in sorted(CACHEABLE_STAGES):
             with self.subTest(stage):

@@ -1,6 +1,6 @@
 # Bàn giao C – Bộ cài, phần code thuần
 - Nhánh: `feat/installer` (từ `origin/main` `40a0125`) · Commit cuối: xem `git log -1` · Cập nhật: 2026-10-11
-- Chạy ở: Cloud · Trạng thái: đang làm (C0 chờ người dùng duyệt; C2 xong; tiếp C6-lõi)
+- Chạy ở: Cloud · Trạng thái: đang làm (C0 chờ người dùng duyệt; C2, C6-lõi xong; tiếp C1)
 
 ## Đã xong
 - **C0:** soạn đề xuất sửa `AGENTS.md`, `LICENSE`, `THIRD_PARTY_NOTICES.md` (mục "Đề xuất C0" bên dưới). **Chưa sửa** `AGENTS.md`, chưa tạo `LICENSE`, chưa sửa `THIRD_PARTY_NOTICES.md`. Không có test (chỉ tài liệu).
@@ -10,26 +10,38 @@
   - Test: `tests/test_install_paths.py` 13 test OK (gốc checkout = `parents[2]` như cũ; worktree tự là gốc; worktree mất file đánh dấu không mượn gốc chính; giới hạn 3 cấp; file đánh dấu sai/thư mục/liên kết bị từ chối; biến môi trường không đổi được gốc; `allowed_project_root` giữ nghĩa; không stage nào trong `CACHEABLE_STAGES` đọc các file đã sửa).
   - Khóa cache: so `stage_source_paths` + SHA-256 từng file của cả 10 stage giữa `origin/main` và nhánh này: **giống hệt**. File đánh dấu không nằm trong danh sách `_tree_fingerprint`.
   - Test liên quan trên Linux: `test_recycle_bin`, `test_job_delete`, `test_source_cleanup`, `test_download_tools`, `test_performance_report`: 156 test, 24 fail + 26 error **giống hệt trên `origin/main`** (test chỉ chạy trên Windows: ctypes/Thùng rác/ACL). PC chạy lại ở G1.
+- **C6-lõi:** `src/biliflow/activation.py` mới, **chưa nối** vào Control Center hay CLI.
+  - Mã máy: 3 HMAC-SHA256 có muối (8 byte mỗi phần) của MachineGuid (registry, `KEY_WOW64_64KEY`), UUID bo mạch (bảng SMBIOS qua `GetSystemFirmwareTable('RSMB')`, kiểu 1; UUID giả như toàn 00/FF, `03000200-0400-0500-0006-000700080009` coi là không biết) và serial ổ đĩa hệ thống (`GetVolumeInformationW` trên ổ chứa Windows; cài lại Windows thì đổi, nên chỉ còn khớp 1/3). Phần không đọc được = 8 byte 0, không bao giờ khớp. Khớp ≥ 2/3. Mã máy dạng base32 48 ký tự (8 nhóm 6) có checksum 5 byte bắt lỗi gõ; chấp nhận chữ thường, khoảng trắng, 0/1/8 thay O/I/B.
+  - Key: 43 byte dữ liệu (phiên bản, loại, số tháng, mã bộ uint32, ngày cấp, ngày hết hạn = ngày đầu tiên không dùng được, mã key 8 byte ngẫu nhiên, 3 hash mã máy) + chữ ký Ed25519 64 byte; base32 172 ký tự, nhóm 4; mã hóa duy nhất (bit thừa phải là 0). Không có tên khách. Lưu `state/activation/key.json`.
+  - Khóa tin cậy: chỉ `RELEASE_PUBLIC_KEY_HEX` (**đang để trống** → mọi kiểm tra trả `NOT_CONFIGURED` cho tới khi người dùng tạo cặp khóa thật trên PC và đặt khóa công khai vào đây); khóa test bị từ chối kể cả khi đặt vào đó (`TEST_PUBLIC_KEY_SHA256`). Test chọn khóa test bằng cách patch `_trusted_public_key`.
+  - Đồng hồ: `state/activation/clock.json` giữ thời điểm muộn nhất từng thấy, có HMAC cục bộ suy từ định danh của máy. Chậm hơn > 48 h → `CLOCK_BACK`; trong 48 h thì kiểm hạn theo thời điểm muộn hơn. Key tháng mất/sửa file đồng hồ → `NEEDS_RECHECK` (nhập lại key; ngày cấp key là mốc dưới). Key vĩnh viễn tự ghi lại file đồng hồ. Ghi tối đa mỗi 10 phút, không bao giờ lùi; lỗi ghi trong `check()` không làm hỏng kết quả.
+  - Trạng thái: `ACTIVE`, `NOT_CONFIGURED`, `NO_KEY`, `INVALID`, `WRONG_MACHINE`, `EXPIRED`, `CLOCK_BACK`, `NEEDS_RECHECK`, `UNAVAILABLE` (thông báo tiếng Việt trong `MESSAGES`).
+  - Công cụ cấp key `keygen/issue_key.py` (ngoài gói, bộ cài không được chép thư mục `keygen/`): `init` (tạo cặp khóa, mã hóa bằng mật khẩu ≥ 12 ký tự, không ghi đè, in khóa công khai), `issue` (cấp cả bộ: `--machine` lặp lại, `--set`, `--kind perpetual|month:N`, `--customer`; ghi sổ CSV), `reissue` (giữ bộ, loại, hạn gốc, mã key mới; tối đa 3 lần mỗi key gốc trừ khi `--force`; key gốc hết hạn thì từ chối), `verify`. Từ chối khóa bí mật và sổ nằm trong checkout Git hay thư mục cài BiliFlow (có `.git` hoặc `biliflow-install.json` ở thư mục cha).
+  - Cặp khóa **TEST ONLY**: `tests/fixtures/activation/` (có README).
+  - Test: `tests/test_activation.py` 36 test, OK trên Python 3.11 và 3.13 (1 skip: đọc định danh thật chỉ chạy trên Windows; PC chạy ở G1). Bắt được và đã sửa: mật khẩu có dấu tiếng Việt làm pycryptodomex lỗi (giờ mã hóa UTF-8).
+  - Khóa cache: `activation.py` không thuộc stage nào (thêm vào `CacheKeyTest`).
 
 ## Đang dở
 - (trống)
 
 ## Bước tiếp theo
-1. C6-lõi: `activation.py`, công cụ cấp key ngoài gói, cặp khóa test.
-2. C1: script chỉ đọc tạo `config/models.lock.json`, cập nhật `scripts/download_models.py` theo lock.
+1. C1: script chỉ đọc tạo `config/models.lock.json`, cập nhật `scripts/download_models.py` theo lock.
 
 ## Cách kiểm
 - C0: người dùng đọc mục "Đề xuất C0".
+- C6-lõi: `python -m unittest tests.test_activation -v` (cần `pycryptodomex`, có trong `.venv`). Trên PC, `test_this_pc_has_at_least_two_known_parts` đọc định danh thật (chỉ đọc).
 - C2: `python -m unittest tests.test_install_paths -v` (PC: `.venv` của thư mục cài, `PYTHONPATH` trỏ vào `src` của worktree); cổng: khóa cache mọi stage không đổi.
 
 ## Chờ người dùng
 - Duyệt C0 (ba khối A, B, C bên dưới). Sau khi duyệt, session nào áp dụng thì chép nguyên văn; điền tên chủ sở hữu vào `LICENSE`.
 - Repo phải Private trước bản build đầu tiên (C7).
+- C6: người dùng tự chạy `keygen\issue_key.py init --private-key <ngoài Git và ngoài BiliFlow>` trên PC, sao lưu file + mật khẩu, rồi đưa khóa công khai (hex) vào `RELEASE_PUBLIC_KEY_HEX` (lúc C6-nối). Agent không chạy bước này.
 
 ## Lưu ý cho người tiếp quản
 - PC chạy Python 3.11 (`pyproject.toml`: `>=3.11,<3.12`): không dùng cú pháp 3.12+.
 - Không sửa: `scheduler.py`, `final_renderer.py`, `job_pipeline.py`, module quét, `control_center.py`, `cli.py`, `__main__.py`, `__init__.py`, `run.ps1`, `env.ps1`, `stage_cache.py`, `cache_dependencies.py`, `pyproject.toml`, `config/*` (trừ file lock mới), `models\`.
 - Không bao giờ tạo hay đưa khóa bí mật thật vào repo.
+- C6-nối (Đợt 3): server chỉ để kích hoạt trước `ControlCenter()`, chặn CLI, trang kích hoạt, tạm dừng scheduler ở ranh giới stage khi key tháng hết hạn, giờ internet (tùy chọn) qua client mạng đã kiểm của trình tải; cập nhật vai trò pycryptodomex trong `config/download_tools.json` (thuộc `config/*`, chưa sửa).
 - C5 (bộ cài) phải ghi `biliflow-install.json` ở gốc thư mục cài **trước** khi chạy bất kỳ code BiliFlow nào; C4 phải giữ gói `biliflow` trong 3 cấp dưới gốc cài (`MAX_LEVELS_ABOVE_PACKAGE`).
 - Môi trường cloud: Python 3.13 hệ thống, không có `.venv`; `pycryptodomex==3.23.0` (đúng bản trong lock) cài vào venv tạm của session để chạy test C6.
 
