@@ -259,7 +259,9 @@ Cùng một bảng so sánh áp cho file chính và last-good:
 6. Kiểm chéo:
    - `result == "ok"` thì `failure` là null;
    - `torch_cuda.ok` thì `device_count ≥ 1`;
-   - `nvml.status == "ok"` và `torch_cuda.ok` thì `device_count == len(nvidia_gpus)`;
+   - bản `ok` có `torch_cuda.ok` thì `nvml.status == "ok"` và `device_count == len(nvidia_gpus)`. Chỉ xét bản `ok`: bản thất bại `nvml_torch_mismatch` chính là chỗ hai bên khác nhau, và vẫn phải đọc được;
+   - bản `ok` mà `torch_cuda.ok` sai thì `history.had_cuda` sai (máy từng có CUDA mà nay không dùng được thì luôn là bản thất bại, mục 3.5);
+   - `history.had_cuda` sai thì `first_cuda_at` là null;
    - `torch_cuda.ok` thì `history.had_cuda`.
 7. Cache trong tiến trình theo `(mtime_ns, size)` của ba file, theo mẫu `control_center.py:511-540`.
 
@@ -372,14 +374,16 @@ Các module được tách theo hai tiêu chí: chạm tới khóa cache tới �
 
 | Module | Nội dung | Import ở cấp module | Không bao giờ bị import bởi |
 |---|---|---|---|
-| `hardware_profile.py` | kiểu, hằng số, `read_profile`, `read_override`/`write_override`, `resolve`, `choose`, `speed_arguments`, `LEGACY_KNOBS`, `freeze_value`/`parse_frozen` (thuần), ghi nguyên khối. Khối `__main__` chỉ là một dòng chuyển sang `hardware_measure.main` (`docs/PERF_INSTALL_PLAN.md:201`) | chỉ stdlib. `hardware_table` và `job_purge` được import trễ bên trong `resolve()` | bất kỳ module nào trong closure của stage |
+| `hardware_schema.py` | lớp file (thêm trong E1, để `hardware_profile.py` dưới 800 dòng): hằng số và kiểm schema mục 3.2–3.6, `Observation`/`GpuInfo`/`FileStat`, `read_profile`/`write_profile` (cache theo `(mtime_ns, size)`), `read_override`/`write_override`, ghi nguyên khối, `previous_had_cuda`, `classify_attempt` (bảng mục 3.5), bộ làm sạch chuỗi lỗi | chỉ stdlib | bất kỳ module nào trong closure của stage |
+| `hardware_profile.py` | kiểu, hằng số, `resolve`, `choose`, `speed_arguments`, `LEGACY_KNOBS`, `freeze_value`/`parse_frozen` (thuần); dẫn lại `read_profile`, `read_override`/`write_override` và `Observation` từ `hardware_schema`. Khối `__main__` chỉ là một dòng chuyển sang `hardware_measure.main` (`docs/PERF_INSTALL_PLAN.md:201`), thêm ở E2 | stdlib và `hardware_schema`. `hardware_table` và `job_purge` được import trễ bên trong `resolve()` | như trên |
 | `hardware_table.py` | `TABLE_VERSION`, `Match`, `Row`, `ROWS`, bằng chứng | `hardware_profile` (lấy kiểu) | như trên |
-| `hardware_detect.py` | E1: Protocol `HardwareSystem`, `WindowsSystem`, `detect()`, `observe()`, tiến trình cháu `torch-probe` (torch chỉ được import **bên trong** tiến trình đó) | `hardware_profile`, `nvdec` (chỉ đọc) | như trên |
+| `hardware_detect.py` | E1: Protocol `HardwareSystem`, `WindowsSystem`, `detect()`, `observe()`, tiến trình cháu `torch-probe` (torch chỉ được import **bên trong** tiến trình đó) | stdlib và `hardware_schema` | như trên |
 | `hardware_measure.py` | E2: `main()`; kiểm tham số, kiểm rảnh, khóa, clip, phép thử, lịch sử số đo, hàm ngưỡng trễ, ghi hồ sơ | `hardware_profile`, `hardware_detect`, `nvdec.input_arguments`/`sampling_filter` (đúng chuỗi lọc thật) | như trên |
 | `hardware_manager.py` | phía Control Center: `status()` có cache, `start("remeasure")`, `set_cpu_only()`, `close()`, `popen` thay được | `hardware_profile`; `hardware_detect.observe` được import trễ | như trên |
 
 - **Không làm gì lúc import** (không torch, subprocess, I/O hay luồng). Lý do: `cli.py:42` import `control_center` ngay đầu file, nên mọi tiến trình stage đều import theo. Vì vậy `control_center` chỉ import các module này **trễ**, bên trong `_hardware(center)`.
-- **Tránh import vòng:** kiểu nằm ở `hardware_profile`, `hardware_table` import kiểu, còn `hardware_profile` chỉ import `hardware_table` bên trong `resolve()`.
+- **Tránh import vòng:** kiểu nằm ở `hardware_profile` (kiểu của file và quan sát nằm ở `hardware_schema`), `hardware_table` import kiểu, còn `hardware_profile` chỉ import `hardware_table` bên trong `resolve()`.
+- **Cách viết trong code:** khối mã ở mục 4.2 và 5.1 dùng `Literal`, `StrEnum` và `slots=True` cho dễ đọc. Code viết theo lối sẵn có của repo: `@dataclass(frozen=True)` không `slots`, hằng số chuỗi và `frozenset` thay cho `Literal`/`StrEnum`, kiểm giá trị trong `__post_init__`. Trạng thái là chuỗi chữ thường (`"ready"`, `"no_gated_row"`…), đúng dạng trong JSON của route mục 6.1.
 
 ### 4.2 Kiểu và hàm chính
 
@@ -592,7 +596,7 @@ Lưu ý mang theo, hiện trên trang Cài đặt và trong cảnh báo của jo
 
 **Không có dòng:**
 - kiến trúc GPU khác, card AMD hay Intel, nhiều GPU;
-- đường fp32 tham chiếu trên một card chưa đo (câu hỏi 2: từ chối; `arch_list` vẫn được ghi để một dòng sau này dùng được);
+- dòng `gated` cho card đời khác Turing: card chưa đo đi đường "chưa qua cổng" của mục 5.6 (phương án D, thay cho câu trả lời "từ chối" của câu hỏi 2 trên đường này);
 - fp16 trên CPU;
 - NVDEC cho 18+ và `live_safety` (cổng B2);
 - NVENC/QSV;
@@ -600,7 +604,7 @@ Lưu ý mang theo, hiện trên trang Cài đặt và trong cảnh báo của jo
 
 ### 5.4 Máy không khớp dòng nào
 
-- Card NVIDIA, bản torch hay driver chưa đo: `NO_GATED_ROW`. Lời từ chối ghi rõ khóa nào không khớp.
+- Một card NVIDIA mà đời card, bản torch hay driver chưa qua cổng: theo mục 5.6 (phương án D). Hoặc chạy chế độ chuẩn có nhãn "chưa qua cổng", hoặc bị từ chối với trạng thái riêng (`ARCH_UNSUPPORTED`, `DRIVER_TOO_OLD`, `VRAM_TOO_SMALL`), không chỉ `NO_GATED_ROW`.
 - Không bao giờ tự chuyển sang CPU.
 - **Máy CPU:** dùng dòng 2. Trước E3 cho `CPU_ROW_NOT_READY`; từ E3 tới E4, dòng chỉ chạy trên root thử (câu hỏi 2: từ chối trên thư mục cài thật).
 
@@ -636,6 +640,73 @@ Lưu ý mang theo, hiện trên trang Cài đặt và trong cảnh báo của jo
   - dấu vân tay đổi thì đếm lại từ đầu, vì lịch sử bắt đầu lại.
 - Con số này dựa trên nhiễu đã ghi, tối đa khoảng 6% (`docs/SCAN_PERFORMANCE.md:14`, `:152-154`), và trên cách các cổng trước dùng ít nhất 5% hoặc 60 s.
 - Một lần đổi chỉ áp dụng cho job đóng băng sau đó. Trang Cài đặt ghi "Job mới sẽ dùng X (trước: Y) – cache stage liên quan sẽ tính lại".
+
+### 5.6 Tổ hợp chưa qua cổng (phương án D, người dùng chọn ngày 2026-10-11)
+
+**Phạm vi.** Máy có đúng một GPU NVIDIA, hồ sơ `ok`, quan sát khớp hồ sơ (bước 7 của mục 7.1), nhưng không dòng `gated` nào khớp vì đời card (compute capability), bản torch hay driver chưa qua cổng. Hôm nay đó là mọi card trừ Turing 7.5 + torch `2.14.0+cu126` + driver ≥ 576.80.
+
+**Điều kiện chạy.** Xét theo thứ tự. Điều đầu tiên sai thì từ chối với trạng thái riêng và lời nhắn cụ thể, không dùng `NO_GATED_ROW`:
+
+1. **`ARCH_UNSUPPORTED`:** bản torch đã cài không có mã cho đời card.
+   - "Có mã" nghĩa là `arch_list` của lần đo (`torch.cuda.get_arch_list()`, mục 3.2) có một trong hai:
+     - `sm_Mn` cùng số chính `M` với card và `n` ≤ số phụ của card: mã máy của một đời chạy được trên card cùng số chính có số phụ lớn hơn;
+     - `compute_Mn` (PTX) với `(M, n)` ≤ (chính, phụ) của card.
+   - Phép kiểm này chặt hơn phép kiểm của chính torch (`_check_cubins` chỉ xét cùng số chính).
+   - Ví dụ: bản `2.14.0+cu126` hôm nay có sm_50, 60, 61, 70, 75, 80, 86, 90.
+     - Ampere 8.0/8.6 và Ada 8.9 (nhờ `sm_86`) chạy được.
+     - Blackwell 10.x/12.x không có mã, nên bị từ chối: "Bản torch 2.14.0+cu126 không có mã cho sm_120 của <tên card> (có: sm_50 … sm_90). Cần bản torch mới hơn (bộ cài, C5)."
+2. **`DRIVER_TOO_OLD`:** driver thấp hơn mức tối thiểu NVIDIA ghi cho bản CUDA mà torch mang theo.
+   - Driver lấy từ quan sát, không có thì từ hồ sơ.
+   - Mức tối thiểu nằm trong bảng `CUDA_DRIVER_MIN` của `hardware_table.py`, hôm nay là `{"cu126": "561.17"}`.
+   - 561.17 là driver Windows tối thiểu của CUDA 12.6 Update 3, theo bảng "Corresponding Driver Versions" trong ghi chú phát hành CUDA Toolkit (GA ≥ 560.76; Update 1–2 ≥ 560.94). Bản torch đã cài mang `cudart64_12.dll` 12.6 và `cublas64_12.dll` 12.6.4, tức bản cuBLAS của 12.6 Update 3, nên lấy mức của Update 3.
+   - Bản torch không có trong bảng (ví dụ một biến thể `cu128` sau này của C5) cũng bị từ chối, lời nhắn "chưa biết driver tối thiểu cho bản torch X". Khi C5 thêm biến thể thì thêm dòng vào bảng.
+   - Ví dụ lời nhắn: "Driver 552.22 thấp hơn 561.17, mức tối thiểu cho CUDA 12.6 của bản torch 2.14.0+cu126. Cập nhật driver NVIDIA rồi Đo lại."
+3. **`VRAM_TOO_SMALL`** (E thêm ngoài phương án D, chờ người dùng xác nhận): VRAM nhỏ hơn 6144 MiB, mức nhỏ nhất từng chạy hết pipeline (RTX 2060 6 GB). Nếu chạy, Qwen2-VL và các model khác có thể hết bộ nhớ giữa chừng.
+
+**Khi đủ điều kiện:** trạng thái `READY_UNTESTED`, dòng `nvidia-untested` (status `untested`).
+- Đường này **không bị từ chối** vì chưa qua cổng, kể cả trên thư mục cài thật. Ở đây phương án D thay cho câu trả lời "từ chối" của câu hỏi 2. Dòng CPU vẫn theo câu hỏi 2.
+- **Mặc định là chế độ chuẩn.**
+  - Chỉ có họ `standard`: dạng `plain`, OCR batch 1, không cờ fp16, và `tf32 = "off"`.
+  - Yêu cầu "Tăng tốc xử lý" hay OCR 8 bị hạ về `standard`, kèm cảnh báo `family_capped`.
+- **Tắt TF32** (núm `tf32`, mục 2.2): matmul và cuDNN (tích chập và RNN) chạy fp32 IEEE trong mọi tiến trình torch của job.
+  - API của bản torch đang cài (2.14, đã thử ngày 2026-10-11, không tạo CUDA context):
+    - đặt `torch.backends.fp32_precision = "ieee"`;
+    - đọc lại `torch.backends.cuda.matmul.fp32_precision`, `torch.backends.cudnn.conv.fp32_precision`, `torch.backends.cudnn.rnn.fp32_precision`: cả ba phải là `"ieee"`, sai thì stage dừng với lỗi;
+    - bản torch không có `torch.backends.fp32_precision` (cũ hơn 2.9) thì dùng `torch.backends.cuda.matmul.allow_tf32 = False` và `torch.backends.cudnn.allow_tf32 = False`.
+
+    Cách chọn này giống `transformers` 5.17 (`transformers/utils/import_utils.py:724-742`).
+  - **Không bao giờ trộn hai API.** Trên torch 2.14, sau khi đặt `fp32_precision`, đọc `torch.backends.cudnn.allow_tf32` ném `RuntimeError` (đã thử). Không module nào của BiliFlow đọc cờ đó: đã tìm trong `src`, `scripts` và thư viện của `.venv`, và chỉ `transformers` dùng nó, lúc huấn luyện.
+  - Turing không có TF32. Vì vậy dòng 1 giữ `tf32 = "default"` (không ghi cờ), để dòng lệnh giống từng byte.
+  - **Chưa chạy được trước Đợt 2.**
+    - Tắt TF32 phải nằm trong tiến trình stage. Cần một cờ dòng lệnh mới của `cli.py` (theo mục 12.5 của kế hoạch, file này thuộc B1), và lời gọi ở đầu mọi tiến trình torch: 10 stage, tiến trình con khởi động routing, script Florence, bước xác nhận bạo lực.
+    - E0–E2 không được sửa `cli.py` hay module quét. Vì vậy `speed_arguments` báo lỗi rõ (`ValueError`) với `tf32 = "off"` cho tới khi Đợt 2 thêm cờ, và không bao giờ âm thầm bỏ qua. Trước Đợt 2 không job nào dùng hồ sơ, nên không có khoảng hở.
+    - Cờ đề xuất: `--fp32-precision ieee`, đặt ngay sau `"--device", "cuda"`. Cờ nằm trên dòng lệnh nên nằm trong khóa cache.
+- **Công tắc riêng "Chế độ nhanh trên card chưa qua cổng"** (mục 3.6, 6.1, 6.2):
+  - chỉ trên PC, mặc định tắt;
+  - gắn với card lúc bật (tên và compute capability).
+  - Khi bật, và card hiện tại đúng card đó:
+    - có đủ ba họ của dòng 1 (`standard`, `standard_ocr8`, `fast`), với đúng giá trị đã qua cổng trên Turing, gồm fp16 ở đúng các stage đã duyệt;
+    - cả ba họ đều `tf32 = "off"`;
+    - NVDEC của họ `fast` theo mục 5.5: phép tự kiểm của E2 là cổng cho từng driver.
+  - Với card khác thì công tắc không có hiệu lực, kèm cảnh báo `untested_fast_other_card` ("Công tắc đang bật cho card khác; bật lại cho card này").
+  - Hộp xác nhận nêu đúng các rủi ro đã liệt kê:
+    1. Trên Ampere trở lên, tích chập "fp32" mặc định chạy TF32 (BiliFlow tắt TF32 trong chế độ này), và kernel fp16 cũng khác Turing, nên kết quả có thể lệch so với RTX 2060.
+    2. Một ứng viên bị bỏ sót trên đường chưa qua cổng sẽ không bao giờ hiện trong danh sách duyệt, nên không ai thấy.
+    3. Số worker và số làn chưa tăng (để sau B1 và A1b), nên chưa dùng hết sức card.
+
+    Hộp cũng ghi: công tắc có hiệu lực cho job mới từ Đợt 2.
+- **Nhãn:**
+  - mọi lựa chọn trên đường này mang cảnh báo `untested_arch`, đúng câu "Chưa qua cổng trên đời card này (sm_86)";
+  - thêm `untested_torch` hay `untested_driver` khi phần đó chưa qua cổng, và `tf32_off`;
+  - khi công tắc có hiệu lực: `untested_fast_on`.
+
+  Các nhãn hiện ở:
+  - hồ sơ: `detection` đã ghi compute capability và `arch_list`, và GET trả trạng thái cùng các nhãn;
+  - trang Cài đặt (mục 6.2);
+  - thẻ duyệt: từ Đợt 2, thẻ đọc `warnings` trong `hw:{id}` (mục 4.3).
+- **Tham số cho kết quả giống hệt** (số worker, số làn, giữ model trong VRAM): chưa tăng trong bảng 1; để sau B1 và A1b.
+- **Cách hiểu của E: áp D cho cả bản torch và driver chưa qua cổng.** Ví dụ: card Turing với một bản torch khác, hay với driver từ 561.17 tới dưới 576.80. Lý do: nhất quán với card đời mới, vốn chạy với bất kỳ bản torch nào có mã cho nó; và kế hoạch mới (`PERF_INSTALL_PLAN.md`, bước 3 của C5) ghi "biến thể chưa qua cổng thì hồ sơ ghi 'chưa đo'". Chờ người dùng xác nhận; nếu không đồng ý, các trường hợp này quay về từ chối kèm lý do cụ thể.
+- **Kế hoạch so với D:** `PERF_INSTALL_PLAN.md` trên `main` (`7d8b8bc`, mục 4, phần "Bảng cấu hình") cho kiến trúc chưa đo dùng ngay cấu hình Turing, gồm cả fp16. D là quyết định sau của người dùng: mặc định là chế độ chuẩn, fp16 chỉ qua công tắc. Hợp đồng này theo D (mục 11).
 
 ## 6. Route, trang Cài đặt và "Đo lại"
 
@@ -932,7 +1003,7 @@ Lỗi FFmpeg và lỗi phép thử encoder không làm lần đo thất bại (m
 ## 8. File và bằng chứng không đổi khóa cache
 
 **Tạo:**
-- `src/biliflow/hardware_profile.py`, `hardware_table.py`, `hardware_detect.py`, `hardware_measure.py`, `hardware_manager.py`;
+- `src/biliflow/hardware_schema.py`, `hardware_profile.py`, `hardware_table.py`, `hardware_detect.py`, `hardware_measure.py`, `hardware_manager.py`;
 - `scripts/hardware-measure.ps1`;
 - `dashboard_v2/hardware-view.js`;
 - `tests/test_hardware_profile.py`, `test_hardware_table.py`, `test_hardware_detect.py`, `test_hardware_measure.py`, `test_hardware_manager.py`, `test_hardware_routes.py`;
@@ -1070,6 +1141,34 @@ Lỗi FFmpeg và lỗi phép thử encoder không làm lần đo thất bại (m
 | 3 | Từ chối | `NEEDS_MEASUREMENT` từ chối job mới tới lần "Đo lại" đầu (mục 7.3) |
 | 4 | Tự tạm dừng | Nút "Đo lại" bị khóa kèm lý do tới khi hàng đợi đã tạm dừng và rảnh (`can_remeasure`, mục 6.1). Không có nút tự tạm dừng |
 | 5 | Từ chối | Hơn một GPU NVIDIA cho `MULTI_GPU_UNSUPPORTED` (mục 5.2, 7.3) |
+
+**Quyết định D của người dùng (2026-10-11), sau khi E đối chiếu E0 với kế hoạch.** Lúc đó E nêu ba phương án cho card đời chưa đo: (A) giữ từ chối, (B) dùng các họ Turing có nhãn "chưa qua cổng", (C) như B nhưng qua một công tắc riêng. Người dùng chọn D, sửa từ C:
+
+> - Card NVIDIA đời chưa đo, có trong danh sách kiến trúc của bản torch đã cài: KHÔNG từ chối. Tự chạy chế độ chuẩn: tắt "Tăng tốc xử lý" (không cờ fp16, OCR batch 1), và tắt TF32 cho cả matmul lẫn cuDNN (dùng API đúng của bản torch đang cài). Hồ sơ, trang Cài đặt và thẻ duyệt ghi rõ "chưa qua cổng trên đời card này".
+> - Chế độ nhanh fp16 (họ cấu hình Turing) trên đời chưa đo: chỉ bật khi tôi bật công tắc riêng cho root đó trên PC (mặc định tắt), có hộp xác nhận nêu đúng các rủi ro bạn đã liệt kê.
+> - Đời card không có trong danh sách kiến trúc của torch, hoặc driver không đủ: từ chối kèm lý do cụ thể (không chỉ NO_GATED_ROW).
+> - Tham số cho kết quả giống hệt (số worker, số làn): chưa tăng trong bảng 1; để sau B1 và A1b như bạn nêu.
+> - Các lệch nhỏ ở mục 11 của E0: đồng ý cả.
+
+| Phần | Hệ quả trong hợp đồng |
+|---|---|
+| Card chưa đo, torch có mã | `READY_UNTESTED`, họ `standard` với `tf32 = "off"`, nhãn `untested_arch`; không bị từ chối kể cả trên thư mục cài thật (mục 5.6) |
+| Tắt TF32 | `torch.backends.fp32_precision = "ieee"` trên torch 2.14, đọc lại để kiểm; bản torch cũ hơn 2.9 dùng `allow_tf32`. Cần cờ `cli.py` của Đợt 2; trước đó `speed_arguments` báo lỗi rõ (mục 5.6) |
+| Công tắc chế độ nhanh | Trường `untested_fast` trong `hardware-override.json`, gắn với card; route chỉ-PC `POST /api/hardware-profile/untested-fast`; hộp xác nhận nêu ba rủi ro (mục 3.6, 5.6, 6.1, 6.2) |
+| Từ chối cụ thể | `ARCH_UNSUPPORTED`, `DRIVER_TOO_OLD` (bảng `CUDA_DRIVER_MIN`), kèm lời nhắn ghi số liệu (mục 5.6, 7.1) |
+| Tham số giống hệt | Bảng 1 không đổi; để sau B1 và A1b |
+| Mục 11 | Các lệch đã ghi được duyệt: fp32 ngầm trên dòng lệnh, NVML quyết định và `nvidia-smi` chỉ để đối chiếu, máy chưa từng có CUDA chờ E4 trên thư mục cài, clip tổng hợp thay clip mẫu |
+
+**Cách hiểu của E, chờ người dùng xác nhận** (đã làm theo, đổi lại được dễ):
+1. D áp cho cả bản torch và driver chưa qua cổng trên card Turing, không chỉ đời card (mục 5.6).
+2. Thêm từ chối `VRAM_TOO_SMALL` khi VRAM nhỏ hơn 6144 MiB (mục 5.6).
+3. Khi công tắc có hiệu lực, cả ba họ Turing đều tắt TF32, để gần đường tham chiếu trên Turing, vốn không có TF32.
+4. Công tắc gắn với card lúc bật; đổi card thì phải bật lại.
+
+**Cập nhật theo kế hoạch mới trên `main`** (`7d8b8bc`, `2d8240f`, `34df52c`, đọc bằng `git show origin/main:docs/PERF_INSTALL_PLAN.md`, chưa merge):
+- nhận diện theo khả năng: `nvidia-smi --query-gpu=name,memory.total,driver_version,compute_cap` được ghi vào `detection.nvidia_smi` để đối chiếu với NVML (mục 3.2);
+- encode và decode thử thật cho từng codec H.264, HEVC, AV1 (mục 3.2, 6.3): thêm phép thử `av1_nvenc` và các phép giải mã NVDEC theo codec;
+- mục 12.6 (nhánh xếp chồng sau khi xong Phase 1): khi E2 xong và đạt cổng, E3 làm trên `feat/hardware-profile-e3`.
 
 Các câu hỏi và phương án ban đầu được giữ dưới đây để truy nguồn.
 

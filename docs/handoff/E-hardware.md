@@ -39,7 +39,23 @@
     - `hw:{id}` chỉ ghi từ Đợt 2;
     - các route mới và lệnh đo vào danh sách "agent không bao giờ gọi/chạy" qua C0;
     - công tắc "Chỉ dùng CPU" ghi ngay trong E2, có hiệu lực cho job mới từ Đợt 2.
-- Chưa có code và chưa chạy test: chưa có gì để test.
+- **Đối chiếu E0 với kế hoạch (người dùng hỏi ngày 2026-10-11).** Mọi điểm khớp, trừ một: card đời chưa đo. Người dùng quyết định **phương án D ngày 2026-10-11** (sửa từ C). Nguyên văn và hệ quả ở mục 10 của `docs/HARDWARE_PROFILE.md`; quy tắc ở mục 5.6. Tóm tắt:
+  - **Card chưa đo mà torch có mã:** không từ chối, kể cả trên thư mục cài thật.
+    - Chạy chế độ chuẩn: họ `standard`, OCR batch 1, không fp16, tắt TF32 cho matmul và cuDNN.
+    - Nhãn "Chưa qua cổng trên đời card này" hiện ở hồ sơ, trang Cài đặt và thẻ duyệt.
+  - **Chế độ nhanh fp16** (họ Turing) trên card chưa đo: chỉ khi người dùng bật một công tắc riêng cho root trên PC (mặc định tắt). Hộp xác nhận nêu ba rủi ro.
+  - **Từ chối kèm lý do cụ thể:** torch không có mã cho đời card (`ARCH_UNSUPPORTED`); driver thấp hơn mức NVIDIA ghi cho CUDA của bản torch (`DRIVER_TOO_OLD`, cu126 cần ≥ 561.17).
+  - **Số worker, số làn:** chưa tăng; để sau B1 và A1b.
+  - **Các lệch ở mục 11 của E0:** người dùng đồng ý cả.
+  - **TF32 trên torch 2.14:** tắt bằng `torch.backends.fp32_precision = "ieee"`.
+    - Đã thử: không trộn với `allow_tf32` cũ, vì sau đó đọc `cudnn.allow_tf32` sẽ ném lỗi.
+    - Cần cờ `cli.py` của Đợt 2 (B1). Trước đó `speed_arguments` báo lỗi rõ.
+- **Đọc kế hoạch mới trên `main`** (`7d8b8bc`, `2d8240f`, `34df52c`, chưa merge):
+  - nhận diện theo khả năng: `nvidia-smi … compute_cap` để đối chiếu;
+  - encode/decode thử thật cho H.264, HEVC, AV1;
+  - mục 12.6: E3 làm trên nhánh xếp chồng `feat/hardware-profile-e3` sau khi E2 đạt cổng.
+
+  Hợp đồng đã cập nhật theo các điểm này.
 
 ## Đang dở
 - (trống)
@@ -70,10 +86,11 @@
   - các route chỉ-PC bị từ chối khi gọi từ điện thoại.
 
 ## Chờ người dùng
-- **Đối chiếu E0 với kế hoạch (người dùng hỏi ngày 2026-10-11): một điểm lệch chờ quyết định.**
-  - Người dùng nêu: card đời chưa đo dùng cấu hình như Turing, chỉ tăng các tham số cho kết quả giống hệt (worker, số làn).
-  - E0 đã duyệt thì từ chối card chưa đo (`NO_GATED_ROW`, câu hỏi 2). `PERF_INSTALL_PLAN.md` mục 3 ý 4 và mục 4 không có câu nào cho phép dùng cấu hình Turing trên card khác.
-  - Chưa sửa gì. Chờ người dùng chọn, rồi mới đổi hợp đồng và phần `resolve()` liên quan.
+- **Xác nhận bốn cách hiểu của E về phương án D** (mục 10 của `docs/HARDWARE_PROFILE.md`; đã làm theo, đổi lại được dễ):
+  1. D áp cho cả bản torch và driver chưa qua cổng trên card Turing;
+  2. thêm từ chối `VRAM_TOO_SMALL` khi VRAM nhỏ hơn 6144 MiB;
+  3. khi công tắc có hiệu lực, cả ba họ Turing đều tắt TF32;
+  4. công tắc gắn với card lúc bật.
 - Ở bước E2: chọn giờ cho khung GPU 3 và tạm dừng hàng đợi thật (agent không bao giờ POST `/api/scheduler`).
 - Trước Đợt 2 (không thuộc E0–E2): chạy lại cổng framemd5 cả phim L ở khung GPU 3 (câu hỏi 1, phương án b; người dùng đã cho phép đọc bản L cho lần chạy đó).
 
