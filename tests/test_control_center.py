@@ -213,11 +213,11 @@ class ControlCenterVisualAuditTests(unittest.TestCase):
         self.assertEqual(cards[60]["exportValue"], "Chờ xuất video")
         self.assertEqual(
             cards[60]["exportDetail"],
-            "Thứ tự chờ: #1 trong 3 việc; xuất video và quét cảnh chạy lần lượt theo thứ tự bấm.",
+            "Thứ tự chờ: #1 trong 3 việc; lệnh xuất chạy trước các lượt quét, theo thứ tự bấm.",
         )
         self.assertEqual(
             cards[62]["scanDetail"],
-            "Thứ tự chờ: #2 trong 3 việc; quét cảnh và xuất video chạy lần lượt theo thứ tự bấm.",
+            "Thứ tự chờ: #2 trong 3 việc; lệnh xuất video chạy trước, các lượt quét theo thứ tự bấm.",
         )
         # A paused job and a reviewed job are not in the queue.
         self.assertIsNone(cards[64]["queue"])
@@ -1445,14 +1445,15 @@ class ControlCenterVisualAuditTests(unittest.TestCase):
                     value = center.status()
                     selected = center.scheduler._select()
                 jobs = {job["id"]: job for job in value["jobs"]}
+                # The waiting export goes first (perf plan A1a); the scans keep click order.
                 self.assertEqual(
-                    [(jobs[ids[n]]["queue_position"], jobs[ids[n]]["queue_kind"]) for n in "cab"],
-                    [(1, "scan"), (2, "scan"), (3, "export")],
+                    [(jobs[ids[n]]["queue_position"], jobs[ids[n]]["queue_kind"]) for n in "bca"],
+                    [(1, "export"), (2, "scan"), (3, "scan")],
                 )
                 self.assertIsNone(jobs[ids["d"]]["queue_position"])
                 self.assertEqual(jobs[ids["b"]]["current_stage"], "render")
                 self.assertEqual(value["queue"], {"length": 3, "paused": False})
-                self.assertEqual(selected[0]["id"], ids["c"])
+                self.assertEqual(selected[0]["id"], ids["b"])
             finally:
                 store.close()
 

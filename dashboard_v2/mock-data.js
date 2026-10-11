@@ -9,7 +9,7 @@
     job(101,'Shin · Thú cưng mới của mình đó nha','WAITING_REVIEW',{review_summary:{status:'WAITING_REVIEW',total:30,resolved:25,needs_more_context:1,skip_eligible:false},palette:'sage',duration:'07:26'}),
     job(102,'Nhất Âu Xuân · Tập 31','SCANNING_LOGO',{progress:.64,current_stage:'visual_logo',active_queue_path:null,review_summary:null,structure_audit:null,palette:'rose',content_style:'live_action',duration:'45:12'}),
     job(103,'Shin · Bỏ lỡ tập phim siêu nhân Kamen','READY_TO_EXPORT',{palette:'blue',duration:'07:18'}),
-    job(104,'Conan · Bức thư trong căn phòng bí mật','QUEUED',{queue_kind:'scan',queue_position:1,progress:0,active_queue_path:null,review_summary:null,structure_audit:null,palette:'violet',duration:'24:06'}),
+    job(104,'Conan · Bức thư trong căn phòng bí mật','QUEUED',{queue_kind:'scan',queue_position:2,progress:0,active_queue_path:null,review_summary:null,structure_audit:null,palette:'violet',duration:'24:06'}),
     job(105,'Shin · Món thịt ủ tình yêu','COMPLETED',{output_path:'E:\\DungChung\\BiliFlow\\output\\demo-105-reviewed.mp4',cleanup:{eligible:true},archive:{eligible:true},palette:'amber',duration:'07:10'}),
     job(106,'Nhất Âu Xuân · Tập 32','NEEDS_METADATA',{progress:0,active_queue_path:null,review_summary:null,structure_audit:null,detector_groups:[],palette:'rose',content_style:'live_action',duration:'45:03'}),
     job(107,'Shin · Một ngày bình yên','READY_TO_EXPORT',{review_summary:{status:'READY_FOR_EDIT_PLAN',total:0,resolved:0,needs_more_context:0,skip_eligible:true},palette:'sage',duration:'07:12'}),
@@ -19,7 +19,7 @@
     job(111,'Shin · Chuyến đi mùa hè','CANCELLED',{delete:{eligible:true,kind:'CANCELLED',reason:null,size_bytes:245000000},palette:'blue',duration:'07:09'}),
     job(112,'Conan · Hồ sơ cũ','CANCELLED',{hidden_at:'2026-10-03T09:00:00Z',delete:{eligible:true,kind:'CANCELLED',reason:null,size_bytes:245000000},palette:'violet',duration:'24:01'}),
     job(113,'Nhất Âu Xuân · Tập 29','COMPLETED',{source_present:false,source_cleaned:true,source_cleanup:{id:613,state:'RECYCLED',verified:false},delete:{eligible:true,kind:'LOST',reason:null,size_bytes:0},palette:'rose',duration:'44:53'}),
-    job(114,'Shin · Cùng nhau đi cắm trại','QUEUED',{queue_kind:'export',queue_position:2,palette:'sage',duration:'07:16'}),
+    job(114,'Shin · Cùng nhau đi cắm trại','QUEUED',{queue_kind:'export',queue_position:1,palette:'sage',duration:'07:16'}),
     job(115,'Conan · Chuyến tàu đêm','PAUSED',{progress:.28,palette:'violet',duration:'24:02'})
   ];
   const memories = [

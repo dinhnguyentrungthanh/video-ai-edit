@@ -102,7 +102,7 @@ Các ô tổng quan **đếm video**, riêng ghi chú “cảnh cần quyết đ
 | --- | --- | --- |
 | Worker và CPU / RAM / GPU / ổ đĩa | Tổng quan → tiến trình & tài nguyên, sidebar ổ E | GET `/api/status` |
 | Sáu tab theo giai đoạn | Bộ lọc trên danh sách, thêm Tất cả | `jobTab` hiện có → `BFContracts.tab` |
-| Đếm job, hàng đợi FIFO, vị trí quét / xuất | KPI, badge lượt, trang Hàng đợi | `queue_position`, `queue_kind`, `queue.length` |
+| Đếm job, hàng đợi (xuất trước, mỗi loại theo thứ tự bấm), vị trí quét / xuất | KPI, badge lượt, trang Hàng đợi | `queue_position`, `queue_kind`, `queue.length` |
 | Thông tin job / trạng thái / lỗi | Danh sách và bảng Chi tiết | `jobs[]`; GET `/api/jobs/{id}` cho lịch sử sâu |
 | Thiết lập nội dung, profile, detector, OCR, tăng tốc | Thiết lập & bắt đầu trong Chi tiết / dòng video | POST start |
 | Tiếp tục, dừng sau bước, dừng ngay, retry, hủy | Chi tiết → Thao tác chính / Thao tác khác | Các endpoint job tương ứng; giữ nguyên điều kiện khóa và xác nhận |
@@ -200,7 +200,7 @@ Demo dùng boolean `render_request` để thử khóa. Adapter không được t
 | /api/jobs/{id}/review/decision | {id,decision,note?,full_frame?,remember_studio_logo?,remember_platform_logo?} | Giữ contract của review hiện có; người dùng phải duyệt |
 | /api/jobs/{id}/review/clear | {id} | Xóa quyết định |
 | /api/jobs/{id}/review/bulk-keep, bulk-accept | {filter} | Bộ lọc phải là giá trị trang review hiện có dùng; cần xác nhận |
-| /api/scheduler | {paused:boolean} | Giữ thứ tự FIFO |
+| /api/scheduler | {paused:boolean} | Giữ thứ tự hàng đợi (xuất trước, mỗi loại theo thứ tự bấm) |
 | /api/shutdown | {mode:"after_stage"} hoặc {mode:"immediate"} | Nhận 202/STOPPING chưa chứng minh backend đã tắt |
 | /api/ai/config | {enabled,model,reasoning_effort} | Allowlist hiện có: gpt-5.6-luna/terra/sol, low/medium/high |
 | /api/ai/check, /api/ai/login | {} | Dùng luồng ChatGPT hiện có, không thêm API trả phí |

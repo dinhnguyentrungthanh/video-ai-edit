@@ -6,7 +6,7 @@ import time
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from biliflow.export_guards import ActionConflict, SOURCE_ARCHIVED_MESSAGE, SOURCE_ARCHIVED_STOP_REFUSAL
 from biliflow.job_pipeline import PipelineStage, StageCommand
@@ -416,20 +416,25 @@ class SchedulerFixture(unittest.TestCase):
 
 
 class QueueOrderTests(SchedulerFixture):
-    """Click-order (FIFO) queue shared by scans and exports, with one worker."""
+    """One worker; waiting exports go before waiting scans, each kind in click order."""
 
-    def test_scans_and_exports_share_one_queue_in_click_order(self):
-        a, b, c, d = (self.job(name) for name in "abcd")
+    def test_waiting_exports_run_before_waiting_scans_each_in_click_order(self):
+        # Perf plan A1a: Xuất video no longer waits behind scans clicked before it.
+        a, b, c, d, e = (self.job(name) for name in "abcde")
         self.start(b)
         self.start(a)
         self.export(d)
         self.start(c)
+        self.export(e)
         # Later updates (progress, heartbeats, metadata) never reorder the queue.
         self.store.update_job(b, progress=0.4)
         self.store.update_job(a, content_style="live_action")
-        self.assertEqual(self.order(), [(b, "scan"), (a, "scan"), (d, "export"), (c, "scan")])
+        self.store.update_job(d, progress=1.0)
+        self.assertEqual(
+            self.order(), [(d, "export"), (e, "export"), (b, "scan"), (a, "scan"), (c, "scan")],
+        )
         self.assertEqual(self.store.get_job(d)["current_stage"], "render")
-        self.assertEqual(self.drain(), [b, a, d, c])
+        self.assertEqual(self.drain(), [d, e, b, a, c])
 
     def test_export_clicked_first_runs_before_a_later_scan(self):
         a, b = self.job("a"), self.job("b")
@@ -437,11 +442,128 @@ class QueueOrderTests(SchedulerFixture):
         self.start(b)
         self.assertEqual(self.drain(), [a, b])
 
+    def test_export_clicked_after_a_scan_runs_first(self):
+        a, b = self.job("a"), self.job("b")
+        self.start(a)
+        self.export(b)
+        self.assertEqual(self.order(), [(b, "export"), (a, "scan")])
+        self.assertEqual(self.drain(), [b, a])
+
     def test_priority_still_beats_click_order(self):
         a, b = self.job("a"), self.job("b")
         self.start(a)
         self.start(b)
         self.store.update_job(b, priority=50)
+        self.assertEqual(self.drain(), [b, a])
+
+    def test_priority_still_beats_the_export_preference(self):
+        a, b, c = self.job("a"), self.job("b"), self.job("c")
+        self.export(a)
+        self.start(b)
+        self.export(c)
+        self.store.update_job(b, priority=50)
+        self.store.update_job(c, priority=150)
+        self.assertEqual(self.order(), [(b, "scan"), (a, "export"), (c, "export")])
+        self.assertEqual(self.drain(), [b, a, c])
+
+    def test_a_waiting_export_runs_at_the_next_stage_boundary_of_a_scan(self):
+        self.stages = [
+            PipelineStage("one", "SCANNING_TEXT", tuple()),
+            PipelineStage("two", "SCANNING_LOGO", tuple()),
+        ]
+        a, b, c = self.job("a"), self.job("b"), self.job("c")
+        self.start(a)
+        self.start(c)
+        _job, _stage, definition = self.scheduler._select()
+        self.assertEqual((_job["id"], definition.name), (a, "one"))
+        # The first stage of a is running (as _execute leaves it) when Xuất video lands.
+        process = Mock(pid=4321)
+        process.poll.return_value = None
+        self.assertTrue(self.store.claim_queued(a, definition.job_state, definition.name))
+        self.store.update_stage(a, "one", state="RUNNING", pid=process.pid)
+        self.scheduler._process, self.scheduler._active = process, (a, "one")
+        with patch.object(self.scheduler, "_terminate_process") as terminate:
+            self.export(b)
+        # The running stage is never cut short.
+        terminate.assert_not_called()
+        self.assertEqual(self.scheduler.active["job_id"], a)
+        self.assertEqual(self.store.get_job(a)["state"], "SCANNING_TEXT")
+        self.assertEqual(self.store.stage(a, "one")["state"], "RUNNING")
+        self.assertEqual(self.order(), [(b, "export"), (c, "scan")])
+        # The stage ends as _execute ends it.
+        self.scheduler._process = self.scheduler._active = None
+        self.store.update_stage(a, "one", state="COMPLETED", progress=1.0, pid=None)
+        self.scheduler._after_success(a, "one", definition)
+        job = self.store.get_job(a)
+        self.assertEqual((job["state"], job["queue_seq"]), ("QUEUED", 1))
+        # At the boundary the export goes first; a keeps its place ahead of c.
+        self.assertEqual(self.order(), [(b, "export"), (a, "scan"), (c, "scan")])
+        job, stage, _definition = self.scheduler._select()
+        self.assertEqual((job["id"], stage["name"]), (b, "render"))
+        self.assertEqual(self.drain(), [b, a, c])
+
+    def test_queue_order_is_the_order_select_takes(self):
+        a, b, c, d = (self.job(name) for name in "abcd")
+        self.start(a)
+        self.export(b)
+        self.start(c)
+        self.export(d)
+        self.store.update_job(c, priority=40)
+        order = self.scheduler.queue_order()
+        self.assertEqual([item["position"] for item in order], [1, 2, 3, 4])
+        self.assertEqual([item["job_id"] for item in order], [c, b, d, a])
+        self.assertEqual(self.drain(), [c, b, d, a])
+
+    def test_a_resumed_or_retried_export_keeps_its_place_among_the_exports(self):
+        a, b, c, e = self.job("a"), self.job("b"), self.job("c"), self.job("e")
+        self.start(a)
+        self.start(b)
+        self.export(c)
+        self.export(e)
+        # Dừng ngay, then Tiếp tục: back before the scans and before the later export e.
+        self.scheduler.pause_now(c)
+        self.assertEqual(self.order(), [(e, "export"), (a, "scan"), (b, "scan")])
+        self.scheduler.resume(c)
+        expected = [(c, "export"), (e, "export"), (a, "scan"), (b, "scan")]
+        self.assertEqual(self.order(), expected)
+        # A failed render, then Thử lại bước lỗi: the same place.
+        self.assertTrue(self.store.claim_queued(c, "RENDERING", "render"))
+        self.store.update_stage(c, "render", state="FAILED_RETRYABLE", error="boom")
+        self.store.update_job(c, state="FAILED", error="boom")
+        self.assertEqual(self.order(), [(e, "export"), (a, "scan"), (b, "scan")])
+        self.scheduler.retry(c)
+        self.assertEqual(self.order(), expected)
+
+    def test_a_rerun_of_a_cancelled_export_is_a_scan_at_the_back(self):
+        a, b = self.job("a"), self.job("b")
+        self.export(a)
+        self.start(b)
+        self.scheduler.cancel(a)
+        self.scheduler.rerun(a)
+        self.assertEqual(self.order(), [(b, "scan"), (a, "scan")])
+
+    def test_a_broken_scan_behind_the_head_does_not_stop_the_worker(self):
+        # As before A1a, the worker builds stage lists only up to the job it takes.
+        a, b = self.job("a"), self.job("b")
+        self.start(a)
+        self.start(b)
+        (self.root / "input" / "b.mp4").unlink()
+
+        def stages(**arguments):
+            Path(arguments["source"]).resolve(strict=True)
+            return list(self.stages)
+
+        with patch("biliflow.scheduler.pipeline_stages", side_effect=stages):
+            self.assertEqual(self.scheduler._select()[0]["id"], a)
+
+    def test_a_paused_queue_still_shows_the_order_it_will_run(self):
+        a, b = self.job("a"), self.job("b")
+        self.start(a)
+        self.export(b)
+        self.store.set_setting("scheduler_paused", True)
+        self.assertIsNone(self.scheduler._select())
+        self.assertEqual(self.order(), [(b, "export"), (a, "scan")])
+        self.store.set_setting("scheduler_paused", False)
         self.assertEqual(self.drain(), [b, a])
 
     def test_a_multi_stage_scan_keeps_the_head_between_its_stages(self):
@@ -557,16 +679,17 @@ class QueueOrderTests(SchedulerFixture):
 
 
     def test_finalizing_a_waiting_export_again_keeps_its_place(self):
-        a, b, c = self.job("a"), self.job("b"), self.job("c")
+        a, b, c, d = self.job("a"), self.job("b"), self.job("c"), self.job("d")
         self.start(a)
         self.export(b)
+        self.export(d)
         self.start(c)
         seq = self.store.get_job(b)["queue_seq"]
         self.scheduler.queue_render(
             b, plan_path=self.root / "work" / f"{b}.json", output_path=self.root / "output" / f"{b}.mp4",
         )
         self.assertEqual(self.store.get_job(b)["queue_seq"], seq)
-        self.assertEqual(self.order(), [(a, "scan"), (b, "export"), (c, "scan")])
+        self.assertEqual(self.order(), [(b, "export"), (d, "export"), (a, "scan"), (c, "scan")])
 
     def _crash_after_review_build(self, name, *, write_queue=True):
         """Run build_review up to COMPLETED, then die before _after_success."""

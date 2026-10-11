@@ -675,30 +675,51 @@ class JobScheduler:
         definition = self._definitions(job).get(stage["name"])
         return (stage, definition) if definition else None
 
-    def queue_order(self) -> list[dict[str, Any]]:
-        """Runnable waiting jobs in the exact order the worker will take them.
+    def _export_next(self, job: dict[str, Any]) -> bool:
+        stage = self.store.next_pending_stage(int(job["id"]))
+        return stage is not None and stage["name"] == "render"
 
-        Scans and exports share this one queue and the single worker.
+    def _waiting(
+        self, *, first_only: bool = False,
+    ) -> list[tuple[dict[str, Any], dict[str, Any], PipelineStage]]:
+        """Runnable waiting jobs, in the order the worker takes them.
+
+        Scans and exports share the single worker. Within a priority a waiting
+        export goes before every waiting scan (perf plan A1a), so Xuất video no
+        longer waits behind scans: it runs at the next stage boundary. Each kind
+        keeps its click order (queue_seq), and a scan between two of its stages
+        keeps its place among the scans. first_only stops at the job the worker
+        takes, so the stage lists of the jobs behind it are not built.
         """
-        order = []
-        for job in self.store.queued_jobs():
+        # sorted() is stable: equal keys keep queued_jobs()' order.
+        ordered = sorted(
+            self.store.queued_jobs(),
+            key=lambda job: (job["priority"], not self._export_next(job)),
+        )
+        waiting = []
+        for job in ordered:
             runnable = self._runnable(job)
-            if runnable is None:
-                continue
-            order.append({
-                "job_id": int(job["id"]), "position": len(order) + 1,
-                "kind": "export" if runnable[0]["name"] == "render" else "scan",
-            })
-        return order
+            if runnable is not None:
+                waiting.append((job, *runnable))
+                if first_only:
+                    break
+        return waiting
+
+    def queue_order(self) -> list[dict[str, Any]]:
+        """Runnable waiting jobs in the exact order the worker will take them."""
+        return [
+            {
+                "job_id": int(job["id"]), "position": position,
+                "kind": "export" if stage["name"] == "render" else "scan",
+            }
+            for position, (job, stage, _definition) in enumerate(self._waiting(), start=1)
+        ]
 
     def _select(self) -> tuple[dict[str, Any], dict[str, Any], PipelineStage] | None:
         if self.store.setting("scheduler_paused", False):
             return None
-        for job in self.store.queued_jobs():
-            runnable = self._runnable(job)
-            if runnable:
-                return job, *runnable
-        return None
+        waiting = self._waiting(first_only=True)
+        return waiting[0] if waiting else None
 
     def _run(self) -> None:
         while not self._stop.is_set():
