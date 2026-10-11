@@ -1,6 +1,6 @@
 # Bàn giao C – Bộ cài, phần code thuần
 - Nhánh: `feat/installer` (từ `origin/main` `40a0125`) · Commit cuối: xem `git log -1` · Cập nhật: 2026-10-11
-- Chạy ở: Cloud · Trạng thái: đang làm (C0 chờ người dùng duyệt; C2, C6-lõi xong; tiếp C1)
+- Chạy ở: Cloud · Trạng thái: đang làm chờ người dùng (C0 chờ duyệt; C2, C6-lõi, C1-script xong; chờ chạy script C1 trên PC)
 
 ## Đã xong
 - **C0:** soạn đề xuất sửa `AGENTS.md`, `LICENSE`, `THIRD_PARTY_NOTICES.md` (mục "Đề xuất C0" bên dưới). **Chưa sửa** `AGENTS.md`, chưa tạo `LICENSE`, chưa sửa `THIRD_PARTY_NOTICES.md`. Không có test (chỉ tài liệu).
@@ -20,21 +20,33 @@
   - Cặp khóa **TEST ONLY**: `tests/fixtures/activation/` (có README).
   - Test: `tests/test_activation.py` 36 test, OK trên Python 3.11 và 3.13 (1 skip: đọc định danh thật chỉ chạy trên Windows; PC chạy ở G1). Bắt được và đã sửa: mật khẩu có dấu tiếng Việt làm pycryptodomex lỗi (giờ mã hóa UTF-8).
   - Khóa cache: `activation.py` không thuộc stage nào (thêm vào `CacheKeyTest`).
+- **C1 (phần cloud):**
+  - `scripts/models_lock.py` mới, **chỉ đọc**: với 9 model production (`easyocr`, `nsfw_detection_2_nano`, `image_safety_classifier_m`, `wd_vit_tagger_v3`, `multilingual_minilm_text_semantics`, `vit_base_violence_detection`, `qwen2_vl_2b_instruct`, `florence_2_base`, `grounding_dino_tiny`) đọc `models\<thư mục>\manifest.json` (repo, revision), hash SHA-256 từng file trên đĩa (bỏ `manifest.json`, `.cache`), giữ nguyên văn manifest (để bản cài mới ghi đúng từng byte), đối chiếu với danh sách files trong manifest. EasyOCR: lấy URL gói nén từ `easyocr/config.py` của `.venv` bằng `ast` (không import). Chỉ ghi `--out` (từ chối nếu nằm trong `models\`, không ghi đè nếu thiếu `--replace`); không tải gì. Vấn đề (file lệch manifest, revision không phải 40 hex, đường dẫn cục bộ trong manifest, model không APPROVED, liên kết) ghi vào `problems`, mã thoát 1.
+  - `scripts/download_models.py`: mặc định **tải theo lock** (`config/models.lock.json`): đúng revision và danh sách file; tải tiếp từ `.part` khi rớt mạng (Range, thử lại 5 lần 2–30 s; máy chủ không hỗ trợ Range thì tải lại từ đầu); kiểm kích thước + SHA-256 trước khi đổi tên; manifest ghi cuối, đúng từng byte trong lock; chỉ https, chuyển hướng sang http bị chặn. Thư mục model đã có file khác lock hay file lạ → từ chối, không ghi đè (không bao giờ sửa model sẵn có). Thêm `qwen2-vl-2b` và `easyocr` (EasyOCR: tải gói zip của bản phát hành, lấy đúng một file, kiểm SHA-256 của `.pth`). Cần `biliflow-install.json` ở gốc. Cách tải cũ (revision mới nhất) giữ lại sau cờ `--latest`, chỉ để thử trong thư mục dev.
+  - Test: `tests/test_models_lock.py` 11 test OK (mạng giả, không chạm `models\` thật hay mạng).
+  - **Chưa làm** (cần PC hoặc người dùng): lock có hash cho `.venv` cu126 và bản CPU; lock riêng và cách dựng lại `runtime\florence-python`; quyết định đóng gói `annotations/text_semantics_seed_v1.json` (kiểm tên thật trước).
 
 ## Đang dở
 - (trống)
 
 ## Bước tiếp theo
-1. C1: script chỉ đọc tạo `config/models.lock.json`, cập nhật `scripts/download_models.py` theo lock.
+1. **Người dùng chạy trên PC (chỉ đọc, vài phút vì hash ~10 GB):**
+   `git fetch origin feat/installer; git worktree add temp\wt-installer feat/installer` (hoặc `-b feat/installer origin/feat/installer`), rồi
+   `.\.venv\Scripts\python.exe temp\wt-installer\scripts\models_lock.py --root E:\DungChung\BiliFlow --out temp\wt-installer\config\models.lock.json`.
+   Xem các dòng `!`; nếu không có vấn đề (hoặc đã xem và chấp nhận), commit `config/models.lock.json` trên nhánh. Không có tên phim hay đường dẫn trong lock (script báo nếu manifest có đường dẫn cục bộ).
+2. Sau đó (PC hoặc cloud): lock có hash cho `.venv`, lock + cách dựng lại `runtime\florence-python`; C3/C4/C5 theo kế hoạch.
 
 ## Cách kiểm
 - C0: người dùng đọc mục "Đề xuất C0".
 - C6-lõi: `python -m unittest tests.test_activation -v` (cần `pycryptodomex`, có trong `.venv`). Trên PC, `test_this_pc_has_at_least_two_known_parts` đọc định danh thật (chỉ đọc).
+- C1: `python -m unittest tests.test_models_lock -v`; cổng: chạy `models_lock.py` không đổi gì trong `models\` (so `dir /s` hoặc SHA trước/sau nếu muốn).
 - C2: `python -m unittest tests.test_install_paths -v` (PC: `.venv` của thư mục cài, `PYTHONPATH` trỏ vào `src` của worktree); cổng: khóa cache mọi stage không đổi.
 
 ## Chờ người dùng
 - Duyệt C0 (ba khối A, B, C bên dưới). Sau khi duyệt, session nào áp dụng thì chép nguyên văn; điền tên chủ sở hữu vào `LICENSE`.
 - Repo phải Private trước bản build đầu tiên (C7).
+- Chạy `scripts/models_lock.py` trên PC (bước tiếp theo 1) và gửi kết quả/commit lock.
+- Quyết định `annotations/text_semantics_seed_v1.json` có đóng gói không (C1).
 - C6: người dùng tự chạy `keygen\issue_key.py init --private-key <ngoài Git và ngoài BiliFlow>` trên PC, sao lưu file + mật khẩu, rồi đưa khóa công khai (hex) vào `RELEASE_PUBLIC_KEY_HEX` (lúc C6-nối). Agent không chạy bước này.
 
 ## Lưu ý cho người tiếp quản
@@ -43,6 +55,7 @@
 - Không bao giờ tạo hay đưa khóa bí mật thật vào repo.
 - C6-nối (Đợt 3): server chỉ để kích hoạt trước `ControlCenter()`, chặn CLI, trang kích hoạt, tạm dừng scheduler ở ranh giới stage khi key tháng hết hạn, giờ internet (tùy chọn) qua client mạng đã kiểm của trình tải; cập nhật vai trò pycryptodomex trong `config/download_tools.json` (thuộc `config/*`, chưa sửa).
 - C5 (bộ cài) phải ghi `biliflow-install.json` ở gốc thư mục cài **trước** khi chạy bất kỳ code BiliFlow nào; C4 phải giữ gói `biliflow` trong 3 cấp dưới gốc cài (`MAX_LEVELS_ABOVE_PACKAGE`).
+- `download_models.py` đổi cách gọi: `--model X` giờ tải theo lock; cách cũ cần `--latest`. Không chạy nó trên `models\` của PC.
 - Môi trường cloud: Python 3.13 hệ thống, không có `.venv`; `pycryptodomex==3.23.0` (đúng bản trong lock) cài vào venv tạm của session để chạy test C6.
 
 ---
