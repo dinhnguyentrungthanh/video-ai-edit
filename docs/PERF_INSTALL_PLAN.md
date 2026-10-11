@@ -33,6 +33,10 @@
 9. **Mỗi session đo trước rồi mới sửa,** và báo số đo trước/sau trên máy thật.
 10. **Repo:** người dùng sẽ chuyển sang Private. **Bắt buộc xong trước khi GitHub Actions tạo bản build đầu tiên** (mục 7, C7).
 11. **Credit cloud có hạn** (khoảng 43 USD lúc lập kế hoạch). Việc cần Windows, GPU hay phần cứng thật chạy trên PC. Cloud chỉ làm code thuần và luôn bàn giao để PC tiếp quản được (mục 13).
+12. **Nhận diện cả các dòng card mới nhất** (bổ sung 2026-10-11, xem E1–E2, C5):
+    - BiliFlow nhận diện card theo **khả năng** (compute capability, VRAM, driver, khả năng encode/decode), **không theo danh sách tên card viết cứng**;
+    - card đời mới (ví dụ RTX 30/40/50) được dùng đúng sức của nó;
+    - riêng RTX 2060 trên PC đã cập nhật driver (mục 1.7).
 
 ## 2. Hiện trạng đã kiểm trên code (`main` d477c70)
 
@@ -182,13 +186,19 @@
   - `hardware_profile.choose(task)` chỉ đọc file;
   - `freeze_for_job(job_id)` lưu lựa chọn theo job, dạng setting `hw:{id}`.
 - **Bảng cấu hình đã qua cổng:**
-  - mỗi dòng là một tổ hợp đầy đủ, khóa theo kiến trúc GPU, phiên bản torch và khoảng driver;
+  - mỗi dòng là một tổ hợp đầy đủ, khóa theo kiến trúc GPU (theo compute capability: Turing 7.5, Ampere 8.x, Ada 8.9, Blackwell 10.x/12.x và các đời sau), phiên bản torch và khoảng driver;
+  - **kiến trúc chưa có máy để đo** (mọi đời trừ Turing của RTX 2060 lúc lập kế hoạch):
+    - chỉ dùng cấu hình **giống cấu hình đã qua cổng trên Turing** cho những gì ảnh hưởng kết quả: fp16 ở đúng các stage đã duyệt, OCR batch 1 hoặc 8;
+    - được tận dụng thêm sức của card **chỉ ở những tham số cho kết quả giống hệt**: số worker, số làn, giữ model trong VRAM khi VRAM đủ lớn;
+    - hồ sơ ghi rõ "chưa đo trên kiến trúc này";
+    - khi có máy thật của kiến trúc đó thì chạy cổng E4 để thêm một dòng đã đo vào bảng;
   - OCR batch chỉ được là 1 hoặc 8 (`job_pipeline.py:164`).
 
 ### E1. Nhận diện (chạy trong tiến trình con)
 
 - **Phát hiện:**
-  - card, VRAM, driver (`nvidia-smi`);
+  - card, VRAM, driver và **compute capability** (`nvidia-smi --query-gpu=name,memory.total,driver_version,compute_cap`); nhận cả dòng card mới nhất mà không cần sửa code, vì chỉ dựa vào các con số này;
+  - NVENC/NVDEC: **encode/decode thử thật** cho từng codec (H.264, HEVC, AV1), không suy từ tên card. Ví dụ: RTX 2060 có NVENC H.264/HEVC nhưng không có AV1; các đời mới hơn có thể có AV1. Bản xuất vẫn dùng H.264 cho tới khi người dùng chọn khác;
   - CUDA dùng được với torch hay không;
   - FFmpeg: `-hwaccels`, các encoder, và encode/decode thử thật;
   - CPU (số nhân thật/luồng, tập lệnh), RAM, đĩa trống.
@@ -406,7 +416,11 @@ Cho stage CPU của video sau chạy chồng với stage GPU của video trướ
    - Phân quyền: file chương trình chỉ đọc/chạy cho Users; thư mục dữ liệu cho phép người dùng sửa.
    - Test việc kho phiên tự tạo thư mục bằng một **tài khoản thường**.
 2. **Tạo cấu trúc thư mục**, trừ `state\source-accounts`, vì kho phiên tự tạo thư mục đó với ACL riêng.
-3. **Chọn torch** theo phiên bản driver từ `nvidia-smi`. Cài xong thì kiểm `torch.cuda`; không dùng được thì chuyển sang bản CPU.
+3. **Chọn torch** theo **kiến trúc card và phiên bản driver** từ `nvidia-smi`:
+   - Bản torch hiện tại là `cu126`. Card đời mới nhất (ví dụ Blackwell, RTX 50) cần bản torch build với CUDA mới hơn (≥ 12.8, phải kiểm lại lúc làm) và driver đủ mới.
+   - Vì vậy bộ cài có **một lock có hash cho mỗi biến thể torch** (`cu126`, biến thể CUDA mới hơn cho card mới, CPU), và chọn biến thể theo compute capability.
+   - Đổi biến thể torch là thay đổi số học: biến thể chưa qua cổng trên máy thật thì hồ sơ ghi "chưa đo".
+   - Cài xong thì kiểm `torch.cuda` và chạy thử một phép tính nhỏ trên card. Không dùng được thì báo rõ lý do (ví dụ "driver quá cũ cho card này") rồi mới chuyển sang bản CPU.
 4. **Kiểm VC++ runtime.**
 5. **Tải torch và model:** hiện tiến độ, tải tiếp khi rớt mạng, kiểm SHA-256.
 6. **FFmpeg:**
@@ -587,6 +601,7 @@ Mỗi phép đo lấy khóa GPU hoặc khóa render (mục 3.7). Session nào th
 8. **NVENC và việc chạy song song** chưa có số đo VRAM khi Qwen2-VL đang chạy.
 9. **Mọi cổng hiện chỉ chạy trên một card RTX 2060.**
 10. **Cài lại Windows hoặc dùng VM nhân bản** ảnh hưởng tới mã máy (cần chính sách cấp lại).
+11. **Card đời mới chưa có máy để đo:** chạy bằng cấu hình đã duyệt trên Turing, chỉ tăng các tham số cho kết quả giống hệt. Phải có máy thật mới thêm được cấu hình tối ưu riêng cho đời đó (E2, E4).
 
 ## 11. Bảng trạng thái
 
