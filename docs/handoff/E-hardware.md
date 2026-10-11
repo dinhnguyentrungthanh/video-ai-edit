@@ -1,6 +1,6 @@
 # Bàn giao E – Hồ sơ phần cứng
 - Nhánh: `feat/hardware-profile` (từ `origin/main` `40a0125`, không theo dõi nhánh từ xa nào) · Commit cuối: xem `git log -1` · Cập nhật: 2026-10-11
-- Chạy ở: PC (`E:\DungChung\BiliFlow\temp\wt-hardware-profile`) · Trạng thái: **chờ người dùng duyệt E0**
+- Chạy ở: PC (`E:\DungChung\BiliFlow\temp\wt-hardware-profile`) · Trạng thái: **E0 đã duyệt (2026-10-11); tiếp theo E1**
 
 ## Đã xong
 - **Chuẩn bị:**
@@ -26,19 +26,19 @@
   - lệnh đo chỉ nhận root mà `allowed_project_root` cho phép;
   - bỏ chuỗi phiên bản FFmpeg chứa tên miền: hồ sơ chỉ giữ số phiên bản và SHA-256;
   - câu hỏi 2 đổi đề xuất thành "từ chối", vì kế hoạch chỉ bật cách chạy đã qua cổng.
+- **Người dùng duyệt E0 ngày 2026-10-11:** "Duyệt E0. Theo đề xuất: 1 a+b, 2 từ chối, 3 từ chối, 4 tự tạm dừng, 5 từ chối." Quyết định và hệ quả ghi ở mục 10 của `docs/HARDWARE_PROFILE.md`.
 - Chưa có code và chưa chạy test: chưa có gì để test.
 
 ## Đang dở
 - (trống)
 
 ## Bước tiếp theo
-1. Chờ người dùng duyệt E0 và trả lời 5 câu hỏi ở mục 10 của `docs/HARDWARE_PROFILE.md`.
-2. **E1:**
+1. **E1:**
    - `hardware_profile.py`: schema, `resolve`/`choose`, `speed_arguments`, `LEGACY_KNOBS`, `freeze_value`/`parse_frozen`;
    - `hardware_table.py`: hash `ffmpeg.exe` cho `nvdec_verified`, đọc ở thư mục cài, chỉ đọc;
    - `hardware_detect.py`: `detect()`, `observe()`;
    - test (giả lập, không GPU), rồi commit.
-3. **E2:**
+2. **E2:**
    - `hardware_measure.py`, `hardware_manager.py`, `scripts/hardware-measure.ps1`;
    - route, `phone_access`, `dashboard_v2/hardware-view.js` (chỉ nạp trong `live.html`);
    - test;
@@ -58,13 +58,8 @@
   - các route chỉ-PC bị từ chối khi gọi từ điện thoại.
 
 ## Chờ người dùng
-- Duyệt E0 (`docs/HARDWARE_PROFILE.md`) và 5 câu hỏi ở mục 10:
-  1. NVDEC trên driver 617.42;
-  2. dòng chưa qua cổng (đề xuất: từ chối);
-  3. chưa có hồ sơ khi Đợt 2 bật;
-  4. "Đo lại" khi hàng đợi đang chạy;
-  5. máy nhiều GPU.
 - Ở bước E2: chọn giờ cho khung GPU 3 và tạm dừng hàng đợi thật (agent không bao giờ POST `/api/scheduler`).
+- Trước Đợt 2 (không thuộc E0–E2): chạy lại cổng framemd5 cả phim L ở khung GPU 3 (câu hỏi 1, phương án b; người dùng đã cho phép đọc bản L cho lần chạy đó).
 
 ## Lưu ý cho người tiếp quản
 - **Không sửa:**

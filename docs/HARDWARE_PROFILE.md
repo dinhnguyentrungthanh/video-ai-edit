@@ -1,6 +1,6 @@
 # Hồ sơ phần cứng (Session E): hợp đồng E0
 
-- **Trạng thái:** bản đề xuất E0, **chờ người dùng duyệt**. Chưa có dòng code nào của E1/E2.
+- **Trạng thái:** E0 **đã được người dùng duyệt** ngày 2026-10-11, cùng câu trả lời cho năm câu hỏi (mục 10). E1 và E2 làm theo hợp đồng này.
 - Ngày: 2026-10-11. Nhánh `feat/hardware-profile`, base `origin/main` `40a0125`.
 - Nguồn: `docs/PERF_INSTALL_PLAN.md` mục 1–4, 9, 13 và bản đồ code đọc trên `40a0125`. Mọi trích dẫn `path:line` tính theo worktree.
 - Bản này đã qua một lượt review đối kháng theo bốn góc (trích dẫn, an toàn, dòng lệnh giống từng byte, khả năng cài đặt), mỗi phát hiện đều có bước kiểm chứng. Các lỗi đã xác nhận được sửa vào thân bài.
@@ -19,7 +19,7 @@
 4. **Bảng cấu hình nằm trong code** (`src/biliflow/hardware_table.py`), không nằm trong `config/*`.
    - Hôm nay chỉ có một dòng GPU đã qua cổng: Turing (compute capability 7.5) + torch `2.14.0+cu126`.
    - Dòng CPU fp32 chờ E3/E4.
-   - Đề xuất: dòng chưa qua cổng chỉ chạy trên root thử (câu hỏi 2).
+   - Dòng chưa qua cổng chỉ chạy trên root thử (câu hỏi 2: từ chối trên thư mục cài thật).
 5. **Không bao giờ âm thầm chạy CPU.** Chỉ chạy CPU trong hai trường hợp:
    - người dùng bật "Chỉ dùng CPU";
    - máy chưa từng có CUDA. Cờ `had_cuda` chỉ đi một chiều: đã đúng một lần thì mọi lần ghi sau đều giữ đúng. Ngoài ra, danh sách card đọc được phải không có thiết bị nào mang mã hãng PCI `10DE` của NVIDIA.
@@ -592,7 +592,7 @@ Lưu ý mang theo, hiện trên trang Cài đặt và trong cảnh báo của jo
 
 **Không có dòng:**
 - kiến trúc GPU khác, card AMD hay Intel, nhiều GPU;
-- đường fp32 tham chiếu trên một card chưa đo (chỉ thêm nếu câu hỏi 2 là "cho phép"; khi đó dòng ấy dùng `arch_list`);
+- đường fp32 tham chiếu trên một card chưa đo (câu hỏi 2: từ chối; `arch_list` vẫn được ghi để một dòng sau này dùng được);
 - fp16 trên CPU;
 - NVDEC cho 18+ và `live_safety` (cổng B2);
 - NVENC/QSV;
@@ -602,7 +602,7 @@ Lưu ý mang theo, hiện trên trang Cài đặt và trong cảnh báo của jo
 
 - Card NVIDIA, bản torch hay driver chưa đo: `NO_GATED_ROW`. Lời từ chối ghi rõ khóa nào không khớp.
 - Không bao giờ tự chuyển sang CPU.
-- **Máy CPU:** dùng dòng 2. Trước E3 cho `CPU_ROW_NOT_READY`; từ E3 tới E4, dòng chỉ chạy trên root thử (câu hỏi 2).
+- **Máy CPU:** dùng dòng 2. Trước E3 cho `CPU_ROW_NOT_READY`; từ E3 tới E4, dòng chỉ chạy trên root thử (câu hỏi 2: từ chối trên thư mục cài thật).
 
 ### 5.5 NVDEC và ngưỡng trễ
 
@@ -615,12 +615,14 @@ Lưu ý mang theo, hiện trên trang Cài đặt và trong cảnh báo của jo
   ```
   logo_decode = "nvdec"  khi  không có cảnh báo ffmpeg_changed  và  (
         (d, f) ∈ row.nvdec_verified
-     hoặc (câu hỏi 1 = (a)  và  detection.ffmpeg.nvdec.trial == "ok"  và  framemd5_equal_cpu
+     hoặc (detection.ffmpeg.nvdec.trial == "ok"  và  framemd5_equal_cpu
            và  gate_key.nvidia_driver của hồ sơ == d) )
   logo_decode = "cpu"    trong mọi trường hợp khác, kèm cảnh báo
                          nvdec_unverified | nvdec_selftest_failed | ffmpeg_changed
   ```
 
+  - Nhánh thứ hai là phép tự kiểm của E2, được dùng làm cổng cho từng driver (câu hỏi 1, phương án a).
+  - Trước khi Đợt 2 bật, cổng framemd5 cả phim L chạy lại ở khung GPU 3 (phương án b). Qua thì cặp `(driver, SHA-256 của ffmpeg.exe)` được thêm vào `nvdec_verified`, kèm `TABLE_VERSION` mới.
   - Phép tự kiểm framemd5 của E2 (mục 6.3) mà **thất bại** thì hạ ngay về `cpu`.
   - Kết quả hai cách giải mã giống hệt, nên không cần ngưỡng trễ.
 - **Ngưỡng trễ cho núm giống hệt chọn theo thời gian** (`free_fields`):
@@ -891,7 +893,7 @@ Bước đầu tiên khớp thì quyết định. Các cảnh báo ở bước 1
 9. **Nhánh CPU:**
    - dòng CPU phải khớp torch, lấy từ quan sát; quan sát None → `not_observed`;
    - `runnable_after` khác None → `CPU_ROW_NOT_READY` trên mọi root;
-   - dòng `ungated`: root thử → `READY_UNGATED`; thư mục cài → `NO_GATED_ROW` (câu hỏi 2);
+   - dòng `ungated`: root thử → `READY_UNGATED`; thư mục cài → `NO_GATED_ROW` (câu hỏi 2: từ chối);
    - dòng `gated` → `READY`.
 10. **Cảnh báo:** `driver_changed`, `ffmpeg_changed`, `machine_changed`, NVDEC (mục 5.5), `last_good_used`, và lưu ý của dòng.
 
@@ -913,7 +915,7 @@ Lỗi FFmpeg và lỗi phép thử encoder không làm lần đo thất bại (m
 |---|---|---|---|
 | Khớp dòng đã qua cổng, quan sát khớp | `READY` | đóng băng | chạy |
 | File chính thiếu hoặc hỏng; last-good hợp lệ và khớp | `READY_LAST_GOOD` + cảnh báo | đóng băng theo last-good | chạy |
-| Chưa từng đo (không file, không last-good) | `NEEDS_MEASUREMENT` | **câu hỏi 3** | chạy |
+| Chưa từng đo (không file, không last-good) | `NEEDS_MEASUREMENT` | từ chối tới lần "Đo lại" đầu (câu hỏi 3) | chạy |
 | Hỏng, không có last-good dùng được | `INVALID` | từ chối | chạy |
 | Lần đo cuối thất bại (mục 7.2), kể cả sau khi gỡ driver | `CUDA_UNAVAILABLE` | từ chối, **không bao giờ CPU** | `standard_ocr8` và `fast` báo lỗi khi bắt đầu; `standard` (OCR 1, fp32) âm thầm chạy CPU ở stage text cho tới E3 (mục 11) |
 | Chưa từng có CUDA, không card NVIDIA | nhánh CPU | `CPU_ROW_NOT_READY` tới E3; từ E3 tới E4 chỉ trên root thử | — |
@@ -921,7 +923,7 @@ Lỗi FFmpeg và lỗi phép thử encoder không làm lần đo thất bại (m
 | Đổi bản torch | `STALE_TORCH` | từ chối tới khi Đo lại | như trên |
 | Cập nhật driver, vẫn trong khoảng | `READY` + `driver_changed` | đóng băng; NVDEC theo mục 5.5 | chạy |
 | Thay FFmpeg | `READY` + `ffmpeg_changed` | đóng băng; decode cpu, xuất x264 | chạy |
-| Hơn một GPU NVIDIA | `MULTI_GPU_UNSUPPORTED` | **câu hỏi 5** | — |
+| Hơn một GPU NVIDIA | `MULTI_GPU_UNSUPPORTED` | từ chối, "chưa hỗ trợ nhiều GPU" (câu hỏi 5) | — |
 | File công tắc hỏng | `OVERRIDE_INVALID` | từ chối | chạy |
 | Công tắc bật khi đã có job CUDA trong hàng | — | job mới chạy CPU | **giữ thiết bị đã đóng băng** (muốn chuyển thì "Chạy lại") |
 | Giá trị `hw:{id}` hỏng | — | — | không chạy được, không bao giờ tự đóng băng lại |
@@ -1057,7 +1059,19 @@ Lỗi FFmpeg và lỗi phép thử encoder không làm lần đo thất bại (m
   - Control Center thử ở cổng 8798: các hồ sơ mẫu đẩy trang Cài đặt qua từng trạng thái;
   - một lần đo thật ở khung GPU 3 (mục 6.4). Báo cáo chỉ ghi tóm tắt hồ sơ.
 
-## 10. Câu hỏi cho bạn
+## 10. Câu hỏi và quyết định
+
+**Quyết định của người dùng (2026-10-11):** "Duyệt E0. Theo đề xuất: 1 a+b, 2 từ chối, 3 từ chối, 4 tự tạm dừng, 5 từ chối."
+
+| # | Quyết định | Hệ quả trong hợp đồng |
+|---|---|---|
+| 1 | (a) + (b) | Phép tự kiểm của E2 là cổng cho từng driver (mục 5.5). Trước khi Đợt 2 bật, cổng framemd5 cả phim L chạy lại ở khung GPU 3; câu trả lời này cũng là lời cho phép đọc bản L cho lần chạy đó |
+| 2 | Từ chối | Thư mục cài thật không dùng dòng chưa qua cổng nào (`NO_GATED_ROW`). Dòng CPU chỉ chạy trên root thử tới E4 (mục 5.4, 7.1 bước 9) |
+| 3 | Từ chối | `NEEDS_MEASUREMENT` từ chối job mới tới lần "Đo lại" đầu (mục 7.3) |
+| 4 | Tự tạm dừng | Nút "Đo lại" bị khóa kèm lý do tới khi hàng đợi đã tạm dừng và rảnh (`can_remeasure`, mục 6.1). Không có nút tự tạm dừng |
+| 5 | Từ chối | Hơn một GPU NVIDIA cho `MULTI_GPU_UNSUPPORTED` (mục 5.2, 7.3) |
+
+Các câu hỏi và phương án ban đầu được giữ dưới đây để truy nguồn.
 
 1. **NVDEC trên driver 617.42.**
    - Bối cảnh:
@@ -1089,7 +1103,7 @@ Lỗi FFmpeg và lỗi phép thử encoder không làm lần đo thất bại (m
    - **Đề xuất:** từ chối ("chưa hỗ trợ nhiều GPU"), vì CLI không chọn được thiết bị và thứ tự của torch có thể khác NVML.
    - Hoặc: dùng thiết bị 0 kèm cảnh báo.
 
-**Ghi nhận, không cần chọn:**
+**Ghi nhận (không cần chọn):**
 - `hw:{id}` chỉ được ghi từ Đợt 2, theo đúng danh sách cấm sửa của bạn (`job_store.py`).
 - Các route mới vào danh sách "agent không bao giờ gọi" qua C0, trước khi G1 gộp chúng. Cùng mục đó: agent không bao giờ chạy `scripts/hardware-measure.ps1` hay `python -m biliflow.hardware_profile measure` với `-ProjectRoot` là thư mục cài. Code trong worktree đã tự từ chối điều này; code của chính thư mục cài thì cho phép, để bạn đo.
 - Công tắc "Chỉ dùng CPU" được ghi ngay trong E2, và có hiệu lực cho job mới từ Đợt 2. Hộp xác nhận nói rõ điều đó.
