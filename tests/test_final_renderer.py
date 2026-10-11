@@ -167,7 +167,7 @@ class FinalRendererTests(unittest.TestCase):
         enable = "enable='between(t,2.000000,8.000000)'"
         self.assertIn(
             f"crop=554:124:369:195,delogo=x=8:y=8:w=538:h=108:{enable},crop=538:108:8:8,"
-            f"gblur=sigma=65:{enable}",
+            f"gblur=sigma=65:threads=54:{enable}",
             graph,
         )
         self.assertEqual(graph.count("delogo="), 1)

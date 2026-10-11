@@ -40,15 +40,30 @@ class BlurFilterGraphTests(unittest.TestCase):
             ),
             [
                 "[in]split[pbase][pcrop]",
-                "[pcrop]crop=60:20:40:30,gblur=sigma=28:enable=1[pblurred]",
+                "[pcrop]crop=60:20:40:30,gblur=sigma=28:threads=10:enable=1[pblurred]",
                 "[pbase][pblurred]overlay=40:30:enable=1[out]",
             ],
         )
 
+    def test_gblur_never_runs_more_threads_than_its_chroma_plane_has_rows(self):
+        # FFmpeg's gblur gives wrong, run-dependent pixels when a plane has fewer rows
+        # than its threads (docs/evidence/perf-export/gblur-threads.md). The branch is
+        # yuv420p and crop rounds an odd height down: the chroma plane has height // 2 rows.
+        for height, threads in ((1, 1), (2, 1), (7, 3), (8, 4), (15, 7), (25, 12), (26, 13), (64, 32), (301, 150)):
+            region = {"x": 0, "y": 0, "width": 40, "height": height}
+            for method in (GBLUR, COVER_METHOD):
+                for feather in (0, 3):
+                    with self.subTest(height=height, method=method, feather=feather):
+                        chains = ";".join(regional_blur_filters(
+                            input_label="in", output_label="out", prefix="p", region=region, sigma=28,
+                            feather=feather, enable="enable=1", method=method, frame_size=(320, 320),
+                        ))
+                        self.assertEqual(re.findall(r"gblur=sigma=28:threads=(\d+):enable=1", chains), [str(threads)])
+
     def test_cover_reads_a_margin_of_picture_and_crops_back_to_the_region(self):
         self.assertEqual(cover(LOGO)[1], (
             "[pcrop]crop=76:36:32:22,delogo=x=8:y=8:w=60:h=20:enable=1,crop=60:20:8:8,"
-            "gblur=sigma=28:enable=1[pblurred]"
+            "gblur=sigma=28:threads=10:enable=1[pblurred]"
         ))
 
     def test_cover_keeps_one_pixel_inside_where_the_region_touches_the_frame_edge(self):
@@ -69,7 +84,7 @@ class BlurFilterGraphTests(unittest.TestCase):
             "[in]split[pbase][pcrop]",
             "[pcrop]crop=76:36:32:22,delogo=x=8:y=8:w=60:h=20:enable=1,crop=60:20:8:8,"
             "split[pclean][pblursource]",
-            "[pblursource]gblur=sigma=28:enable=1,split[pcoloursource][pmasksource]",
+            "[pblursource]gblur=sigma=28:threads=10:enable=1,split[pcoloursource][pmasksource]",
             "[pcoloursource]format=yuv420p[pcolour]",
             "[pmasksource]format=gray,"
             "geq=lum='255*min(1\\,min(min(X\\,W-1-X)\\,min(Y\\,H-1-Y))/4)':enable=1[pmask]",
@@ -163,7 +178,7 @@ UNGATED_ENABLE = re.compile(r":enable='[^']*'")
 GATED_FILTERS = (
     re.compile(r"delogo=x=\d+:y=\d+:w=\d+:h=\d+:enable"),
     re.compile(r"geq=lum='[^']*':enable"),
-    re.compile(r"(?:,|blursource\])gblur=sigma=[\d.]+:enable"),
+    re.compile(r"(?:,|blursource\])gblur=sigma=[\d.]+(?::threads=\d+)?:enable"),
 )
 
 
@@ -275,6 +290,70 @@ class BlurGatingEquivalenceTests(unittest.TestCase):
                 self.assertEqual(self.framemd5(ungated), frames)
                 self.assertEqual(self.mp4_sha256(ungated, f"{name}-ungated"),
                                  self.mp4_sha256(gated, f"{name}-gated"))
+
+
+UNCAPPED_THREADS = re.compile(r":threads=\d+")
+
+
+@unittest.skipUnless(FFMPEG.exists(), "project FFmpeg is required")
+class ThinRegionBlurTests(unittest.TestCase):
+    """The gblur thread cap: thin regions come out right and the same on every run; others keep their bytes."""
+
+    SIZE = (320, 180)
+
+    @classmethod
+    def setUpClass(cls):
+        cls.directory = TemporaryDirectory()
+        cls.source = Path(cls.directory.name) / "source.mp4"
+        width, height = cls.SIZE
+        subprocess.run(
+            [str(FFMPEG), "-hide_banner", "-loglevel", "error",
+             "-f", "lavfi", "-i", f"testsrc2=s={width}x{height}:r=25:d=2",
+             "-c:v", "libx264", "-preset", "veryfast", "-crf", "18", "-pix_fmt", "yuv420p", str(cls.source)],
+            capture_output=True, timeout=120, check=True,
+        )
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.directory.cleanup()
+
+    def graph(self, height, method, feather):
+        region = {"x": 96, "y": 60, "width": 128, "height": height}
+        return ";".join(regional_blur_filters(
+            input_label="0:v", output_label="out", prefix="p", region=region, sigma=28, feather=feather,
+            enable="enable='between(t,0.2,1.6)'", method=method, frame_size=self.SIZE,
+        ))
+
+    def framemd5(self, graph, *options):
+        return subprocess.run(
+            [str(FFMPEG), "-hide_banner", "-loglevel", "error", *options, "-i", str(self.source),
+             "-filter_complex", graph, "-map", "[out]", "-pix_fmt", "yuv420p", "-f", "framemd5", "-"],
+            capture_output=True, timeout=120, check=True,
+        ).stdout
+
+    def test_thin_regions_match_the_one_thread_result_on_every_run(self):
+        # Fewer chroma rows (height // 2) than this PC's filter threads before the cap.
+        for height in (8, 15, 24):
+            for method in (GBLUR, COVER_METHOD):
+                for feather in (0, 4):
+                    with self.subTest(height=height, method=method, feather=feather):
+                        graph = self.graph(height, method, feather)
+                        reference = self.framemd5(graph, "-filter_complex_threads", "1")
+                        self.assertGreater(reference.count(b"\n0,"), 40)
+                        self.assertEqual(self.framemd5(graph), reference)
+                        self.assertEqual(self.framemd5(graph), reference)
+
+    def test_regions_with_enough_rows_keep_their_bytes(self):
+        height = 64  # 32 chroma rows: the cap changes nothing up to 32 filter threads
+        if (os.cpu_count() or 1) + 1 > height // 2:
+            self.skipTest("more filter threads than the region's chroma rows: the uncapped graph is unreliable")
+        for method in (GBLUR, COVER_METHOD):
+            for feather in (0, 4):
+                with self.subTest(method=method, feather=feather):
+                    capped = self.graph(height, method, feather)
+                    uncapped = UNCAPPED_THREADS.sub("", capped)
+                    self.assertNotEqual(capped, uncapped)
+                    self.assertEqual(self.framemd5(capped), self.framemd5(uncapped))
 
 
 if __name__ == "__main__":

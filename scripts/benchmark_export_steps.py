@@ -8,7 +8,7 @@ by id: no titles, file names or paths. Run it through
 scripts/benchmark-export-steps.ps1, which holds the shared GPU slot and the
 final-render slot; measure and gate also hold <install>/state/final-render.lock.
 
-  prepare  --name N --job J [--segment START SECONDS] [--ops-from-job M]
+  prepare  --name N --job J [--segment START SECONDS] [--ops-from-job M | --ops-file F]
            [--synthetic WxH:SECONDS:FPS]
            Copy job J's source (or cut a segment of it, or make a synthetic clip)
            into the bench root and write work/plan.template.json from job J's
@@ -28,6 +28,11 @@ final-render slot; measure and gate also hold <install>/state/final-render.lock.
            both framemd5 files and both mp4 SHA-256 are identical (and, with
            --baseline-twice, the two baseline runs too). --framemd5-only skips
            the mp4: a match exits 2 and records "passed": null, never a pass.
+  stability --name N [--src DIR] [--runs 2]
+           One code tree run several times: exit 0 only when every run gives the
+           same framemd5 and mp4 SHA-256 and the framemd5 equals a run with one
+           filter thread (FFmpeg's gblur is wrong with more threads than a plane
+           has rows; docs/evidence/perf-export/gblur-threads.md).
 """
 from __future__ import annotations
 
@@ -317,7 +322,9 @@ def command_prepare(args: argparse.Namespace) -> int:
     cover_sigma = importlib.import_module("biliflow.blur_filter").cover_sigma
     for folder in ("input", "work", "output", "state", "results"):
         (bench / folder).mkdir(parents=True)
-    if args.ops_from_job is None:
+    if args.ops_from_job is not None and args.ops_file is not None:
+        raise SystemExit("Give --ops-from-job or --ops-file, not both")
+    if args.ops_from_job is None and args.ops_file is None:
         source, operations, job_facts = _job_operations(install_root, args.job)
     else:
         source, operations, job_facts = _job_row(install_root, args.job)[0], [], None
@@ -347,7 +354,11 @@ def command_prepare(args: argparse.Namespace) -> int:
         shutil.copyfile(source, copy)
     facts = _stream_facts(_probe(ffprobe, copy))
     duration = facts["duration_seconds"]
-    if args.ops_from_job is not None:
+    if args.ops_file is not None:
+        # Hand-written operations, in source pixels and on the copy's clock.
+        operations = _read_json(args.ops_file)
+        origin["ops_file"] = args.ops_file.name
+    elif args.ops_from_job is not None:
         template_source, template_operations, template_facts = _job_operations(install_root, args.ops_from_job)
         template_width = _stream_facts(_probe(ffprobe, template_source))["width"]
         operations = _fit_operations(
@@ -700,7 +711,9 @@ def command_gate_side(args: argparse.Namespace) -> int:
     has_audio = prepared["copy"]["audio_codec"] is not None
     graph = _graph(renderer, plan, plan["approved_operations"], tuple(prepared["graph_frame_size"]), has_audio)
     framemd5 = bench / "results" / f"{args.tag}.framemd5"
-    command = [str(ffmpeg), "-hide_banner", "-loglevel", "error", "-i", plan["source"]["path"],
+    # A fixed filter thread count gives the reference of `stability` (one thread: gblur is right).
+    threads = ["-filter_complex_threads", str(args.filter_threads)] if args.filter_threads else []
+    command = [str(ffmpeg), "-hide_banner", "-loglevel", "error", *threads, "-i", plan["source"]["path"],
                "-filter_complex", graph, "-map", "[vout]"]
     if has_audio:
         command += ["-map", "[aout]"]
@@ -708,6 +721,7 @@ def command_gate_side(args: argparse.Namespace) -> int:
     seconds, _ = _run_timed(command + ["-pix_fmt", "yuv420p", "-f", "framemd5", "-y", str(framemd5)])
     result: dict[str, Any] = {
         "tag": args.tag, "code": _git_state(src), "graph_chars": len(graph),
+        "filter_threads": args.filter_threads,
         "graph_sha256": hashlib.sha256(graph.encode("utf-8")).hexdigest(),
         "framemd5_seconds": round(seconds, 3), "framemd5_sha256": _sha256(framemd5),
         "framemd5_frames": sum(1 for line in framemd5.read_text(encoding="utf-8").splitlines()
@@ -795,6 +809,51 @@ def command_gate(args: argparse.Namespace) -> int:
     return 2 if args.framemd5_only else 0
 
 
+def command_stability(args: argparse.Namespace) -> int:
+    """One code tree, several runs: same framemd5 and mp4 SHA-256 each run, and the one-thread framemd5."""
+    if args.runs < 2:
+        raise SystemExit("stability needs at least 2 runs")
+    install_root = args.install_root.resolve(strict=True)
+    bench = _bench_dir(install_root, args.name)
+    prepared = _read_json(bench / "prepared.json")
+    src = args.src.resolve(strict=True)
+    _import_biliflow(src)  # the lock helper
+    tag = _stamp()
+    labels = [f"run{index}" for index in range(1, args.runs + 1)]
+    with _install_render_lock(install_root):
+        for label, extra in [*((label, []) for label in labels),
+                             ("one-thread", ["--framemd5-only", "--filter-threads", "1"])]:
+            print(f"stability side {label} ...", flush=True)
+            child = [sys.executable, str(Path(__file__).resolve()), "--install-root", str(install_root),
+                     "_gate-side", "--name", args.name, "--src", str(src), "--tag", f"{tag}-{label}", *extra]
+            if args.keep_outputs:
+                child.append("--keep-outputs")
+            subprocess.run(child, check=True)
+    sides = {label: _read_json(bench / "results" / f"{tag}-{label}.gate-side.json") for label in [*labels, "one-thread"]}
+
+    def framemd5(label: str) -> bytes:
+        return (bench / "results" / f"{tag}-{label}.framemd5").read_bytes()
+
+    runs_framemd5_identical = all(framemd5(label) == framemd5(labels[0]) for label in labels)
+    runs_mp4_identical = len({sides[label]["render"]["output_sha256"] for label in labels}) == 1
+    matches_one_thread = framemd5(labels[0]) == framemd5("one-thread")
+    summary = {
+        "schema_version": 1, "name": args.name, "tag": tag, "finished_at": _now(), "scope": "stability",
+        "machine": _machine(_tools(install_root)[0]), "origin": prepared["origin"], "copy": prepared["copy"],
+        "operations": prepared["operations"], "size_policy": prepared.get("size_policy"), "runs": args.runs,
+        "runs_framemd5_identical": runs_framemd5_identical, "runs_mp4_sha256_identical": runs_mp4_identical,
+        "matches_one_thread_framemd5": matches_one_thread,
+        "passed": runs_framemd5_identical and runs_mp4_identical and matches_one_thread,
+        "sides": sides,
+    }
+    path = bench / "results" / f"{tag}-stability.json"
+    _write_json(path, summary)
+    print(json.dumps({key: summary[key] for key in (
+        "runs_framemd5_identical", "runs_mp4_sha256_identical", "matches_one_thread_framemd5", "passed")}, indent=2))
+    print(f"results: {path}")
+    return 0 if summary["passed"] else 1
+
+
 # --------------------------------------------------------------------------- main
 
 def main(argv: list[str] | None = None) -> int:
@@ -807,6 +866,7 @@ def main(argv: list[str] | None = None) -> int:
     prepare.add_argument("--job", type=int, required=True)
     prepare.add_argument("--segment", type=float, nargs=2, metavar=("START", "SECONDS"))
     prepare.add_argument("--ops-from-job", type=int)
+    prepare.add_argument("--ops-file", type=Path, help="JSON list of operations (source pixels, the copy's clock)")
     prepare.add_argument("--synthetic", metavar="WxH:SECONDS:FPS")
     prepare.add_argument("--src", type=Path, default=CHECKOUT / "src")
 
@@ -832,11 +892,18 @@ def main(argv: list[str] | None = None) -> int:
     side.add_argument("--tag", required=True)
     side.add_argument("--framemd5-only", action="store_true")
     side.add_argument("--keep-outputs", action="store_true")
+    side.add_argument("--filter-threads", type=int)
+
+    stability = sub.add_parser("stability")
+    stability.add_argument("--name", required=True)
+    stability.add_argument("--src", type=Path, default=CHECKOUT / "src")
+    stability.add_argument("--runs", type=int, default=2)
+    stability.add_argument("--keep-outputs", action="store_true")
 
     args = parser.parse_args(argv)
     handlers = {
         "prepare": command_prepare, "measure": command_measure,
-        "gate": command_gate, "_gate-side": command_gate_side,
+        "gate": command_gate, "_gate-side": command_gate_side, "stability": command_stability,
     }
     return handlers[args.command](args)
 

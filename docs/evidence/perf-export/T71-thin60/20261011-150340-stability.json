@@ -1,0 +1,321 @@
+{
+  "schema_version": 1,
+  "name": "T71-thin60",
+  "tag": "20261011-150340",
+  "finished_at": "2026-10-11T15:04:43+07:00",
+  "scope": "stability",
+  "machine": {
+    "cpu": "Intel64 Family 6 Model 165 Stepping 2, GenuineIntel",
+    "logical_cpus": 12,
+    "platform": "Windows-10-10.0.26300-SP0",
+    "python": "3.11.16",
+    "ffmpeg": "9.0.1"
+  },
+  "origin": {
+    "job_id": 71,
+    "segment": [
+      0.0,
+      60.0
+    ],
+    "synthetic": null,
+    "ops_file": "thin-regions.ops.json"
+  },
+  "copy": {
+    "duration_seconds": 60.185391,
+    "bytes": 7931878,
+    "width": 1280,
+    "height": 534,
+    "video_codec": "h264",
+    "pix_fmt": "yuv420p",
+    "frame_rate": "25/1",
+    "video_bit_rate": "986633",
+    "audio_codec": "aac",
+    "file": "input/source.mp4"
+  },
+  "operations": [
+    {
+      "type": "blur",
+      "start_seconds": 0.0,
+      "end_seconds": 60.0,
+      "region": {
+        "x": 40,
+        "y": 20,
+        "width": 300,
+        "height": 8
+      },
+      "blur": {
+        "sigma": 28,
+        "edge_feather_pixels": 0,
+        "edge_feather_mode": "all_edges",
+        "method": "gblur"
+      }
+    },
+    {
+      "type": "blur",
+      "start_seconds": 5.0,
+      "end_seconds": 40.0,
+      "region": {
+        "x": 400,
+        "y": 21,
+        "width": 240,
+        "height": 14
+      },
+      "blur": {
+        "sigma": 28,
+        "edge_feather_pixels": 2,
+        "edge_feather_mode": "all_edges",
+        "method": "gblur"
+      }
+    },
+    {
+      "type": "blur",
+      "start_seconds": 0.0,
+      "end_seconds": 60.0,
+      "region": {
+        "x": 760,
+        "y": 31,
+        "width": 320,
+        "height": 15
+      },
+      "blur": {
+        "sigma": 28,
+        "edge_feather_pixels": 2,
+        "edge_feather_mode": "all_edges",
+        "method": "delogo_blur_v1"
+      }
+    },
+    {
+      "type": "blur",
+      "start_seconds": 10.0,
+      "end_seconds": 25.0,
+      "region": {
+        "x": 100,
+        "y": 470,
+        "width": 400,
+        "height": 24
+      },
+      "blur": {
+        "sigma": 28,
+        "edge_feather_pixels": 4,
+        "edge_feather_mode": "vertical_only",
+        "method": "delogo_blur_v1"
+      }
+    },
+    {
+      "type": "blur",
+      "start_seconds": 30.0,
+      "end_seconds": 55.0,
+      "region": {
+        "x": 600,
+        "y": 480,
+        "width": 200,
+        "height": 24
+      },
+      "blur": {
+        "sigma": 28,
+        "edge_feather_pixels": 4,
+        "edge_feather_mode": "vertical_only",
+        "method": "gblur"
+      }
+    },
+    {
+      "type": "blur",
+      "start_seconds": 0.0,
+      "end_seconds": 60.0,
+      "region": {
+        "x": 1000,
+        "y": 100,
+        "width": 160,
+        "height": 8
+      },
+      "blur": {
+        "sigma": 28,
+        "edge_feather_pixels": 0,
+        "edge_feather_mode": "all_edges",
+        "method": "delogo_blur_v1"
+      }
+    },
+    {
+      "type": "blur",
+      "start_seconds": 2.0,
+      "end_seconds": 3.0,
+      "region": {
+        "x": 1100,
+        "y": 300,
+        "width": 128,
+        "height": 15
+      },
+      "blur": {
+        "sigma": 28,
+        "edge_feather_pixels": 3,
+        "edge_feather_mode": "all_edges",
+        "method": "gblur"
+      }
+    },
+    {
+      "type": "blur",
+      "start_seconds": 45.0,
+      "end_seconds": 60.0,
+      "region": {
+        "x": 500,
+        "y": 250,
+        "width": 250,
+        "height": 14
+      },
+      "blur": {
+        "sigma": 28,
+        "edge_feather_pixels": 4,
+        "edge_feather_mode": "all_edges",
+        "method": "delogo_blur_v1"
+      }
+    },
+    {
+      "type": "cut",
+      "start_seconds": 28.0,
+      "end_seconds": 32.0,
+      "region": null,
+      "blur": {
+        "sigma": null,
+        "edge_feather_pixels": null,
+        "edge_feather_mode": null,
+        "method": null
+      }
+    }
+  ],
+  "size_policy": {
+    "max_output_bytes": 3500000000,
+    "target_output_bytes": 3300000000
+  },
+  "runs": 2,
+  "runs_framemd5_identical": false,
+  "runs_mp4_sha256_identical": false,
+  "matches_one_thread_framemd5": false,
+  "passed": false,
+  "sides": {
+    "run1": {
+      "tag": "20261011-150340-run1",
+      "code": {
+        "src_sha256": "ffa0b1822481b66add20411443d8e0898ea770be38a3821f41bfaaec612e457f",
+        "tracked": false
+      },
+      "graph_chars": 6591,
+      "filter_threads": null,
+      "graph_sha256": "659ceba9368d66b8c0071aae8c4efe30c934ccef1823d9810cf345f1f3b12f75",
+      "framemd5_seconds": 6.593,
+      "framemd5_sha256": "49b2e844329a3083083e182dc935c263c5fe7919586433a4a40555652f8f49ea",
+      "framemd5_frames": 2717,
+      "render": {
+        "tag": "20261011-150340-run1",
+        "total_seconds": 11.96,
+        "events": [
+          {
+            "step": "sha256_source_before",
+            "seconds": 0.022,
+            "bytes": 7931878
+          },
+          {
+            "step": "ffprobe",
+            "seconds": 0.041
+          },
+          {
+            "step": "ffmpeg_render",
+            "seconds": 11.138
+          },
+          {
+            "step": "ffprobe",
+            "seconds": 0.044
+          },
+          {
+            "step": "ffmpeg_decode_validation",
+            "seconds": 0.648
+          },
+          {
+            "step": "sha256_output",
+            "seconds": 0.036,
+            "bytes": 13165732
+          },
+          {
+            "step": "sha256_source_after",
+            "seconds": 0.022,
+            "bytes": 7931878
+          }
+        ],
+        "output_sha256": "4e4cb2a0a8ecaf4e1234aca871dea8874299deaa35cdeae939b0e4d41d332b12",
+        "output_bytes": 13165732,
+        "output_duration_seconds": 56.12,
+        "manifest_elapsed_seconds": 11.138,
+        "manifest_decode_validation_seconds": 0.648,
+        "manifest_video_seconds_per_processing_second": 5.044
+      }
+    },
+    "run2": {
+      "tag": "20261011-150340-run2",
+      "code": {
+        "src_sha256": "ffa0b1822481b66add20411443d8e0898ea770be38a3821f41bfaaec612e457f",
+        "tracked": false
+      },
+      "graph_chars": 6591,
+      "filter_threads": null,
+      "graph_sha256": "659ceba9368d66b8c0071aae8c4efe30c934ccef1823d9810cf345f1f3b12f75",
+      "framemd5_seconds": 8.047,
+      "framemd5_sha256": "8d1fcd2f9ed85225b4ce727368426219ee8dcc233e8497082b385d0fe222d528",
+      "framemd5_frames": 2717,
+      "render": {
+        "tag": "20261011-150340-run2",
+        "total_seconds": 21.299,
+        "events": [
+          {
+            "step": "sha256_source_before",
+            "seconds": 0.028,
+            "bytes": 7931878
+          },
+          {
+            "step": "ffprobe",
+            "seconds": 0.038
+          },
+          {
+            "step": "ffmpeg_render",
+            "seconds": 19.683
+          },
+          {
+            "step": "ffprobe",
+            "seconds": 0.076
+          },
+          {
+            "step": "ffmpeg_decode_validation",
+            "seconds": 1.284
+          },
+          {
+            "step": "sha256_output",
+            "seconds": 0.083,
+            "bytes": 13162867
+          },
+          {
+            "step": "sha256_source_after",
+            "seconds": 0.09,
+            "bytes": 7931878
+          }
+        ],
+        "output_sha256": "7578bffcc6fe24f2a9177e4f62b1f9c77426ff51862d888c6bc6edb05229d2a6",
+        "output_bytes": 13162867,
+        "output_duration_seconds": 56.12,
+        "manifest_elapsed_seconds": 19.683,
+        "manifest_decode_validation_seconds": 1.284,
+        "manifest_video_seconds_per_processing_second": 2.854
+      }
+    },
+    "one-thread": {
+      "tag": "20261011-150340-one-thread",
+      "code": {
+        "src_sha256": "ffa0b1822481b66add20411443d8e0898ea770be38a3821f41bfaaec612e457f",
+        "tracked": false
+      },
+      "graph_chars": 6591,
+      "filter_threads": 1,
+      "graph_sha256": "659ceba9368d66b8c0071aae8c4efe30c934ccef1823d9810cf345f1f3b12f75",
+      "framemd5_seconds": 12.401,
+      "framemd5_sha256": "3546c6099dbd30dca229b9cc4632590ac2aadbe276d03e94a524ede48591c9e6",
+      "framemd5_frames": 2717
+    }
+  }
+}

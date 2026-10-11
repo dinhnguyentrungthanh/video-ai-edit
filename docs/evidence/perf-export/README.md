@@ -15,6 +15,7 @@ Benches (all copies in a temporary root; the install's `input\`, `output\` and d
 | `L39-1080-seg300` | job 39 (L, 1920×1080), 3,600–3,900 s, stream-copied | job 71's operations fitted to it (regions ×1.5, cover sigma recomputed; whole-length ones stay whole-length, short ones keep their distance from the start or the end) |
 | `T74` | whole copy of job 74 (T, 2,880 s, 1280×534, 25 fps) | job 74's approved operations, unchanged |
 | `smoke-synth` | synthetic 20 s testsrc2 + sine at 1280×534 | job 71's operations fitted to it |
+| `T71-thin60` | job 71's first 60 s, stream-copied (phase 2) | 8 hand-written regions 8–24 rows high and one cut (`T71-thin60/thin-regions.ops.json`: source pixels, the copy's clock) |
 
 All benches render with the default export size policy, which is also the one jobs 71 and 74 were exported with (their
 bench renders are byte-identical to the real exports).
@@ -42,3 +43,17 @@ Files:
   - `T71` (A0) ran this worktree's `src` as it was at 10:48 (`40a0125`, before any change) for its render, filters,
     encode, decode, faststart and hash steps. Its last step, `cli_import` (about 11:21:30–11:22:18), started new
     interpreters after the A1a edits to `scheduler.py` and `control_center.py`, so that step imported the A1a code.
+
+## Phase 2 (branch `perf/export-speed-p2`)
+
+Each step is gated against the step before it, both as frozen copies of `src` in `<install>\temp\perf-export\`
+(`tracked: false`; `src_sha256` identifies them): `a2-05653c9` (`git archive 05653c9 src`), `p2-step1`, `p2-step2`.
+- Step 1, the gblur thread cap (`gblur-threads.md`):
+  - `T71-thin60/<stamp>-stability.json`: `stability` runs one code twice (render and framemd5) and adds a framemd5 with
+    one filter thread; `passed` only when both runs give the same framemd5 and mp4 SHA-256 and the framemd5 equals the
+    one-thread one. `15:03:40` is the A2 code (fails, as expected), `15:04:45` the fixed code (passes).
+  - `<bench>/<stamp>-gate.json` stamped 15:06–15:33 on 2026-10-11 (`smoke-synth` 15:06:19, `L39-1080-seg300` 15:07:08,
+    `T74` 15:14:26, `T71` 15:32:53): A2 code (baseline, framemd5 only; its mp4 SHA-256 is the one of the A2 gate,
+    `--baseline-mp4-sha256`) against step 1. Regions there are 30 rows or more, so the cap changes the graph but no
+    byte: all four passed.
+  - These ran while research agents of the same session also used the CPU: their times are not comparable.

@@ -61,6 +61,19 @@ def _cover_chain(region: dict, frame_size: tuple[int, int] | None, enable: str) 
     return chain + f"crop={width}:{height}:{left}:{top}"
 
 
+def _gblur(sigma: float, height: int, enable: str) -> str:
+    """gblur of one region, never with more threads than its chroma plane has rows.
+
+    FFmpeg's gblur gives wrong, run-dependent pixels when a plane has fewer rows
+    than its threads (docs/evidence/perf-export/gblur-threads.md). The branch is
+    yuv420p and crop rounds an odd height down, so the chroma plane has
+    height // 2 rows. FFmpeg uses the smaller of this cap and its own thread count,
+    and every count up to the row count gives the same pixels: a region with enough
+    rows keeps its bytes, a thin one comes out right and the same on every machine.
+    """
+    return f"gblur=sigma={sigma:g}:threads={max(1, height // 2)}:{enable}"
+
+
 def blur_feather_mode(operation: dict) -> str:
     settings = operation.get("blur") or {}
     mode = str(settings.get("edge_feather_mode", "all_edges"))
@@ -99,7 +112,7 @@ def regional_blur_filters(
     filters = [f"[{input_label}]split[{base}][{crop}]"]
     if feather <= 0:
         filters.append(
-            f"[{crop}]{region_chain},gblur=sigma={sigma:g}:{enable}[{blurred}]"
+            f"[{crop}]{region_chain},{_gblur(sigma, height, enable)}[{blurred}]"
         )
         filters.append(
             f"[{base}][{blurred}]overlay={x}:{y}:{enable}[{output_label}]"
@@ -125,11 +138,11 @@ def regional_blur_filters(
         patch = f"{prefix}patch"
         filters.append(f"[{crop}]{region_chain},split[{clean}][{blur_source}]")
         filters.append(
-            f"[{blur_source}]gblur=sigma={sigma:g}:{enable},split[{colour_source}][{mask_source}]"
+            f"[{blur_source}]{_gblur(sigma, height, enable)},split[{colour_source}][{mask_source}]"
         )
     else:
         filters.append(
-            f"[{crop}]{region_chain},gblur=sigma={sigma:g}:{enable},"
+            f"[{crop}]{region_chain},{_gblur(sigma, height, enable)},"
             f"split[{colour_source}][{mask_source}]"
         )
     # Pin the overlay branch to a colour format. Without this explicit

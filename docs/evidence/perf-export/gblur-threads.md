@@ -24,9 +24,38 @@ Exports so far (read-only scan of the 22 completed export manifests): no blur re
 30 rows (5 regions), then 33 and 34. They are fine on this PC. On a machine with 16 or more filter threads (about 15+
 logical CPUs) a 30-row region's chroma (15 rows) would be wrong.
 
-Possible fix (not done; changes output only where it is wrong today, so it needs the user's decision and its own
-gate): cap each regional gblur's threads at its smallest plane's rows (`gblur=sigma=S:threads=<height // 2>` for
-yuv420p). A region whose chroma rows reach the default thread count is unchanged by the cap (FFmpeg uses the smaller
-of the two), so regions that are correct today keep their bytes; in the probes every thread count up to the row count
-gave the same result, so the output would also stop depending on the machine's CPU count. Also seen: geq (the feather
-mask) and delogo on an 8-row crop were stable; an overlay case was unstable only because of the gblur inside it.
+Also seen: geq (the feather mask) and delogo on an 8-row crop were stable; an overlay case was unstable only because of
+the gblur inside it.
+
+## Fix (perf phase 2, step 1; the user approved it on 2026-10-11)
+
+Each regional gblur gets `threads=max(1, height // 2)`: the rows of its chroma plane (the branch is yuv420p, and crop
+rounds an odd height down). FFmpeg uses the smaller of this cap and its own filter thread count, and every count up to
+the row count gives the same pixels, so:
+- a region whose chroma rows reach the default thread count (26 rows or more on this PC) is unchanged;
+- a thinner region now comes out as with one thread: right, and the same on every run and every machine.
+
+The full-frame gblur keeps FFmpeg's default (a whole frame has hundreds of rows).
+
+Gates (`scripts/benchmark_export_steps.py`, files in `<bench>/*-stability.json` and `<bench>/*-gate.json`):
+- `T71-thin60`: the first 60 s of job 71 with 8 hand-written regions 8, 14, 15 and 24 rows high (gblur and cover,
+  feather 0, 2, 3 and 4, `all_edges` and `vertical_only`, whole-length and short) and one cut
+  (`thin-regions.ops.json`). `stability` renders the same code twice and adds a framemd5 with one filter thread:
+  - A2 code (`05653c9`): the two runs differ in framemd5 and in the mp4 SHA-256, and neither matches one thread:
+    failed, as expected;
+  - fixed code: both runs and the one-thread run give the same framemd5 (`3546c609…`), and both mp4 are identical
+    (`821bec86…`): passed. The one-thread framemd5 of the A2 code is the same `3546c609…`: the fix gives exactly
+    the one-thread pixels.
+- `smoke-synth`, `L39-1080-seg300`, `T74` and `T71` (regions of 30 rows or more): `gate` A2 code against the fix,
+  framemd5 identical and mp4 SHA-256 identical to the A2 renders (for `T74` and `T71` also the real exports of jobs
+  74 and 71): regions that were right keep their bytes.
+
+Root cause (FFmpeg n9.0.1 source, read by a research agent of this session and confirmed by its probes; its second,
+independent check did not run, so treat the source line details as unverified): gblur's last
+pass (`postscale`) splits the plane by rows into `min(width × height, threads)` jobs, so with more threads than rows
+some jobs get no row. The C version then does nothing, but the x86 assembly loop tests its length after its body and
+scales one vector (8 floats with AVX2) of the next job's rows a second time, without synchronisation: those pixels go
+almost to black, or not, depending on timing. The cap leaves no job empty. A second assembly fault, not reached by
+the cap: with AVX2, a plane 8 pixels wide or less (a yuv420p region 16 pixels wide or less) whose slices reach 8 rows
+reads past its row; thin regions get slices of about 2 rows (correct), and such narrow regions of 26 rows or more
+behave as before.
