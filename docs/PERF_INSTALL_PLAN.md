@@ -1,7 +1,7 @@
 # Kế hoạch: xuất và quét nhanh hơn, tự nhận diện phần cứng, bộ cài, kích hoạt
 
 - Ngày lập: 2026-10-11 (Asia/Bangkok).
-- Bản 2: đã sửa theo hai lượt review đối chiếu với code. Chờ người dùng duyệt rồi mới giao việc.
+- Bản 3: đã sửa theo hai lượt review đối chiếu với code. Thêm lịch chi tiết (mục 9), prompt Phase 1 (mục 12) và quy trình bàn giao (mục 13). Người dùng đồng ý đưa vào `main` ngày 2026-10-11.
 - Base: `main` `d477c70`.
 - Nhánh tài liệu: `docs/perf-install-plan`.
 - Repo từng công khai, nên tài liệu, code, test và commit **không ghi tên phim, tên file nguồn, link hay tên miền thật**. Tên report và tên bản xuất lấy từ tên file nguồn, nên cũng không được dán vào.
@@ -32,6 +32,7 @@
 8. **Phụ đề và dịch:** tạm dừng.
 9. **Mỗi session đo trước rồi mới sửa,** và báo số đo trước/sau trên máy thật.
 10. **Repo:** người dùng sẽ chuyển sang Private. **Bắt buộc xong trước khi GitHub Actions tạo bản build đầu tiên** (mục 7, C7).
+11. **Credit cloud có hạn** (khoảng 43 USD lúc lập kế hoạch). Việc cần Windows, GPU hay phần cứng thật chạy trên PC. Cloud chỉ làm code thuần và luôn bàn giao để PC tiếp quản được (mục 13).
 
 ## 2. Hiện trạng đã kiểm trên code (`main` d477c70)
 
@@ -168,8 +169,8 @@
 
 ## 4. Session E: hồ sơ phần cứng và đường chạy CPU
 
-- **Ở đâu:** cloud viết; đo trên PC (Control Center thử).
-- **Nhánh:** `feat/hardware-profile`.
+- **Ở đâu:** PC (mục 9.3), vì phải nhận diện phần cứng thật. Phép đo E4 chạy trên một Control Center thử.
+- **Nhánh / worktree:** `feat/hardware-profile` / `temp\wt-hardware-profile`.
 - **Thời gian (ước tính):** E0–E4 khoảng 2 tuần; E5 thêm 2–4 tuần.
 
 ### E0. Hợp đồng giao diện (người dùng duyệt)
@@ -366,12 +367,23 @@ Cho stage CPU của video sau chạy chồng với stage GPU của video trướ
 - Tìm **file đánh dấu** ở gốc cây thư mục cài. Không dùng biến môi trường, không dùng tham số.
 - Giữ nguyên nghĩa của `allowed_project_root`, vì nó chặn cả hàm xóa, kho phiên, trình quản lý tài khoản và bước thử tải.
 - **Chưa sửa `cli.py`.** Thay đổi ở đó đi theo đợt B1.
+- Kiểm bằng `cache_dependencies.stage_source_paths` (trước và sau khi sửa) rằng **không stage nào đổi khóa cache**.
 
 ### C3. Khóa cache cho bản build (đi theo B1, phải xong trước C4)
 
 - Bản build: khóa theo mã build và hash từng module, tính sẵn lúc build.
 - **Từ chối an toàn:** khi không có cả `.py` lẫn manifest build thì `cacheable()` trả False.
 - Bản chạy từ mã nguồn giữ cách cũ.
+
+### C-spike. Thử Nuitka sớm (Phase 1, trên PC, không gộp vào `main`)
+
+- **Mục đích:** biết sớm những gì vướng khi biên dịch.
+- **Cần người dùng duyệt** trước khi tải Nuitka.
+- **Cách làm:**
+  - biên dịch gói `biliflow` sang một **thư mục tạm** dưới `temp\`;
+  - chạy `python -m biliflow --help`, `python -m biliflow.performance_report --help`, một stage quét ngắn và `render-final` trên clip tổng hợp trong root tạm;
+  - so kết quả với bản chạy từ mã nguồn.
+- **Không sửa** code của repo. Mọi vướng mắc ghi vào file bàn giao (mục 13) để C4 dùng.
 
 ### C4. Biên dịch Nuitka (chỉ chế độ module)
 
@@ -413,6 +425,13 @@ Cho stage CPU của video sau chạy chồng với stage GPU của video trướ
     - đổi model hoặc torch thì làm qua lock.
 
 ### C6. Kích hoạt
+
+**Chia làm hai phần:**
+- **C6-lõi (Phase 1):** chỉ là code mới, có test, chưa nối vào Control Center:
+  - module mới `activation.py`: mã máy, định dạng key, kiểm chữ ký, kiểm hạn, chống chỉnh lùi đồng hồ;
+  - công cụ cấp key dạng script, nằm ngoài gói cài;
+  - cặp khóa test chỉ dành cho test.
+- **C6-nối (Đợt 3):** server chỉ để kích hoạt, chặn CLI, trang kích hoạt.
 
 - **Mức bảo vệ:** chỉ để **răn đe**, không chống được người có chuyên môn. `.venv` là CPython thường, sửa được.
   - Kiểm chữ ký **bên trong module đã biên dịch**, và kiểm hash các file mã hóa so với manifest build.
@@ -473,18 +492,68 @@ Cho stage CPU của video sau chạy chồng với stage GPU của video trướ
 
 **Phần chạm khóa cache** (đường dẫn FFmpeg trong `cli.py`/`stage_cache.py`, số phiên bản trong `__init__.py`, `pyproject.toml`) **đi theo đợt B1**.
 
-## 9. Thứ tự, điểm gộp, ai sửa file nào
+## 9. Lịch, song song, điểm gộp, ai sửa file nào
 
-```
-Đợt 1  E0–E2 (cloud)  ║  A0, A1a, A2 (PC)  ║  C0 đề xuất, C1, C2 không đụng cli.py (cloud)
-       ── Điểm gộp G1 (người dùng duyệt): E0–E2, A1a, A2 vào main
-Đợt 2  B0 (PC)  ║  E3 + đóng băng hồ sơ theo job (scheduler, sau G1)  ║  A3 NVENC trong root tạm (PC)
-       ── B1: đợt sửa khóa cache duy nhất (người dùng duyệt) gồm phần của B, C2, C3, D
-       ── Điểm gộp G2: E3, B1, A3 (nếu được duyệt) vào main
-Đợt 3  B2–B4 (PC)  ║  E4 cổng CPU (Control Center thử)  ║  C4–C7 (cloud + Actions)  ║  A1b (nếu đủ điều kiện)
-       ── Điểm gộp G3, rồi D, rồi bản cài đầu tiên cho người dùng kiểm
-Sau    E5 OpenVINO · AMD/Intel GPU · phụ đề/dịch
-```
+### 9.1 Đường găng
+
+Chuỗi dài nhất quyết định ngày ra bản cài đầu tiên:
+
+> C1/C2 → **B1** (đợt sửa khóa cache duy nhất) → C3 → C4 biên dịch → C5 bộ cài → C7 build tự động → người dùng kiểm
+
+Để rút ngắn:
+1. **B0 (chỉ đo) chạy ngay ở Phase 1**, để có thể chốt B1 vào tuần 2.
+2. **C-spike (thử Nuitka) chạy ngay ở Phase 1**, để lộ vướng mắc sớm.
+3. **C6-lõi viết ngay ở Phase 1**, vì đó là code mới, không đụng file của session khác.
+4. Mọi việc không nằm trên đường găng (A, E, B2–B4) chạy song song với nó.
+
+### 9.2 Lịch theo tuần (ước tính)
+
+| Tuần | PC | Cloud (khi còn credit) | Người dùng |
+|---|---|---|---|
+| **1 (Phase 1)** | **A:** A0 → A1a → A2 · **E:** E0 → E1–E2 · **B0:** chỉ đo, chạy lúc rảnh hoặc ban đêm · **C-spike** | **C:** C0 đề xuất · C1 (script) · C2 · C6-lõi | Repo Private · duyệt E0, C0 · chạy script chỉ đọc của C1 · duyệt tải Nuitka |
+| | **Điểm gộp G1:** E0–E2, A1a, A2, C1, C2, C6-lõi vào `main` | | Duyệt G1 |
+| **2** | **A3:** NVENC trong thư mục thử + SSIM · **B:** thiết kế B3 → **B1** · **E3** + đóng băng hồ sơ theo job | **C:** C4 dây chuyền biên dịch, bản nháp C5 | Chọn cách xử lý C1 trên CPU · duyệt danh sách B1 · duyệt NVENC · khởi động lại Control Center khi rảnh |
+| | **Điểm gộp G2:** B1, E3, A3 (nếu duyệt) | | Duyệt G2 |
+| **3** | **B:** B2–B4 · **E4:** cổng CPU (Control Center thử, ban đêm) · A1b nếu đủ điều kiện | **C:** C6-nối, C5, C7, C8 | |
+| **4** | Người dùng cài thử bản build (thư mục mới, thêm một tài khoản Windows thường) | Sửa lỗi từ lần cài thử · **D** | Kiểm bộ cài |
+| | **Điểm gộp G3** | | |
+| **5–6** | Dự phòng: sửa lỗi, đo lại, bản cài đầu tiên chính thức | | |
+
+**Khi nào thấy kết quả:**
+- **Cuối tuần 1:** bản xuất không còn chờ sau việc quét; bộ lọc làm mờ nhanh hơn (nếu A0 xác nhận đó là chỗ nghẽn).
+- **Tuần 2:** có NVENC sau khi duyệt; máy biết tự chọn cấu hình.
+- **Tuần 3:** quét nhanh hơn.
+- **Tuần 4–6:** bản cài có kích hoạt.
+
+### 9.3 Phase 1: 5 session, cái nào chạy ở đâu
+
+| Session | Chạy ở | Nhánh | Worktree trên PC | Bắt đầu | Dùng GPU |
+|---|---|---|---|---|---|
+| **A** xuất video | PC | `perf/export-speed` | `temp\wt-export-speed` | Ngày 1 | A0 (khung giờ GPU 1) |
+| **E** hồ sơ phần cứng | **PC** (nhận diện phần cứng thật, không tốn credit cloud) | `feat/hardware-profile` | `temp\wt-hardware-profile` | Ngày 1 | Đo nhanh E2 (khung giờ GPU 3) |
+| **C** bộ cài, phần code thuần | **Cloud**; PC tiếp quản khi hết credit (mục 13) | `feat/installer` | `temp\wt-installer` (khi tiếp quản) | Ngày 1 | Không |
+| **B0** đo nền quét | PC | `perf/scan-baseline`, chỉ có file bàn giao, không sửa code | `temp\wt-scan-baseline` | Ngày 2–3 | Có (khung giờ GPU 2, ban đêm) |
+| **C-spike** thử Nuitka | PC | `spike/nuitka`, chỉ có file bàn giao; script build để trong `temp\` | `temp\wt-nuitka-spike` | Ngày 2–3, sau khi duyệt tải Nuitka | Chỉ khi chạy clip thử |
+
+- **Vì sao E chạy trên PC:** E phải nhận diện card, driver, NVENC/NVDEC thật. Cloud không có những thứ này, và chạy trên PC còn tiết kiệm credit cloud.
+- **Vì sao C chạy trên cloud:** C0, C2 và C6-lõi là code thuần với test giả. Đây là phần duy nhất của Phase 1 hợp với cloud. Nếu hết credit, PC tiếp quản theo mục 13.
+
+### 9.4 Khung giờ GPU trên PC (không chạy chồng)
+
+1. **Khung 1, A0:** đo xuất. Chủ yếu dùng CPU, NVENC chỉ chạy trong thư mục thử.
+2. **Khung 2, B0:** đo quét. Dùng GPU nặng; chạy ban đêm hoặc khi Control Center thật không có job.
+3. **Khung 3, E2:** đo nhanh hồ sơ phần cứng, vài phút.
+4. **C-spike:** chỉ dùng GPU khi chạy clip thử. Xếp vào lúc không có khung nào ở trên.
+
+Mỗi phép đo lấy khóa GPU hoặc khóa render (mục 3.7). Session nào thấy khóa đang bị giữ thì **chờ, không chen ngang**.
+
+### 9.5 Điểm gộp
+
+- **Ai gộp:** một session **trên PC** ("Điều phối gộp", prompt ở mục 12). Session này gộp lần lượt các nhánh vào `main`, chạy cả bộ test, rồi push `main` khi người dùng đồng ý.
+- **Thư mục chính trên PC** là bản đang chạy của Control Center. Chỉ cập nhật thư mục này khi **không có job**, và người dùng tự khởi động lại.
+- **Thứ tự gộp ở G1:** C2 → C1 → C6-lõi → E0–E2 → A1a → A2. Nhánh nào chưa đạt cổng thì để sang G2, không chờ.
+
+### 9.6 Ai sửa file nào
 
 | File | Đợt 1 | Đợt 2 | Đợt 3 |
 |---|---|---|---|
@@ -498,7 +567,9 @@ Sau    E5 OpenVINO · AMD/Intel GPU · phụ đề/dịch
 | `review_workflow.py` | — | E (ghi chú C1, nếu chọn) | — |
 | `models\` trên PC | **không ai sửa** | **không ai sửa** | **không ai sửa** |
 
-**Thời gian tối thiểu (ước tính) khoảng 5–6 tuần** cho bản cài đầu tiên. Bản 1 ước tính 4 tuần; review cho thấy cần thêm:
+### 9.7 Thời gian
+
+**Tối thiểu khoảng 5–6 tuần** cho bản cài đầu tiên (ước tính). Bản 1 ước tính 4 tuần; review cho thấy cần thêm:
 - server chỉ để kích hoạt;
 - khóa cache an toàn cho bản build;
 - tách trạng thái theo làn trong scheduler;
@@ -521,8 +592,12 @@ Sau    E5 OpenVINO · AMD/Intel GPU · phụ đề/dịch
 
 | Mốc | Trạng thái |
 |---|---|
-| Kế hoạch bản 2 được người dùng duyệt | [ ] |
+| Kế hoạch bản 3 vào `main` | [x] 2026-10-11 |
 | Repo chuyển sang Private | [ ] |
+| Phase 1 bắt đầu: A, E, C (cloud), B0, C-spike | [ ] |
+| B0 đo nền quét (`docs/handoff/B0-scan-baseline.md`) | [ ] |
+| C-spike thử Nuitka (`docs/handoff/C-spike-nuitka.md`) | [ ] |
+| C6-lõi thư viện kích hoạt + công cụ cấp key | [ ] |
 | C0: sửa `AGENTS.md` (route mới, quy tắc khóa bí mật, thư mục cài) được duyệt | [ ] |
 | E0 hợp đồng hồ sơ phần cứng được duyệt | [ ] |
 | E1–E2 nhận diện, bảng cấu hình, đo nhanh | [ ] |
@@ -535,7 +610,6 @@ Sau    E5 OpenVINO · AMD/Intel GPU · phụ đề/dịch
 | E3 + đóng băng hồ sơ theo job | [ ] |
 | A3 NVENC trong root tạm; người dùng duyệt; `AGENTS.md` cập nhật | [ ] |
 | A4 (nếu làm) được duyệt; `AGENTS.md` cập nhật | [ ] |
-| B0 đo nền quét | [ ] |
 | **B1 đợt sửa khóa cache duy nhất** (người dùng duyệt) | [ ] |
 | **Điểm gộp G2** | [ ] |
 | B2 · B3 · B4 · (B5) | [ ] |
@@ -548,18 +622,138 @@ Sau    E5 OpenVINO · AMD/Intel GPU · phụ đề/dịch
 
 ## 12. Prompt dán cho từng session
 
+**Cách dùng:**
+- Prompt **[PC]** dán vào Claude Code trên máy Windows: Remote Control hoặc phiên chạy local trong `E:\DungChung\BiliFlow`.
+- Prompt **[Cloud]** dán vào một session cloud mới của repo `dinhnguyentrungthanh/video-ai-edit`.
+- **Mọi session đều theo quy trình bàn giao ở mục 13.**
+
+### 12.1 Phase 1
+
 ```text
-[E – cloud] Repo dinhnguyentrungthanh/video-ai-edit. Đọc AGENTS.md và docs/PERF_INSTALL_PLAN.md (mục 1–4, 9). Nhánh feat/hardware-profile từ main. Làm E0 và đưa hợp đồng cho tôi duyệt; sau đó E1–E2. Không sửa scheduler.py, cli.py, __main__.py, __init__.py, run.ps1, env.ps1, stage_cache.py, cache_dependencies.py, pyproject.toml, config/*, models\. Chỉ ghi số job/revision/nhãn L-H-T, không tên phim. Commit trên nhánh; hỏi tôi trước khi push.
+[A – PC] Xuất video nhanh hơn. Làm việc trong E:\DungChung\BiliFlow. Đọc AGENTS.md, rồi docs/PERF_INSTALL_PLAN.md mục 1–3, 5, 9, 13.
+Chuẩn bị: git fetch origin; git worktree add temp\wt-export-speed -b perf/export-speed origin/main; làm theo mục 3.8. Không làm trong thư mục chính.
+Việc: A0 (đo từng bước trong root tạm, dùng khung giờ GPU 1, báo số cho tôi) → A1a → A2 (cổng framemd5 + SHA-256 giống hệt). Chưa làm A3/A4.
+Không sửa: cli.py, __main__.py, __init__.py, run.ps1, env.ps1, stage_cache.py, cache_dependencies.py, pyproject.toml, config/*, models\. Không ghi vào input\, output\, reports\, archive\ thật. Không gọi route bị cấm trên Control Center thật.
+Chỉ ghi số job/revision/nhãn L-H-T, không tên phim hay tên file nguồn.
+Bàn giao: sau mỗi bước chạy test liên quan, commit trong worktree, cập nhật docs/handoff/A-export.md (mẫu mục 13). Chưa push hay merge. Xong A2 thì báo tôi và chờ điểm gộp G1.
+```
+
+```text
+[E – PC] Hồ sơ phần cứng. Làm việc trong E:\DungChung\BiliFlow. Đọc AGENTS.md, rồi docs/PERF_INSTALL_PLAN.md mục 1–4, 9, 13.
+Chuẩn bị: git fetch origin; git worktree add temp\wt-hardware-profile -b feat/hardware-profile origin/main; làm theo mục 3.8.
+Việc: E0 (schema + API + bảng cấu hình đã qua cổng): trình tôi duyệt trước khi code. Sau đó E1 (nhận diện trong tiến trình con, có lớp giao diện để test giả) → E2 (đo nhanh qua file .ps1 riêng có khóa, chỉ chạy ở khung giờ GPU 3 khi Control Center thật rảnh; trang Cài đặt với "Đo lại", "Chỉ dùng CPU", chỉ PC).
+Không sửa: scheduler.py, job_store.py, job_pipeline.py, module quét, cli.py, __main__.py, __init__.py, run.ps1, env.ps1, stage_cache.py, cache_dependencies.py, pyproject.toml, config/*, models\. Không gọi route mới trên Control Center thật; kiểm trên Control Center thử (root tạm, cổng riêng).
+Chỉ ghi nhãn L-H-T, không tên phim.
+Bàn giao: sau mỗi bước chạy test, commit trong worktree, cập nhật docs/handoff/E-hardware.md. Chưa push hay merge. Xong E2 thì báo tôi và chờ G1.
+```
+
+```text
+[C – Cloud] Bộ cài, phần code thuần. Repo dinhnguyentrungthanh/video-ai-edit. Đọc AGENTS.md, rồi docs/PERF_INSTALL_PLAN.md mục 1–3, 7, 9, 13.
+Nhánh feat/installer từ origin/main.
+Việc theo thứ tự:
+(1) C0: soạn đề xuất sửa AGENTS.md, LICENSE, THIRD_PARTY_NOTICES vào docs/handoff/C-installer.md để tôi duyệt; chưa sửa AGENTS.md.
+(2) C2: install_root() bằng file đánh dấu, giữ nguyên nghĩa allowed_project_root, có test; không sửa cli.py.
+(3) C6-lõi: activation.py (mã máy 3 hash có muối, key Ed25519 qua pycryptodomex, kiểm hạn, chống chỉnh lùi đồng hồ), công cụ cấp key dạng script ngoài gói, cặp khóa test; chưa nối vào Control Center.
+(4) C1: script chỉ đọc để tôi chạy trên PC (lấy revision từ models\*\manifest.json), cập nhật download_models.py theo lock; không chạy tải.
+Không sửa: scheduler.py, final_renderer.py, job_pipeline.py, module quét, control_center.py, cli.py, __main__.py, __init__.py, run.ps1, env.ps1, stage_cache.py, cache_dependencies.py, pyproject.toml, config/* (trừ file lock mới), models\. Không bao giờ tạo hay đưa khóa bí mật thật vào repo.
+Tiết kiệm credit: không chạy workflow nhiều agent, chỉ chạy test liên quan (cả bộ test để PC chạy ở G1), trả lời ngắn.
+Bàn giao: sau MỖI bước chạy test, commit, cập nhật docs/handoff/C-installer.md, rồi push nhánh feat/installer (tôi cho phép push nhánh này, không bao giờ push main). Khi sắp hết credit: dừng việc mới, commit "wip:" kèm file bàn giao, rồi push.
+```
+
+```text
+[B0 – PC] Đo nền quét, không sửa code. Làm việc trong E:\DungChung\BiliFlow. Đọc AGENTS.md, rồi docs/PERF_INSTALL_PLAN.md mục 1–3, 6 (B0), 9.4, 13.
+Chuẩn bị: git fetch origin; git worktree add temp\wt-scan-baseline -b perf/scan-baseline origin/main.
+Việc:
+- performance_report --root E:\DungChung\BiliFlow cho 2–3 job gần đây (chỉ đọc);
+- đo một đoạn của L (cả 4 nhóm) và H trong root tạm bằng harness benchmark sẵn có, chỉ ở khung giờ GPU 2 (ban đêm hoặc khi Control Center thật không có job), lấy khóa GPU;
+- đo thời gian khởi động từng stage (python -X importtime, PowerShell);
+- phác thiết kế B3 và danh sách dự kiến cho B1.
+Ghi mọi số đo vào docs/handoff/B0-scan-baseline.md, chỉ dùng số job và nhãn L-H-T. Commit trong worktree; chưa push hay merge; không sửa code.
+```
+
+```text
+[C-spike – PC] Thử Nuitka, không sửa code repo. Làm việc trong E:\DungChung\BiliFlow. Đọc AGENTS.md, rồi docs/PERF_INSTALL_PLAN.md mục 2.5, 7 (C-spike, C4), 13.
+Trước khi tải Nuitka: hỏi tôi duyệt (tên gói, phiên bản, giấy phép, nơi cài trong E:\DungChung\BiliFlow).
+Chuẩn bị: git fetch origin; git worktree add temp\wt-nuitka-spike -b spike/nuitka origin/main.
+Việc: biên dịch gói biliflow (chế độ module, giữ __main__.py dạng mã nguồn) ra thư mục tạm trong temp\; thử python -m biliflow --help, performance_report --help, một stage quét ngắn và render-final trên clip tổng hợp trong root tạm; so với bản chạy từ mã nguồn. Ghi mọi vướng mắc (đọc file .py, subprocess, spawn, Florence trust_remote_code, khóa cache) vào docs/handoff/C-spike-nuitka.md.
+Script build để trong temp\. Commit chỉ file bàn giao; chưa push hay merge.
+```
+
+### 12.2 Tiếp quản session cloud trên PC (khi cloud hết credit)
+
+```text
+[Tiếp quản <X> – PC] Session cloud <X> đã dừng. Làm việc trong E:\DungChung\BiliFlow.
+git fetch origin <nhánh>; git worktree add temp\wt-<tên> <nhánh>  (nếu nhánh local chưa có: git worktree add temp\wt-<tên> -b <nhánh> origin/<nhánh>).
+Đọc AGENTS.md, docs/PERF_INSTALL_PLAN.md (mục 1–3, mục của session <X>, 9, 13) và docs/handoff/<file bàn giao>.md.
+Kiểm trạng thái: git log, git status; chạy test của các file đã sửa. Nếu commit cuối là "wip:" thì đọc kỹ phần "Đang dở".
+Tiếp tục từ "Bước tiếp theo", giữ nguyên mọi quy tắc của session <X>. Commit trong worktree; chưa push hay merge nếu tôi chưa bảo.
+```
+
+Ví dụ cho C: `<X>` = C, `<nhánh>` = `feat/installer`, `<tên>` = `installer`, file bàn giao = `C-installer.md`.
+
+### 12.3 Điểm gộp G1 (PC, khi các session Phase 1 báo xong)
+
+```text
+[Điều phối G1 – PC] Làm việc trong E:\DungChung\BiliFlow. Đọc AGENTS.md, docs/PERF_INSTALL_PLAN.md mục 9.5, 11, 13, và mọi docs/handoff/*.md trên các nhánh feat/installer (git fetch origin), feat/hardware-profile, perf/export-speed, perf/scan-baseline, spike/nuitka.
+Tạo worktree temp\wt-merge-g1 từ origin/main. Gộp theo thứ tự mục 9.5, chỉ những nhánh đã đạt cổng (perf/scan-baseline và spike/nuitka chỉ có tài liệu). Sau mỗi nhánh chạy test liên quan; cuối cùng chạy cả bộ test (clip tổng hợp 1 s trong input\ của worktree, xóa sau).
+Cập nhật bảng trạng thái mục 11, CHANGELOG.md, docs/PROJECT_STATUS.md, docs/SESSION_HANDOFF.md.
+Báo kết quả cho tôi. Chỉ push main, và chỉ cập nhật thư mục chính, khi tôi đồng ý và Control Center thật không có job.
+```
+
+### 12.4 Các đợt sau (dùng khi tới lượt)
+
+```text
+[B – PC] Sau G1. Worktree temp\wt-scan-speed, nhánh perf/scan-decode từ origin/main. Đọc AGENTS.md, docs/PERF_INSTALL_PLAN.md mục 1–3, 6, 9, 13 và docs/handoff/B0-scan-baseline.md. Trình tôi danh sách B1 trước khi sửa; mọi thay đổi qua cổng giống hệt; không sửa models\. Bàn giao theo mục 13 (docs/handoff/B-scan.md). Chưa push hay merge.
 ```
 ```text
-[A – PC] Làm việc trong E:\DungChung\BiliFlow. Đọc AGENTS.md và docs/PERF_INSTALL_PLAN.md (mục 1–3, 5, 9). Worktree temp\wt-export-speed, nhánh perf/export-speed từ main (chuẩn bị theo mục 3.8). Làm A0 (đo) và báo số; rồi A1a, A2. Không sửa cli.py, run.ps1, stage_cache.py, cache_dependencies.py, config/*, models\. Không ghi vào input\/output\/reports\/archive thật; NVENC chỉ trong root tạm. Chưa push/merge.
+[D – Cloud hoặc PC] Sau G3. Nhánh refactor/shared-helpers. Đọc AGENTS.md, docs/PERF_INSTALL_PLAN.md mục 1–3, 8, 9, 13. Hỏi tôi định dạng giờ trước khi đổi. Không sửa cli.py, stage_cache.py, __init__.py, pyproject.toml (đã đi theo B1). Bàn giao theo mục 13 (docs/handoff/D-refactor.md). Cloud: push nhánh của mình sau mỗi bước; không bao giờ push main.
 ```
-```text
-[C – cloud] Repo dinhnguyentrungthanh/video-ai-edit. Đọc AGENTS.md và docs/PERF_INSTALL_PLAN.md (mục 1–3, 7, 9). Nhánh feat/installer từ main. Làm C0 (đề xuất sửa AGENTS.md/LICENSE để tôi duyệt), C1 (script chỉ đọc, không tải lại model), C2 (không sửa cli.py). C3 chỉ làm trong đợt B1. Không bao giờ tạo, đọc hay đưa khóa bí mật cấp key vào repo. Commit trên nhánh; hỏi tôi trước khi push.
-```
-```text
-[B – PC] Làm việc trong E:\DungChung\BiliFlow. Đọc AGENTS.md và docs/PERF_INSTALL_PLAN.md (mục 1–3, 6, 9). Chỉ bắt đầu sau điểm gộp G1. Worktree temp\wt-scan-speed, nhánh perf/scan-decode (mục 3.8). B0 đo trước; trình tôi danh sách B1 trước khi sửa. Mọi thay đổi qua cổng giống hệt. Không sửa models\. Chưa push/merge.
-```
-```text
-[D – cloud] Repo dinhnguyentrungthanh/video-ai-edit. Đọc AGENTS.md và docs/PERF_INSTALL_PLAN.md (mục 1–3, 8, 9). Chỉ bắt đầu sau điểm gộp G3. Nhánh refactor/shared-helpers. Hỏi tôi định dạng giờ trước khi đổi. Phần chạm khóa cache đã đi theo B1; không sửa cli.py, stage_cache.py, __init__.py, pyproject.toml. Hỏi tôi trước khi push.
+
+## 13. Bàn giao: để không mất việc khi session dừng (nhất là cloud hết credit)
+
+### 13.1 Quy tắc
+
+1. **Mỗi session có một file bàn giao** `docs/handoff/<mã>-<tên>.md` trên nhánh của mình:
+   - `A-export.md`, `E-hardware.md`, `C-installer.md`, `B0-scan-baseline.md`, `C-spike-nuitka.md`;
+   - sau này thêm `B-scan.md`, `D-refactor.md`.
+2. **Điểm lưu sau MỖI bước nhỏ** (ví dụ xong C2, xong E1), và với cloud thì **ít nhất mỗi 1–2 giờ làm việc**:
+   - chạy test của các file đã sửa;
+   - commit;
+   - cập nhật file bàn giao.
+3. **Session cloud push nhánh của mình ở mỗi điểm lưu.** Người dùng cho phép việc này trong prompt, **chỉ cho nhánh đó và không bao giờ cho `main`**. Session trên PC commit trong worktree; các worktree dùng chung `.git` nên session điều phối thấy được mà không cần push.
+4. **Sắp hết credit** (người dùng báo, hoặc session thấy cảnh báo hạn mức):
+   - không bắt đầu bước mới;
+   - commit phần đang dở thành `wip: <mô tả>`, ghi rõ phần "Đang dở";
+   - push.
+5. **Tiết kiệm credit cloud:**
+   - không chạy workflow nhiều agent; tối đa một agent review ở cuối phase, hoặc để PC review lúc gộp;
+   - chỉ chạy test liên quan. Cả bộ test do PC chạy ở điểm gộp;
+   - không đọc đi đọc lại file lớn; trả lời ngắn.
+6. **Việc cần Windows, GPU, video thật hay người dùng duyệt** luôn giao cho PC, không để cloud chờ.
+
+### 13.2 Mẫu file bàn giao
+
+```markdown
+# Bàn giao <mã session> – <tên>
+- Nhánh: <nhánh> · Commit cuối: <hash> · Cập nhật: <ngày giờ>
+- Chạy ở: PC / Cloud · Trạng thái: đang làm / chờ người dùng / xong, chờ gộp
+
+## Đã xong
+- <bước>: <kết quả, test đã chạy, số đo (chỉ số job + nhãn L-H-T)>
+
+## Đang dở
+- <file>: <đang làm gì, còn thiếu gì> (để trống nếu không có)
+
+## Bước tiếp theo
+1. <việc cụ thể kế tiếp>
+
+## Cách kiểm
+- Lệnh test: <lệnh>
+- Cổng của bước này: <tiêu chí>
+
+## Chờ người dùng
+- <quyết định hoặc duyệt đang chờ>
+
+## Lưu ý cho người tiếp quản
+- <bẫy, giả định, file không được sửa>
 ```
