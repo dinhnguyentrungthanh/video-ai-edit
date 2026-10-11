@@ -1,0 +1,13 @@
+{"event": "load", "seconds": 6.4, "modes": ["strict_multi", "strict_single"]}
+{"case": "N1", "truth": "nudity", "mode": "strict_multi", "frames": 3, "answer": "Yes", "p_yes": 0.7265, "seconds": 200.79, "input_tokens": 585}
+{"case": "N1", "truth": "nudity", "mode": "strict_single", "frames": 1, "answer": "Yes", "p_yes": 0.7056, "seconds": 70.13, "input_tokens": 245}
+{"event": "load", "seconds": 6.1, "modes": ["strict_single"]}
+{"case": "N2", "truth": "nudity", "mode": "strict_single", "frames": 1, "answer": "Yes", "p_yes": 0.7772, "seconds": 68.68, "input_tokens": 245}
+{"case": "N3", "truth": "nudity", "mode": "strict_single", "frames": 1, "answer": "Yes", "p_yes": 0.7936, "seconds": 68.6, "input_tokens": 245}
+{"case": "C1", "truth": "not18", "mode": "strict_single", "frames": 1, "answer": "No", "p_yes": 0.2514, "seconds": 68.29, "input_tokens": 245}
+{"case": "S1", "truth": "not18", "mode": "strict_single", "frames": 1, "answer": "No", "p_yes": 0.5085, "seconds": 68.05, "input_tokens": 245}
+{"case": "S4", "truth": "not18", "mode": "strict_single", "frames": 1, "answer": "Yes", "p_yes": 0.6172, "seconds": 68.15, "input_tokens": 245}
+{"case": "K2", "truth": "not18", "mode": "strict_single", "frames": 1, "answer": "yes", "p_yes": 0.6744, "seconds": 67.94, "input_tokens": 245}
+{"case": "O1", "truth": "not18", "mode": "strict_single", "frames": 1, "answer": "No", "p_yes": 0.4548, "seconds": 68.15, "input_tokens": 245}
+{"case": "O3", "truth": "not18", "mode": "strict_single", "frames": 1, "answer": "Yes", "p_yes": 0.72, "seconds": 67.79, "input_tokens": 245}
+{"case": "O4", "truth": "not18", "mode": "strict_single", "frames": 1, "answer": "Yes", "p_yes": 0.6462, "seconds": 68.42, "input_tokens": 245}

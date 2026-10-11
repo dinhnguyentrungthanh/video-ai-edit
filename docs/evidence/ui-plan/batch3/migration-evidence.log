@@ -1,0 +1,50 @@
+{
+ "checks": {
+  "old_table_row_counts_unchanged": true,
+  "old_table_contents_unchanged": true,
+  "no_table_dropped": true,
+  "source_cleanups_absent_before": true,
+  "source_cleanups_table_created": true,
+  "source_cleanups_empty": true,
+  "source_cleanups_indexes_created": true,
+  "queue_index_kept": true,
+  "schema_info_version_1": true,
+  "exactly_one_backup": true,
+  "backup_label_source_cleanup": true,
+  "backup_has_old_rows_and_no_new_table": true,
+  "reconcile_pending_cleanups_returns_empty": true,
+  "second_open_no_new_backup": true,
+  "second_open_rows_identical": true,
+  "second_open_schema_identical": true,
+  "older_code_opens_migrated_copy": true,
+  "older_code_lists_all_jobs": true,
+  "older_code_changes_nothing": true,
+  "reopen_after_older_code_no_new_backup": true
+ },
+ "all_checks_true": true,
+ "before_counts": {
+  "artifacts": 333,
+  "events": 834,
+  "job_revisions": 53,
+  "jobs": 30,
+  "schema_info": 1,
+  "settings": 102,
+  "stages": 178,
+  "watcher_files": 30
+ },
+ "after_counts": {
+  "artifacts": 333,
+  "events": 834,
+  "job_revisions": 53,
+  "jobs": 30,
+  "schema_info": 1,
+  "settings": 102,
+  "source_cleanups": 0,
+  "stages": 178,
+  "watcher_files": 30
+ },
+ "backups": [
+  "control-center-before-source-cleanup-20261003-104526.sqlite3"
+ ],
+ "old_jobs": 30
+}

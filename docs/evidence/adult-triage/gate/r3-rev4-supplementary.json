@@ -1,0 +1,662 @@
+{
+ "off": {
+  "violations": [],
+  "rev4_outcome": {
+   "BLUR": {
+    "kept": 7,
+    "moved": 0,
+    "split": 0
+   },
+   "KEEP": {
+    "kept": 86,
+    "moved": 0,
+    "split": 0
+   }
+  },
+  "rev4_seconds": {
+   "BLUR": {
+    "kept": 254.5,
+    "moved": 0.0,
+    "split": 0.0
+   },
+   "KEEP": {
+    "kept": 983.0,
+    "moved": 0.0,
+    "split": 0.0
+   }
+  },
+  "lone_shots": [
+   {
+    "span": "0:15:37.5-0:15:41.5",
+    "kind": "topless",
+    "nudity": true,
+    "seeds": 7,
+    "verifier_max": 0.9235,
+    "would_move": false
+   },
+   {
+    "span": "0:15:41.5-0:15:50.8",
+    "kind": "undressed embrace (bare back/side)",
+    "nudity": true,
+    "seeds": 8,
+    "verifier_max": 0.9374,
+    "would_move": false
+   },
+   {
+    "span": "0:16:17.0-0:16:38.5",
+    "kind": "nude from behind (buttocks)",
+    "nudity": true,
+    "seeds": 14,
+    "verifier_max": 0.9333,
+    "would_move": false
+   },
+   {
+    "span": "0:16:38.8-0:16:54.0",
+    "kind": "partial frontal, mostly covered",
+    "nudity": true,
+    "seeds": 9,
+    "verifier_max": 0.9461,
+    "would_move": false
+   },
+   {
+    "span": "0:16:54.0-0:18:20.5",
+    "kind": "implied: undressed couple framed at shoulders",
+    "nudity": false,
+    "seeds": 13,
+    "verifier_max": 0.9258,
+    "would_move": false
+   },
+   {
+    "span": "0:18:20.5-0:18:22.0",
+    "kind": "implied: undressed couple kissing, bare shoulders",
+    "nudity": false,
+    "seeds": 2,
+    "verifier_max": 0.6185,
+    "would_move": false
+   },
+   {
+    "span": "0:06:55.5-0:07:07.5",
+    "kind": "nude group lying in bed (bare backs/buttocks)",
+    "nudity": true,
+    "seeds": 7,
+    "verifier_max": 0.9237,
+    "would_move": false
+   },
+   {
+    "span": "0:07:08.5-0:07:17.5",
+    "kind": "nude couple lying in bed (bare backs)",
+    "nudity": true,
+    "seeds": 13,
+    "verifier_max": 0.9302,
+    "would_move": false
+   },
+   {
+    "span": "0:07:21.5-0:07:24.5",
+    "kind": "nude couple lying in bed (bare backs)",
+    "nudity": true,
+    "seeds": 5,
+    "verifier_max": 0.9249,
+    "would_move": false
+   },
+   {
+    "span": "0:07:29.5-0:07:44.5",
+    "kind": "nude couple lying in bed (bare back/buttocks)",
+    "nudity": true,
+    "seeds": 14,
+    "verifier_max": 0.9363,
+    "would_move": false
+   },
+   {
+    "span": "1:53:14.5-1:54:20.5",
+    "kind": "sexual activity, nude (bare buttocks)",
+    "nudity": true,
+    "seeds": 79,
+    "verifier_max": 0.9413,
+    "would_move": false
+   },
+   {
+    "span": "1:54:29.5-1:54:34.5",
+    "kind": "implied: woman under a sheet, bare legs",
+    "nudity": false,
+    "seeds": 8,
+    "verifier_max": 0.171,
+    "would_move": false
+   },
+   {
+    "span": "1:54:38.5-1:54:42.5",
+    "kind": "implied: woman under a sheet, bare shoulders",
+    "nudity": false,
+    "seeds": 7,
+    "verifier_max": 0.3339,
+    "would_move": false
+   },
+   {
+    "span": "2:00:10.5-2:00:25.5",
+    "kind": "topless embrace, breasts covered by arms (partial)",
+    "nudity": true,
+    "seeds": 28,
+    "verifier_max": 0.6916,
+    "would_move": false
+   },
+   {
+    "span": "2:00:25.5-2:00:53.5",
+    "kind": "implied: undressed couple framed at shoulders",
+    "nudity": false,
+    "seeds": 53,
+    "verifier_max": 0.9027,
+    "would_move": false
+   },
+   {
+    "span": "2:01:05.5-2:01:13.5",
+    "kind": "nude man lying in bed (bare buttocks)",
+    "nudity": true,
+    "seeds": 2,
+    "verifier_max": 0.9204,
+    "would_move": false
+   },
+   {
+    "span": "2:01:13.5-2:01:18.5",
+    "kind": "implied: bare shoulders in bed",
+    "nudity": false,
+    "seeds": 9,
+    "verifier_max": 0.9322,
+    "would_move": false
+   }
+  ]
+ },
+ "credits": {
+  "violations": [],
+  "rev4_outcome": {
+   "BLUR": {
+    "kept": 7,
+    "moved": 0,
+    "split": 0
+   },
+   "KEEP": {
+    "kept": 79,
+    "moved": 7,
+    "split": 0
+   }
+  },
+  "rev4_seconds": {
+   "BLUR": {
+    "kept": 254.5,
+    "moved": 0.0,
+    "split": 0.0
+   },
+   "KEEP": {
+    "kept": 706.5,
+    "moved": 276.5,
+    "split": 0.0
+   }
+  },
+  "lone_shots": [
+   {
+    "span": "0:15:37.5-0:15:41.5",
+    "kind": "topless",
+    "nudity": true,
+    "seeds": 7,
+    "verifier_max": 0.9235,
+    "would_move": false
+   },
+   {
+    "span": "0:15:41.5-0:15:50.8",
+    "kind": "undressed embrace (bare back/side)",
+    "nudity": true,
+    "seeds": 8,
+    "verifier_max": 0.9374,
+    "would_move": false
+   },
+   {
+    "span": "0:16:17.0-0:16:38.5",
+    "kind": "nude from behind (buttocks)",
+    "nudity": true,
+    "seeds": 14,
+    "verifier_max": 0.9333,
+    "would_move": false
+   },
+   {
+    "span": "0:16:38.8-0:16:54.0",
+    "kind": "partial frontal, mostly covered",
+    "nudity": true,
+    "seeds": 9,
+    "verifier_max": 0.9461,
+    "would_move": false
+   },
+   {
+    "span": "0:16:54.0-0:18:20.5",
+    "kind": "implied: undressed couple framed at shoulders",
+    "nudity": false,
+    "seeds": 13,
+    "verifier_max": 0.9258,
+    "would_move": false
+   },
+   {
+    "span": "0:18:20.5-0:18:22.0",
+    "kind": "implied: undressed couple kissing, bare shoulders",
+    "nudity": false,
+    "seeds": 2,
+    "verifier_max": 0.6185,
+    "would_move": false
+   },
+   {
+    "span": "0:06:55.5-0:07:07.5",
+    "kind": "nude group lying in bed (bare backs/buttocks)",
+    "nudity": true,
+    "seeds": 7,
+    "verifier_max": 0.9237,
+    "would_move": false
+   },
+   {
+    "span": "0:07:08.5-0:07:17.5",
+    "kind": "nude couple lying in bed (bare backs)",
+    "nudity": true,
+    "seeds": 13,
+    "verifier_max": 0.9302,
+    "would_move": false
+   },
+   {
+    "span": "0:07:21.5-0:07:24.5",
+    "kind": "nude couple lying in bed (bare backs)",
+    "nudity": true,
+    "seeds": 5,
+    "verifier_max": 0.9249,
+    "would_move": false
+   },
+   {
+    "span": "0:07:29.5-0:07:44.5",
+    "kind": "nude couple lying in bed (bare back/buttocks)",
+    "nudity": true,
+    "seeds": 14,
+    "verifier_max": 0.9363,
+    "would_move": false
+   },
+   {
+    "span": "1:53:14.5-1:54:20.5",
+    "kind": "sexual activity, nude (bare buttocks)",
+    "nudity": true,
+    "seeds": 79,
+    "verifier_max": 0.9413,
+    "would_move": false
+   },
+   {
+    "span": "1:54:29.5-1:54:34.5",
+    "kind": "implied: woman under a sheet, bare legs",
+    "nudity": false,
+    "seeds": 8,
+    "verifier_max": 0.171,
+    "would_move": false
+   },
+   {
+    "span": "1:54:38.5-1:54:42.5",
+    "kind": "implied: woman under a sheet, bare shoulders",
+    "nudity": false,
+    "seeds": 7,
+    "verifier_max": 0.3339,
+    "would_move": false
+   },
+   {
+    "span": "2:00:10.5-2:00:25.5",
+    "kind": "topless embrace, breasts covered by arms (partial)",
+    "nudity": true,
+    "seeds": 28,
+    "verifier_max": 0.6916,
+    "would_move": false
+   },
+   {
+    "span": "2:00:25.5-2:00:53.5",
+    "kind": "implied: undressed couple framed at shoulders",
+    "nudity": false,
+    "seeds": 53,
+    "verifier_max": 0.9027,
+    "would_move": false
+   },
+   {
+    "span": "2:01:05.5-2:01:13.5",
+    "kind": "nude man lying in bed (bare buttocks)",
+    "nudity": true,
+    "seeds": 2,
+    "verifier_max": 0.9204,
+    "would_move": false
+   },
+   {
+    "span": "2:01:13.5-2:01:18.5",
+    "kind": "implied: bare shoulders in bed",
+    "nudity": false,
+    "seeds": 9,
+    "verifier_max": 0.9322,
+    "would_move": false
+   }
+  ]
+ },
+ "conservative": {
+  "violations": [],
+  "rev4_outcome": {
+   "BLUR": {
+    "kept": 7,
+    "moved": 0,
+    "split": 0
+   },
+   "KEEP": {
+    "kept": 45,
+    "moved": 41,
+    "split": 0
+   }
+  },
+  "rev4_seconds": {
+   "BLUR": {
+    "kept": 254.5,
+    "moved": 0.0,
+    "split": 0.0
+   },
+   "KEEP": {
+    "kept": 508.5,
+    "moved": 474.5,
+    "split": 0.0
+   }
+  },
+  "lone_shots": [
+   {
+    "span": "0:15:37.5-0:15:41.5",
+    "kind": "topless",
+    "nudity": true,
+    "seeds": 7,
+    "verifier_max": 0.9235,
+    "would_move": false
+   },
+   {
+    "span": "0:15:41.5-0:15:50.8",
+    "kind": "undressed embrace (bare back/side)",
+    "nudity": true,
+    "seeds": 8,
+    "verifier_max": 0.9374,
+    "would_move": false
+   },
+   {
+    "span": "0:16:17.0-0:16:38.5",
+    "kind": "nude from behind (buttocks)",
+    "nudity": true,
+    "seeds": 14,
+    "verifier_max": 0.9333,
+    "would_move": false
+   },
+   {
+    "span": "0:16:38.8-0:16:54.0",
+    "kind": "partial frontal, mostly covered",
+    "nudity": true,
+    "seeds": 9,
+    "verifier_max": 0.9461,
+    "would_move": false
+   },
+   {
+    "span": "0:16:54.0-0:18:20.5",
+    "kind": "implied: undressed couple framed at shoulders",
+    "nudity": false,
+    "seeds": 13,
+    "verifier_max": 0.9258,
+    "would_move": false
+   },
+   {
+    "span": "0:18:20.5-0:18:22.0",
+    "kind": "implied: undressed couple kissing, bare shoulders",
+    "nudity": false,
+    "seeds": 2,
+    "verifier_max": 0.6185,
+    "would_move": false
+   },
+   {
+    "span": "0:06:55.5-0:07:07.5",
+    "kind": "nude group lying in bed (bare backs/buttocks)",
+    "nudity": true,
+    "seeds": 7,
+    "verifier_max": 0.9237,
+    "would_move": false
+   },
+   {
+    "span": "0:07:08.5-0:07:17.5",
+    "kind": "nude couple lying in bed (bare backs)",
+    "nudity": true,
+    "seeds": 13,
+    "verifier_max": 0.9302,
+    "would_move": false
+   },
+   {
+    "span": "0:07:21.5-0:07:24.5",
+    "kind": "nude couple lying in bed (bare backs)",
+    "nudity": true,
+    "seeds": 5,
+    "verifier_max": 0.9249,
+    "would_move": false
+   },
+   {
+    "span": "0:07:29.5-0:07:44.5",
+    "kind": "nude couple lying in bed (bare back/buttocks)",
+    "nudity": true,
+    "seeds": 14,
+    "verifier_max": 0.9363,
+    "would_move": false
+   },
+   {
+    "span": "1:53:14.5-1:54:20.5",
+    "kind": "sexual activity, nude (bare buttocks)",
+    "nudity": true,
+    "seeds": 79,
+    "verifier_max": 0.9413,
+    "would_move": false
+   },
+   {
+    "span": "1:54:29.5-1:54:34.5",
+    "kind": "implied: woman under a sheet, bare legs",
+    "nudity": false,
+    "seeds": 8,
+    "verifier_max": 0.171,
+    "would_move": false
+   },
+   {
+    "span": "1:54:38.5-1:54:42.5",
+    "kind": "implied: woman under a sheet, bare shoulders",
+    "nudity": false,
+    "seeds": 7,
+    "verifier_max": 0.3339,
+    "would_move": false
+   },
+   {
+    "span": "2:00:10.5-2:00:25.5",
+    "kind": "topless embrace, breasts covered by arms (partial)",
+    "nudity": true,
+    "seeds": 28,
+    "verifier_max": 0.6916,
+    "would_move": false
+   },
+   {
+    "span": "2:00:25.5-2:00:53.5",
+    "kind": "implied: undressed couple framed at shoulders",
+    "nudity": false,
+    "seeds": 53,
+    "verifier_max": 0.9027,
+    "would_move": false
+   },
+   {
+    "span": "2:01:05.5-2:01:13.5",
+    "kind": "nude man lying in bed (bare buttocks)",
+    "nudity": true,
+    "seeds": 2,
+    "verifier_max": 0.9204,
+    "would_move": false
+   },
+   {
+    "span": "2:01:13.5-2:01:18.5",
+    "kind": "implied: bare shoulders in bed",
+    "nudity": false,
+    "seeds": 9,
+    "verifier_max": 0.9322,
+    "would_move": false
+   }
+  ]
+ },
+ "balanced": {
+  "violations": [],
+  "rev4_outcome": {
+   "BLUR": {
+    "kept": 7,
+    "moved": 0,
+    "split": 0
+   },
+   "KEEP": {
+    "kept": 27,
+    "moved": 59,
+    "split": 0
+   }
+  },
+  "rev4_seconds": {
+   "BLUR": {
+    "kept": 254.5,
+    "moved": 0.0,
+    "split": 0.0
+   },
+   "KEEP": {
+    "kept": 341.0,
+    "moved": 642.0,
+    "split": 0.0
+   }
+  },
+  "lone_shots": [
+   {
+    "span": "0:15:37.5-0:15:41.5",
+    "kind": "topless",
+    "nudity": true,
+    "seeds": 7,
+    "verifier_max": 0.9235,
+    "would_move": false
+   },
+   {
+    "span": "0:15:41.5-0:15:50.8",
+    "kind": "undressed embrace (bare back/side)",
+    "nudity": true,
+    "seeds": 8,
+    "verifier_max": 0.9374,
+    "would_move": false
+   },
+   {
+    "span": "0:16:17.0-0:16:38.5",
+    "kind": "nude from behind (buttocks)",
+    "nudity": true,
+    "seeds": 14,
+    "verifier_max": 0.9333,
+    "would_move": false
+   },
+   {
+    "span": "0:16:38.8-0:16:54.0",
+    "kind": "partial frontal, mostly covered",
+    "nudity": true,
+    "seeds": 9,
+    "verifier_max": 0.9461,
+    "would_move": false
+   },
+   {
+    "span": "0:16:54.0-0:18:20.5",
+    "kind": "implied: undressed couple framed at shoulders",
+    "nudity": false,
+    "seeds": 13,
+    "verifier_max": 0.9258,
+    "would_move": false
+   },
+   {
+    "span": "0:18:20.5-0:18:22.0",
+    "kind": "implied: undressed couple kissing, bare shoulders",
+    "nudity": false,
+    "seeds": 2,
+    "verifier_max": 0.6185,
+    "would_move": true
+   },
+   {
+    "span": "0:06:55.5-0:07:07.5",
+    "kind": "nude group lying in bed (bare backs/buttocks)",
+    "nudity": true,
+    "seeds": 7,
+    "verifier_max": 0.9237,
+    "would_move": false
+   },
+   {
+    "span": "0:07:08.5-0:07:17.5",
+    "kind": "nude couple lying in bed (bare backs)",
+    "nudity": true,
+    "seeds": 13,
+    "verifier_max": 0.9302,
+    "would_move": false
+   },
+   {
+    "span": "0:07:21.5-0:07:24.5",
+    "kind": "nude couple lying in bed (bare backs)",
+    "nudity": true,
+    "seeds": 5,
+    "verifier_max": 0.9249,
+    "would_move": false
+   },
+   {
+    "span": "0:07:29.5-0:07:44.5",
+    "kind": "nude couple lying in bed (bare back/buttocks)",
+    "nudity": true,
+    "seeds": 14,
+    "verifier_max": 0.9363,
+    "would_move": false
+   },
+   {
+    "span": "1:53:14.5-1:54:20.5",
+    "kind": "sexual activity, nude (bare buttocks)",
+    "nudity": true,
+    "seeds": 79,
+    "verifier_max": 0.9413,
+    "would_move": false
+   },
+   {
+    "span": "1:54:29.5-1:54:34.5",
+    "kind": "implied: woman under a sheet, bare legs",
+    "nudity": false,
+    "seeds": 8,
+    "verifier_max": 0.171,
+    "would_move": false
+   },
+   {
+    "span": "1:54:38.5-1:54:42.5",
+    "kind": "implied: woman under a sheet, bare shoulders",
+    "nudity": false,
+    "seeds": 7,
+    "verifier_max": 0.3339,
+    "would_move": false
+   },
+   {
+    "span": "2:00:10.5-2:00:25.5",
+    "kind": "topless embrace, breasts covered by arms (partial)",
+    "nudity": true,
+    "seeds": 28,
+    "verifier_max": 0.6916,
+    "would_move": false
+   },
+   {
+    "span": "2:00:25.5-2:00:53.5",
+    "kind": "implied: undressed couple framed at shoulders",
+    "nudity": false,
+    "seeds": 53,
+    "verifier_max": 0.9027,
+    "would_move": false
+   },
+   {
+    "span": "2:01:05.5-2:01:13.5",
+    "kind": "nude man lying in bed (bare buttocks)",
+    "nudity": true,
+    "seeds": 2,
+    "verifier_max": 0.9204,
+    "would_move": false
+   },
+   {
+    "span": "2:01:13.5-2:01:18.5",
+    "kind": "implied: bare shoulders in bed",
+    "nudity": false,
+    "seeds": 9,
+    "verifier_max": 0.9322,
+    "would_move": false
+   }
+  ]
+ }
+}

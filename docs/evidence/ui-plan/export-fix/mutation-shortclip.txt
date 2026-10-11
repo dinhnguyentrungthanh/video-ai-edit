@@ -1,0 +1,11 @@
+cap=1073741822        Ran 9 tests in 0.214s FAILED (failures=3) 
+cap=1050000000        Ran 9 tests in 0.222s FAILED (failures=4) 
+cap=1073000000        Ran 9 tests in 0.231s FAILED (failures=4) 
+cap=1073741824        Ran 9 tests in 0.266s FAILED (failures=6) 
+cap=1000000000        Ran 9 tests in 0.207s FAILED (failures=5) 
+cap=2147483647        Ran 9 tests in 0.215s FAILED (failures=6) 
+cap=1000000000000000  Ran 9 tests in 0.206s FAILED (failures=6) 
+556:        video_maxrate = min(budget_bits_per_second, MAX_VIDEO_MAXRATE) - audio_bitrate
+audio-after-cap   FAIL: test_a_short_output_stays_within_the_encoder_limits (tests.test_final_renderer.RenderCompletionTests.test_a_short_output_stays_within_the_encoder_limits) (duration=20.0, audio=True)
+Ran 9 tests in 0.223s
+FAILED (failures=1)

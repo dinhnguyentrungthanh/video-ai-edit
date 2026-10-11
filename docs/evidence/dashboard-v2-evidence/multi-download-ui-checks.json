@@ -1,0 +1,70 @@
+{
+  "checks": [
+    {
+      "name": "Batch: two active, one queued",
+      "pass": true
+    },
+    {
+      "name": "Mixed invalid batch adds nothing",
+      "pass": true
+    },
+    {
+      "name": "Can add other source while downloads running",
+      "pass": true
+    },
+    {
+      "name": "Cancelling queued task leaves others untouched",
+      "pass": true
+    },
+    {
+      "name": "Individual pause releases a slot for next FIFO task",
+      "pass": true
+    },
+    {
+      "name": "Failure reported per task with retry control",
+      "pass": true
+    },
+    {
+      "name": "Retry preserves task ID and count",
+      "pass": true
+    },
+    {
+      "name": "Automatic progress completes each task after verification",
+      "pass": true
+    },
+    {
+      "name": "Expanded log survives progress updates",
+      "pass": true
+    },
+    {
+      "name": "Completed filter shows only completed tasks",
+      "pass": true
+    },
+    {
+      "name": "Downloads leave processing counters untouched",
+      "pass": true
+    },
+    {
+      "name": "Navigation preserves download list and filter",
+      "pass": true
+    },
+    {
+      "name": "375px list and form have no horizontal overflow",
+      "pass": true
+    },
+    {
+      "name": "Global pause keeps task percentages fixed",
+      "pass": true
+    },
+    {
+      "name": "Dark mode uses legible download panels",
+      "pass": true
+    },
+    {
+      "name": "Concurrency selector changes independently of processing jobs",
+      "pass": true
+    }
+  ],
+  "passed": 16,
+  "failed": 0
+}

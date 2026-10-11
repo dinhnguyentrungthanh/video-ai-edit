@@ -1,0 +1,8 @@
+before: {'artifacts': 333, 'events': 834, 'job_revisions': 53, 'jobs': 30, 'settings': 102, 'stages': 178, 'watcher_files': 30} queue cols: [] version: None states: ['CANCELLED', 'COMPLETED', 'READY_TO_EXPORT']
+first open: 30 
+after: {'artifacts': 333, 'events': 834, 'job_revisions': 53, 'jobs': 30, 'settings': 102, 'stages': 178, 'watcher_files': 30} queue cols: ['queue_seq', 'queued_at'] version: None
+counts unchanged: True old columns data unchanged: False backups: ['control-center-before-queue-order-20261003-000706.sqlite3']
+backup counts match pre-migration: True backup has queue cols: False
+second open: 30 unchanged: True backups now: 1
+old code open: 30  counts unchanged: True
+live untouched: False

@@ -1,0 +1,36 @@
+{
+ "fresh": [
+  "#46:Đang xếp hàng:",
+  "#45:Đang xếp hàng:",
+  "#44:Đang xếp hàng:",
+  "#43:Đang xếp hàng:",
+  "#42:Đang xếp hàng:",
+  "#47:Chờ thiết lập:advertising+adult+gore+violence",
+  "#48:Chờ thiết lập:advertising+adult+gore+violence",
+  "#49:Chờ thiết lập:advertising+adult+gore+violence",
+  "#50:Chờ thiết lập:advertising+adult+gore+violence"
+ ],
+ "stale_render_after_slow_poll": [
+  "#46:Đang xếp hàng:",
+  "#45:Đang xếp hàng:",
+  "#44:Đang xếp hàng:",
+  "#43:Đang xếp hàng:",
+  "#42:Đang xếp hàng:",
+  "#47:Chờ thiết lập:advertising+adult+gore+violence",
+  "#48:Chờ thiết lập:advertising+adult+gore+violence",
+  "#49:Chờ thiết lập:advertising+adult+gore+violence",
+  "#50:Chờ thiết lập:advertising+adult+gore+violence"
+ ],
+ "drafts": "{}",
+ "next_poll": [
+  "#46:Đang xếp hàng:",
+  "#45:Đang xếp hàng:",
+  "#44:Đang xếp hàng:",
+  "#43:Đang xếp hàng:",
+  "#42:Đang xếp hàng:",
+  "#47:Chờ thiết lập:advertising+adult+gore+violence",
+  "#48:Chờ thiết lập:advertising+adult+gore+violence",
+  "#49:Chờ thiết lập:advertising+adult+gore+violence",
+  "#50:Chờ thiết lập:advertising+adult+gore+violence"
+ ]
+}

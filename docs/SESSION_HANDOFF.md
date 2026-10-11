@@ -1,6 +1,15 @@
 # BiliFlow session handoff
 
-## Source accounts in `main` — deployed 2026-10-11 (`10ed81e`, not pushed); the user's real test passed
+## Disk cleanup: evidence out of `temp` — 2026-10-11
+
+- **Request:** the user asked to free disk space, to remove what is already in `main` or redundant, and to keep the evidence that code and docs cite somewhere other than `temp`, committed where possible.
+- **Worktrees and branches:** all nine extra worktrees under `temp\wt-*` were removed (each clean, its branch fully in `main`) with their local branches and the other merged local branches; only `main` is left. The merged GitHub branches `feat/dashboard-v2` and `improve/review-performance` are still on GitHub: the delete was blocked by the agent's permission check, and the user may delete them.
+- **Evidence:** the ten evidence folders were triaged by one review pass and checked by a second, adversarial one. 75 clean text files are now tracked in `docs/evidence/` (its README maps every old `temp/<folder>/<path>`); 185 files that name real films, video files, local paths or the home network, or that are the only copy of a result, are kept only on this PC in `reports/evidence/` (Git-ignored). The rest (about 1.7 GB of frames, clips, `.npz` arrays, database copies, temporary roots and browser profiles) went to the Recycle Bin, as did 308 unreferenced `temp` entries (about 0.9 GB) before it.
+- **Code:** only `scripts/benchmark_adult_triage.py` changed (its two input paths). The fingerprinted modules that cite `temp/...` were not touched, so the scan stage cache stays valid.
+- **`temp` now:** nine small entries: the runtime folders (`downloads`, `source-account-browser`, `tailscale`, `render-progress`, `recycle-bin-test`), two caches, `codex-sandbox-recovery` and `source-accounts-feature-docs-20261011` (the feature worktree's docs; they hold plan section 9.21, which `main` lacks).
+- **For the user:** the space comes back when the Recycle Bin is emptied. `reports/evidence` (about 5 MB) has a single copy on this PC.
+
+## Source accounts in `main` — deployed 2026-10-11 (`10ed81e`, pushed 2026-10-11); the user's real test passed
 
 - **Request:** the user allowed committing the accepted source-accounts work, merging it into `main` and restarting the main copy once it is idle; no push (prompt `BILIFLOW-SOURCE-ACCOUNTS-DEPLOY-MAIN-20261011-PROMPT.md`, after Codex's `…-TICKET-REUSE-INTEGRATION-CLOSED-REVIEW.md`; private notes outside the repository). The user keeps exception A in its reviewed scope.
 - **Accepted:** run 6 on the integration build (one ticket for the probe and the first transfer, two Dừng/Tiếp tục without a new ticket, the safe comparison when the server's ETag changed, COMPLETED into `input\`, picture and sound fine) and Codex's closed review of 2026-10-11 (no open finding).

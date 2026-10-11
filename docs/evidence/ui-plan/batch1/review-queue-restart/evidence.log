@@ -1,0 +1,49 @@
+== build_review crash NEW
+before crash: {'state': 'BUILDING_REVIEW', 'current_stage': 'build_review', 'active_revision': 2}
+after restart: {'state': 'INTERRUPTED_RECOVERABLE', 'current_stage': 'build_review', 'active_revision': 2}
+after Tiếp tục: {'state': 'QUEUED', 'current_stage': 'build_review', 'active_revision': 2} select: None queue_order: []
+rerun refused: Video #1 đang nằm trong hàng đợi; không xếp chạy lại thêm lần nữa.
+== build_review crash OLD
+before crash: {'state': 'BUILDING_REVIEW', 'current_stage': 'build_review', 'active_revision': 2}
+after restart: {'state': 'WAITING_REVIEW', 'current_stage': 'build_review', 'active_revision': 2}
+== render crash NEW
+after restart: INTERRUPTED_RECOVERABLE render
+after Tiếp tục: QUEUED render order: [] select: None
+== render crash OLD
+after restart: COMPLETED render
+== rollback
+new code: [(2, 2)]
+old code queued x then z
+new code after rollback (clicks were y, x, z): [(1, 1), (2, 2), (3, 3)]
+== adversarial
+PASS fifo: rerun of queued A refused :: Video #1 đang nằm trong hàng đợi; không xếp chạy lại thêm lần nữa.
+PASS fifo: A is head :: 1
+PASS fifo: A stays head between stages :: [{'job_id': 1, 'position': 1, 'kind': 'scan'}, {'job_id': 2, 'position': 2, 'kind': 'scan'}, {'job_id': 3, 'position': 3, 'kind': 'scan'}]
+PASS fifo: order B,C,A,D :: [(2, 'scan', 1), (3, 'scan', 2), (1, 'scan', 3), (4, 'export', 4)]
+PASS fifo: kinds scan,scan,scan,export :: [(2, 'scan', 1), (3, 'scan', 2), (1, 'scan', 3), (4, 'export', 4)]
+FAIL fifo: repeated queue_render of an already queued export keeps seq (info) :: 5->6
+PASS fifo: pause/resume B keeps head :: [{'job_id': 2, 'position': 1, 'kind': 'scan'}, {'job_id': 3, 'position': 2, 'kind': 'scan'}, {'job_id': 1, 'position': 3, 'kind': 'scan'}, {'job_id': 4, 'position': 4, 'kind': 'export'}]
+PASS fifo: stop-after-stage/resume C keeps place :: [{'job_id': 2, 'position': 1, 'kind': 'scan'}, {'job_id': 3, 'position': 2, 'kind': 'scan'}, {'job_id': 1, 'position': 3, 'kind': 'scan'}, {'job_id': 4, 'position': 4, 'kind': 'export'}]
+PASS fifo: _select None while paused
+PASS fifo: order after scheduler pause/resume
+PASS fifo: status positions :: {3: (2, 'scan'), 2: (1, 'scan'), 4: (4, 'export'), 1: (3, 'scan')}
+PASS fifo: status queue length :: {'length': 4, 'paused': False}
+first import: {'rerun': 'READY_TO_EXPORT', 'export': 'READY_TO_EXPORT', 'paused': 'WAITING_REVIEW', 'interrupted': 'WAITING_REVIEW', 'building': 'WAITING_REVIEW', 'building_done': 'WAITING_REVIEW', 'rendering': 'READY_TO_EXPORT', 'rereviewed': 'READY_TO_EXPORT', 'fresh': 'NEEDS_METADATA'}
+PASS restart: queued rerun stays QUEUED, no revision
+PASS restart: queued export stays QUEUED/render
+PASS restart: paused stays PAUSED
+PASS restart: interrupted stays
+PASS restart: building recovered
+PASS restart: rendering recovered
+PASS restart: rereviewed stays WAITING_REVIEW on rev2 :: ('WAITING_REVIEW', 2)
+PASS restart: seqs unchanged
+PASS restart: queue order unchanged :: ([{'job_id': 9, 'position': 1, 'kind': 'scan'}, {'job_id': 3, 'position': 2, 'kind': 'export'}], [{'job_id': 9, 'position': 1, 'kind': 'scan'}, {'job_id': 3, 'position': 2, 'kind': 'export'}])
+PASS restart: export kind :: (2, 'export')
+PASS restart+resume: paused runnable :: state=QUEUED stage=None stages=[('scan', 'PENDING'), ('build_review', 'PENDING')]
+PASS restart+resume: interrupted runnable :: state=QUEUED stage=None stages=[('scan', 'PENDING'), ('build_review', 'PENDING')]
+PASS restart+resume: building runnable :: state=QUEUED stage=build_review stages=[('scan', 'COMPLETED'), ('build_review', 'PENDING')]
+FAIL restart+resume: building_done runnable :: state=QUEUED stage=build_review stages=[('scan', 'COMPLETED'), ('build_review', 'COMPLETED')]
+PASS restart+resume: rendering runnable :: state=QUEUED stage=render stages=[('render', 'PENDING')]
+PASS restart+resume: rendering is export kind
+
+26 pass, 2 fail

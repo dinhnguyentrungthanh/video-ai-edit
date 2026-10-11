@@ -1,0 +1,27 @@
+{
+  "passed": 22,
+  "checks": [
+    "Custom export rejects invalid GB",
+    "Export queues rather than completes",
+    "Export preserves shared FIFO position",
+    "Start confirms omitted detector groups",
+    "Partial scope stays explicit",
+    "NEEDS_MORE_CONTEXT remains unresolved",
+    "Unresolved job offers no export action in drawer",
+    "Cancel file dialog preserves source mock",
+    "Confirmed cleanup changes only mock source overlay",
+    "Full bin blocks destructive confirmation",
+    "Offline disables AI writes",
+    "Conflict keeps modal open without replay",
+    "375px page has no horizontal overflow",
+    "375px drawer stays inside viewport",
+    "Draft selection survives closing and reopening setup",
+    "Logo class conversion maps platform BLUR to studio KEEP",
+    "Bulk keep preserves existing NEEDS_MORE_CONTEXT",
+    "Explicit final context decision enables export",
+    "Skip moves mock job to completed without rendering",
+    "Skipped source can be reopened when present",
+    "Restore returns exported archive to review for re-export",
+    "VERIFYING is not presented as completed"
+  ]
+}

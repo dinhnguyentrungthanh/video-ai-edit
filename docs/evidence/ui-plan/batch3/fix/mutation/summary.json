@@ -1,0 +1,32 @@
+{
+ "f1_identity": {
+  "returncode": 1,
+  "result": "FAILED (failures=3)",
+  "caught": true
+ },
+ "f6_moved_reason": {
+  "returncode": 1,
+  "result": "FAILED (failures=1)",
+  "caught": true
+ },
+ "f2_standalone": {
+  "returncode": 1,
+  "result": "FAILED (failures=6)",
+  "caught": true
+ },
+ "f3_serve_wait": {
+  "returncode": 1,
+  "result": "FAILED (failures=1)",
+  "caught": true
+ },
+ "f4_dialog": {
+  "returncode": 1,
+  "result": "FAILED (failures=1)",
+  "caught": true
+ },
+ "f5_skipped_text": {
+  "returncode": 1,
+  "result": "FAILED (failures=1)",
+  "caught": true
+ }
+}

@@ -1,0 +1,79 @@
+{
+ "tabs": [
+  "Đang chờ xử lý18",
+  "Đang chạy1",
+  "Hoàn tất1"
+ ],
+ "worker": "Đang chạy #41: text",
+ "waiting": [
+  "#45:Đang xếp hàng",
+  "#44:Đang xếp hàng",
+  "#43:Đang xếp hàng",
+  "#42:Đang xếp hàng",
+  "#39:Chờ duyệt cảnh:advertising",
+  "#6:Đã hủy:advertising",
+  "#5:Có lỗi cần xử lý:advertising",
+  "#1:Đã tạm dừng:advertising",
+  "#46:Chờ thiết lập:advertising+adult+gore+violence",
+  "#47:Chờ thiết lập:advertising+adult+gore+violence",
+  "#48:Chờ thiết lập:advertising+adult+gore+violence",
+  "#49:Chờ thiết lập:advertising+adult+gore+violence",
+  "#50:Chờ thiết lập:advertising+adult+gore+violence",
+  "#51:Chờ thiết lập:advertising+adult+gore+violence",
+  "#52:Chờ thiết lập:advertising+adult+gore+violence",
+  "#53:Chờ thiết lập:advertising+adult+gore+violence",
+  "#54:Chờ thiết lập:advertising+adult+gore+violence",
+  "#55:Chờ thiết lập:advertising+adult+gore+violence"
+ ],
+ "completed": [
+  "#40:Đã hoàn tất:advertising"
+ ],
+ "structure40": "Cấu trúc cục bộWARNKiểm tra logo bằng AI đã xét 175/520 đoạn ứng viên",
+ "hasAudit40": true,
+ "rerunOpen": true,
+ "rerunOpenAfterPoll": true,
+ "rerunPicker40": [
+  "advertising"
+ ],
+ "workerPaused": "Đang chạy #41: text",
+ "posts": [
+  "/api/jobs/40/ai-audit {\"visual\":true}",
+  "/api/jobs/40/rerun {\"detectors\":[\"advertising\",\"adult\",\"gore\",\"violence\"],\"ocr_recognition_batch_size\":1,\"fast_scan\":true}",
+  "/api/jobs/1/resume {}",
+  "/api/jobs/5/retry {}",
+  "/api/jobs/45/cancel {}",
+  "/api/jobs/44/pause {}",
+  "/api/jobs/43/stop-after-stage {}",
+  "/api/scheduler {\"paused\":true}",
+  "/api/scheduler {\"paused\":false}"
+ ],
+ "confirms": [
+  "Visual AI Audit sẽ gửi tối đa 36 ảnh thumbnail của riêng video này cho Codex bằng tài khoản ChatGPT. Video và âm thanh gốc không được gửi. Tiếp tục?",
+  "Chạy lại video với các nhóm kiểm tra đang chọn? Report và quyết định cũ vẫn được giữ; lượt mới dùng thư mục revision riêng."
+ ],
+ "alerts": [
+  "Visual AI Audit đã được xếp chạy. AI chỉ đưa đề xuất; bạn vẫn duyệt mọi thay đổi."
+ ],
+ "waitingAfter": [
+  "#44:Đã tạm dừng:advertising",
+  "#45:Đã hủy:advertising",
+  "#5:Đang xếp hàng",
+  "#1:Đang xếp hàng",
+  "#40:Đang xếp hàng",
+  "#43:Đang xếp hàng",
+  "#42:Đang xếp hàng",
+  "#39:Chờ duyệt cảnh:advertising",
+  "#6:Đã hủy:advertising",
+  "#46:Chờ thiết lập:advertising+adult+gore+violence",
+  "#47:Chờ thiết lập:advertising+adult+gore+violence",
+  "#48:Chờ thiết lập:advertising+adult+gore+violence",
+  "#49:Chờ thiết lập:advertising+adult+gore+violence",
+  "#50:Chờ thiết lập:advertising+adult+gore+violence",
+  "#51:Chờ thiết lập:advertising+adult+gore+violence",
+  "#52:Chờ thiết lập:advertising+adult+gore+violence",
+  "#53:Chờ thiết lập:advertising+adult+gore+violence",
+  "#54:Chờ thiết lập:advertising+adult+gore+violence",
+  "#55:Chờ thiết lập:advertising+adult+gore+violence"
+ ],
+ "errors": []
+}

@@ -1,0 +1,18 @@
+start,end,start_tc,end_tc,kind,nudity_18plus,frames,seeds,longest_seed_run,context_frames,seed_labels,max_score,max_p_porn,n_p_porn_ge_0.97,mean_score
+937.5,941.5,0:15:37.5,0:15:41.5,topless,True,7,7,7,0,{'porn': 7},0.9988,0.9895,4,0.992
+941.5,950.75,0:15:41.5,0:15:50.8,undressed embrace (bare back/side),True,18,8,3,8,"{'sexy': 1, 'porn': 7}",0.9995,0.9317,0,0.821
+977.0,998.5,0:16:17.0,0:16:38.5,nude from behind (buttocks),True,43,14,10,9,{'porn': 14},0.9952,0.984,6,0.636
+998.75,1014.0,0:16:38.8,0:16:54.0,"partial frontal, mostly covered",True,31,9,3,10,{'porn': 9},0.9998,0.9974,4,0.695
+1014.0,1100.5,0:16:54.0,0:18:20.5,implied: undressed couple framed at shoulders,False,173,13,3,20,{'porn': 13},0.9947,0.9375,0,0.249
+1100.5,1102.0,0:18:20.5,0:18:22.0,"implied: undressed couple kissing, bare shoulders",False,3,2,2,0,{'porn': 2},0.975,0.9634,0,0.648
+415.5,427.5,0:06:55.5,0:07:07.5,nude group lying in bed (bare backs/buttocks),True,23,7,5,2,{'porn': 7},0.9987,0.9803,1,0.462
+428.5,437.5,0:07:08.5,0:07:17.5,nude couple lying in bed (bare backs),True,17,13,10,4,{'porn': 13},1.0,0.9993,9,0.963
+441.5,444.5,0:07:21.5,0:07:24.5,nude couple lying in bed (bare backs),True,5,5,5,0,{'porn': 5},1.0,0.9995,5,1.0
+449.5,464.5,0:07:29.5,0:07:44.5,nude couple lying in bed (bare back/buttocks),True,29,14,8,11,{'porn': 14},0.9985,0.9946,7,0.865
+6794.5,6860.5,1:53:14.5,1:54:20.5,"sexual activity, nude (bare buttocks)",True,131,79,19,24,{'porn': 79},1.0,0.9987,26,0.837
+6869.5,6874.5,1:54:29.5,1:54:34.5,"implied: woman under a sheet, bare legs",False,9,8,8,0,{'sexy': 8},0.9828,0.0505,0,0.87
+6878.5,6882.5,1:54:38.5,1:54:42.5,"implied: woman under a sheet, bare shoulders",False,7,7,7,0,{'porn': 7},0.9998,0.9969,7,1.0
+7210.5,7225.5,2:00:10.5,2:00:25.5,"topless embrace, breasts covered by arms (partial)",True,29,28,28,1,{'porn': 28},0.9998,0.9473,0,0.993
+7225.5,7253.5,2:00:25.5,2:00:53.5,implied: undressed couple framed at shoulders,False,55,53,33,2,{'porn': 53},0.9998,0.9975,38,0.991
+7265.5,7273.5,2:01:05.5,2:01:13.5,nude man lying in bed (bare buttocks),True,15,2,1,9,{'porn': 2},0.988,0.8611,0,0.743
+7273.5,7278.5,2:01:13.5,2:01:18.5,implied: bare shoulders in bed,False,9,9,9,0,{'porn': 9},0.9999,0.9578,0,0.999

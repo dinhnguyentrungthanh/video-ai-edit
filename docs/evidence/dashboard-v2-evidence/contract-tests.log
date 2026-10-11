@@ -1,0 +1,19 @@
+OK Every known state maps to one of the original six buckets
+OK Queue kind is explicit; unknown queue does not become scan
+OK Hidden applies only to cancelled state
+OK Missing source blocks export and rerun
+OK Unresolved NEEDS_MORE_CONTEXT blocks export even with stale ready status
+OK Unfinished render request blocks resubmission and rerun
+OK Ready resolved queue accepts export
+OK Skip is only offered when backend certifies skip eligibility
+OK Cleanup requires eligibility rather than state alone
+OK A copied eligibility flag cannot unlock archived/cleaned sources
+OK Global file operation lock blocks cleanup and restore
+OK Recycle recheck uses row identity and only unverified outcomes
+OK Audit requires queue and AI readiness
+OK Scan rejects empty/unknown detector groups and unsupported OCR batch
+OK GB policy uses exact supported modes and numeric boundaries
+OK Critical request paths and payloads preserve production contracts
+OK Fixtures do not load production files and expose backend review keys
+OK Prototype has no network transport and enforces connect-src none
+{"passed":18,"failed":0}

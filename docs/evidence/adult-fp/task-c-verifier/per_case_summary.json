@@ -1,0 +1,595 @@
+[
+ {
+  "case": "N1",
+  "truth": "nudity",
+  "note": "15:37 topless woman (findings 937.5-941.5)",
+  "times": [
+   938.0,
+   939.5,
+   941.0
+  ],
+  "nano_scores": [
+   0.961,
+   0.9953,
+   0.9991
+  ],
+  "safety_m_nsfw_padded": [
+   0.8659,
+   0.9125,
+   0.911
+  ],
+  "wd_adult_policy_rgb": [
+   false,
+   false,
+   false
+  ],
+  "wd_nude_rgb": [
+   0.3165,
+   0.5961,
+   0.5838
+  ],
+  "florence_center_keywords": [],
+  "qwen_single_center": {
+   "answer": "Yes",
+   "p_yes": 0.7056,
+   "seconds": 70.13
+  },
+  "qwen_multi_3frames": {
+   "answer": "Yes",
+   "p_yes": 0.7265,
+   "seconds": 200.79
+  }
+ },
+ {
+  "case": "N2",
+  "truth": "nudity",
+  "note": "16:20-16:43 bed scene, nude woman from behind / partial frontal",
+  "times": [
+   980.0,
+   992.0,
+   1003.0
+  ],
+  "nano_scores": [
+   0.182,
+   0.9816,
+   0.9963
+  ],
+  "safety_m_nsfw_padded": [
+   0.387,
+   0.8158,
+   0.9343
+  ],
+  "wd_adult_policy_rgb": [
+   true,
+   true,
+   false
+  ],
+  "wd_nude_rgb": [
+   0.7676,
+   0.7373,
+   0.3467
+  ],
+  "florence_center_keywords": [
+   "bed",
+   "naked",
+   "shirtless"
+  ],
+  "qwen_single_center": {
+   "answer": "Yes",
+   "p_yes": 0.7772,
+   "seconds": 68.68
+  },
+  "qwen_multi_3frames": null
+ },
+ {
+  "case": "N3",
+  "truth": "nudity",
+  "note": "1:53:20-1:54:18 user BLUR 6796-6861",
+  "times": [
+   6806.5,
+   6830.0,
+   6858.0
+  ],
+  "nano_scores": [
+   0.999,
+   0.9972,
+   1.0
+  ],
+  "safety_m_nsfw_padded": [
+   0.8715,
+   0.8881,
+   0.9369
+  ],
+  "wd_adult_policy_rgb": [
+   true,
+   true,
+   true
+  ],
+  "wd_nude_rgb": [
+   0.8918,
+   0.7784,
+   0.8939
+  ],
+  "florence_center_keywords": [
+   "bed",
+   "kiss",
+   "naked"
+  ],
+  "qwen_single_center": {
+   "answer": "Yes",
+   "p_yes": 0.7936,
+   "seconds": 68.6
+  },
+  "qwen_multi_3frames": null
+ },
+ {
+  "case": "C1",
+  "truth": "not18",
+  "note": "end credits text (review-7c8558d9f4e6)",
+  "times": [
+   11309.5,
+   11310.5,
+   11311.5
+  ],
+  "nano_scores": [
+   0.9478,
+   0.9565,
+   0.9481
+  ],
+  "safety_m_nsfw_padded": [
+   0.0557,
+   0.044,
+   0.0429
+  ],
+  "wd_adult_policy_rgb": [
+   false,
+   false,
+   false
+  ],
+  "wd_nude_rgb": [
+   0.0006,
+   0.0008,
+   0.0011
+  ],
+  "florence_center_keywords": [],
+  "qwen_single_center": {
+   "answer": "No",
+   "p_yes": 0.2514,
+   "seconds": 68.29
+  },
+  "qwen_multi_3frames": null
+ },
+ {
+  "case": "C2",
+  "truth": "not18",
+  "note": "end credits text (review-c5a9c4006bc8)",
+  "times": [
+   11563.0,
+   11564.0,
+   11565.0
+  ],
+  "nano_scores": [
+   0.9134,
+   0.9493,
+   0.9564
+  ],
+  "safety_m_nsfw_padded": [
+   0.0433,
+   0.0454,
+   0.0488
+  ],
+  "wd_adult_policy_rgb": [
+   false,
+   false,
+   false
+  ],
+  "wd_nude_rgb": [
+   0.001,
+   0.0009,
+   0.0012
+  ],
+  "florence_center_keywords": [],
+  "qwen_single_center": null,
+  "qwen_multi_3frames": null
+ },
+ {
+  "case": "S1",
+  "truth": "not18",
+  "note": "shirtless man in tent (review-507b498fc54d)",
+  "times": [
+   3969.0,
+   3970.0,
+   3971.0
+  ],
+  "nano_scores": [
+   0.1936,
+   0.9626,
+   0.9868
+  ],
+  "safety_m_nsfw_padded": [
+   0.0576,
+   0.1697,
+   0.5666
+  ],
+  "wd_adult_policy_rgb": [
+   false,
+   false,
+   false
+  ],
+  "wd_nude_rgb": [
+   0.073,
+   0.2925,
+   0.1964
+  ],
+  "florence_center_keywords": [
+   "shirtless"
+  ],
+  "qwen_single_center": {
+   "answer": "No",
+   "p_yes": 0.5085,
+   "seconds": 68.05
+  },
+  "qwen_multi_3frames": null
+ },
+ {
+  "case": "S2",
+  "truth": "not18",
+  "note": "shirtless men carrying log (review-3f7dd19e5dbe)",
+  "times": [
+   2755.0,
+   2756.0,
+   2757.0
+  ],
+  "nano_scores": [
+   0.0379,
+   0.9146,
+   0.0124
+  ],
+  "safety_m_nsfw_padded": [
+   0.0334,
+   0.0438,
+   0.0441
+  ],
+  "wd_adult_policy_rgb": [
+   false,
+   false,
+   false
+  ],
+  "wd_nude_rgb": [
+   0.0034,
+   0.0214,
+   0.008
+  ],
+  "florence_center_keywords": [
+   "shirtless"
+  ],
+  "qwen_single_center": null,
+  "qwen_multi_3frames": null
+ },
+ {
+  "case": "S3",
+  "truth": "not18",
+  "note": "shirtless bald warrior with shield (review-e1c07b29d4dd)",
+  "times": [
+   596.0,
+   597.0,
+   598.0
+  ],
+  "nano_scores": [
+   0.0232,
+   0.3491,
+   0.2616
+  ],
+  "safety_m_nsfw_padded": [
+   0.098,
+   0.0415,
+   0.0589
+  ],
+  "wd_adult_policy_rgb": [
+   false,
+   false,
+   false
+  ],
+  "wd_nude_rgb": [
+   0.0003,
+   0.0041,
+   0.0329
+  ],
+  "florence_center_keywords": [
+   "shirtless"
+  ],
+  "qwen_single_center": null,
+  "qwen_multi_3frames": null
+ },
+ {
+  "case": "S4",
+  "truth": "not18",
+  "note": "shirtless man with helmet (review-bc58edbbb304, high)",
+  "times": [
+   8122.0,
+   8123.0,
+   8124.0
+  ],
+  "nano_scores": [
+   0.9325,
+   0.9856,
+   0.9936
+  ],
+  "safety_m_nsfw_padded": [
+   0.7013,
+   0.5971,
+   0.4286
+  ],
+  "wd_adult_policy_rgb": [
+   false,
+   false,
+   false
+  ],
+  "wd_nude_rgb": [
+   0.4299,
+   0.3986,
+   0.0109
+  ],
+  "florence_center_keywords": [
+   "shirtless"
+  ],
+  "qwen_single_center": {
+   "answer": "Yes",
+   "p_yes": 0.6172,
+   "seconds": 68.15
+  },
+  "qwen_multi_3frames": null
+ },
+ {
+  "case": "K1",
+  "truth": "not18",
+  "note": "clothed kiss (review-7dc01db2c183, high)",
+  "times": [
+   2671.5,
+   2672.5,
+   2673.5
+  ],
+  "nano_scores": [
+   0.9548,
+   0.9991,
+   0.4281
+  ],
+  "safety_m_nsfw_padded": [
+   0.1085,
+   0.2419,
+   0.3939
+  ],
+  "wd_adult_policy_rgb": [
+   false,
+   false,
+   false
+  ],
+  "wd_nude_rgb": [
+   0.0014,
+   0.0015,
+   0.0057
+  ],
+  "florence_center_keywords": [],
+  "qwen_single_center": null,
+  "qwen_multi_3frames": null
+ },
+ {
+  "case": "K2",
+  "truth": "not18",
+  "note": "kiss close-up (review-97ba90501822, high)",
+  "times": [
+   10860.5,
+   10861.5,
+   10862.5
+  ],
+  "nano_scores": [
+   0.9909,
+   0.9981,
+   0.0783
+  ],
+  "safety_m_nsfw_padded": [
+   0.5643,
+   0.2067,
+   0.1135
+  ],
+  "wd_adult_policy_rgb": [
+   false,
+   false,
+   false
+  ],
+  "wd_nude_rgb": [
+   0.0057,
+   0.0069,
+   0.0057
+  ],
+  "florence_center_keywords": [],
+  "qwen_single_center": {
+   "answer": "yes",
+   "p_yes": 0.6744,
+   "seconds": 67.94
+  },
+  "qwen_multi_3frames": null
+ },
+ {
+  "case": "K3",
+  "truth": "not18",
+  "note": "kiss (review-7cdb15bf6169, high)",
+  "times": [
+   4764.0,
+   4765.0,
+   4766.0
+  ],
+  "nano_scores": [
+   0.9992,
+   0.9995,
+   0.9993
+  ],
+  "safety_m_nsfw_padded": [
+   0.0742,
+   0.0802,
+   0.0674
+  ],
+  "wd_adult_policy_rgb": [
+   false,
+   false,
+   false
+  ],
+  "wd_nude_rgb": [
+   0.0024,
+   0.0033,
+   0.0075
+  ],
+  "florence_center_keywords": [
+   "kissing"
+  ],
+  "qwen_single_center": null,
+  "qwen_multi_3frames": null
+ },
+ {
+  "case": "O1",
+  "truth": "not18",
+  "note": "infant on bed (review-abfed84538e6, max 0.999999)",
+  "times": [
+   4689.0,
+   4690.0,
+   4691.0
+  ],
+  "nano_scores": [
+   0.0284,
+   1.0,
+   0.9999
+  ],
+  "safety_m_nsfw_padded": [
+   0.0443,
+   0.7684,
+   0.449
+  ],
+  "wd_adult_policy_rgb": [
+   false,
+   true,
+   false
+  ],
+  "wd_nude_rgb": [
+   0.0592,
+   0.2441,
+   0.2749
+  ],
+  "florence_center_keywords": [
+   "bed",
+   "naked"
+  ],
+  "qwen_single_center": {
+   "answer": "No",
+   "p_yes": 0.4548,
+   "seconds": 68.15
+  },
+  "qwen_multi_3frames": null
+ },
+ {
+  "case": "O2",
+  "truth": "not18",
+  "note": "dancers in revealing costumes (review-a8ef1424049e)",
+  "times": [
+   746.5,
+   747.0,
+   754.0
+  ],
+  "nano_scores": [
+   0.7999,
+   0.9995,
+   0.9367
+  ],
+  "safety_m_nsfw_padded": [
+   0.1835,
+   0.5883,
+   0.1011
+  ],
+  "wd_adult_policy_rgb": [
+   false,
+   false,
+   false
+  ],
+  "wd_nude_rgb": [
+   0.001,
+   0.0044,
+   0.0003
+  ],
+  "florence_center_keywords": [],
+  "qwen_single_center": null,
+  "qwen_multi_3frames": null
+ },
+ {
+  "case": "O3",
+  "truth": "not18",
+  "note": "undressed couple kiss, bare shoulders only (review-0999440b5f0f)",
+  "times": [
+   1100.5,
+   1101.0,
+   1101.5
+  ],
+  "nano_scores": [
+   0.2833,
+   0.8756,
+   0.9598
+  ],
+  "safety_m_nsfw_padded": [
+   0.3088,
+   0.602,
+   0.6212
+  ],
+  "wd_adult_policy_rgb": [
+   false,
+   false,
+   false
+  ],
+  "wd_nude_rgb": [
+   0.011,
+   0.0218,
+   0.0473
+  ],
+  "florence_center_keywords": [],
+  "qwen_single_center": {
+   "answer": "Yes",
+   "p_yes": 0.72,
+   "seconds": 67.79
+  },
+  "qwen_multi_3frames": null
+ },
+ {
+  "case": "O4",
+  "truth": "not18",
+  "note": "couple in bed, bare shoulders (review-03adbe64ac86)",
+  "times": [
+   1039.5,
+   1040.5,
+   1041.5
+  ],
+  "nano_scores": [
+   0.9852,
+   0.782,
+   0.8954
+  ],
+  "safety_m_nsfw_padded": [
+   0.6378,
+   0.7484,
+   0.7234
+  ],
+  "wd_adult_policy_rgb": [
+   false,
+   false,
+   false
+  ],
+  "wd_nude_rgb": [
+   0.3097,
+   0.3381,
+   0.2157
+  ],
+  "florence_center_keywords": [],
+  "qwen_single_center": {
+   "answer": "Yes",
+   "p_yes": 0.6462,
+   "seconds": 68.42
+  },
+  "qwen_multi_3frames": null
+ }
+]

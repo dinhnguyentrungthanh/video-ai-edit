@@ -14,7 +14,7 @@
            base trial is the R3-derived one, the default).
         4. Checks Troy rev 4 against the user's decisions: every BLUR stays in the main list,
            moved false alarms equal the pre-registered counts (+-1), the lone clear-nude shot
-           test over temp/adult-fp/task-b-signals/frame-truth-spans.csv (copied into the
+           test over docs/evidence/adult-fp/task-b-signals/frame-truth-spans.csv (copied into the
            evidence directory), and production verifier scores against the task C CPU
            measurement (+-0.01, gate 4.4).
         Writes summary.json and summary.md; exits 1 when a pre-registered gate fails.
@@ -46,8 +46,9 @@ sys.path.insert(0, str(ROOT / "scripts"))
 BASELINE = ROOT / "reports/benchmarks/golden-baseline-v1v11-20261001-095204"
 TROY_REV4_QUEUE = ROOT / ("reports/jobs/tm2-troy-2004-directors-cut-1080p-bluray-dd5-1-x-f43cf94a"
                           "-run-20260930-230655/review-queue.json")
-FRAME_TRUTH = ROOT / "temp/adult-fp/task-b-signals/frame-truth-spans.csv"
-CPU_SCORES = ROOT / "temp/adult-fp/task-c-verifier/safety_m_items.json"
+# Moved out of temp on 2026-10-11 (docs/evidence/README.md): the clean file is tracked, the other stays local.
+FRAME_TRUTH = ROOT / "docs/evidence/adult-fp/task-b-signals/frame-truth-spans.csv"
+CPU_SCORES = ROOT / "reports/evidence/adult-fp/task-c-verifier/safety_m_items.json"
 R3_DERIVED_TRIAL = ROOT / "reports/benchmarks/r3-validation-20261001/derived-trial/troy-allgroups-full-fast-20260930-162534-r3"
 TRIALS = {
     "troy": ROOT / "reports/benchmarks/troy-allgroups-full-fast-20260930-162534",
@@ -189,7 +190,7 @@ def simulate_verifier(scan: Path, output: Path, rev4: dict) -> None:
     payload["adult_verification"] = {
         "state": "COMPLETED", "simulated": True, "source_report": relative(scan),
         "source_report_sha256": sha256(scan),
-        "note": "SIMULATED from temp/adult-fp/task-c-verifier/safety_m_items.json; not evidence",
+        "note": "SIMULATED from reports/evidence/adult-fp/task-c-verifier/safety_m_items.json; not evidence",
     }
     write_json(output, payload)
 

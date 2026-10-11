@@ -1,0 +1,359 @@
+{
+ "gate": "detector",
+ "violations": [],
+ "comparable": true,
+ "label_changes": [],
+ "newly_caught": [],
+ "newly_missed": [],
+ "new_trap_hits": [],
+ "metric_deltas": {
+  "advertising": {
+   "holdout": {
+    "caught": {
+     "before": 6,
+     "after": 6,
+     "delta": 0
+    },
+    "must_caught": {
+     "before": 6,
+     "after": 6,
+     "delta": 0
+    },
+    "useful_main": {
+     "before": 6,
+     "after": 6,
+     "delta": 0
+    },
+    "false_positive_main": {
+     "before": 1,
+     "after": 1,
+     "delta": 0
+    },
+    "precision_main": {
+     "before": 0.8571,
+     "after": 0.8571,
+     "delta": 0.0
+    },
+    "advisory_items": {
+     "before": 93,
+     "after": 93,
+     "delta": 0
+    },
+    "region_ok": {
+     "before": 4,
+     "after": 4,
+     "delta": 0
+    },
+    "trap_hits": {
+     "before": 0,
+     "after": 0,
+     "delta": 0
+    }
+   },
+   "all": {
+    "caught": {
+     "before": 13,
+     "after": 13,
+     "delta": 0
+    },
+    "must_caught": {
+     "before": 13,
+     "after": 13,
+     "delta": 0
+    },
+    "useful_main": {
+     "before": 13,
+     "after": 13,
+     "delta": 0
+    },
+    "false_positive_main": {
+     "before": 7,
+     "after": 7,
+     "delta": 0
+    },
+    "precision_main": {
+     "before": 0.65,
+     "after": 0.65,
+     "delta": 0.0
+    },
+    "advisory_items": {
+     "before": 253,
+     "after": 253,
+     "delta": 0
+    },
+    "region_ok": {
+     "before": 9,
+     "after": 9,
+     "delta": 0
+    },
+    "trap_hits": {
+     "before": 0,
+     "after": 0,
+     "delta": 0
+    }
+   }
+  },
+  "adult": {
+   "holdout": {
+    "caught": {
+     "before": 1,
+     "after": 1,
+     "delta": 0
+    },
+    "must_caught": {
+     "before": 1,
+     "after": 1,
+     "delta": 0
+    },
+    "useful_main": {
+     "before": 1,
+     "after": 1,
+     "delta": 0
+    },
+    "false_positive_main": {
+     "before": 2,
+     "after": 2,
+     "delta": 0
+    },
+    "precision_main": {
+     "before": 0.3333,
+     "after": 0.3333,
+     "delta": 0.0
+    },
+    "advisory_items": {
+     "before": 0,
+     "after": 0,
+     "delta": 0
+    },
+    "region_ok": {
+     "before": 0,
+     "after": 0,
+     "delta": 0
+    },
+    "trap_hits": {
+     "before": 0,
+     "after": 0,
+     "delta": 0
+    }
+   },
+   "all": {
+    "caught": {
+     "before": 1,
+     "after": 1,
+     "delta": 0
+    },
+    "must_caught": {
+     "before": 1,
+     "after": 1,
+     "delta": 0
+    },
+    "useful_main": {
+     "before": 1,
+     "after": 1,
+     "delta": 0
+    },
+    "false_positive_main": {
+     "before": 8,
+     "after": 8,
+     "delta": 0
+    },
+    "precision_main": {
+     "before": 0.1111,
+     "after": 0.1111,
+     "delta": 0.0
+    },
+    "advisory_items": {
+     "before": 0,
+     "after": 0,
+     "delta": 0
+    },
+    "region_ok": {
+     "before": 0,
+     "after": 0,
+     "delta": 0
+    },
+    "trap_hits": {
+     "before": 0,
+     "after": 0,
+     "delta": 0
+    }
+   }
+  },
+  "gore": {
+   "holdout": {
+    "caught": {
+     "before": 4,
+     "after": 4,
+     "delta": 0
+    },
+    "must_caught": {
+     "before": 4,
+     "after": 4,
+     "delta": 0
+    },
+    "useful_main": {
+     "before": 4,
+     "after": 4,
+     "delta": 0
+    },
+    "false_positive_main": {
+     "before": 6,
+     "after": 6,
+     "delta": 0
+    },
+    "precision_main": {
+     "before": 0.4,
+     "after": 0.4,
+     "delta": 0.0
+    },
+    "advisory_items": {
+     "before": 0,
+     "after": 0,
+     "delta": 0
+    },
+    "region_ok": {
+     "before": 0,
+     "after": 0,
+     "delta": 0
+    },
+    "trap_hits": {
+     "before": 0,
+     "after": 0,
+     "delta": 0
+    }
+   },
+   "all": {
+    "caught": {
+     "before": 5,
+     "after": 5,
+     "delta": 0
+    },
+    "must_caught": {
+     "before": 5,
+     "after": 5,
+     "delta": 0
+    },
+    "useful_main": {
+     "before": 5,
+     "after": 5,
+     "delta": 0
+    },
+    "false_positive_main": {
+     "before": 16,
+     "after": 16,
+     "delta": 0
+    },
+    "precision_main": {
+     "before": 0.2381,
+     "after": 0.2381,
+     "delta": 0.0
+    },
+    "advisory_items": {
+     "before": 0,
+     "after": 0,
+     "delta": 0
+    },
+    "region_ok": {
+     "before": 0,
+     "after": 0,
+     "delta": 0
+    },
+    "trap_hits": {
+     "before": 0,
+     "after": 0,
+     "delta": 0
+    }
+   }
+  },
+  "violence": {
+   "holdout": {
+    "caught": {
+     "before": 0,
+     "after": 0,
+     "delta": 0
+    },
+    "must_caught": {
+     "before": 0,
+     "after": 0,
+     "delta": 0
+    },
+    "useful_main": {
+     "before": 0,
+     "after": 0,
+     "delta": 0
+    },
+    "false_positive_main": {
+     "before": 2,
+     "after": 2,
+     "delta": 0
+    },
+    "precision_main": {
+     "before": 0.0,
+     "after": 0.0,
+     "delta": 0.0
+    },
+    "advisory_items": {
+     "before": 0,
+     "after": 0,
+     "delta": 0
+    },
+    "region_ok": {
+     "before": 0,
+     "after": 0,
+     "delta": 0
+    },
+    "trap_hits": {
+     "before": 0,
+     "after": 0,
+     "delta": 0
+    }
+   },
+   "all": {
+    "caught": {
+     "before": 0,
+     "after": 0,
+     "delta": 0
+    },
+    "must_caught": {
+     "before": 0,
+     "after": 0,
+     "delta": 0
+    },
+    "useful_main": {
+     "before": 0,
+     "after": 0,
+     "delta": 0
+    },
+    "false_positive_main": {
+     "before": 6,
+     "after": 6,
+     "delta": 0
+    },
+    "precision_main": {
+     "before": 0.0,
+     "after": 0.0,
+     "delta": 0.0
+    },
+    "advisory_items": {
+     "before": 0,
+     "after": 0,
+     "delta": 0
+    },
+    "region_ok": {
+     "before": 0,
+     "after": 0,
+     "delta": 0
+    },
+    "trap_hits": {
+     "before": 0,
+     "after": 0,
+     "delta": 0
+    }
+   }
+  }
+ },
+ "time": {
+  "baseline": 4292.1139968000025,
+  "candidate": 4292.1139968000025
+ }
+}

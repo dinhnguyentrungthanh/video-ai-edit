@@ -1,0 +1,24 @@
+Real ffmpeg check (2026-10-03, branch fix/export-identity-http, worktree temp/wt-export-fix)
+Script: e2e.py (copy of temp/export-fix-e2e/e2e.py); throw-away root temp/export-fix-e2e/root; synthetic 40 s testsrc + sine clip.
+Flow: build_edit_plan -> authorize_final_from_resolved_review -> render_final_output (tools/ffmpeg/bin), default size policy.
+
+OK   real manifest proves the first export
+OK   first export is not at the legacy name
+OK   edge mode change gets another name
+OK   old export is not reused for the new edge mode
+OK   second export proven
+OK   first export untouched
+OK   second manifest records vertical_only
+OK   first manifest is OLDER for the second review
+OK   fake file is not an export
+OK   renderer refuses to overwrite the fake file
+OK   source unchanged
+all passed
+
+Side finding (pre-existing on main, not changed here): with the default size policy an export whose output lasts
+less than about 24 s fails in libx264 (6 s: maxrate 4267616000 out of range; 20 s: bufsize 2560032000 out of range).
+Flagged as a separate task.
+
+Re-run after the review fixes (renderer hashes before the rename, os.rename never replaces): the same 11 checks, all passed.
+
+Re-run after the second fix pass (output checked as given before it is resolved; lexical manifest paths; source-itself check): the same 11 checks, all passed.

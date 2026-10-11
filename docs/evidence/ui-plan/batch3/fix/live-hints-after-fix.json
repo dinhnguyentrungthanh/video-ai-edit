@@ -1,0 +1,161 @@
+{
+ "jobs": 30,
+ "states": {
+  "COMPLETED": 24,
+  "READY_TO_EXPORT": 5,
+  "CANCELLED": 1
+ },
+ "hint_ms_per_pass": [
+  225.9,
+  48.9,
+  46.7
+ ],
+ "eligible": [
+  40,
+  41,
+  42,
+  43,
+  44,
+  45,
+  46,
+  47,
+  48,
+  49,
+  50,
+  51,
+  52,
+  53,
+  54,
+  55,
+  56,
+  57,
+  58,
+  59
+ ],
+ "reasons": {
+  "Không thấy bản xuất trong thư mục output (đã bị dời hoặc đổi tên?)": 2,
+  "Video gốc không còn trong thư mục input": 2
+ },
+ "per_job": {
+  "3": [
+   false,
+   "EXPORTED",
+   "Video gốc không còn trong thư mục input"
+  ],
+  "4": [
+   false,
+   "EXPORTED",
+   "Video gốc không còn trong thư mục input"
+  ],
+  "37": [
+   false,
+   "EXPORTED",
+   "Không thấy bản xuất trong thư mục output (đã bị dời hoặc đổi tên?)"
+  ],
+  "38": [
+   false,
+   "EXPORTED",
+   "Không thấy bản xuất trong thư mục output (đã bị dời hoặc đổi tên?)"
+  ],
+  "40": [
+   true,
+   "EXPORTED",
+   null
+  ],
+  "41": [
+   true,
+   "EXPORTED",
+   null
+  ],
+  "42": [
+   true,
+   "EXPORTED",
+   null
+  ],
+  "43": [
+   true,
+   "EXPORTED",
+   null
+  ],
+  "44": [
+   true,
+   "EXPORTED",
+   null
+  ],
+  "45": [
+   true,
+   "EXPORTED",
+   null
+  ],
+  "46": [
+   true,
+   "EXPORTED",
+   null
+  ],
+  "47": [
+   true,
+   "EXPORTED",
+   null
+  ],
+  "48": [
+   true,
+   "EXPORTED",
+   null
+  ],
+  "49": [
+   true,
+   "EXPORTED",
+   null
+  ],
+  "50": [
+   true,
+   "EXPORTED",
+   null
+  ],
+  "51": [
+   true,
+   "EXPORTED",
+   null
+  ],
+  "52": [
+   true,
+   "EXPORTED",
+   null
+  ],
+  "53": [
+   true,
+   "EXPORTED",
+   null
+  ],
+  "54": [
+   true,
+   "EXPORTED",
+   null
+  ],
+  "55": [
+   true,
+   "EXPORTED",
+   null
+  ],
+  "56": [
+   true,
+   "EXPORTED",
+   null
+  ],
+  "57": [
+   true,
+   "EXPORTED",
+   null
+  ],
+  "58": [
+   true,
+   "EXPORTED",
+   null
+  ],
+  "59": [
+   true,
+   "EXPORTED",
+   null
+  ]
+ }
+}

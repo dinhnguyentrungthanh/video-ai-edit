@@ -1,0 +1,28 @@
+OK   clip6: FFmpeg refused the uncapped rate
+OK   clip6: the refused render left nothing in output/
+OK   clip6: export proven by its manifest
+OK   clip6: maxrate is the cap and its bufsize fits
+OK   clip6: within the size limit
+OK   clip6: source unchanged
+OK   clip20: FFmpeg refused the uncapped rate
+OK   clip20: the refused render left nothing in output/
+OK   clip20: export proven by its manifest
+OK   clip20: maxrate is the cap and its bufsize fits
+OK   clip20: within the size limit
+OK   clip20: source unchanged
+OK   custom100-clip600: FFmpeg refused the uncapped rate
+OK   custom100-clip600: the refused render left nothing in output/
+OK   custom100-clip600: export proven by its manifest
+OK   custom100-clip600: maxrate is the cap and its bufsize fits
+OK   custom100-clip600: within the size limit
+OK   custom100-clip600: source unchanged
+OK   clip30: same rates with and without the cap
+OK   clip30: identical sources give identical exports
+     clip6 uncapped -> [libx264 @ 00000215b81577c0] Value 4267616000.000000 for parameter 'maxrate' out of range [0 - 2.14748e+09] | [libx264 @ 00000215b81577c0] Error setting option maxrate to value 4267616000.
+     clip6 capped -> 130686 bytes, 6.0 s, maxrate 1073741823, b:v 56685, H.264 level 62
+     clip20 uncapped -> [libx264 @ 000002a7c93bb6c0] Value 2560032000.000000 for parameter 'bufsize' out of range [-2.14748e+09 - 2.14748e+09] | [libx264 @ 000002a7c93bb6c0] Error setting option bufsize to value 2560032000.
+     clip20 capped -> 371231 bytes, 20.0 s, maxrate 1073741823, b:v 53269, H.264 level 62
+     custom100-clip600 uncapped -> [libx264 @ 00000271bfcaa180] Value 2438089142.000000 for parameter 'bufsize' out of range [-2.14748e+09 - 2.14748e+09] | [libx264 @ 00000271bfcaa180] Error setting option bufsize to value 2438089142.
+     custom100-clip600 capped -> 10435728 bytes, 600.0 s, maxrate 1073741823, b:v 53493, H.264 level 62
+     clip30 -> maxrate 853216000, H.264 level 62
+20/20 checks passed

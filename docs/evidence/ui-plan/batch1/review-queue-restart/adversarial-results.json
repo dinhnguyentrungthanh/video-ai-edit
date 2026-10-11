@@ -1,0 +1,142 @@
+[
+ [
+  "fifo: rerun of queued A refused",
+  true,
+  "Video #1 đang nằm trong hàng đợi; không xếp chạy lại thêm lần nữa."
+ ],
+ [
+  "fifo: A is head",
+  true,
+  "1"
+ ],
+ [
+  "fifo: A stays head between stages",
+  true,
+  "[{'job_id': 1, 'position': 1, 'kind': 'scan'}, {'job_id': 2, 'position': 2, 'kind': 'scan'}, {'job_id': 3, 'position': 3, 'kind': 'scan'}]"
+ ],
+ [
+  "fifo: order B,C,A,D",
+  true,
+  "[(2, 'scan', 1), (3, 'scan', 2), (1, 'scan', 3), (4, 'export', 4)]"
+ ],
+ [
+  "fifo: kinds scan,scan,scan,export",
+  true,
+  "[(2, 'scan', 1), (3, 'scan', 2), (1, 'scan', 3), (4, 'export', 4)]"
+ ],
+ [
+  "fifo: repeated queue_render of an already queued export keeps seq (info)",
+  true,
+  "5->5"
+ ],
+ [
+  "fifo: pause/resume B keeps head",
+  true,
+  "[{'job_id': 2, 'position': 1, 'kind': 'scan'}, {'job_id': 3, 'position': 2, 'kind': 'scan'}, {'job_id': 1, 'position': 3, 'kind': 'scan'}, {'job_id': 4, 'position': 4, 'kind': 'export'}]"
+ ],
+ [
+  "fifo: stop-after-stage/resume C keeps place",
+  true,
+  "[{'job_id': 2, 'position': 1, 'kind': 'scan'}, {'job_id': 3, 'position': 2, 'kind': 'scan'}, {'job_id': 1, 'position': 3, 'kind': 'scan'}, {'job_id': 4, 'position': 4, 'kind': 'export'}]"
+ ],
+ [
+  "fifo: _select None while paused",
+  true,
+  ""
+ ],
+ [
+  "fifo: order after scheduler pause/resume",
+  true,
+  ""
+ ],
+ [
+  "fifo: status positions",
+  true,
+  "{3: (2, 'scan'), 2: (1, 'scan'), 4: (4, 'export'), 1: (3, 'scan')}"
+ ],
+ [
+  "fifo: status queue length",
+  true,
+  "{'length': 4, 'paused': False}"
+ ],
+ [
+  "restart: queued rerun stays QUEUED, no revision",
+  true,
+  ""
+ ],
+ [
+  "restart: queued export stays QUEUED/render",
+  true,
+  ""
+ ],
+ [
+  "restart: paused stays PAUSED",
+  true,
+  ""
+ ],
+ [
+  "restart: interrupted stays",
+  true,
+  ""
+ ],
+ [
+  "restart: building recovered",
+  true,
+  ""
+ ],
+ [
+  "restart: rendering recovered",
+  true,
+  ""
+ ],
+ [
+  "restart: rereviewed stays WAITING_REVIEW on rev2",
+  true,
+  "('WAITING_REVIEW', 2)"
+ ],
+ [
+  "restart: seqs unchanged",
+  true,
+  ""
+ ],
+ [
+  "restart: queue order unchanged",
+  true,
+  "([{'job_id': 9, 'position': 1, 'kind': 'scan'}, {'job_id': 3, 'position': 2, 'kind': 'export'}], [{'job_id': 9, 'position': 1, 'kind': 'scan'}, {'job_id': 3, 'position': 2, 'kind': 'export'}])"
+ ],
+ [
+  "restart: export kind",
+  true,
+  "(2, 'export')"
+ ],
+ [
+  "restart+resume: paused runnable",
+  true,
+  "state=QUEUED stage=None stages=[('scan', 'PENDING'), ('build_review', 'PENDING')]"
+ ],
+ [
+  "restart+resume: interrupted runnable",
+  true,
+  "state=QUEUED stage=None stages=[('scan', 'PENDING'), ('build_review', 'PENDING')]"
+ ],
+ [
+  "restart+resume: building runnable",
+  true,
+  "state=QUEUED stage=build_review stages=[('scan', 'COMPLETED'), ('build_review', 'PENDING')]"
+ ],
+ [
+  "restart+resume: building_done runnable",
+  true,
+  "state=QUEUED stage=build_review stages=[('scan', 'COMPLETED'), ('build_review', 'PENDING')]"
+ ],
+ [
+  "restart+resume: rendering runnable",
+  true,
+  "state=QUEUED stage=render stages=[('render', 'PENDING')]"
+ ],
+ [
+  "restart+resume: rendering is export kind",
+  true,
+  ""
+ ]
+]

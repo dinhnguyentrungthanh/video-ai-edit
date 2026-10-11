@@ -1,0 +1,15 @@
+{
+ "A_adult47_after_long_press": false,
+ "A_draft47": "[\"advertising\",\"gore\",\"violence\"]",
+ "A_rendered_after_release": "50%",
+ "B_gore47_after_label_click": false,
+ "C_pointerDown_after_select_click": false,
+ "C_active": "style-48",
+ "C_style48": "live_action",
+ "C_meta48": "{\"content_style\":\"live_action\",\"profile\":\"careful\"}",
+ "C_44_progress_while_select_focused_3_6s": "50%",
+ "C_44_progress_after_16s": "70%",
+ "C_style48_after": "live_action",
+ "D_pointerDown_after_drag_release": false,
+ "errors": []
+}

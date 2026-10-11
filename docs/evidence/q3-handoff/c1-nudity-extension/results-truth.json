@@ -1,0 +1,1395 @@
+{
+ "-1.0": [
+  [
+   "baseline",
+   "-",
+   "-",
+   {
+    "added_total": 0,
+    "added_in_nudity": 0.0,
+    "added_in_clothed_intimacy_keep": 0.0,
+    "added_in_implied_uncertain": 0.0,
+    "added_in_other_keep": 0.0,
+    "nudity_covered": 44.0,
+    "nudity_total": 50.25,
+    "miss_977_983_covered": 0.0,
+    "added_spans": []
+   }
+  ],
+  [
+   "support-shot",
+   "start",
+   4,
+   {
+    "added_total": 0,
+    "added_in_nudity": 0.0,
+    "added_in_clothed_intimacy_keep": 0.0,
+    "added_in_implied_uncertain": 0.0,
+    "added_in_other_keep": 0.0,
+    "nudity_covered": 44.0,
+    "nudity_total": 50.25,
+    "miss_977_983_covered": 0.0,
+    "added_spans": []
+   }
+  ],
+  [
+   "support-shot",
+   "start",
+   6,
+   {
+    "added_total": 5.88,
+    "added_in_nudity": 5.88,
+    "added_in_clothed_intimacy_keep": 0.0,
+    "added_in_implied_uncertain": 0.0,
+    "added_in_other_keep": 0.0,
+    "nudity_covered": 49.88,
+    "nudity_total": 50.25,
+    "miss_977_983_covered": 5.88,
+    "added_spans": [
+     [
+      977.12,
+      983.0
+     ]
+    ]
+   }
+  ],
+  [
+   "support-shot",
+   "start",
+   8,
+   {
+    "added_total": 12.96,
+    "added_in_nudity": 5.88,
+    "added_in_clothed_intimacy_keep": 0.0,
+    "added_in_implied_uncertain": 0.0,
+    "added_in_other_keep": 7.08,
+    "nudity_covered": 49.88,
+    "nudity_total": 50.25,
+    "miss_977_983_covered": 5.88,
+    "added_spans": [
+     [
+      738.92,
+      746.0
+     ],
+     [
+      977.12,
+      983.0
+     ]
+    ]
+   }
+  ],
+  [
+   "support-shot",
+   "start",
+   10,
+   {
+    "added_total": 22.0,
+    "added_in_nudity": 5.88,
+    "added_in_clothed_intimacy_keep": 0.0,
+    "added_in_implied_uncertain": 9.04,
+    "added_in_other_keep": 7.08,
+    "nudity_covered": 49.88,
+    "nudity_total": 50.25,
+    "miss_977_983_covered": 5.88,
+    "added_spans": [
+     [
+      738.92,
+      746.0
+     ],
+     [
+      977.12,
+      983.0
+     ],
+     [
+      1090.96,
+      1100.0
+     ]
+    ]
+   }
+  ],
+  [
+   "support-shot",
+   "start",
+   12,
+   {
+    "added_total": 33.4,
+    "added_in_nudity": 5.88,
+    "added_in_clothed_intimacy_keep": 0.0,
+    "added_in_implied_uncertain": 9.04,
+    "added_in_other_keep": 18.48,
+    "nudity_covered": 49.88,
+    "nudity_total": 50.25,
+    "miss_977_983_covered": 5.88,
+    "added_spans": [
+     [
+      738.92,
+      746.0
+     ],
+     [
+      783.6,
+      795.0
+     ],
+     [
+      977.12,
+      983.0
+     ],
+     [
+      1090.96,
+      1100.0
+     ]
+    ]
+   }
+  ],
+  [
+   "support-shot",
+   "start",
+   15,
+   {
+    "added_total": 33.4,
+    "added_in_nudity": 5.88,
+    "added_in_clothed_intimacy_keep": 0.0,
+    "added_in_implied_uncertain": 9.04,
+    "added_in_other_keep": 18.48,
+    "nudity_covered": 49.88,
+    "nudity_total": 50.25,
+    "miss_977_983_covered": 5.88,
+    "added_spans": [
+     [
+      738.92,
+      746.0
+     ],
+     [
+      783.6,
+      795.0
+     ],
+     [
+      977.12,
+      983.0
+     ],
+     [
+      1090.96,
+      1100.0
+     ]
+    ]
+   }
+  ],
+  [
+   "support-shot",
+   "both",
+   4,
+   {
+    "added_total": 1.34,
+    "added_in_nudity": 0.22,
+    "added_in_clothed_intimacy_keep": 0.0,
+    "added_in_implied_uncertain": 1.12,
+    "added_in_other_keep": 0.0,
+    "nudity_covered": 44.22,
+    "nudity_total": 50.25,
+    "miss_977_983_covered": 0.0,
+    "added_spans": [
+     [
+      950.5,
+      950.72
+     ],
+     [
+      1044.0,
+      1045.12
+     ]
+    ]
+   }
+  ],
+  [
+   "support-shot",
+   "both",
+   6,
+   {
+    "added_total": 7.22,
+    "added_in_nudity": 6.1,
+    "added_in_clothed_intimacy_keep": 0.0,
+    "added_in_implied_uncertain": 1.12,
+    "added_in_other_keep": 0.0,
+    "nudity_covered": 50.1,
+    "nudity_total": 50.25,
+    "miss_977_983_covered": 5.88,
+    "added_spans": [
+     [
+      950.5,
+      950.72
+     ],
+     [
+      977.12,
+      983.0
+     ],
+     [
+      1044.0,
+      1045.12
+     ]
+    ]
+   }
+  ],
+  [
+   "support-shot",
+   "both",
+   8,
+   {
+    "added_total": 14.3,
+    "added_in_nudity": 6.1,
+    "added_in_clothed_intimacy_keep": 0.0,
+    "added_in_implied_uncertain": 1.12,
+    "added_in_other_keep": 7.08,
+    "nudity_covered": 50.1,
+    "nudity_total": 50.25,
+    "miss_977_983_covered": 5.88,
+    "added_spans": [
+     [
+      738.92,
+      746.0
+     ],
+     [
+      950.5,
+      950.72
+     ],
+     [
+      977.12,
+      983.0
+     ],
+     [
+      1044.0,
+      1045.12
+     ]
+    ]
+   }
+  ],
+  [
+   "support-shot",
+   "both",
+   10,
+   {
+    "added_total": 42.8,
+    "added_in_nudity": 6.1,
+    "added_in_clothed_intimacy_keep": 9.96,
+    "added_in_implied_uncertain": 19.66,
+    "added_in_other_keep": 7.08,
+    "nudity_covered": 50.1,
+    "nudity_total": 50.25,
+    "miss_977_983_covered": 5.88,
+    "added_spans": [
+     [
+      738.92,
+      746.0
+     ],
+     [
+      900.0,
+      909.96
+     ],
+     [
+      950.5,
+      950.72
+     ],
+     [
+      977.12,
+      983.0
+     ],
+     [
+      1027.0,
+      1036.5
+     ],
+     [
+      1044.0,
+      1045.12
+     ],
+     [
+      1090.96,
+      1100.0
+     ]
+    ]
+   }
+  ],
+  [
+   "support-shot",
+   "both",
+   12,
+   {
+    "added_total": 54.2,
+    "added_in_nudity": 6.1,
+    "added_in_clothed_intimacy_keep": 9.96,
+    "added_in_implied_uncertain": 19.66,
+    "added_in_other_keep": 18.48,
+    "nudity_covered": 50.1,
+    "nudity_total": 50.25,
+    "miss_977_983_covered": 5.88,
+    "added_spans": [
+     [
+      738.92,
+      746.0
+     ],
+     [
+      783.6,
+      795.0
+     ],
+     [
+      900.0,
+      909.96
+     ],
+     [
+      950.5,
+      950.72
+     ],
+     [
+      977.12,
+      983.0
+     ],
+     [
+      1027.0,
+      1036.5
+     ],
+     [
+      1044.0,
+      1045.12
+     ],
+     [
+      1090.96,
+      1100.0
+     ]
+    ]
+   }
+  ],
+  [
+   "support-shot",
+   "both",
+   15,
+   {
+    "added_total": 54.2,
+    "added_in_nudity": 6.1,
+    "added_in_clothed_intimacy_keep": 9.96,
+    "added_in_implied_uncertain": 19.66,
+    "added_in_other_keep": 18.48,
+    "nudity_covered": 50.1,
+    "nudity_total": 50.25,
+    "miss_977_983_covered": 5.88,
+    "added_spans": [
+     [
+      738.92,
+      746.0
+     ],
+     [
+      783.6,
+      795.0
+     ],
+     [
+      900.0,
+      909.96
+     ],
+     [
+      950.5,
+      950.72
+     ],
+     [
+      977.12,
+      983.0
+     ],
+     [
+      1027.0,
+      1036.5
+     ],
+     [
+      1044.0,
+      1045.12
+     ],
+     [
+      1090.96,
+      1100.0
+     ]
+    ]
+   }
+  ],
+  [
+   "seed-shot",
+   "start",
+   4,
+   {
+    "added_total": 0,
+    "added_in_nudity": 0.0,
+    "added_in_clothed_intimacy_keep": 0.0,
+    "added_in_implied_uncertain": 0.0,
+    "added_in_other_keep": 0.0,
+    "nudity_covered": 44.0,
+    "nudity_total": 50.25,
+    "miss_977_983_covered": 0.0,
+    "added_spans": []
+   }
+  ],
+  [
+   "seed-shot",
+   "start",
+   6,
+   {
+    "added_total": 5.88,
+    "added_in_nudity": 5.88,
+    "added_in_clothed_intimacy_keep": 0.0,
+    "added_in_implied_uncertain": 0.0,
+    "added_in_other_keep": 0.0,
+    "nudity_covered": 49.88,
+    "nudity_total": 50.25,
+    "miss_977_983_covered": 5.88,
+    "added_spans": [
+     [
+      977.12,
+      983.0
+     ]
+    ]
+   }
+  ],
+  [
+   "seed-shot",
+   "start",
+   8,
+   {
+    "added_total": 12.96,
+    "added_in_nudity": 5.88,
+    "added_in_clothed_intimacy_keep": 0.0,
+    "added_in_implied_uncertain": 0.0,
+    "added_in_other_keep": 7.08,
+    "nudity_covered": 49.88,
+    "nudity_total": 50.25,
+    "miss_977_983_covered": 5.88,
+    "added_spans": [
+     [
+      738.92,
+      746.0
+     ],
+     [
+      977.12,
+      983.0
+     ]
+    ]
+   }
+  ],
+  [
+   "seed-shot",
+   "start",
+   10,
+   {
+    "added_total": 22.0,
+    "added_in_nudity": 5.88,
+    "added_in_clothed_intimacy_keep": 0.0,
+    "added_in_implied_uncertain": 9.04,
+    "added_in_other_keep": 7.08,
+    "nudity_covered": 49.88,
+    "nudity_total": 50.25,
+    "miss_977_983_covered": 5.88,
+    "added_spans": [
+     [
+      738.92,
+      746.0
+     ],
+     [
+      977.12,
+      983.0
+     ],
+     [
+      1090.96,
+      1100.0
+     ]
+    ]
+   }
+  ],
+  [
+   "seed-shot",
+   "start",
+   12,
+   {
+    "added_total": 33.4,
+    "added_in_nudity": 5.88,
+    "added_in_clothed_intimacy_keep": 0.0,
+    "added_in_implied_uncertain": 9.04,
+    "added_in_other_keep": 18.48,
+    "nudity_covered": 49.88,
+    "nudity_total": 50.25,
+    "miss_977_983_covered": 5.88,
+    "added_spans": [
+     [
+      738.92,
+      746.0
+     ],
+     [
+      783.6,
+      795.0
+     ],
+     [
+      977.12,
+      983.0
+     ],
+     [
+      1090.96,
+      1100.0
+     ]
+    ]
+   }
+  ],
+  [
+   "seed-shot",
+   "start",
+   15,
+   {
+    "added_total": 33.4,
+    "added_in_nudity": 5.88,
+    "added_in_clothed_intimacy_keep": 0.0,
+    "added_in_implied_uncertain": 9.04,
+    "added_in_other_keep": 18.48,
+    "nudity_covered": 49.88,
+    "nudity_total": 50.25,
+    "miss_977_983_covered": 5.88,
+    "added_spans": [
+     [
+      738.92,
+      746.0
+     ],
+     [
+      783.6,
+      795.0
+     ],
+     [
+      977.12,
+      983.0
+     ],
+     [
+      1090.96,
+      1100.0
+     ]
+    ]
+   }
+  ],
+  [
+   "seed-shot",
+   "both",
+   4,
+   {
+    "added_total": 1.34,
+    "added_in_nudity": 0.22,
+    "added_in_clothed_intimacy_keep": 0.0,
+    "added_in_implied_uncertain": 1.12,
+    "added_in_other_keep": 0.0,
+    "nudity_covered": 44.22,
+    "nudity_total": 50.25,
+    "miss_977_983_covered": 0.0,
+    "added_spans": [
+     [
+      950.5,
+      950.72
+     ],
+     [
+      1044.0,
+      1045.12
+     ]
+    ]
+   }
+  ],
+  [
+   "seed-shot",
+   "both",
+   6,
+   {
+    "added_total": 7.22,
+    "added_in_nudity": 6.1,
+    "added_in_clothed_intimacy_keep": 0.0,
+    "added_in_implied_uncertain": 1.12,
+    "added_in_other_keep": 0.0,
+    "nudity_covered": 50.1,
+    "nudity_total": 50.25,
+    "miss_977_983_covered": 5.88,
+    "added_spans": [
+     [
+      950.5,
+      950.72
+     ],
+     [
+      977.12,
+      983.0
+     ],
+     [
+      1044.0,
+      1045.12
+     ]
+    ]
+   }
+  ],
+  [
+   "seed-shot",
+   "both",
+   8,
+   {
+    "added_total": 14.3,
+    "added_in_nudity": 6.1,
+    "added_in_clothed_intimacy_keep": 0.0,
+    "added_in_implied_uncertain": 1.12,
+    "added_in_other_keep": 7.08,
+    "nudity_covered": 50.1,
+    "nudity_total": 50.25,
+    "miss_977_983_covered": 5.88,
+    "added_spans": [
+     [
+      738.92,
+      746.0
+     ],
+     [
+      950.5,
+      950.72
+     ],
+     [
+      977.12,
+      983.0
+     ],
+     [
+      1044.0,
+      1045.12
+     ]
+    ]
+   }
+  ],
+  [
+   "seed-shot",
+   "both",
+   10,
+   {
+    "added_total": 42.8,
+    "added_in_nudity": 6.1,
+    "added_in_clothed_intimacy_keep": 9.96,
+    "added_in_implied_uncertain": 19.66,
+    "added_in_other_keep": 7.08,
+    "nudity_covered": 50.1,
+    "nudity_total": 50.25,
+    "miss_977_983_covered": 5.88,
+    "added_spans": [
+     [
+      738.92,
+      746.0
+     ],
+     [
+      900.0,
+      909.96
+     ],
+     [
+      950.5,
+      950.72
+     ],
+     [
+      977.12,
+      983.0
+     ],
+     [
+      1027.0,
+      1036.5
+     ],
+     [
+      1044.0,
+      1045.12
+     ],
+     [
+      1090.96,
+      1100.0
+     ]
+    ]
+   }
+  ],
+  [
+   "seed-shot",
+   "both",
+   12,
+   {
+    "added_total": 54.2,
+    "added_in_nudity": 6.1,
+    "added_in_clothed_intimacy_keep": 9.96,
+    "added_in_implied_uncertain": 19.66,
+    "added_in_other_keep": 18.48,
+    "nudity_covered": 50.1,
+    "nudity_total": 50.25,
+    "miss_977_983_covered": 5.88,
+    "added_spans": [
+     [
+      738.92,
+      746.0
+     ],
+     [
+      783.6,
+      795.0
+     ],
+     [
+      900.0,
+      909.96
+     ],
+     [
+      950.5,
+      950.72
+     ],
+     [
+      977.12,
+      983.0
+     ],
+     [
+      1027.0,
+      1036.5
+     ],
+     [
+      1044.0,
+      1045.12
+     ],
+     [
+      1090.96,
+      1100.0
+     ]
+    ]
+   }
+  ],
+  [
+   "seed-shot",
+   "both",
+   15,
+   {
+    "added_total": 54.2,
+    "added_in_nudity": 6.1,
+    "added_in_clothed_intimacy_keep": 9.96,
+    "added_in_implied_uncertain": 19.66,
+    "added_in_other_keep": 18.48,
+    "nudity_covered": 50.1,
+    "nudity_total": 50.25,
+    "miss_977_983_covered": 5.88,
+    "added_spans": [
+     [
+      738.92,
+      746.0
+     ],
+     [
+      783.6,
+      795.0
+     ],
+     [
+      900.0,
+      909.96
+     ],
+     [
+      950.5,
+      950.72
+     ],
+     [
+      977.12,
+      983.0
+     ],
+     [
+      1027.0,
+      1036.5
+     ],
+     [
+      1044.0,
+      1045.12
+     ],
+     [
+      1090.96,
+      1100.0
+     ]
+    ]
+   }
+  ],
+  [
+   "density-shot",
+   "start",
+   4,
+   {
+    "added_total": 0,
+    "added_in_nudity": 0.0,
+    "added_in_clothed_intimacy_keep": 0.0,
+    "added_in_implied_uncertain": 0.0,
+    "added_in_other_keep": 0.0,
+    "nudity_covered": 44.0,
+    "nudity_total": 50.25,
+    "miss_977_983_covered": 0.0,
+    "added_spans": []
+   }
+  ],
+  [
+   "density-shot",
+   "start",
+   6,
+   {
+    "added_total": 5.88,
+    "added_in_nudity": 5.88,
+    "added_in_clothed_intimacy_keep": 0.0,
+    "added_in_implied_uncertain": 0.0,
+    "added_in_other_keep": 0.0,
+    "nudity_covered": 49.88,
+    "nudity_total": 50.25,
+    "miss_977_983_covered": 5.88,
+    "added_spans": [
+     [
+      977.12,
+      983.0
+     ]
+    ]
+   }
+  ],
+  [
+   "density-shot",
+   "start",
+   8,
+   {
+    "added_total": 5.88,
+    "added_in_nudity": 5.88,
+    "added_in_clothed_intimacy_keep": 0.0,
+    "added_in_implied_uncertain": 0.0,
+    "added_in_other_keep": 0.0,
+    "nudity_covered": 49.88,
+    "nudity_total": 50.25,
+    "miss_977_983_covered": 5.88,
+    "added_spans": [
+     [
+      977.12,
+      983.0
+     ]
+    ]
+   }
+  ],
+  [
+   "density-shot",
+   "start",
+   10,
+   {
+    "added_total": 5.88,
+    "added_in_nudity": 5.88,
+    "added_in_clothed_intimacy_keep": 0.0,
+    "added_in_implied_uncertain": 0.0,
+    "added_in_other_keep": 0.0,
+    "nudity_covered": 49.88,
+    "nudity_total": 50.25,
+    "miss_977_983_covered": 5.88,
+    "added_spans": [
+     [
+      977.12,
+      983.0
+     ]
+    ]
+   }
+  ],
+  [
+   "density-shot",
+   "start",
+   12,
+   {
+    "added_total": 5.88,
+    "added_in_nudity": 5.88,
+    "added_in_clothed_intimacy_keep": 0.0,
+    "added_in_implied_uncertain": 0.0,
+    "added_in_other_keep": 0.0,
+    "nudity_covered": 49.88,
+    "nudity_total": 50.25,
+    "miss_977_983_covered": 5.88,
+    "added_spans": [
+     [
+      977.12,
+      983.0
+     ]
+    ]
+   }
+  ],
+  [
+   "density-shot",
+   "start",
+   15,
+   {
+    "added_total": 5.88,
+    "added_in_nudity": 5.88,
+    "added_in_clothed_intimacy_keep": 0.0,
+    "added_in_implied_uncertain": 0.0,
+    "added_in_other_keep": 0.0,
+    "nudity_covered": 49.88,
+    "nudity_total": 50.25,
+    "miss_977_983_covered": 5.88,
+    "added_spans": [
+     [
+      977.12,
+      983.0
+     ]
+    ]
+   }
+  ],
+  [
+   "density-shot",
+   "both",
+   4,
+   {
+    "added_total": 0.22,
+    "added_in_nudity": 0.22,
+    "added_in_clothed_intimacy_keep": 0.0,
+    "added_in_implied_uncertain": 0.0,
+    "added_in_other_keep": 0.0,
+    "nudity_covered": 44.22,
+    "nudity_total": 50.25,
+    "miss_977_983_covered": 0.0,
+    "added_spans": [
+     [
+      950.5,
+      950.72
+     ]
+    ]
+   }
+  ],
+  [
+   "density-shot",
+   "both",
+   6,
+   {
+    "added_total": 6.1,
+    "added_in_nudity": 6.1,
+    "added_in_clothed_intimacy_keep": 0.0,
+    "added_in_implied_uncertain": 0.0,
+    "added_in_other_keep": 0.0,
+    "nudity_covered": 50.1,
+    "nudity_total": 50.25,
+    "miss_977_983_covered": 5.88,
+    "added_spans": [
+     [
+      950.5,
+      950.72
+     ],
+     [
+      977.12,
+      983.0
+     ]
+    ]
+   }
+  ],
+  [
+   "density-shot",
+   "both",
+   8,
+   {
+    "added_total": 6.1,
+    "added_in_nudity": 6.1,
+    "added_in_clothed_intimacy_keep": 0.0,
+    "added_in_implied_uncertain": 0.0,
+    "added_in_other_keep": 0.0,
+    "nudity_covered": 50.1,
+    "nudity_total": 50.25,
+    "miss_977_983_covered": 5.88,
+    "added_spans": [
+     [
+      950.5,
+      950.72
+     ],
+     [
+      977.12,
+      983.0
+     ]
+    ]
+   }
+  ],
+  [
+   "density-shot",
+   "both",
+   10,
+   {
+    "added_total": 15.6,
+    "added_in_nudity": 6.1,
+    "added_in_clothed_intimacy_keep": 0.0,
+    "added_in_implied_uncertain": 9.5,
+    "added_in_other_keep": 0.0,
+    "nudity_covered": 50.1,
+    "nudity_total": 50.25,
+    "miss_977_983_covered": 5.88,
+    "added_spans": [
+     [
+      950.5,
+      950.72
+     ],
+     [
+      977.12,
+      983.0
+     ],
+     [
+      1027.0,
+      1036.5
+     ]
+    ]
+   }
+  ],
+  [
+   "density-shot",
+   "both",
+   12,
+   {
+    "added_total": 15.6,
+    "added_in_nudity": 6.1,
+    "added_in_clothed_intimacy_keep": 0.0,
+    "added_in_implied_uncertain": 9.5,
+    "added_in_other_keep": 0.0,
+    "nudity_covered": 50.1,
+    "nudity_total": 50.25,
+    "miss_977_983_covered": 5.88,
+    "added_spans": [
+     [
+      950.5,
+      950.72
+     ],
+     [
+      977.12,
+      983.0
+     ],
+     [
+      1027.0,
+      1036.5
+     ]
+    ]
+   }
+  ],
+  [
+   "density-shot",
+   "both",
+   15,
+   {
+    "added_total": 15.6,
+    "added_in_nudity": 6.1,
+    "added_in_clothed_intimacy_keep": 0.0,
+    "added_in_implied_uncertain": 9.5,
+    "added_in_other_keep": 0.0,
+    "nudity_covered": 50.1,
+    "nudity_total": 50.25,
+    "miss_977_983_covered": 5.88,
+    "added_spans": [
+     [
+      950.5,
+      950.72
+     ],
+     [
+      977.12,
+      983.0
+     ],
+     [
+      1027.0,
+      1036.5
+     ]
+    ]
+   }
+  ],
+  [
+   "pad-to-cap(naive)",
+   "start",
+   6,
+   {
+    "added_total": 35.88,
+    "added_in_nudity": 5.88,
+    "added_in_clothed_intimacy_keep": 12.0,
+    "added_in_implied_uncertain": 6.0,
+    "added_in_other_keep": 12.0,
+    "nudity_covered": 49.88,
+    "nudity_total": 50.25,
+    "miss_977_983_covered": 5.88,
+    "added_spans": [
+     [
+      740.0,
+      746.0
+     ],
+     [
+      789.0,
+      795.0
+     ],
+     [
+      889.5,
+      895.5
+     ],
+     [
+      922.5,
+      928.5
+     ],
+     [
+      977.12,
+      983.0
+     ],
+     [
+      1094.0,
+      1100.0
+     ]
+    ]
+   }
+  ],
+  [
+   "pad-to-cap(naive)",
+   "start",
+   10,
+   {
+    "added_total": 52.0,
+    "added_in_nudity": 5.88,
+    "added_in_clothed_intimacy_keep": 20.0,
+    "added_in_implied_uncertain": 9.04,
+    "added_in_other_keep": 17.08,
+    "nudity_covered": 49.88,
+    "nudity_total": 50.25,
+    "miss_977_983_covered": 5.88,
+    "added_spans": [
+     [
+      738.92,
+      746.0
+     ],
+     [
+      785.0,
+      795.0
+     ],
+     [
+      885.5,
+      895.5
+     ],
+     [
+      918.5,
+      928.5
+     ],
+     [
+      977.12,
+      983.0
+     ],
+     [
+      1090.96,
+      1100.0
+     ]
+    ]
+   }
+  ],
+  [
+   "pad-to-cap(naive)",
+   "start",
+   15,
+   {
+    "added_total": 63.4,
+    "added_in_nudity": 5.88,
+    "added_in_clothed_intimacy_keep": 26.5,
+    "added_in_implied_uncertain": 9.04,
+    "added_in_other_keep": 21.98,
+    "nudity_covered": 49.88,
+    "nudity_total": 50.25,
+    "miss_977_983_covered": 5.88,
+    "added_spans": [
+     [
+      738.92,
+      746.0
+     ],
+     [
+      783.6,
+      795.0
+     ],
+     [
+      880.5,
+      895.5
+     ],
+     [
+      913.5,
+      928.5
+     ],
+     [
+      977.12,
+      983.0
+     ],
+     [
+      1090.96,
+      1100.0
+     ]
+    ]
+   }
+  ],
+  [
+   "pad-to-cap(naive)",
+   "both",
+   6,
+   {
+    "added_total": 67.22,
+    "added_in_nudity": 6.1,
+    "added_in_clothed_intimacy_keep": 20.0,
+    "added_in_implied_uncertain": 13.12,
+    "added_in_other_keep": 28.0,
+    "nudity_covered": 50.1,
+    "nudity_total": 50.25,
+    "miss_977_983_covered": 5.88,
+    "added_spans": [
+     [
+      740.0,
+      746.0
+     ],
+     [
+      757.0,
+      763.0
+     ],
+     [
+      789.0,
+      795.0
+     ],
+     [
+      797.5,
+      803.5
+     ],
+     [
+      880.0,
+      886.0
+     ],
+     [
+      889.5,
+      895.5
+     ],
+     [
+      900.0,
+      906.0
+     ],
+     [
+      922.5,
+      928.5
+     ],
+     [
+      950.5,
+      950.72
+     ],
+     [
+      977.12,
+      983.0
+     ],
+     [
+      1027.0,
+      1033.0
+     ],
+     [
+      1044.0,
+      1045.12
+     ],
+     [
+      1094.0,
+      1100.0
+     ]
+    ]
+   }
+  ],
+  [
+   "pad-to-cap(naive)",
+   "both",
+   10,
+   {
+    "added_total": 98.3,
+    "added_in_nudity": 6.1,
+    "added_in_clothed_intimacy_keep": 31.46,
+    "added_in_implied_uncertain": 19.66,
+    "added_in_other_keep": 41.08,
+    "nudity_covered": 50.1,
+    "nudity_total": 50.25,
+    "miss_977_983_covered": 5.88,
+    "added_spans": [
+     [
+      738.92,
+      746.0
+     ],
+     [
+      757.0,
+      767.0
+     ],
+     [
+      785.0,
+      795.0
+     ],
+     [
+      797.5,
+      807.5
+     ],
+     [
+      880.0,
+      895.5
+     ],
+     [
+      900.0,
+      909.96
+     ],
+     [
+      918.5,
+      928.5
+     ],
+     [
+      950.5,
+      950.72
+     ],
+     [
+      977.12,
+      983.0
+     ],
+     [
+      1027.0,
+      1036.5
+     ],
+     [
+      1044.0,
+      1045.12
+     ],
+     [
+      1090.96,
+      1100.0
+     ]
+    ]
+   }
+  ],
+  [
+   "pad-to-cap(naive)",
+   "both",
+   15,
+   {
+    "added_total": 114.7,
+    "added_in_nudity": 6.1,
+    "added_in_clothed_intimacy_keep": 36.46,
+    "added_in_implied_uncertain": 19.66,
+    "added_in_other_keep": 52.48,
+    "nudity_covered": 50.1,
+    "nudity_total": 50.25,
+    "miss_977_983_covered": 5.88,
+    "added_spans": [
+     [
+      738.92,
+      746.0
+     ],
+     [
+      757.0,
+      772.0
+     ],
+     [
+      783.6,
+      795.0
+     ],
+     [
+      797.5,
+      812.5
+     ],
+     [
+      880.0,
+      895.5
+     ],
+     [
+      900.0,
+      909.96
+     ],
+     [
+      913.5,
+      928.5
+     ],
+     [
+      950.5,
+      950.72
+     ],
+     [
+      977.12,
+      983.0
+     ],
+     [
+      1027.0,
+      1036.5
+     ],
+     [
+      1044.0,
+      1045.12
+     ],
+     [
+      1090.96,
+      1100.0
+     ]
+    ]
+   }
+  ]
+ ]
+}

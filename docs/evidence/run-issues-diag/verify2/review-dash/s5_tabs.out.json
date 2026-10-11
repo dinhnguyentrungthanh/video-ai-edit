@@ -1,0 +1,26 @@
+{
+ "B_picker49_after_poll": [
+  "advertising"
+ ],
+ "B_posts": [
+  "/api/jobs/49/start [\"advertising\"]"
+ ],
+ "A_memory49_after_B_start": "null",
+ "A_has_start49": true,
+ "A_picker49_stale": [
+  "advertising"
+ ],
+ "A_posts": [
+  "/api/jobs/49/start [\"advertising\"]"
+ ],
+ "A_notice": "Video #49 không còn chờ thiết lập (Đang xếp hàng); không cần bắt đầu lại.",
+ "A_confirms": [],
+ "storage": {
+  "biliflow.lastDetectorScope": "[\"advertising\"]"
+ },
+ "db49": [
+  "QUEUED:advertising"
+ ],
+ "errorsA": [],
+ "errorsB": []
+}

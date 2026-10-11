@@ -1,0 +1,32 @@
+[
+  {
+    "method": "GET",
+    "path": "/",
+    "status": 200
+  },
+  {
+    "method": "GET",
+    "path": "/api/status",
+    "status": 404
+  },
+  {
+    "method": "GET",
+    "path": "/state/control-center.sqlite3",
+    "status": 404
+  },
+  {
+    "method": "GET",
+    "path": "/README.md",
+    "status": 404
+  },
+  {
+    "method": "HEAD",
+    "path": "/",
+    "status": 200
+  },
+  {
+    "method": "POST",
+    "path": "/demo-write-check",
+    "status": 405
+  }
+]

@@ -1,0 +1,8 @@
+== build_review crash
+  before crash: {'state': 'BUILDING_REVIEW', 'current_stage': 'build_review', 'active_revision': None}
+  recover_finished_stages -> [1]
+  after restart: {'state': 'WAITING_REVIEW', 'current_stage': None, 'active_revision': 2, 'error': None, 'queue_seq': None} queue_order: []
+  rerun accepted: QUEUED
+== render crash
+  recover_finished_stages -> [1]
+  after restart: COMPLETED None None order: [] final_output: ['output/movie-8a6ba32c-0d92e9f2-reviewed.mp4']

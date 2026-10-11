@@ -1,0 +1,9 @@
+Review page header with #export-notice (mock: temp/ui-plan/batch1/ui-review/mock.py new 8796, /review/102, Browser pane JS measurement, 2026-10-03)
+1280x800: header 102 px in every case (none, 'Đã xếp hàng xuất video.', 'Đang xuất video: 42,3% · còn khoảng 3 phút',
+  'Đã xuất xong: <long file name>' (238 px wide, ellipsis, full output path in title), long FAILED error, long 'Không gửi được lệnh xuất' error);
+  '← Quay lại Dashboard' stays at (1096,12).
+1536x864: header 102 px in every case, back stays at (1352,12).
+1024x768: header 145 px with or without a notice (the row already wrapped before; back on line 2 in both).
+375x812: header static, notice wraps (white-space normal) at 343x70, scrollWidth 375 (no horizontal scroll).
+Finalize flow at 1280: cancel -> panel stays open, 1 confirm, 0 requests; OK (two calls back to back) -> panel closed, button disabled while queued,
+  notice 'Đã xếp hàng xuất video.', header 102 (request count for a double click is asserted by the node harness test); server refusal (mock 400) -> panel reopened, notice 'Không gửi được lệnh xuất: …', header 102.

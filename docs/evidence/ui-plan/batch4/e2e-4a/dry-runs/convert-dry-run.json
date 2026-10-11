@@ -1,0 +1,97 @@
+{
+  "dry_run": true,
+  "to": "platform_logo",
+  "platform": {
+    "key": "iqiyi",
+    "name": "iQIYI"
+  },
+  "records": [
+    {
+      "key": "f79bae15e3bdef60445abd058854fc21f653029047a20890699485cb3956a33c:review-dd6d551760b5",
+      "status": "convertible",
+      "reason": null,
+      "logo_frames": 63,
+      "box_share": 0.0767,
+      "blur_region": {
+        "box": [
+          0.373125,
+          0.335672,
+          0.244375,
+          0.313731
+        ],
+        "method": "logo_pixels",
+        "frames": 63,
+        "padding": [
+          0.03,
+          0.03
+        ],
+        "analysis_size": [
+          320,
+          134
+        ]
+      }
+    },
+    {
+      "key": "91ee66f3fc47d548ca65fe1a188abcfadb62c4699fb8742a3dbff935ccf0cffd:review-571a51c78be4",
+      "status": "convertible",
+      "reason": null,
+      "logo_frames": 62,
+      "box_share": 0.0767,
+      "blur_region": {
+        "box": [
+          0.373125,
+          0.335672,
+          0.244375,
+          0.313731
+        ],
+        "method": "logo_pixels",
+        "frames": 62,
+        "padding": [
+          0.03,
+          0.03
+        ],
+        "analysis_size": [
+          320,
+          134
+        ]
+      }
+    },
+    {
+      "key": "9a17ba301c255947272fce71402d0de7233672d53bb2d991bf5e467bb970e779:review-bfbb9423ac85",
+      "status": "convertible",
+      "reason": null,
+      "logo_frames": 65,
+      "box_share": 0.0757,
+      "blur_region": {
+        "box": [
+          0.373125,
+          0.335672,
+          0.24125,
+          0.313731
+        ],
+        "method": "logo_pixels",
+        "frames": 65,
+        "padding": [
+          0.03,
+          0.03
+        ],
+        "analysis_size": [
+          320,
+          134
+        ]
+      }
+    },
+    {
+      "key": "f79bae15e3bdef60445abd058854fc21f653029047a20890699485cb3956a33c:review-9445dc481911",
+      "status": "refused",
+      "reason": "no_logo_frames",
+      "logo_frames": 0,
+      "box_share": null,
+      "blur_region": null
+    }
+  ],
+  "backup": null,
+  "converted": 0,
+  "automatic_edit": false,
+  "memory_sha256": "5ab0fdfd0574e1801c4fe2ed954362affec96e5aaad9038ebec8f88e67204a1f"
+}

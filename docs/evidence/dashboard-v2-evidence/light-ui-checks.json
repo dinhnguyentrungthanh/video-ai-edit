@@ -1,0 +1,44 @@
+[
+  {
+    "name": "Hovered backdrop remains translucent",
+    "pass": true
+  },
+  {
+    "name": "Scan operations preserved in main and folded sections",
+    "pass": true
+  },
+  {
+    "name": "Cancel requires confirmation and leaves job unchanged",
+    "pass": true
+  },
+  {
+    "name": "Export and review remain available with all secondary operations",
+    "pass": true
+  },
+  {
+    "name": "Mobile overview has no horizontal overflow",
+    "pass": true
+  },
+  {
+    "name": "Mobile cards stack vertically",
+    "pass": true
+  },
+  {
+    "name": "Mobile drawer fits and reports correct progress",
+    "pass": true
+  },
+  {
+    "name": "Desktop has light background, 14px titles and no overflow",
+    "pass": true,
+    "data": {
+      "bg": "rgb(243, 246, 251)",
+      "scroll": 1265,
+      "titleSize": "14px",
+      "width": 1280
+    }
+  },
+  {
+    "name": "Backdrop click closes drawer and restores page scrolling",
+    "pass": true
+  }
+]

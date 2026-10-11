@@ -1,0 +1,49 @@
+{
+  "probe": "R3 shot-cut window decode: serial vs 2 workers (threads=2 each)",
+  "windows": [
+    [
+      920.5,
+      935.5
+    ],
+    [
+      970.0,
+      985.0
+    ],
+    [
+      1000.0,
+      1015.0
+    ],
+    [
+      4003.0,
+      4018.0
+    ],
+    [
+      6812.0,
+      6827.0
+    ],
+    [
+      7270.0,
+      7285.0
+    ]
+  ],
+  "video_seconds": 90.0,
+  "frame_changes": 2244,
+  "outputs_identical": true,
+  "runs_seconds": {
+    "serial": [
+      10.182,
+      9.61
+    ],
+    "parallel_2": [
+      5.796,
+      5.728
+    ]
+  },
+  "mean_seconds": {
+    "serial": 9.896,
+    "parallel_2": 5.762
+  },
+  "speedup": 1.717,
+  "serial_realtime_factor": 9.09,
+  "note": "Other agents' CPU work was running; production R3 measured 78.07 s for 1100.5 s of windows (14.1x)."
+}
