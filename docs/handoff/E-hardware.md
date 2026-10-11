@@ -26,7 +26,19 @@
   - lệnh đo chỉ nhận root mà `allowed_project_root` cho phép;
   - bỏ chuỗi phiên bản FFmpeg chứa tên miền: hồ sơ chỉ giữ số phiên bản và SHA-256;
   - câu hỏi 2 đổi đề xuất thành "từ chối", vì kế hoạch chỉ bật cách chạy đã qua cổng.
-- **Người dùng duyệt E0 ngày 2026-10-11:** "Duyệt E0. Theo đề xuất: 1 a+b, 2 từ chối, 3 từ chối, 4 tự tạm dừng, 5 từ chối." Quyết định và hệ quả ghi ở mục 10 của `docs/HARDWARE_PROFILE.md`.
+- **E0 được người dùng duyệt ngày 2026-10-11.**
+  - Lời duyệt: "Duyệt E0. Theo đề xuất: 1 a+b, 2 từ chối, 3 từ chối, 4 tự tạm dừng, 5 từ chối."
+  - Commit: `958395c` (bản đề xuất), `e0549df` (ghi quyết định). File: `docs/HARDWARE_PROFILE.md`; quyết định và hệ quả ở mục 10.
+  - Các đề xuất người dùng đã đồng ý:
+    1. NVDEC trên driver 617.42: phép tự kiểm framemd5 của E2 làm cổng cho từng driver; trước Đợt 2, chạy lại cổng framemd5 cả phim L ở khung GPU 3 (người dùng đã cho phép đọc bản L cho lần đó).
+    2. Dòng cấu hình chưa qua cổng: từ chối trên thư mục cài thật; chỉ chạy trên root thử.
+    3. Chưa có hồ sơ khi Đợt 2 bật: từ chối job mới tới lần "Đo lại" đầu.
+    4. "Đo lại": người dùng tự tạm dừng hàng đợi; nút bị khóa kèm lý do, không có nút tự tạm dừng.
+    5. Máy nhiều GPU NVIDIA: từ chối.
+  - Kèm theo hợp đồng:
+    - `hw:{id}` chỉ ghi từ Đợt 2;
+    - các route mới và lệnh đo vào danh sách "agent không bao giờ gọi/chạy" qua C0;
+    - công tắc "Chỉ dùng CPU" ghi ngay trong E2, có hiệu lực cho job mới từ Đợt 2.
 - Chưa có code và chưa chạy test: chưa có gì để test.
 
 ## Đang dở
@@ -58,6 +70,10 @@
   - các route chỉ-PC bị từ chối khi gọi từ điện thoại.
 
 ## Chờ người dùng
+- **Đối chiếu E0 với kế hoạch (người dùng hỏi ngày 2026-10-11): một điểm lệch chờ quyết định.**
+  - Người dùng nêu: card đời chưa đo dùng cấu hình như Turing, chỉ tăng các tham số cho kết quả giống hệt (worker, số làn).
+  - E0 đã duyệt thì từ chối card chưa đo (`NO_GATED_ROW`, câu hỏi 2). `PERF_INSTALL_PLAN.md` mục 3 ý 4 và mục 4 không có câu nào cho phép dùng cấu hình Turing trên card khác.
+  - Chưa sửa gì. Chờ người dùng chọn, rồi mới đổi hợp đồng và phần `resolve()` liên quan.
 - Ở bước E2: chọn giờ cho khung GPU 3 và tạm dừng hàng đợi thật (agent không bao giờ POST `/api/scheduler`).
 - Trước Đợt 2 (không thuộc E0–E2): chạy lại cổng framemd5 cả phim L ở khung GPU 3 (câu hỏi 1, phương án b; người dùng đã cho phép đọc bản L cho lần chạy đó).
 
