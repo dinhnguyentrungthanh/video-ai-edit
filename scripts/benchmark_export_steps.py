@@ -124,11 +124,27 @@ def _import_biliflow(src: Path):
     return renderer
 
 
+def _src_sha256(src: Path) -> str:
+    """One hash of every .py file under ``src`` (relative path and bytes), in any folder."""
+    digest = hashlib.sha256()
+    for path in sorted(src.rglob("*.py")):
+        digest.update(path.relative_to(src).as_posix().encode("utf-8") + b"\0")
+        digest.update(path.read_bytes() + b"\0")
+    return digest.hexdigest()
+
+
 def _git_state(src: Path) -> dict:
+    """The code a measurement ran: its commit when ``src`` is tracked, and always its content hash."""
     def git(*args: str) -> str:
         result = subprocess.run(["git", "-C", str(src), *args], capture_output=True, text=True)
-        return result.stdout.strip()
+        # Only the line ends: porcelain lines start with a status column that may be a space.
+        return result.stdout.rstrip("\r\n")
+    state: dict[str, Any] = {"src_sha256": _src_sha256(src)}
+    # A frozen copy in an ignored folder (the baseline) belongs to no commit.
+    if not git("ls-files", "--", "biliflow/final_renderer.py"):
+        return {**state, "tracked": False}
     return {
+        **state, "tracked": True,
         "head": git("rev-parse", "HEAD"),
         "branch": git("rev-parse", "--abbrev-ref", "HEAD"),
         "dirty_files": [line[3:] for line in git("status", "--porcelain", "--", ".").splitlines()],

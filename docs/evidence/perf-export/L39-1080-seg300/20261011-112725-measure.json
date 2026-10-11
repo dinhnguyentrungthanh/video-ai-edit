@@ -1,0 +1,239 @@
+{
+  "schema_version": 1,
+  "name": "L39-1080-seg300",
+  "started_at": "2026-10-11T11:27:24+07:00",
+  "steps": {
+    "render": {
+      "tag": "measure-20261011-112725",
+      "total_seconds": 187.61,
+      "events": [
+        {
+          "step": "sha256_source_before",
+          "seconds": 0.44,
+          "bytes": 191639894
+        },
+        {
+          "step": "ffprobe",
+          "seconds": 0.046
+        },
+        {
+          "step": "ffmpeg_render",
+          "seconds": 177.547
+        },
+        {
+          "step": "ffprobe",
+          "seconds": 0.046
+        },
+        {
+          "step": "ffmpeg_decode_validation",
+          "seconds": 8.688
+        },
+        {
+          "step": "sha256_output",
+          "seconds": 0.408,
+          "bytes": 158771003
+        },
+        {
+          "step": "sha256_source_after",
+          "seconds": 0.429,
+          "bytes": 191639894
+        }
+      ],
+      "output_sha256": "a9da0a09da5666efb22f02524028041af8d00debcafcca65a48149df1a8f4355",
+      "output_bytes": 158771003,
+      "output_duration_seconds": 300.118,
+      "manifest_elapsed_seconds": 177.547,
+      "manifest_decode_validation_seconds": 8.688,
+      "manifest_video_seconds_per_processing_second": 1.691
+    },
+    "filters_null": {
+      "seconds": 127.113
+    },
+    "encode_only": {
+      "seconds": 67.21,
+      "output_bytes": 159664526
+    },
+    "decode_source": {
+      "seconds": 10.098
+    },
+    "faststart": {
+      "remux_plain": 0.241,
+      "remux_faststart": 0.273,
+      "faststart_extra_seconds": 0.032
+    },
+    "output_sha256": {
+      "seconds": 0.351,
+      "bytes": 158771003
+    },
+    "variants": {
+      "no_blur": {
+        "seconds": 9.282,
+        "blur_operations": 0
+      },
+      "long_only": {
+        "seconds": 38.279,
+        "blur_operations": 2
+      },
+      "short_only": {
+        "seconds": 85.463,
+        "blur_operations": 2
+      },
+      "no_feather": {
+        "seconds": 60.047,
+        "blur_operations": 4
+      },
+      "gblur_method": {
+        "seconds": 105.772,
+        "blur_operations": 4
+      }
+    }
+  },
+  "code": {
+    "head": "4d12a38762227a7291fb4cc3e045d3c0e20dc55e",
+    "branch": "main",
+    "dirty_files": []
+  },
+  "machine": {
+    "cpu": "Intel64 Family 6 Model 165 Stepping 2, GenuineIntel",
+    "logical_cpus": 12,
+    "platform": "Windows-10-10.0.26300-SP0",
+    "python": "3.11.16",
+    "ffmpeg": "ffmpeg version 9.0.1-essentials_build-www.gyan.dev Copyright (c) 2000-2026 the FFmpeg developers"
+  },
+  "copy": {
+    "duration_seconds": 300.1874,
+    "bytes": 191639894,
+    "width": 1920,
+    "height": 1080,
+    "video_codec": "h264",
+    "pix_fmt": "yuv420p",
+    "frame_rate": "25/1",
+    "video_bit_rate": "4910242",
+    "audio_codec": "aac",
+    "file": "input/source.mp4"
+  },
+  "origin": {
+    "job_id": 39,
+    "segment": [
+      3600.0,
+      300.0
+    ],
+    "synthetic": null,
+    "ops_from_job": 71
+  },
+  "operations": [
+    {
+      "type": "blur",
+      "start_seconds": 0.0,
+      "end_seconds": 300.187,
+      "region": {
+        "x": 56,
+        "y": 52,
+        "width": 312,
+        "height": 88
+      },
+      "blur": {
+        "sigma": 53,
+        "edge_feather_pixels": 2,
+        "edge_feather_mode": "all_edges",
+        "method": "delogo_blur_v1"
+      }
+    },
+    {
+      "type": "blur",
+      "start_seconds": 0.0,
+      "end_seconds": 300.187,
+      "region": {
+        "x": 574,
+        "y": 734,
+        "width": 774,
+        "height": 51
+      },
+      "blur": {
+        "sigma": 31,
+        "edge_feather_pixels": 2,
+        "edge_feather_mode": "all_edges",
+        "method": "delogo_blur_v1"
+      }
+    },
+    {
+      "type": "blur",
+      "start_seconds": 8.0,
+      "end_seconds": 13.08,
+      "region": {
+        "x": 704,
+        "y": 268,
+        "width": 477,
+        "height": 252
+      },
+      "blur": {
+        "sigma": 151,
+        "edge_feather_pixels": 4,
+        "edge_feather_mode": "all_edges",
+        "method": "delogo_blur_v1"
+      }
+    },
+    {
+      "type": "blur",
+      "start_seconds": 295.935,
+      "end_seconds": 299.935,
+      "region": {
+        "x": 566,
+        "y": 304,
+        "width": 807,
+        "height": 162
+      },
+      "blur": {
+        "sigma": 97,
+        "edge_feather_pixels": 4,
+        "edge_feather_mode": "all_edges",
+        "method": "delogo_blur_v1"
+      }
+    }
+  ],
+  "render_command_shape": [
+    "ffmpeg",
+    "-hide_banner",
+    "-loglevel",
+    "error",
+    "-stats_period",
+    "1",
+    "-progress",
+    "<bench>/temp/render-progress/4d14d3a7bfd7ce8beaeb.progress",
+    "-nostats",
+    "-i",
+    "<bench>/input/source.mp4",
+    "-filter_complex",
+    "<graph 2705 chars, 37 chains>",
+    "-map",
+    "[vout]",
+    "-map",
+    "[aout]",
+    "-map_metadata",
+    "0",
+    "-c:v",
+    "libx264",
+    "-preset",
+    "veryfast",
+    "-crf",
+    "20",
+    "-maxrate",
+    "84922711",
+    "-bufsize",
+    "169845422",
+    "-b:v",
+    "5646778",
+    "-pix_fmt",
+    "yuv420p",
+    "-c:a",
+    "aac",
+    "-b:a",
+    "384000",
+    "-movflags",
+    "+faststart",
+    "-max_muxing_queue_size",
+    "2048",
+    "<bench>/output/render-measure-20261011-112725.partial.mp4"
+  ],
+  "finished_at": "2026-10-11T11:38:56+07:00"
+}
