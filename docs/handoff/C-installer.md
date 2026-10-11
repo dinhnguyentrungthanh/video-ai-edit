@@ -1,20 +1,26 @@
 # Bàn giao C – Bộ cài, phần code thuần
 - Nhánh: `feat/installer` (từ `origin/main` `40a0125`) · Commit cuối: xem `git log -1` · Cập nhật: 2026-10-11
-- Chạy ở: Cloud · Trạng thái: đang làm (C0 xong, chờ người dùng duyệt; tiếp C2)
+- Chạy ở: Cloud · Trạng thái: đang làm (C0 chờ người dùng duyệt; C2 xong; tiếp C6-lõi)
 
 ## Đã xong
 - **C0:** soạn đề xuất sửa `AGENTS.md`, `LICENSE`, `THIRD_PARTY_NOTICES.md` (mục "Đề xuất C0" bên dưới). **Chưa sửa** `AGENTS.md`, chưa tạo `LICENSE`, chưa sửa `THIRD_PARTY_NOTICES.md`. Không có test (chỉ tài liệu).
+
+- **C2:** `src/biliflow/install_paths.py` mới: `install_root()` tìm file đánh dấu `biliflow-install.json` (`{"biliflow_install": 1, "layout": "source"}`, file thường, không phải liên kết, ≤ 4 KiB, giá trị phải đúng số nguyên 1) ở thư mục gần nhất trong 3 cấp trên thư mục gói (`src`, gốc checkout, thêm 1 cấp cho bố cục bản build). Không biến môi trường, không tham số. Không thấy thì `InstallRootNotFound` (không đoán). File đánh dấu được commit ở gốc repo, nên mỗi checkout/worktree vẫn là gốc của chính nó như `parents[2]` trước đây; worktree trong `temp\` mất file đánh dấu thì báo lỗi, không mượn gốc của thư mục cài chính (vì gốc đó cách 4 cấp).
+  - `recycle_bin.INSTALL_ROOT = install_root()` (nên `job_purge.INSTALL_ROOT`, `allowed_project_root`, kho phiên, trình quản lý tài khoản, bước thử tải đều theo); mặc định `--project-root` của `download_tools audit` và `--root` của `performance_report` cũng dùng `install_root()`. **Không sửa** `cli.py`, `control_center.py` (`parents[2]` ở đó đi theo B1/C-nối), `scripts/download_models.py` (để C1).
+  - Test: `tests/test_install_paths.py` 13 test OK (gốc checkout = `parents[2]` như cũ; worktree tự là gốc; worktree mất file đánh dấu không mượn gốc chính; giới hạn 3 cấp; file đánh dấu sai/thư mục/liên kết bị từ chối; biến môi trường không đổi được gốc; `allowed_project_root` giữ nghĩa; không stage nào trong `CACHEABLE_STAGES` đọc các file đã sửa).
+  - Khóa cache: so `stage_source_paths` + SHA-256 từng file của cả 10 stage giữa `origin/main` và nhánh này: **giống hệt**. File đánh dấu không nằm trong danh sách `_tree_fingerprint`.
+  - Test liên quan trên Linux: `test_recycle_bin`, `test_job_delete`, `test_source_cleanup`, `test_download_tools`, `test_performance_report`: 156 test, 24 fail + 26 error **giống hệt trên `origin/main`** (test chỉ chạy trên Windows: ctypes/Thùng rác/ACL). PC chạy lại ở G1.
 
 ## Đang dở
 - (trống)
 
 ## Bước tiếp theo
-1. C2: `install_root()` bằng file đánh dấu.
-2. C6-lõi: `activation.py`, công cụ cấp key ngoài gói, cặp khóa test.
-3. C1: script chỉ đọc tạo `config/models.lock.json`, cập nhật `scripts/download_models.py` theo lock.
+1. C6-lõi: `activation.py`, công cụ cấp key ngoài gói, cặp khóa test.
+2. C1: script chỉ đọc tạo `config/models.lock.json`, cập nhật `scripts/download_models.py` theo lock.
 
 ## Cách kiểm
 - C0: người dùng đọc mục "Đề xuất C0".
+- C2: `python -m unittest tests.test_install_paths -v` (PC: `.venv` của thư mục cài, `PYTHONPATH` trỏ vào `src` của worktree); cổng: khóa cache mọi stage không đổi.
 
 ## Chờ người dùng
 - Duyệt C0 (ba khối A, B, C bên dưới). Sau khi duyệt, session nào áp dụng thì chép nguyên văn; điền tên chủ sở hữu vào `LICENSE`.
@@ -24,6 +30,8 @@
 - PC chạy Python 3.11 (`pyproject.toml`: `>=3.11,<3.12`): không dùng cú pháp 3.12+.
 - Không sửa: `scheduler.py`, `final_renderer.py`, `job_pipeline.py`, module quét, `control_center.py`, `cli.py`, `__main__.py`, `__init__.py`, `run.ps1`, `env.ps1`, `stage_cache.py`, `cache_dependencies.py`, `pyproject.toml`, `config/*` (trừ file lock mới), `models\`.
 - Không bao giờ tạo hay đưa khóa bí mật thật vào repo.
+- C5 (bộ cài) phải ghi `biliflow-install.json` ở gốc thư mục cài **trước** khi chạy bất kỳ code BiliFlow nào; C4 phải giữ gói `biliflow` trong 3 cấp dưới gốc cài (`MAX_LEVELS_ABOVE_PACKAGE`).
+- Môi trường cloud: Python 3.13 hệ thống, không có `.venv`; `pycryptodomex==3.23.0` (đúng bản trong lock) cài vào venv tạm của session để chạy test C6.
 
 ---
 

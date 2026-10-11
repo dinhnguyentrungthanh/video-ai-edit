@@ -8,6 +8,8 @@ from contextlib import closing
 from datetime import datetime
 from pathlib import Path
 
+from biliflow.install_paths import install_root
+
 
 def summarize_job(root: Path, job_id: int) -> dict:
     root = root.resolve(strict=True)
@@ -97,7 +99,7 @@ def summarize_job(root: Path, job_id: int) -> dict:
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--root", type=Path, default=Path(__file__).resolve().parents[2])
+    parser.add_argument("--root", type=Path, default=install_root())
     parser.add_argument("--job-id", type=int, required=True)
     args = parser.parse_args()
     print(json.dumps(summarize_job(args.root, args.job_id), ensure_ascii=False, indent=2))
