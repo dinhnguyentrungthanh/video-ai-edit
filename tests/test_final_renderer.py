@@ -164,8 +164,10 @@ class FinalRendererTests(unittest.TestCase):
             ],
             duration=10, has_audio=False, frame_size=(1280, 534),
         )
+        enable = "enable='between(t,2.000000,8.000000)'"
         self.assertIn(
-            "crop=554:124:369:195,delogo=x=8:y=8:w=538:h=108,crop=538:108:8:8,gblur=sigma=65",
+            f"crop=554:124:369:195,delogo=x=8:y=8:w=538:h=108:{enable},crop=538:108:8:8,"
+            f"gblur=sigma=65:{enable}",
             graph,
         )
         self.assertEqual(graph.count("delogo="), 1)
