@@ -1,6 +1,6 @@
 # Bàn giao E – Hồ sơ phần cứng
 - Nhánh: `feat/hardware-profile` (từ `origin/main` `40a0125`, không theo dõi nhánh từ xa nào) · Commit cuối: xem `git log -1` · Cập nhật: 2026-10-11
-- Chạy ở: PC (`E:\DungChung\BiliFlow\temp\wt-hardware-profile`) · Trạng thái: **E0 đã duyệt (2026-10-11); tiếp theo E1**
+- Chạy ở: PC (`E:\DungChung\BiliFlow\temp\wt-hardware-profile`) · Trạng thái: **E0 đã duyệt, phương án D đã chọn, E1 xong (2026-10-11); tiếp theo E2**
 
 ## Đã xong
 - **Chuẩn bị:**
@@ -57,16 +57,21 @@
 
   Hợp đồng đã cập nhật theo các điểm này.
 
+- **E1 xong (2026-10-11), theo phương án D.** Module (không module nào nằm trong closure stage; khóa cache của 10 stage giống hệt `40a0125`):
+  - `hardware_schema.py`: lớp file, schema mục 3.2–3.6, `classify_attempt`, bộ làm sạch chuỗi lỗi;
+  - `hardware_profile.py`: kiểu, `choose`, `speed_arguments`, `LEGACY_KNOBS`, `freeze_value`/`parse_frozen`;
+  - `hardware_resolve.py`: `resolve()` tách riêng (thứ tự quyết định mục 7.1, đường chưa qua cổng mục 5.6, bước 4 đổi lần đo lỗi của card không có mã torch thành `arch_unsupported`/`driver_too_old`);
+  - `hardware_table.py`: dòng 1 Turing `gated`, dòng CPU `ungated` (`runnable_after = "E3"`), `nvidia-untested` và `nvidia-untested-fast`, `CUDA_DRIVER_MIN = {"cu126": "561.17"}`;
+  - `hardware_detect.py` và `hardware_system.py` (lớp truy cập Windows): `detect()`, `observe()`, tiến trình cháu `torch-probe`.
+  - **Test:** 191 test `test_hardware_*` (gồm phép so nguyên bộ argv trên `pipeline_stages` thật, lưới `resolve()` 256 root × 12 quan sát, hai test đầu-cuối detect → hồ sơ → resolve cho RTX 2060 và cho một card Ampere giả), cộng `test_cache_dependencies` và `test_job_purge`: qua. Tiến trình torch thật chưa chạy lần nào (theo luật); lần chạy đầu là phép đo E2.
+  - **Cả bộ test** (clip tổng hợp 1 s trong `input\` của worktree, đã xóa): 2838 test, 35 bỏ qua. Ba module E2E tài khoản nguồn lỗi ở `setUpModule` vì TEMP/TMP của shell nằm ngoài thư mục cài (lỗi môi trường, không do E1). Chạy lại với `TEMP=TMP=E:\DungChung\BiliFlow\temp`: 12 test qua.
+  - **Cách làm:** workflow (cài song song, review bốn góc mỗi nhóm, mỗi phát hiện một bước kiểm chứng, sửa, tích hợp): 42 phát hiện, 20 được xác nhận và đã sửa; tài liệu được chỉnh theo code (mục 3.2, 4.1, 4.2, 6.3, 7.1, 8, 9).
+
 ## Đang dở
 - (trống)
 
 ## Bước tiếp theo
-1. **E1:**
-   - `hardware_profile.py`: schema, `resolve`/`choose`, `speed_arguments`, `LEGACY_KNOBS`, `freeze_value`/`parse_frozen`;
-   - `hardware_table.py`: hash `ffmpeg.exe` cho `nvdec_verified`, đọc ở thư mục cài, chỉ đọc;
-   - `hardware_detect.py`: `detect()`, `observe()`;
-   - test (giả lập, không GPU), rồi commit.
-2. **E2:**
+1. **E2:**
    - `hardware_measure.py`, `hardware_manager.py`, `scripts/hardware-measure.ps1`;
    - route, `phone_access`, `dashboard_v2/hardware-view.js` (chỉ nạp trong `live.html`);
    - test;
@@ -77,7 +82,7 @@
 
 ## Cách kiểm
 - **Lệnh test:** `E:\DungChung\BiliFlow\.venv\Scripts\python.exe -m unittest discover -s tests -p "test_hardware_*.py" -v`, với `PYTHONPATH=<worktree>\src`.
-- **Trước khi bàn giao:** chạy cả bộ, với một clip tổng hợp 1 s trong `input\` của worktree; xóa clip sau đó.
+- **Trước khi bàn giao:** chạy cả bộ, với một clip tổng hợp 1 s trong `input\` của worktree; xóa clip sau đó. Đặt `TEMP` và `TMP` là `E:\DungChung\BiliFlow\temp` (như `env.ps1`), nếu không ba module E2E tài khoản nguồn từ chối chạy.
 - **Cổng của E1–E2:**
   - không khóa cache stage nào đổi: `stage_source_paths` của 10 stage giống hệt ở `40a0125` và HEAD; `tests.test_cache_dependencies` qua;
   - dòng lệnh không đổi: test so nguyên bộ argv (mục 8 ý 4 của tài liệu), và các test hiện có ghim dòng lệnh vẫn qua;
@@ -91,6 +96,9 @@
   2. thêm từ chối `VRAM_TOO_SMALL` khi VRAM nhỏ hơn 6144 MiB;
   3. khi công tắc có hiệu lực, cả ba họ Turing đều tắt TF32;
   4. công tắc gắn với card lúc bật.
+- **Hai câu nhỏ về nhãn và lời từ chối** (đã làm theo hợp đồng, đổi được):
+  - card Turing chỉ khác bản torch hay driver cũng mang nhãn "Chưa qua cổng trên đời card này (sm_75)", vì mục 5.6 ghi "mọi lựa chọn trên đường này";
+  - lần đo lỗi với bản torch chưa có trong `CUDA_DRIVER_MIN` giữ `cuda_unavailable` ở bước 4; bước 8 thì từ chối `driver_too_old` ("chưa biết driver tối thiểu").
 - Ở bước E2: chọn giờ cho khung GPU 3 và tạm dừng hàng đợi thật (agent không bao giờ POST `/api/scheduler`).
 - Trước Đợt 2 (không thuộc E0–E2): chạy lại cổng framemd5 cả phim L ở khung GPU 3 (câu hỏi 1, phương án b; người dùng đã cho phép đọc bản L cho lần chạy đó).
 
@@ -107,6 +115,10 @@
   - Dùng `.venv` của thư mục cài.
   - Với `.ps1`, truyền `-Python` và `-ProjectRoot`.
   - Trước lần đo thật, chép `ffmpeg.exe` và `ffprobe.exe` của thư mục cài vào `<worktree>\tools\ffmpeg\bin` (đã gitignore).
+- **Cho E2, từ bước tích hợp E1:**
+  - manager gọi `observe()` với đúng `detection.ffmpeg.path` của hồ sơ, nếu không `ffmpeg_changed` sẽ báo sai;
+  - `warnings` của GET ghép từ `Resolution.warnings`, `Resolution.caveats` và `FamilyOption.warnings`, bỏ trùng (`untested_fast_on` có ở cả hai chỗ đầu; `c1_off_fp32` chỉ nằm trong họ);
+  - ghi chú chỉ-đọc cho E2 nằm trong scratchpad của session (`e2\read-*.md`), không nằm trong repo; session khác phải đọc lại code.
 - **Test không bao giờ giữ tên mutex thật** (`Local\BiliFlowGpuInference`, `Local\BiliFlowFinalRender`). Dùng `Local\BiliFlowTest-<uuid>`, truyền bằng tham số hàm, không bao giờ qua dòng lệnh hay biến môi trường.
 - **Control Center thử:**
   - lệnh: `python -m biliflow.control_entry --project-root <worktree>\temp\hw-cc-* --port 8798 --no-import-existing`, giống `Start-BiliFlow.ps1`. Không chạy qua `cli.py`, vì như vậy sẽ kéo torch vào;
