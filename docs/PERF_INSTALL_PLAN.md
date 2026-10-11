@@ -814,6 +814,21 @@ Báo tôi rõ: sau khi cập nhật thư mục chính và khởi động lại C
 Cập nhật mục 11, CHANGELOG.md, docs/PROJECT_STATUS.md, docs/SESSION_HANDOFF.md. Chỉ push main và cập nhật thư mục chính khi tôi đồng ý và Control Center không có job.
 ```
 
+### 12.6 Khi một session Phase 1 xong sớm: làm tiếp trên nhánh xếp chồng
+
+Session nào xong Phase 1 trước (ví dụ E, C) thì **không phải chờ G1**:
+
+1. Giữ nguyên nhánh Phase 1 ở commit đã đạt cổng. G1 sẽ gộp đúng commit đó.
+2. Ngay trong worktree đó, tạo **nhánh xếp chồng** cho Phase 2 bằng `git switch -c <nhánh>-p2`:
+   - `feat/hardware-profile-e3`;
+   - `feat/installer-build`.
+   
+   Từ đây chỉ commit vào nhánh mới.
+3. **Không sửa vùng mà session Phase 1 còn chạy đang sửa.** Ví dụ A đang sửa `_select`/`queue_order` trong `scheduler.py`; E3 chỉ được sửa `configure_and_queue` và phần liên quan.
+4. **Sau G1:** khi người dùng báo, chạy `git merge origin/main` vào nhánh xếp chồng (không rebase).
+5. **Nhánh xếp chồng chỉ được gộp ở G2.** E3 sửa module quét, nên phải vào cùng đợt với B1 để cache chỉ bị tính lại một lần.
+6. **Session cloud C dừng hẳn.** Từ đây chỉ session C trên PC commit vào `feat/installer` và `feat/installer-build`.
+
 ## 13. Bàn giao: để không mất việc khi session dừng (nhất là cloud hết credit)
 
 ### 13.1 Quy tắc
