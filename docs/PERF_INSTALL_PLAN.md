@@ -1,287 +1,330 @@
 # Kế hoạch: xuất và quét nhanh hơn, tự nhận diện phần cứng, bộ cài, kích hoạt
 
-- Ngày lập: 2026-10-11 (Asia/Bangkok). Bản nháp, chờ review trước khi giao việc.
+- Ngày lập: 2026-10-11 (Asia/Bangkok).
+- Bản 2: đã sửa theo hai lượt review đối chiếu với code. Chờ người dùng duyệt rồi mới giao việc.
 - Base: `main` `d477c70`.
 - Nhánh tài liệu: `docs/perf-install-plan`.
-- Repo đang công khai: tài liệu này không ghi tên phim, link hay tên miền thật. Phim tham chiếu được gọi theo nhãn:
-  - **L196**: phim người đóng dài khoảng 196 phút.
-  - **H110**: phim hoạt hình dài khoảng 110 phút.
-  - **T45**: một tập phim bộ khoảng 45 phút.
+- Repo từng công khai, nên tài liệu, code, test và commit **không ghi tên phim, tên file nguồn, link hay tên miền thật**. Tên report và tên bản xuất lấy từ tên file nguồn, nên cũng không được dán vào.
+- Khi báo kết quả, mọi session chỉ ghi số job, revision và nhãn:
+  - **L**: phim người đóng dài dùng làm tham chiếu;
+  - **H**: phim hoạt hình dùng làm tham chiếu;
+  - **T**: một tập phim bộ khoảng 45 phút.
 
-Đọc theo thứ tự: `AGENTS.md`, file này, rồi mục của session mình (mục 4–8).
+Đọc theo thứ tự: `AGENTS.md`, mục 1–3 của file này, rồi mục của session mình.
 
 ## 1. Quyết định của người dùng (2026-10-10 / 2026-10-11)
 
-1. **Xuất video nhanh hơn và quét nhanh hơn**, nhưng chất lượng và kết quả duyệt giữ nguyên.
-2. **Không hardcode cấu hình.** Xuất và quét phải tự nhận diện cấu hình máy và chọn cách chạy tốt nhất, giống như bộ cài tự nhận diện máy.
-3. **Chạy được trên máy không có card đồ họa.** Phải chấp nhận vì nhiều máy không có card. Chất lượng giữ nguyên, chậm hơn là chấp nhận được.
-4. **Máy test:** chưa có máy riêng. Đường chạy CPU được kiểm trên PC chính bằng công tắc "Chỉ dùng CPU". Card AMD và đồ họa Intel tích hợp làm sau, khi có máy test.
+1. **Xuất video và quét nhanh hơn,** nhưng chất lượng và kết quả duyệt giữ nguyên.
+2. **Không hardcode cấu hình.** Xuất và quét tự nhận diện cấu hình máy và chọn cách chạy tốt nhất, giống bộ cài.
+3. **Chạy được trên máy không có card đồ họa,** chậm hơn là chấp nhận được.
+4. **Chưa có máy test riêng.** Đường chạy CPU được kiểm trên PC chính bằng công tắc "Chỉ dùng CPU". Card AMD và đồ họa Intel tích hợp làm khi có máy test.
 5. **Bộ cài `.exe`:**
    - hỏi thư mục cài và dựng cấu trúc thư mục giống bản hiện tại;
-   - code phải được bảo vệ để không bị lấy cắp;
-   - model được **tải lúc cài**;
-   - build ở nơi nhanh và tiện nhất: GitHub Actions (Windows);
+   - bảo vệ code;
+   - **tải model lúc cài**;
+   - build trên GitHub Actions;
    - **không mua chữ ký số**: hướng dẫn cài ghi rõ bấm "Thông tin thêm → Vẫn chạy".
 6. **Kích hoạt** bằng key gắn với mã máy:
-   - có **key theo tháng** và **key vĩnh viễn**, cấp theo bộ;
+   - **key theo tháng** và **key vĩnh viễn**, cấp theo bộ;
    - miễn phí, không có máy chủ;
-   - **không có key thì không làm gì cả**: chỉ hiện trang kích hoạt.
-7. **Driver NVIDIA đã cập nhật** lên Studio 617.42. Bản FFmpeg trong `tools\ffmpeg` có `h264_nvenc`/`hevc_nvenc`, và lệnh encode thử bằng `h264_nvenc` chạy được.
-8. **Phụ đề và dịch:** tạm dừng, làm sau. Nhánh `feat/read-audio-add-text` chưa có commit.
+   - **không có key thì không làm gì cả.**
+7. **Driver NVIDIA đã cập nhật** lên Studio 617.42. FFmpeg trong `tools\ffmpeg` có `h264_nvenc`/`hevc_nvenc` và encode thử được.
+8. **Phụ đề và dịch:** tạm dừng.
 9. **Mỗi session đo trước rồi mới sửa,** và báo số đo trước/sau trên máy thật.
+10. **Repo:** người dùng sẽ chuyển sang Private. **Bắt buộc xong trước khi GitHub Actions tạo bản build đầu tiên** (mục 7, C7).
 
 ## 2. Hiện trạng đã kiểm trên code (`main` d477c70)
 
 ### 2.1 Xuất video
 
-- **Một hàng đợi và một worker cho cả quét lẫn xuất** (`scheduler.py:121`, `:681`, `:703-716`).
-  - Lệnh xuất bị đưa xuống cuối hàng (`queue_render` dùng `reseq=True`, `scheduler.py:553-563`).
-  - Vì vậy bản xuất phải chờ mọi stage còn lại của mọi video quét xếp trước nó.
-- **Encode bằng CPU.**
-  - `libx264 -preset veryfast -crf 20`, có giới hạn dung lượng qua `-maxrate`/`-bufsize`.
-  - Âm thanh luôn encode lại AAC 384 kb/s.
-  - Không dùng `-hwaccel`. Manifest ghi `"gpu_used": false` (`final_renderer.py:592-614`, `:701`).
-- **Bộ lọc làm mờ một vùng nhỏ:** `enable=` chỉ đặt ở `overlay` cuối (`blur_filter.py:97`, `:140`). Nhánh crop → delogo → gblur → geq → alphamerge có thể đang chạy trên mọi khung của cả đoạn, không chỉ trong khoảng làm mờ. Đây là suy luận, **chưa đo**.
+- **Một worker cho cả quét lẫn xuất.**
+  - `scheduler.py:141-145` chỉ giữ một `_process`, `_active`, `_log_handle` và `_executing_job_id`.
+  - Lệnh xuất được đưa xuống cuối hàng: `queue_render` dùng `reseq` khi job không ở QUEUED (`scheduler.py:553-563`).
+  - `priority` sắp xếp `queued_jobs` trước `queue_seq` (`job_store.py:487`), nhưng giao diện không có chỗ đặt.
+- **Lệnh FFmpeg** (`final_renderer.py:592-614`):
+  - `libx264 -preset veryfast -crf 20`, có trần `-maxrate`/`-bufsize`. `-crf` lấn át `-b:v`.
+  - Âm thanh AAC 384 kb/s.
+  - Không dùng `-hwaccel`.
+  - Các chuỗi encoder và `"gpu_used": false` trong manifest đang viết cứng (`:689-701`).
+- **Số đo cũ:** 6,586× thời gian thực trên một tập 3.559 s (`docs/TEST_RESULTS.md:37`).
+  - Con số đó là `elapsed` của riêng lệnh FFmpeg, gồm cả bộ lọc và encode (`final_renderer.py:614-616`). Nó không gồm bước kiểm tra sau xuất.
+  - Trên PC (2026-10-11), riêng encode x264 trên một đoạn 2 phút **ít chuyển động** đạt 36×.
+  - Khoảng cách giữa hai con số nằm ở bộ lọc, ở nội dung video, hoặc ở cả hai. A0 phải đo trên **cùng một video**.
+- **Bộ lọc làm mờ một vùng:** `enable=` chỉ đặt ở `overlay` cuối (`blur_filter.py:97`, `:140`). Nhánh crop → delogo → gblur → geq → alphamerge có thể chạy trên mọi khung của cả đoạn. Chưa đo.
 - **Sau khi encode:**
-  - giải mã lại toàn bộ file bằng CPU để kiểm tra (`final_renderer.py:642-656`);
-  - hash SHA-256 bản xuất và video gốc;
-  - `+faststart` ghi lại file một lần nữa.
-- **Số đo cũ:** 6,6–8,2× thời gian thực, trên video 1280 px (`docs/TEST_RESULTS.md`).
-- **Thử trên máy bạn (2026-10-11):** riêng bước encode x264 trên một đoạn 2 phút ít chuyển động đạt 36×. Khoảng cách lớn so với 6,6–8,2× là lý do phải đo từng bước trước (A0).
+  - giải mã toàn bộ bằng CPU để kiểm tra (`:642-656`);
+  - hash SHA-256 bản xuất, video gốc trước và sau khi render (`:533`, `:660-661`);
+  - `+faststart`.
+- **Bằng chứng để xóa hay lưu trữ video gốc:** `export_identity.manifest_problem` (`export_identity.py:188-233`) chỉ kiểm trạng thái, hash, `full_decode_validation_passed` và các thao tác render. **Encoder không nằm trong bằng chứng này.**
 
 ### 2.2 Quét
 
-Số đo mới nhất, card RTX 2060, "Tăng tốc xử lý" bật:
-
-| Phim | Phạm vi quét | Thời gian |
+| Phim | Phạm vi quét | Thời gian (RTX 2060, "Tăng tốc xử lý" bật) |
 |---|---|---|
-| L196 | chỉ quảng cáo | 866,6 s |
-| L196 | cả 4 nhóm | 2.507 s (đo trước một số tối ưu sau đó) |
-| H110 | cả 4 nhóm | 950,1 s |
+| L | chỉ quảng cáo | 866,6 s |
+| L | cả 4 nhóm | 2.507 s (đo trước một số tối ưu sau đó) |
+| H | cả 4 nhóm | 950,1 s |
 
-- **Đã làm hoặc đã loại có số đo:** xem `docs/SCAN_PERFORMANCE.md` và `docs/CLAUDE_SCAN_OPTIMIZATION_HANDOFF.md`. Không đề xuất lại các hướng đã loại.
-- **Hướng còn lại, chưa làm:**
-  - **L3:** giải mã bằng NVDEC cho stage 18+ và `live_safety`. Hai stage này đang nghẽn CPU (GPU khoảng 5%, CPU 99,7%).
-  - **L4:** gộp lượt giải mã của 18+ vào lượt chung của `live_safety`. Tài liệu ước tính 5–10 phút trên L196.
-  - **Khởi động stage:** `cli.py:8-43` nạp mọi module quét (torch, transformers, timm) ở đầu file, nên stage nào cũng tốn thời gian này, kể cả `build-review` và `render-final`. Chưa đo.
-  - **Hash video gốc:** preflight hash tuần tự (khoảng 17 s trên L196), sau đó các stage còn hash lại trong nền.
-- **Giải mã toàn bộ phim mỗi job:**
-  - phim người đóng: 4 lần;
-  - phim hoạt hình: 3 lần;
-  - phim hỗn hợp: 5 lần.
-  
-  Chỉ luồng routing chạy kèm trong stage OCR dùng NVDEC, và chỉ với h264/yuv420p (`nvdec.py:16`).
-- **Mọi stage chạy lần lượt trên một worker.** Cờ `uses_gpu` không được scheduler đọc.
+- **Đã làm hoặc đã loại có số đo:** `docs/SCAN_PERFORMANCE.md`, `docs/CLAUDE_SCAN_OPTIMIZATION_HANDOFF.md`. Không đề xuất lại các hướng đã loại.
+- **Hướng còn lại:**
+  - **L3:** giải mã bằng NVDEC cho stage 18+ và `live_safety`. Số "GPU khoảng 5%, CPU 99,7%" chỉ đo trên stage 18+, trước L1/L2, và gồm cả bộ xử lý ảnh trên CPU (`CLAUDE_SCAN_OPTIMIZATION_HANDOFF.md:782`).
+  - **L4:** gộp lượt giải mã của 18+ vào `live_safety`. Tài liệu ước tính 5–10 phút trên L.
+  - **Khởi động stage:** `cli.py:8-43` nạp mọi module quét ở đầu file. Chưa đo.
+  - **Hash video gốc:** preflight hash tuần tự (khoảng 17 s trên L), sau đó các stage còn hash lại.
+- **NVDEC:**
+  - chỉ được chứng minh giống hệt pixel cho chuỗi OCR và routing, với h264/yuv420p;
+  - `nvdec.py:40-60` chỉ kiểm danh sách cho phép và giải mã thử một khung;
+  - chuỗi 18+ (448 px, scaler mặc định, có pad; `scanner.py:436-445`) và `live_safety` (256 px, split/hstack; `live_safety_scanner.py:148-160`) **chưa có phép thử giống hệt nào**.
+- **Mọi stage chạy lần lượt trên một worker.** Cờ `uses_gpu` không được đọc.
 
-### 2.3 Cấu hình đang viết cứng (yêu cầu số 2 muốn bỏ)
+### 2.3 Cấu hình đang viết cứng
 
 - `job_pipeline.py:129-155`:
   - `FAST_SCAN_OCR_BATCH_SIZE = 8`, `FAST_SCAN_OCR_FRAME_WINDOW = 4`, `FAST_SCAN_LOGO_ROUTING_WORKERS = 3`;
   - các precision `fp16`;
   - `--logo-decode nvdec`.
-- `--device cuda` viết cứng ở 11 chỗ trong `job_pipeline.py:238-392`. Loader báo lỗi khi không có CUDA (ví dụ `scanner.py:421-422`).
-- Encoder `libx264` và các tham số encode viết cứng trong `final_renderer.py`.
-- Đường dẫn FFmpeg `tools\ffmpeg\bin\ffmpeg.exe` viết cứng ở khoảng 34 chỗ.
+- `--device cuda` viết cứng ở 11 chỗ (`job_pipeline.py:238-392`).
+- Encoder và tham số encode viết cứng trong `final_renderer.py`.
+- Đường dẫn FFmpeg viết cứng ở khoảng 39 chỗ trong `src`, trong đó 20 chỗ nằm ở `cli.py` và `stage_cache.py`.
+- **Mức giống nhau của từng tham số:**
+
+| Tham số | Kết quả khi đổi giá trị |
+|---|---|
+| Số worker routing (`RoutingPool`) | Giống hệt |
+| OCR batch 8 + cửa sổ 4 | **Không** giống hệt từng byte: điểm lệch tối đa 2,1e-5 (`SCAN_PERFORMANCE.md:129-131`). Chỉ giống ở mức danh sách duyệt |
+| Precision fp16 | Chỉ giống ở mức danh sách duyệt |
+
+  Mọi cổng kiểm tra đều mới chạy trên **một** card RTX 2060.
 
 ### 2.4 Chạy trên CPU
 
-- **CLI đã có `--device {cuda,cpu}`**, và có nhánh float32 cho một số model. Nhưng:
-  - Cờ fp16 của "Tăng tốc xử lý" báo lỗi trên CPU (`textscan.py:542-543`, `animation_safety_scanner.py:167`, `live_safety_scanner.py:92`).
-  - `autocast` viết cứng `device_type="cuda"` (`ocr_precision.py:31`, `animation_safety_scanner.py:272`, `live_safety_scanner.py:230`).
-  - **Lỗi:** `scripts/localize_visual_logo_report.py:134-135` luôn ép `pixel_values` sang float16, nên Florence trên CPU (float32) sẽ lỗi.
-  - **Luật máu anime C1** chỉ chạy khi report là fp16 (`gore_triage.py:61-65`, `GORE_TRIAGE_SCAN_PRECISION = "fp16"`). Trên CPU fp32, C1 sẽ không di chuyển thẻ nào, tức hành vi duyệt khác máy có card.
-- **NVDEC tự quay về CPU** khi không dùng được (`nvdec.py:41-60`). NVML là tùy chọn.
-- **Ước tính của tôi, chưa đo:**
-  - Florence trên CPU mất 7–11 s mỗi khung (`docs/ADULT_FALSE_ALARM_PLAN.md`).
-  - Một phim như L196 quét cả 4 nhóm trên CPU có thể mất nhiều giờ.
+- **CLI đã có `--device {cuda,cpu}`.** Nhưng:
+  - Cờ fp16 báo lỗi trên CPU (`textscan.py:541-542`, `animation_safety_scanner.py:167`, `live_safety_scanner.py:92`).
+  - `autocast` viết cứng `"cuda"` (`ocr_precision.py:31`, `animation_safety_scanner.py:272`, `live_safety_scanner.py:230`).
+  - **Lỗi:** `scripts/localize_visual_logo_report.py:134-135` luôn ép float16, nên Florence lỗi trên CPU.
+  - **Trên CUDA, Florence, Qwen2-VL và text-semantics luôn nạp trọng số fp16** (`vlm_confirmation.py:177`, `text_semantics.py:62`, `:136`, `visual_logo_scanner.py:1789`, `ad_candidate_pipeline.py:295`, `:389`). Vì vậy CPU fp32 khác GPU ở cả `confirm_violence` và `localize_logo`, không chỉ ở ba cờ fp16.
+  - **Luật máu anime C1** chỉ chạy khi report là fp16 (`gore_triage.py:114`). Trên CPU, C1 không di chuyển thẻ nào.
+- **Ước tính, chưa đo:** Florence trên CPU mất 7–11 s mỗi khung. Quét cả 4 nhóm trên CPU có thể mất nhiều giờ.
 
 ### 2.5 Cài đặt và đóng gói
 
-- **Thư mục gốc không viết cứng.** Nó lấy theo vị trí file: `Path(__file__).resolve().parents[2]` ở `cli.py:47`, `recycle_bin.py:60` (`INSTALL_ROOT`), `job_purge.py:36`, `control_center.py:125`; trong PowerShell là `Split-Path -Parent $PSScriptRoot`.
-  - `INSTALL_ROOT` còn là **chốt an toàn khi xóa**: `job_purge.allowed_project_root` từ chối mọi root khác install root hoặc thư mục `temp` bên trong nó.
+- **Thư mục gốc lấy theo vị trí file:**
+  - `parents[2]` ở `cli.py:47`, `recycle_bin.py:60` (`INSTALL_ROOT`), `download_tools.py:180`, `performance_report.py:100`, `scripts/download_models.py:330`;
+  - `control_center.py:125` là `DASHBOARD_V2_DIR`;
+  - `job_purge.py:36` dùng lại `recycle_bin.INSTALL_ROOT`.
+- **`job_purge.allowed_project_root` (`:103-111`) là chốt an toàn.** Nó chặn các hàm xóa, và chặn cả kho phiên tài khoản nguồn (`download_account_vault.py:180`), trình quản lý tài khoản (`download_accounts.py:230`) và bước thử tải (`download_account_probe.py:210`).
 - **Chưa có script cài đặt.**
-  - Python nằm trong `runtime\python`, cài qua uv. `.venv` dùng `requirements.lock.txt` với `torch==2.14.0+cu126`.
-  - Florence có runtime riêng (`runtime\florence-python`, transformers 4.49.0).
-  - Ngoài ra cần FFmpeg 9.0.1 (bản build **GPLv3**) và Deno.
-- **Model không ghim phiên bản lúc tải.**
-  - `scripts/download_models.py:354` lấy revision mới nhất rồi mới ghi vào manifest.
-  - Qwen2-VL-2B (khoảng 4,4 GB) không có script tải.
-  - EasyOCR tải không kiểm checksum.
-- **Khóa cache quét đọc mã nguồn `.py`:** `cache_dependencies.py` parse AST của `src/biliflow/*.py`. Code đã biên dịch thì không còn file `.py` để đọc.
-- **Mỗi stage chạy qua** `powershell -File scripts\run.ps1` → `python -m biliflow`.
-- **Phần chỉ chạy trên Windows:** Thùng rác, `msvcrt`, DPAPI, ACL, Edge/Playwright.
-- **Tài khoản nguồn phim** (vào `main` ngày 2026-10-11): phiên đăng nhập được mã hóa bằng DPAPI theo tài khoản Windows, nằm trong `state\source-accounts\<SID>\`, với ACL riêng do kho phiên tự tạo. Phiên này **không chép sang máy khác được**: máy mới phải đăng nhập lại.
-- **Repo công khai và không có file LICENSE.** `pycryptodomex 3.23.0` đã có sẵn trong `requirements.lock.txt` (đi kèm yt-dlp) và có Ed25519, nên kích hoạt không cần thêm thư viện mới.
+  - Python nằm trong `runtime\python`, cài qua uv. `.venv` lấy từ `requirements.lock.txt`, **không có hash**, dùng `-e .`, và chỉ có bản cu126.
+  - `runtime\florence-python` là **thư mục package được thêm vào `sys.path`** của Python trong `.venv` (`localize_visual_logo_report.py:203-208`). Repo **không có cách dựng lại** thư mục này.
+  - FFmpeg 9.0.1 là bản build **GPLv3**. Ngoài ra còn Deno.
+- **Model không ghim phiên bản lúc tải:**
+  - `download_models.py:354` lấy revision mới nhất và ghi lại `manifest.json` cùng `downloaded_at` (`:384-394`);
+  - Qwen2-VL-2B không có script tải;
+  - EasyOCR không kiểm checksum.
+- **`annotations/` bị gitignore,** nhưng bước quét chữ cần `annotations/text_semantics_seed_v1.json` (`cli.py:305`, `textscan.py:785`).
+- **Đầu vào của khóa cache quét** (`stage_cache.py:44-96`, `:153-198`; `cache_dependencies.py:24-95`):
+  - các file `.py` của stage cùng `__init__.py`, `__main__.py`, `cli.py`, `stage_cache.py`, `cache_dependencies.py` và `scripts/localize_visual_logo_report.py`;
+  - `config/processing_profiles.json`, `config/detection_policy.yaml`, `config/text_review_policy.json`, `config/license_policy.json`;
+  - `scripts/run.ps1`, `scripts/env.ps1`, `annotations/text_semantics_seed_v1.json`, `pyproject.toml`, `uv.lock`;
+  - **mọi file trong `models\`** (manifest và config được hash);
+  - kích thước và mtime của `ffmpeg.exe`/`ffprobe.exe`;
+  - toàn bộ dòng lệnh của stage.
+  
+  Nếu không còn file `.py` (bản đã biên dịch), phần code **bị bỏ khỏi khóa mà không báo gì**. Khi đó lên bản mới vẫn dùng lại kết quả cũ.
+- **Tài khoản nguồn phim:** phiên được mã hóa bằng DPAPI theo tài khoản Windows, nằm trong `state\source-accounts\<SID>\`, và kho phiên tự tạo ACL riêng. Phiên **không chép sang máy khác được**.
+- **Không có file LICENSE.** `pycryptodomex 3.23.0` có sẵn trong lock (đi kèm yt-dlp) và có Ed25519.
 
-## 3. Nguyên tắc chung cho mọi session
+## 3. Nguyên tắc chung
 
-1. Đọc `AGENTS.md` trước. Tuân thủ các mục về xóa, lưu trữ, tải video, tài khoản nguồn và Tailscale. **Không bao giờ** POST tới các route bị cấm trên Control Center thật.
-2. **Repo công khai:** không ghi tên phim, link hay tên miền thật vào code, test, tài liệu hay commit. Dùng nhãn L196, H110, T45.
+1. **`AGENTS.md` là luật cao nhất.** Không bao giờ gọi các route bị cấm trên Control Center thật. Các route PC-only mới của kế hoạch này (Đo lại, Chỉ dùng CPU, kích hoạt) cũng được thêm vào danh sách "agent không bao giờ gọi" (C0).
+2. **Repo:** không ghi tên phim, tên file nguồn, link hay tên miền thật. Báo kết quả bằng số job, revision và nhãn L/H/T.
 3. **Giữ nguyên chất lượng:**
-   - Không đổi model, mật độ quét hay ngưỡng phát hiện.
-   - Một cách chạy mới chỉ được bật sau khi qua cổng kiểm tra:
-     - **giống hệt từng byte** (report, JPEG, danh sách duyệt) với thay đổi tuyên bố là "chính xác";
-     - hoặc **danh sách duyệt giống hệt trên bộ Golden** (`scripts/evaluate_golden.py`, `review-diff`) với thay đổi về số học (fp16, CPU fp32, OpenVINO).
-   - **Không dùng nén int8.**
-   - Đổi encoder (NVENC…) phải qua đo SSIM và **người dùng duyệt** trước khi làm mặc định.
-4. **Không hardcode cấu hình (yêu cầu số 2):**
-   - Mọi lựa chọn ảnh hưởng tốc độ đều lấy từ **hồ sơ phần cứng** (mục 4): thiết bị, precision, cách giải mã, encoder, số worker, batch, số làn chạy song song.
-   - Hồ sơ chỉ được chọn trong **bảng các cấu hình đã qua cổng**. Không tự bịa cấu hình mới.
-   - Hằng số hiện tại chỉ còn là giá trị dự phòng.
-   - Lựa chọn thực tế phải được ghi vào report và manifest để chạy lại được đúng như cũ.
-5. **Đo trước:** mỗi session bắt đầu bằng bước đo (A0, B0, E4). Đo trên bản sao hoặc trong root tạm dưới `E:\DungChung\BiliFlow\temp`, không ghi vào `input\`, `output\`, `reports\` hay `archive\` thật.
-6. **Chỉ có một GPU:** các lần đo của A, B và E xếp lịch lần lượt, và tránh lúc Control Center đang chạy job.
-7. **`cli.py`, `__main__.py`, `run.ps1`, `stage_cache.py` và `cache_dependencies.py` được hash vào khóa cache của mọi stage.** Sửa một trong các file này làm toàn bộ cache quét bị tính lại. Vì vậy:
-   - mọi thay đổi ở đây được **gom thành một đợt duy nhất** (B1);
-   - hỏi người dùng trước khi làm.
-8. **Trên PC:**
-   - mỗi session làm trong worktree `temp\wt-*`, **không** làm trong thư mục chính;
-   - không push hay merge nếu người dùng chưa bảo;
-   - chỉ người dùng khởi động lại Control Center, và chỉ khi không có job.
-9. **Cloud** không có GPU, model, video hay Windows. Cloud chỉ viết code và test bằng dữ liệu giả, rồi giao phần đo cho PC.
-10. **Xong một mốc thì** đánh dấu bảng trạng thái ở mục 11 và cập nhật `CHANGELOG.md`, `docs/PROJECT_STATUS.md`, `docs/SESSION_HANDOFF.md`.
+   - Không đổi model, mật độ quét hay ngưỡng.
+   - Cách chạy mới chỉ bật sau khi qua cổng:
+     - **giống hệt từng byte** (report, JPEG, danh sách duyệt) cho thay đổi tuyên bố là "chính xác";
+     - hoặc **danh sách duyệt giống hệt trên bộ Golden** cho thay đổi về số học (fp16, CPU fp32, OpenVINO).
+   - Không dùng nén int8.
+   - Đổi encoder hay cách kiểm tra bản xuất phải được **người dùng duyệt**.
+4. **Không hardcode cấu hình:**
+   - Mọi lựa chọn tốc độ lấy từ **hồ sơ phần cứng** (mục 4) và chỉ chọn trong **bảng cấu hình đã qua cổng**.
+   - Lựa chọn được **đóng băng theo từng job** lúc xếp hàng (`configure_and_queue`), giống cách lưu `fast_scan:{id}`. "Đo lại" giữa chừng không trộn thiết bị trong một revision.
+   - `device` và `precision` **luôn nằm trên dòng lệnh**, nên luôn có trong khóa cache. Một stage **không bao giờ tự quay về CPU** khi CUDA lỗi.
+   - Tham số đã chứng minh cho kết quả giống hệt (số worker, cách giải mã khi đã qua cổng pixel) được **bỏ khỏi khóa cache** trong đợt B1.
+   - `choose()` chỉ đọc file. Tiến trình Control Center không nạp torch và không gọi `nvidia-smi` trong các vòng lặp hỏi trạng thái.
+5. **Khóa cache:** mọi sửa đổi trên các đầu vào chung ở mục 2.5 (file khởi động, `run.ps1`, `env.ps1`, `config/*`, `pyproject.toml`, `uv.lock`, `__init__.py`, đường dẫn và file trong `models\`, `ffmpeg.exe`) đều làm toàn bộ cache quét bị tính lại. Vì vậy:
+   - mọi sửa đổi đó **gom vào một đợt duy nhất, B1**, và người dùng duyệt trước;
+   - **không tải lại hay sửa gì trong `models\` trên PC.** C1 chỉ đọc;
+   - sửa module quét (E3, B2–B4) làm cache của các stage đó bị tính lại. Phải báo trước.
+6. **Đo trước.** Đo trên bản sao hoặc trong root tạm dưới `E:\DungChung\BiliFlow\temp`, hoặc trên một **Control Center thử** (root tạm, cổng riêng). Không ghi vào `input\`, `output\`, `reports\` hay `archive\` thật.
+7. **Chỉ có một GPU.** Các lần đo xếp lịch lần lượt, tránh lúc Control Center thật đang chạy job. Mọi phép đo dùng GPU lấy khóa `Local\BiliFlowGpuInference`; phép đo xuất lấy thêm `state/final-render.lock`.
+8. **Chuẩn bị worktree trên PC:**
+   - `git worktree add temp\wt-<tên> -b <nhánh> main`.
+   - Chạy test bằng `.venv` của thư mục cài, với `PYTHONPATH` trỏ vào `src` của worktree.
+   - Full suite cần một clip tổng hợp 1 s trong `input\` của worktree; xóa sau khi xong.
+   - `performance_report` phải có `--root E:\DungChung\BiliFlow`.
+   - Đo pipeline bằng harness với root tạm, như các benchmark trước.
+9. **Không push hay merge** nếu người dùng chưa bảo. **Chỉ người dùng khởi động lại Control Center**, và chỉ khi không có job.
+10. **Gộp nhánh theo các điểm gộp đã định (mục 9).** Mỗi session ghi `CHANGELOG.md`, `docs/PROJECT_STATUS.md`, `docs/SESSION_HANDOFF.md` trong nhánh của mình. Xung đột được giải lúc gộp.
 
-## 4. Session E: hồ sơ phần cứng và đường chạy CPU (nền cho A, B, C)
+## 4. Session E: hồ sơ phần cứng và đường chạy CPU
 
-- **Ở đâu:** cloud viết; đo trên PC với công tắc "Chỉ dùng CPU".
+- **Ở đâu:** cloud viết; đo trên PC (Control Center thử).
 - **Nhánh:** `feat/hardware-profile`.
-- **Thời gian (ước tính):** E1–E4 khoảng 1,5–2 tuần; E5 thêm 2–4 tuần.
+- **Thời gian (ước tính):** E0–E4 khoảng 2 tuần; E5 thêm 2–4 tuần.
 
-### E0. Hợp đồng giao diện (làm đầu tiên, khoảng nửa ngày)
+### E0. Hợp đồng giao diện (người dùng duyệt)
 
-Viết schema của `state\hardware-profile.json` và API `hardware_profile.choose(task)`. A, B và C dùng chung API này.
+- **Schema `state\hardware-profile.json`:**
+  - `profile_version`, dấu vân tay phần cứng và driver, các phát hiện, lựa chọn kèm lý do và lần đo;
+  - kiểm tra hợp lệ mỗi khi đọc.
+- **API:**
+  - `hardware_profile.choose(task)` chỉ đọc file;
+  - `freeze_for_job(job_id)` lưu lựa chọn theo job, dạng setting `hw:{id}`.
+- **Bảng cấu hình đã qua cổng:**
+  - mỗi dòng là một tổ hợp đầy đủ, khóa theo kiến trúc GPU, phiên bản torch và khoảng driver;
+  - OCR batch chỉ được là 1 hoặc 8 (`job_pipeline.py:164`).
 
-- **Phần nhận diện:**
-  - card: hãng, tên, VRAM, driver;
+### E1. Nhận diện (chạy trong tiến trình con)
+
+- **Phát hiện:**
+  - card, VRAM, driver (`nvidia-smi`);
   - CUDA dùng được với torch hay không;
-  - FFmpeg: `-hwaccels`, các encoder có trong bản build, và **encode/decode thử thật** (giống lệnh người dùng đã chạy);
-  - CPU: số nhân thật và số luồng, tập lệnh;
-  - RAM và dung lượng đĩa còn trống.
-- **Phần lựa chọn:** `device`, `precision`, `decode` theo từng stage, `encoder`, `routing_workers`, `ocr_batch`, `parallel_lanes`.
-- **Mỗi lựa chọn ghi kèm lý do và lần đo.** Hồ sơ có `profile_version` và dấu vân tay phần cứng/driver. Khi phần cứng, driver hoặc phiên bản BiliFlow đổi thì tự đo lại.
+  - FFmpeg: `-hwaccels`, các encoder, và encode/decode thử thật;
+  - CPU (số nhân thật/luồng, tập lệnh), RAM, đĩa trống.
+- **Lỗi khi nhận diện:**
+  - Máy **từng có CUDA** mà lần này lỗi: giữ hồ sơ tốt gần nhất, hoặc từ chối xếp job mới kèm cảnh báo. **Không** âm thầm chuyển sang CPU.
+  - Máy **chưa từng có CUDA:** dùng CPU fp32 và x264.
+- Mọi lệnh gọi riêng của Windows nằm sau một lớp giao diện để test bằng dữ liệu giả.
 
-### E1. Nhận diện
+### E2. Chọn cấu hình
 
-- Module mới `hardware_profile.py`. Mọi lệnh gọi riêng của Windows (WMI, nvidia-smi, NVML, `-hwaccels`) nằm sau một lớp giao diện để test bằng dữ liệu giả.
-- Có lỗi thì luôn chọn **cấu hình an toàn nhất**: CPU fp32 và x264.
-
-### E2. Bảng cấu hình đã qua cổng, đo nhanh, lưu lựa chọn
-
-1. Bảng ban đầu chỉ gồm những gì đã được đo và chấp nhận:
-   - CUDA + fp16 cho các stage đã qua cổng duyệt; batch OCR 8 + cửa sổ 4; số worker routing (đã chứng minh cho kết quả giống hệt, nên được tự chỉnh theo số nhân);
-   - CPU fp32 (thêm vào sau khi E4 đạt);
-   - encoder x264 (NVENC thêm vào sau khi A3 đạt).
-2. Đo nhanh khoảng 1–3 phút trên một clip mẫu đi kèm, không phải video của người dùng, để chọn trong bảng.
-3. Trang Cài đặt hiện hồ sơ đang dùng, có nút **"Đo lại"** và công tắc **"Chỉ dùng CPU"**.
+- **Đo nhanh** chạy bằng `python -m biliflow.hardware_profile`, gói trong một file `.ps1` có khóa riêng, giống các file `benchmark-*.ps1`. Nó **không** thêm lệnh vào `run.ps1`.
+  - Đo khi chưa khởi động scheduler, hoặc khi scheduler đang rảnh và tạm dừng.
+  - Lấy khóa GPU và khóa render.
+  - Đo trên clip mẫu đi kèm, không phải video của người dùng.
+- **Cách giải mã và số worker:** **không** chọn chỉ dựa trên một lần đo nhanh đứng riêng. NVDEC từng chậm hơn khi CPU rảnh (`SCAN_PERFORMANCE.md:93-95`). Dùng bảng số đo thật và có ngưỡng trễ (hysteresis) để không đổi qua đổi lại.
+- **Trang Cài đặt:** hiện hồ sơ; có "Đo lại" và "Chỉ dùng CPU", **chỉ trên PC** (127.0.0.1 + token).
+- E0–E2 **không sửa `scheduler.py`**. Việc đóng băng lựa chọn theo job làm sau điểm gộp G1 (mục 9).
 
 ### E3. Sửa đường chạy CPU
 
-- Bỏ cờ fp16 khi chạy CPU. `autocast` theo thiết bị thật.
-- Sửa lỗi ép float16 của Florence.
-- Bỏ khóa GPU khi chạy CPU (`run.ps1` đã bỏ qua khóa khi có `--device cpu`).
-- Torch: bộ cài chọn bản CUDA hoặc bản CPU (mục 7).
-- **Luật máu anime C1 trên CPU:** khi report là fp32, C1 không di chuyển thẻ nào (hành vi hiện tại).
-  - Phương án 1: đo lại ngưỡng cho fp32 trên bộ Golden và các bằng chứng đã có.
-  - Phương án 2: giữ nguyên, và ghi chú trên thẻ "C1 chưa hiệu chỉnh cho CPU".
-  - **Người dùng chọn.**
+- Bỏ cờ fp16 khi chạy CPU; `autocast` theo thiết bị thật; sửa lỗi ép float16 của Florence; không lấy khóa GPU khi chạy CPU.
+- **Luật C1 trên CPU, người dùng chọn trước khi làm E4:**
+  - đo lại ngưỡng cho fp32;
+  - hoặc giữ nguyên và ghi chú "C1 chưa hiệu chỉnh cho CPU" trên thẻ. Việc này chạm `review_workflow.py`, nên làm ở đợt có quyền sửa file đó.
 
-### E4. Đo trên PC với "Chỉ dùng CPU"
+### E4. Cổng CPU fp32 (Control Center thử trên PC)
 
-- Trên đoạn trích của L196, H110 và một T45:
-  - so **danh sách duyệt** của CPU fp32 với bản GPU;
-  - đo tốc độ và RAM đỉnh.
-- Chỉ bật CPU fp32 trong bảng sau khi đạt cổng.
+- So danh sách duyệt của CPU fp32 với **bản GPU chạy fp32 thường**, không so với fp16, trên **các đoạn Golden** của L, H và một T.
+- Đo tốc độ và RAM đỉnh.
+- **Giới hạn:** chạy bản torch CUDA trên CPU của PC không chứng nhận được bản torch CPU, cũng không chứng nhận các loại CPU khác. Bản torch CPU sẽ được kiểm lại khi có bộ cài (C5).
 
 ### E5. Đợt sau: OpenVINO trên CPU
 
-- Chuyển từng model và qua cổng Golden. Qwen2-VL đã được OpenVINO hỗ trợ; Florence-2 chưa xác nhận.
-- Card AMD và đồ họa Intel tích hợp: chỉ làm khi có máy test.
+- Chuyển từng model và qua cổng Golden. Florence-2 chưa xác nhận được.
+- File model OpenVINO **không đặt vào `models\`** cho tới khi B1 đã giới hạn khóa cache theo đúng model mà stage dùng.
 
 ## 5. Session A: xuất video nhanh hơn
 
 - **Ở đâu:** PC.
 - **Nhánh / worktree:** `perf/export-speed` / `temp\wt-export-speed`.
-- **Thời gian (ước tính):** 3–5 ngày.
+- **Thời gian (ước tính):** khoảng 1–1,5 tuần.
 
 ### A0. Đo từng bước
 
-Chạy `python -m biliflow.performance_report --job-id <N>` (chỉ đọc). Sau đó tách thời gian xuất của một T45 và một đoạn 1080p, làm trên bản sao trong root tạm:
+- `performance_report --root E:\DungChung\BiliFlow --job-id <N>` (chỉ đọc).
+- Trên **cùng một** T và một đoạn 1080p, làm trên bản sao trong root tạm, đo:
+  - bộ lọc + encode (lệnh hiện tại);
+  - riêng encode (không bộ lọc);
+  - bộ lọc với `-f null`;
+  - kiểm tra sau xuất; hash; `+faststart`.
+- Kiểm bộ lọc nào nhận `enable` bằng `ffmpeg -filters` (cột T).
 
-- bộ lọc (encode giả `-f null`);
-- encode;
-- kiểm tra sau xuất (giải mã lại toàn bộ);
-- hash;
-- `+faststart`.
+### A1a. Ưu tiên bản xuất, chưa chạy song song (ít rủi ro, làm trước)
 
-Riêng nhánh làm mờ vùng nhỏ thì đo hai trường hợp: có và không có `enable` sớm.
+- `_select` lấy lệnh xuất đang chờ trước, ở ranh giới stage kế tiếp, dùng `priority` có sẵn.
+- Một worker như cũ. Mọi chốt chặn giữ nguyên.
 
-### A1. Làn xuất riêng
+### A1b. Chạy song song nhiều làn (sau A3, chỉ khi hồ sơ cho phép)
 
-- Bản xuất **không còn xếp sau việc quét**. Số làn và mức ưu tiên lấy từ hồ sơ phần cứng:
-  - máy có card: xuất chạy song song với quét;
-  - máy chỉ có CPU: chạy lần lượt hoặc hạ ưu tiên một bên, theo số đo tranh chấp CPU.
-- **Giữ nguyên mọi chốt chặn:** khóa render `Local\BiliFlowFinalRender` và `state/final-render.lock`, `job_action_lock`, hủy/tạm dừng/tiếp tục, retire, finalize, và việc khóa job khi xóa hoặc lưu trữ.
-- Có test cho trạng thái xuất song song với quét.
+**Phải thay toàn bộ trạng thái đang giả định chỉ có một worker:**
+- `_process`/`_active`/`_log_handle` thành dict theo làn; `_executing_job_ids` thành set;
+- `pause_now`/`cancel`/`_terminate_active` chỉ dừng đúng làn;
+- nhánh xử lý lỗi (`:824`) không đóng log của làn khác;
+- `is_busy` (đang được dùng cho chốt xóa và lưu trữ ở `source_cleanup.py:493`, `job_delete.py:154`, `control_center.py:1176,1464,1494,1578`) phải đúng với mọi làn;
+- `shutdown` chờ và dừng mọi làn; `_select`/`queue_order` có bộ lọc theo làn; `_wake` dùng chung;
+- `status()["active"]` thành danh sách, giữ trường cũ để tương thích (`control_center.py:936`, `dashboard_v2/adapter.js:317`, `app.js:91`);
+- định nghĩa `scheduler_paused` dừng những gì.
+
+**Test:** hủy hoặc tạm dừng làn A khi làn B đang chạy; `is_busy` trong khoảng ghi sổ.
+
+**Điều kiện:** chỉ bật khi đã đo VRAM của NVENC lúc Qwen2-VL đang chạy. Máy chỉ có CPU thì không chạy song song.
 
 ### A2. Bộ lọc làm mờ
 
-Chỉ xử lý đúng khoảng cần làm mờ. Ví dụ: tách đoạn tại biên của khoảng làm mờ, hoặc đặt `enable`/`trim` cho cả nhánh.
+- Đặt `enable` cho các bộ lọc xử lý từng khung (gblur, geq, delogo) trong nhánh làm mờ.
+- **Không** tách đoạn tại biên làm mờ: `trim` loại trừ điểm cuối còn `between` thì gồm cả điểm cuối, và `concat` đặt lại thời gian khung, nên kết quả không giống hệt.
+- **Cổng:** `framemd5` của `[vout]` **và** SHA-256 của file mp4 x264 giống hệt, trên clip tổng hợp và trên bản sao video thật.
 
-**Cổng:** `framemd5` giống hệt trên clip tổng hợp và trên bản sao video thật.
+### A3. Encoder theo hồ sơ
 
-### A3. Encoder chọn theo hồ sơ
+- **Lựa chọn encoder** lưu trong cài đặt render hoặc edit plan, **không thêm cờ vào `cli.py`**.
+- **NVENC:** `-rc vbr -cq <N>` với `-maxrate`/`-bufsize`. Nếu bản xuất vượt kiểm tra dung lượng (`final_renderer.py:619`) thì **tự encode lại bằng x264**.
+- **Manifest ghi thêm** `encoding.encoder` và `validation_method`. Giữ nguyên `source_hash_before/after` và `sha256_after_render`.
+- Encoder không nằm trong bằng chứng xóa/lưu trữ (mục 2.1), nên **NVENC chỉ chạy trong root tạm cho tới khi người dùng duyệt**. Khi duyệt, ghi rõ vào `AGENTS.md` rằng bản xuất NVENC được dùng làm bằng chứng cho "Xóa video gốc" và "Lưu trữ".
+- **Cổng:** SSIM (và VMAF nếu có) cùng dung lượng file trên 3 tập, so với x264. x264 vẫn là mặc định cho tới khi người dùng duyệt.
 
-- NVENC `h264_nvenc`; giới hạn dung lượng ánh xạ sang `-rc vbr` với `-maxrate`/`-bufsize`.
-- Tự quay về x264 nếu thiếu hoặc encode thử thất bại.
-- Ghi encoder đã dùng vào manifest. Tên bản xuất (export identity) không đổi, vì các thao tác render vẫn giống nhau.
-- **Cổng:** đo SSIM (và VMAF nếu bản build có) cùng dung lượng file trên 3 tập, so với x264. **x264 vẫn là mặc định cho tới khi người dùng duyệt.**
+### A4. Kiểm tra sau xuất (chỉ khi A0 cho thấy đáng làm)
 
-### A4. Kiểm tra sau xuất
+- Đổi cách kiểm tra (ví dụ giải mã bằng NVDEC) là **đổi nghĩa của "bản xuất qua kiểm tra manifest"** trong `AGENTS.md`. Cần người dùng duyệt và sửa `AGENTS.md`.
+- Giải mã bằng CPU vẫn là chuẩn.
 
-Chỉ đổi cách kiểm tra (ví dụ giải mã bằng NVDEC) nếu A0 cho thấy bước này chiếm phần đáng kể và người dùng chấp nhận. Giải mã bằng CPU vẫn là chuẩn.
+### Kỳ vọng (ước tính, A0 xác nhận)
 
-### Kỳ vọng (ước tính, A0 sẽ xác nhận)
-
-- Một T45 từ khoảng 6–8 phút còn khoảng 1,5–3 phút.
+- Một T từ khoảng 6–8 phút còn khoảng 1,5–3 phút.
 - Không còn chờ sau việc quét.
-
-### Được sửa
-
-`scheduler.py`, `job_store.py` (nếu cần), `final_renderer.py`, `blur_filter.py`, phần hiển thị hàng đợi trong `control_center.py` và `dashboard_v2/`, kèm test.
 
 ## 6. Session B: quét nhanh hơn
 
-- **Ở đâu:** PC. Bắt đầu sau khi A1 đã vào `main` và E0–E2 xong.
+- **Ở đâu:** PC. Bắt đầu sau điểm gộp G1.
 - **Nhánh / worktree:** `perf/scan-decode` / `temp\wt-scan-speed`.
-- **Thời gian (ước tính):** 1–2 tuần.
+- **Thời gian (ước tính):** khoảng 2 tuần.
 
 ### B0. Đo nền mới
 
-- Một phim người đóng quét cả 4 nhóm (đoạn trích L196) và H110.
-- Đo thêm thời gian khởi động từng stage (`python -X importtime`, PowerShell).
+- Phim người đóng quét cả 4 nhóm (đoạn của L) và H.
+- Thời gian khởi động từng stage (`python -X importtime`, PowerShell).
 
-### B1. Đợt sửa `cli.py` duy nhất
+### B1. Đợt sửa khóa cache duy nhất (người dùng duyệt danh sách và thời điểm)
 
-- Nạp thư viện khi cần (lazy import).
-- Gom luôn mọi thay đổi CLI mà A, C, E cần: cờ thiết bị và giải mã, đường dẫn tool. **Danh sách phải được chốt trước khi sửa.**
-- Hỏi người dùng trước, vì cache quét bị tính lại một lần.
+Danh sách chốt sau B0 và sau khi thiết kế xong B3. Dự kiến gồm:
+1. Nạp thư viện khi cần trong `cli.py`.
+2. Thay `parents[2]` ở `cli.py:47` bằng `install_root()` (lấy từ C2).
+3. Phần chạm khóa cache của C3: `stage_cache.py`, `cache_dependencies.py`.
+4. Từ D: đường dẫn FFmpeg trong `cli.py`/`stage_cache.py`, số phiên bản trong `__init__.py`, `pyproject.toml`.
+5. Cờ CLI mới mà B2/B3 cần.
+6. Thay đổi `STAGE_MODULES` của B3.
+7. Bỏ các tham số đã chứng minh cho kết quả giống hệt khỏi khóa cache.
+8. Đề xuất: khóa cache chỉ tính **model mà stage dùng**, không tính cả thư mục `models\`.
 
 ### B2. NVDEC cho stage 18+ và `live_safety`
 
-- Theo hồ sơ phần cứng và phép thử "giống hệt pixel" cho từng video. NVDEC hiện chỉ được chứng minh với h264/yuv420p.
+- Trước hết viết **phép thử giống hệt pixel cho từng video** trên đúng chuỗi xử lý của stage: 448 px có pad, và 256 px split/hstack.
 - **Cổng:** report và JPEG giống hệt từng byte (`scripts/benchmark_stage_equivalence.py`).
 
 ### B3. Gộp lượt giải mã 18+ vào `live_safety`
 
-Chỉ khi job chọn cả 18+ lẫn máu/bạo lực. Cổng như B2.
+- Chỉ khi job chọn cả 18+ lẫn máu/bạo lực.
+- Đổi tên stage thì **job đang trong hàng cần đường cũ**, giống `scheduler.py:568-570`. Nếu không, `_runnable` trả `None` và job bị kẹt.
+- Cổng như B2.
 
 ### B4. Hash một lần
 
-Preflight hash xong thì truyền kết quả cho các stage sau, bớt số lần đọc toàn bộ file.
+Preflight hash xong thì truyền kết quả cho các stage sau.
 
 ### B5. Tùy chọn
 
-Cho stage chỉ dùng CPU của video sau chạy chồng với stage GPU của video trước, theo VRAM và số nhân trong hồ sơ. Chỉ làm khi đo có lợi và kết quả không đổi.
+Cho stage CPU của video sau chạy chồng với stage GPU của video trước, theo hồ sơ phần cứng. Chỉ làm khi đo có lợi và kết quả không đổi.
 
 ### Kỳ vọng (ước tính)
 
@@ -290,178 +333,233 @@ Cho stage chỉ dùng CPU của video sau chạy chồng với stage GPU của v
 
 ## 7. Session C: bộ cài, biên dịch, kích hoạt
 
-- **Ở đâu:** cloud viết; build và cài thử bằng GitHub Actions; kiểm thật trên PC.
+- **Ở đâu:** cloud viết; GitHub Actions build; kiểm thật trên PC.
 - **Nhánh:** `feat/installer`.
-- **Thời gian (ước tính):** 3–4 tuần.
+- **Thời gian (ước tính):** khoảng 4 tuần.
 
-### C0. Việc cần người dùng duyệt trước
+### C0. Đề xuất sửa `AGENTS.md` và tài liệu (người dùng duyệt)
 
-- **Sửa `AGENTS.md`:** bản cài ở máy khác không nằm trong `E:\DungChung\BiliFlow`. Mục "giữ runtime trong `E:\DungChung\BiliFlow`" phải đổi thành "trong thư mục cài".
-- **Thêm file `LICENSE`** (độc quyền) và cập nhật `THIRD_PARTY_NOTICES.md`: ghi chú GPL của FFmpeg và nơi lấy mã nguồn FFmpeg.
+1. **"Giữ runtime trong `E:\DungChung\BiliFlow`"** đổi thành "trong thư mục cài". Áp dụng cho:
+   - các câu về root tạm của test (`<install>\temp`);
+   - câu "không chuyển dữ liệu về ổ C";
+   - giả định trong mục Tailscale rằng mọi tài khoản cục bộ đều sửa được cây thư mục BiliFlow.
+2. **Công cụ cần người dùng duyệt trước khi tải:** Nuitka, Inno Setup, công cụ làm rối JS, uv, torch bản CPU.
+3. **Thêm quy tắc mới:**
+   - agent không bao giờ tạo, đọc hay in khóa bí mật cấp key; không chạy công cụ cấp key; không cấp key;
+   - sổ khách hàng nằm ngoài Git và ngoài cây thư mục BiliFlow;
+   - các route kích hoạt, Đo lại, Chỉ dùng CPU thuộc danh sách "agent không bao giờ gọi" trên Control Center thật.
+4. **`LICENSE`** (độc quyền) và `THIRD_PARTY_NOTICES.md`:
+   - FFmpeg GPLv3 và nguồn tương ứng;
+   - Playwright, torch/CUDA, Nuitka, pycryptodomex, Inno Setup;
+   - file NOTICE của các model Apache-2.0.
+5. **Repo phải Private** trước bản build đầu tiên.
 
-### C1. Khóa phiên bản model
+### C1. Khóa phiên bản (chỉ đọc trên PC)
 
-1. Tạo `config/models.lock.json` ghi revision và SHA-256 từng file của 9 model.
-2. Viết một script **chỉ đọc** để người dùng chạy trên PC, lấy revision từ các `models\*\manifest.json` hiện có.
-3. Cập nhật `download_models.py`:
-   - tải đúng phiên bản đã khóa, tải tiếp khi rớt mạng, kiểm SHA-256;
-   - thêm Qwen2-VL-2B;
-   - thêm checksum cho EasyOCR.
+- `config/models.lock.json`: revision và SHA-256 từng file của 9 model. Lấy bằng một **script chỉ đọc** chạy trên PC. **Không tải lại model trên PC.**
+- Cập nhật `download_models.py`: tải theo lock, tải tiếp khi rớt mạng, kiểm SHA-256, thêm Qwen2-VL-2B, thêm checksum cho EasyOCR. Script này chỉ dùng cho bản cài mới.
+- **Lock có hash** cho `.venv` bản cu126 và bản CPU; **lock riêng cho `florence-python`**, kèm cách dựng lại.
+- `annotations/text_semantics_seed_v1.json`: quyết định có đóng gói không. Kiểm trước xem có tên thật nào trong đó không.
 
-### C2. Một hàm `install_root()` duy nhất
+### C2. `install_root()`
 
-- Thay các chỗ `parents[2]`.
-- **Giữ nguyên nghĩa** của `recycle_bin.INSTALL_ROOT` và chốt `job_purge.allowed_project_root`: các hàm xóa vẫn chỉ nhận install root hoặc thư mục `temp` bên trong. Có test.
+- Tìm **file đánh dấu** ở gốc cây thư mục cài. Không dùng biến môi trường, không dùng tham số.
+- Giữ nguyên nghĩa của `allowed_project_root`, vì nó chặn cả hàm xóa, kho phiên, trình quản lý tài khoản và bước thử tải.
+- **Chưa sửa `cli.py`.** Thay đổi ở đó đi theo đợt B1.
 
-### C3. Khóa cache khi chạy bản build
+### C3. Khóa cache cho bản build (đi theo B1, phải xong trước C4)
 
-- **Bản build:** khóa cache theo **mã build** và hash từng module, tính sẵn lúc build và ghi trong một manifest.
-- **Bản chạy từ mã nguồn** (thư mục dev hiện tại): **giữ nguyên** cách cũ, nên cache trên PC không bị mất.
+- Bản build: khóa theo mã build và hash từng module, tính sẵn lúc build.
+- **Từ chối an toàn:** khi không có cả `.py` lẫn manifest build thì `cacheable()` trả False.
+- Bản chạy từ mã nguồn giữ cách cũ.
 
-### C4. Biên dịch
+### C4. Biên dịch Nuitka (chỉ chế độ module)
 
-- Biên dịch gói `biliflow` thành `.pyd` bằng Nuitka (bản miễn phí). Thư viện bên thứ ba giữ nguyên trong `.venv`.
-- Script chạy lúc runtime (ví dụ `scripts/localize_visual_logo_report.py`, chạy trong runtime Florence) phải được đưa vào gói hoặc biên dịch luôn.
-- Khởi động qua `.exe`; `.cmd`/`.ps1` chỉ còn là lớp mỏng.
-- JS của giao diện được làm rối mã. Không thể giấu hoàn toàn vì trình duyệt phải đọc được.
+- Biên dịch gói `biliflow` thành `.pyd`. **Giữ `__main__.py` dạng mã nguồn** để `python -m biliflow` vẫn chạy (`run.ps1:62`, `routing_prewarm.py:36`). **Làm thử nghiệm điểm này trước tiên.**
+- `python.exe` của runtime vẫn giữ, nên những thứ sau vẫn đúng:
+  - `sys.executable -m yt_dlp` (`download_runner.py:288`);
+  - ProcessPool `spawn` (`visual_logo_scanner.py:1016`);
+  - quy tắc tường lửa gắn với `python.exe` (`tailscale-setup.ps1:46-60`).
+  
+  File `.exe` chỉ là lớp khởi động mỏng.
+- **Florence** dùng `trust_remote_code`: ghim và hash các file `.py` đi kèm model.
+- **JS:** làm rối mã phải giữ CSP `script-src 'self'` và danh sách file cố định (`control_center.py:125-143`).
+- **Test** chạy trên cây mã nguồn, vì một số test đọc file nguồn.
+- **Cổng:** chạy bản biên dịch và bản mã nguồn trên một clip ngắn, kết quả phải giống hệt.
 
 ### C5. Trình cài đặt (Inno Setup)
 
-1. Hỏi thư mục cài, kiểm dung lượng đĩa. Tạo `input`, `output`, `archive`, `state`, `reports`, `models`, `tools`, `cache`, `temp`, `logs`.
-2. **Không tự tạo** `state\source-accounts`. Kho phiên tự tạo thư mục này với ACL riêng, và từ chối thư mục có ACL lạ.
-3. Chạy E1 để chọn bản torch CUDA hay bản CPU.
-4. Tải torch và model, hiện tiến độ, tải tiếp khi rớt mạng, kiểm SHA-256.
-5. Cài Playwright, dùng Edge có sẵn trong Windows. Cài FFmpeg và Deno đi kèm.
-6. Tạo shortcut "Mở BiliFlow" và "Tắt BiliFlow".
-7. Gỡ cài **giữ dữ liệu** (`input`, `output`, `archive`, `state`, `reports`), trừ khi người dùng chọn xóa.
-
-**Điểm cần review:** thư mục cài nên giới hạn quyền ghi, để tài khoản Windows khác không sửa được file chương trình.
+1. **Thư mục cài:**
+   - **Từ chối** Program Files.
+   - Phân quyền: file chương trình chỉ đọc/chạy cho Users; thư mục dữ liệu cho phép người dùng sửa.
+   - Test việc kho phiên tự tạo thư mục bằng một **tài khoản thường**.
+2. **Tạo cấu trúc thư mục**, trừ `state\source-accounts`, vì kho phiên tự tạo thư mục đó với ACL riêng.
+3. **Chọn torch** theo phiên bản driver từ `nvidia-smi`. Cài xong thì kiểm `torch.cuda`; không dùng được thì chuyển sang bản CPU.
+4. **Kiểm VC++ runtime.**
+5. **Tải torch và model:** hiện tiến độ, tải tiếp khi rớt mạng, kiểm SHA-256.
+6. **FFmpeg:**
+   - từ chối bản build `--enable-nonfree`;
+   - với GPLv3: kèm mã nguồn tương ứng, hoặc tải FFmpeg lúc cài với SHA ghim sẵn.
+7. **Cài Playwright,** dùng Edge có sẵn trong Windows; cài Deno.
+8. **Tạo shortcut.**
+9. **Gỡ cài:**
+   - **không bao giờ xóa** `input`, `archive`, `output`, `state`, `reports`, `annotations`;
+   - chỉ xóa chương trình, runtime, model, cache, temp;
+   - **không có tùy chọn "xóa dữ liệu".**
+10. **Lên bản mới:**
+    - chỉ dừng Control Center khi không có job;
+    - các dòng lưu trữ đang dở được xử lý ở lần khởi động sau;
+    - schema database chỉ đi lên (`job_store.py:303`), nên **không hạ bản được**;
+    - đổi model hoặc torch thì làm qua lock.
 
 ### C6. Kích hoạt
 
-- **Mã máy:** SHA-256 của MachineGuid, UUID bo mạch (SMBIOS) và số serial ổ hệ thống. Chỉ cần khớp 2/3.
-- **Key:** chuỗi để dán, gồm nội dung + chữ ký Ed25519 (`pycryptodomex`), mã hóa base32, chia nhóm.
-  - Nội dung: mã máy, tên khách, mã bộ, loại (`month:N` hoặc `perpetual`), ngày cấp, ngày hết hạn, mã key.
-- **Không có key hoặc key không hợp lệ:** chỉ trang kích hoạt hoạt động.
-  - Không quét, không xuất, không tải, không duyệt.
-  - Scheduler và trình tải không khởi động. Các route khác trả 403.
-  - Dữ liệu trên đĩa không bị đụng tới.
-- **Key tháng hết hạn trong lúc chạy:** stage đang chạy được chạy xong, rồi khóa. Hàng đợi giữ nguyên.
-- **Chống chỉnh lùi đồng hồ:** lưu thời điểm muộn nhất từng thấy (có chữ ký cục bộ). Khi có mạng thì so thêm giờ trên internet.
-- **Công cụ cấp key** chạy trên PC của người dùng:
-  - ghi sổ số máy theo từng bộ;
-  - **khóa bí mật chỉ nằm trên PC đó và phải sao lưu**; không bao giờ đưa vào Git hay GitHub Actions;
-  - bộ cài chỉ chứa khóa công khai.
-- **PC của người dùng** tự cấp cho mình một key vĩnh viễn. Test dùng cặp khóa riêng cho test.
+- **Mức bảo vệ:** chỉ để **răn đe**, không chống được người có chuyên môn. `.venv` là CPython thường, sửa được.
+  - Kiểm chữ ký **bên trong module đã biên dịch**, và kiểm hash các file mã hóa so với manifest build.
+  - **Khóa công khai của bản phát hành là hằng số lúc biên dịch.** Bản phát hành không bao giờ chọn được khóa test.
+- **Mã máy:** ba hash có muối:
+  - MachineGuid;
+  - UUID bo mạch, đọc bằng `GetSystemFirmwareTable` (không dùng `wmic`), và bỏ qua UUID giả;
+  - serial ổ hệ thống.
+  
+  Khớp 2/3 là được.
+  - VM nhân bản sẽ khớp cả 3. Cài lại Windows chỉ còn khớp 1/3: cấp lại theo chính sách cấp lại trong công cụ.
+- **Key:**
+  - gồm mã máy, mã bộ, loại (`month:N` hoặc `perpetual`), ngày cấp, ngày hết hạn, mã key;
+  - **không chứa tên khách**, tên khách chỉ nằm trong sổ;
+  - ký Ed25519, mã hóa base32, khoảng 176 ký tự;
+  - lưu ở `state\activation\`.
+- **Không có key hoặc key không hợp lệ:**
+  - Chạy **server chỉ để kích hoạt**, trước khi dựng `ControlCenter()`. Như vậy không migrate database, không reconcile, không nhập report, không chạy watcher, trình tải hay tài khoản nguồn, và **không đụng tới dữ liệu**.
+  - Chỉ mở `/healthz`, GET `/api/phone-mode`, POST `/api/shutdown` (để `Start/Stop-BiliFlow` vẫn chạy) và route kích hoạt (chỉ PC: 127.0.0.1 + token).
+  - Không bật chế độ điện thoại hay Tailscale.
+  - CLI của bản build cũng kiểm key.
+- **Key tháng hết hạn trong lúc chạy:** tạm dừng scheduler ở ranh giới stage kế tiếp. **Không bao giờ làm hỏng một stage.**
+- **Chống chỉnh lùi đồng hồ:**
+  - lưu thời điểm muộn nhất từng thấy, có chữ ký cục bộ; cho phép lệch ±48 h;
+  - mất file này thì key tháng phải kiểm lại;
+  - giờ trên internet là tùy chọn, lấy qua client mạng đã kiểm của trình tải.
+- **Công cụ cấp key** chạy trên PC của người dùng. **Khóa bí mật chỉ nằm ở đó và phải sao lưu.** Sổ khách hàng nằm ngoài Git.
+- **Bản chạy từ mã nguồn** (thư mục dev trên PC) cũng cần key: người dùng tự cấp cho mình một key vĩnh viễn. Test dùng cặp khóa test, và chỉ bản test mới chọn được khóa đó.
+- Cập nhật vai trò của pycryptodomex trong `config/download_tools.json:71-76`.
 
-### C7. GitHub Actions
+### C7. GitHub Actions (sau khi repo đã Private)
 
-- Đẩy tag thì tự build: biên dịch, Inno Setup, rồi đưa lên Release của repo private.
-- **Cài thử tự động** trên máy Windows sạch: cài đặt, kích hoạt bằng key test, rồi chạy một clip ngắn với model nhỏ.
-  - Máy build chỉ có 2 nhân, 8 GB RAM, 14 GB đĩa, nên không chạy được Qwen2-VL và không quét cả phim.
-- Theo dõi hạn mức phút miễn phí. Vượt hạn mức thì build trên PC.
+- Đẩy tag thì tự build: biên dịch, Inno Setup, rồi lưu bộ cài thành **artifact** của workflow. Người dùng tự tạo Release, vì `AGENTS.md:18` cấm tự phát hành.
+- **Cài thử tự động** trên Windows sạch: cài, kích hoạt bằng key test, chạy clip ngắn với model nhỏ.
+- **Máy build không kiểm được:** CUDA, NVENC/NVDEC, Edge có giao diện, Thùng rác thật, ACL với tài khoản thường (máy build chạy quyền admin), SmartScreen. Những thứ này kiểm trên PC.
+- **Bảo mật:** token phạm vi hẹp, bảo vệ tag, ghim action theo SHA. Khóa bí mật cấp key không bao giờ lên CI.
 
 ### C8. Hướng dẫn cài
 
-- Cảnh báo SmartScreen: bấm "Thông tin thêm → Vẫn chạy".
-- Phần mềm diệt virus báo nhầm: gửi file cho Microsoft kiểm tra (miễn phí).
-- Ghi rõ: phiên đăng nhập nguồn phim phải đăng nhập lại trên máy mới.
+- SmartScreen: bấm "Thông tin thêm → Vẫn chạy". Diệt virus báo nhầm: gửi file cho Microsoft kiểm tra.
+- Phiên tài khoản nguồn phải đăng nhập lại trên máy mới.
 
 ## 8. Session D: dọn code (làm cuối)
 
 - **Ở đâu:** cloud.
 - **Nhánh:** `refactor/shared-helpers`.
-- **Thời gian (ước tính):** 3–5 ngày.
+- **Thời gian (ước tính):** khoảng 1 tuần.
 
 **Việc:**
 1. Module dùng chung cho:
-   - ghi JSON an toàn: file tạm riêng cho mỗi lần ghi + `fsync`. Dùng lại cách của `source_archive_files.py`;
+   - ghi JSON an toàn: file tạm riêng + `fsync`, theo `source_archive_files.py`;
    - SHA-256;
    - đọc JSON;
    - lấy giờ hiện tại.
-2. `tool_path()` thay khoảng 34 chỗ viết cứng đường dẫn FFmpeg.
-3. Thống nhất định dạng giờ. **Người dùng chọn định dạng**, vì chữ trên thẻ sẽ đổi.
-4. Một nguồn duy nhất cho số phiên bản (hiện `pyproject.toml` ghi 0.7.19, còn `__init__` ghi 0.7.24).
-5. Khai báo numpy và opencv trong `pyproject.toml`.
-6. `RoutingPool` dùng `spawn` để bộ test không treo trên Linux.
-7. Harness Node gọi `process.exit`.
+2. `tool_path()` cho FFmpeg.
+3. Thống nhất định dạng giờ. **Người dùng chọn**, vì chữ trên thẻ đổi.
+4. `RoutingPool` dùng `spawn`. Harness Node gọi `process.exit`.
 
-**Lưu ý:** phần chạm vào module mà module quét import sẽ làm cache bị tính lại. Phần đó gộp chung đợt với B1.
+**Phần chạm khóa cache** (đường dẫn FFmpeg trong `cli.py`/`stage_cache.py`, số phiên bản trong `__init__.py`, `pyproject.toml`) **đi theo đợt B1**.
 
-## 9. Thứ tự và ai sửa file nào
+## 9. Thứ tự, điểm gộp, ai sửa file nào
 
 ```
-Đợt 1:  E0–E2 (cloud)  ║  A0–A2 (PC)  ║  C0–C2 (cloud)
-Đợt 2:  A3–A4 (PC, dùng hồ sơ)  ║  E3–E4 (cloud + đo trên PC)  ║  C4–C7 (cloud + Actions)
-Đợt 3:  B (PC)  →  B1 gom mọi thay đổi cli.py/cache  →  C3 → D
-Sau:    E5 OpenVINO · AMD/Intel GPU · phụ đề/dịch
+Đợt 1  E0–E2 (cloud)  ║  A0, A1a, A2 (PC)  ║  C0 đề xuất, C1, C2 không đụng cli.py (cloud)
+       ── Điểm gộp G1 (người dùng duyệt): E0–E2, A1a, A2 vào main
+Đợt 2  B0 (PC)  ║  E3 + đóng băng hồ sơ theo job (scheduler, sau G1)  ║  A3 NVENC trong root tạm (PC)
+       ── B1: đợt sửa khóa cache duy nhất (người dùng duyệt) gồm phần của B, C2, C3, D
+       ── Điểm gộp G2: E3, B1, A3 (nếu được duyệt) vào main
+Đợt 3  B2–B4 (PC)  ║  E4 cổng CPU (Control Center thử)  ║  C4–C7 (cloud + Actions)  ║  A1b (nếu đủ điều kiện)
+       ── Điểm gộp G3, rồi D, rồi bản cài đầu tiên cho người dùng kiểm
+Sau    E5 OpenVINO · AMD/Intel GPU · phụ đề/dịch
 ```
 
-| File | E | A | B | C | D |
-|---|---|---|---|---|---|
-| `hardware_profile.py` (mới) | ✅ | đọc | đọc | đọc | — |
-| `scheduler.py` | — | ✅ làn xuất | ✅ hash (sau A) | ✅ chặn khi chưa kích hoạt (sau A, B) | — |
-| `final_renderer.py`, `blur_filter.py` | — | ✅ | — | — | sau A |
-| `job_pipeline.py`, module quét, `nvdec.py` | ✅ CPU/precision | — | ✅ (sau E) | — | — |
-| `cli.py`, `__main__.py`, `run.ps1`, `stage_cache.py`, `cache_dependencies.py` | — | — | ✅ **một lần** | ✅ C3 (sau B1) | — |
-| `recycle_bin.py`, `job_purge.py` (chỉ phần root) | — | — | — | ✅ C2 | — |
-| `control_center.py`, `dashboard_v2/` | ✅ trang hồ sơ | ✅ hàng đợi | — | ✅ trang kích hoạt | — |
-| `scripts/download_models.py`, `config/models.lock.json`, bộ cài | — | — | — | ✅ | — |
+| File | Đợt 1 | Đợt 2 | Đợt 3 |
+|---|---|---|---|
+| `hardware_profile.py` (mới), `.ps1` đo nhanh | E | E | E |
+| `scheduler.py`, `job_store.py` | A (A1a) | E (đóng băng hồ sơ) | A (A1b) → B (B3, giữ đường cũ) |
+| `final_renderer.py`, `blur_filter.py` | A | A | A |
+| `job_pipeline.py`, module quét, `nvdec.py` | — | E (E3) | B |
+| `cli.py`, `__main__.py`, `__init__.py`, `run.ps1`, `env.ps1`, `stage_cache.py`, `cache_dependencies.py`, `pyproject.toml`, `config/*` | — | **chỉ B1** | — |
+| `recycle_bin.py`, `job_purge.py` (phần root) | C (C2) | — | — |
+| `control_center.py`, `dashboard_v2/` | E (trang hồ sơ) → A (hàng đợi), lần lượt | — | C (server kích hoạt) |
+| `review_workflow.py` | — | E (ghi chú C1, nếu chọn) | — |
+| `models\` trên PC | **không ai sửa** | **không ai sửa** | **không ai sửa** |
 
-**Tối thiểu khoảng 4 tuần** cho bản cài đầu tiên: có kích hoạt, code đã biên dịch, xuất và quét nhanh hơn, chạy được trên máy NVIDIA và máy chỉ có CPU.
+**Thời gian tối thiểu (ước tính) khoảng 5–6 tuần** cho bản cài đầu tiên. Bản 1 ước tính 4 tuần; review cho thấy cần thêm:
+- server chỉ để kích hoạt;
+- khóa cache an toàn cho bản build;
+- tách trạng thái theo làn trong scheduler;
+- phép thử pixel cho từng chuỗi giải mã.
 
 ## 10. Rủi ro và câu hỏi mở
 
-1. **Luật máu anime C1 trên CPU:** đo lại cho fp32, hay ghi chú "chưa hiệu chỉnh" (E3)?
-2. **Florence-2 trên OpenVINO** chưa xác nhận được (E5).
-3. **Bản build bằng Nuitka hay bị phần mềm diệt virus báo nhầm** khi không có chữ ký số.
-4. **Quyền ghi của thư mục cài:** tài khoản Windows khác có thể sửa file chương trình (C5).
-5. **Lịch sử repo đã từng công khai.** Chuyển sang Private không thu hồi được những gì đã bị clone.
-6. **Mất khóa bí mật** thì không cấp key mới cho các bản đã cài được nữa.
-7. **Repo chuyển sang Private** thì GitHub Actions tính phút theo hạn mức miễn phí, phút Windows tính gấp đôi.
-8. **Kích hoạt chặn cả trang duyệt.** Người dùng đã chọn "không key thì không làm gì".
+1. **Kích hoạt chỉ để răn đe.** Người có chuyên môn vẫn bẻ được.
+2. **Luật C1 trên CPU:** đo lại cho fp32, hay ghi chú "chưa hiệu chỉnh"? (E3)
+3. **Florence-2 trên OpenVINO** chưa xác nhận được.
+4. **Bản Nuitka không ký số** dễ bị phần mềm diệt virus báo nhầm.
+5. **Lịch sử repo đã công khai** thì không thu hồi được.
+6. **Mất khóa bí mật** thì không cấp key mới được.
+7. **Hạn mức phút GitHub Actions** sau khi repo chuyển sang Private.
+8. **NVENC và việc chạy song song** chưa có số đo VRAM khi Qwen2-VL đang chạy.
+9. **Mọi cổng hiện chỉ chạy trên một card RTX 2060.**
+10. **Cài lại Windows hoặc dùng VM nhân bản** ảnh hưởng tới mã máy (cần chính sách cấp lại).
 
 ## 11. Bảng trạng thái
 
 | Mốc | Trạng thái |
 |---|---|
-| Kế hoạch được review và người dùng duyệt | [ ] |
-| E0 hợp đồng giao diện hồ sơ phần cứng | [ ] |
+| Kế hoạch bản 2 được người dùng duyệt | [ ] |
+| Repo chuyển sang Private | [ ] |
+| C0: sửa `AGENTS.md` (route mới, quy tắc khóa bí mật, thư mục cài) được duyệt | [ ] |
+| E0 hợp đồng hồ sơ phần cứng được duyệt | [ ] |
 | E1–E2 nhận diện, bảng cấu hình, đo nhanh | [ ] |
-| E3 sửa đường chạy CPU | [ ] |
-| E4 cổng CPU fp32 trên PC | [ ] |
 | A0 đo từng bước xuất | [ ] |
-| A1 làn xuất riêng | [ ] |
-| A2 bộ lọc làm mờ (framemd5 giống hệt) | [ ] |
-| A3 NVENC qua cổng SSIM, người dùng duyệt | [ ] |
+| A1a ưu tiên bản xuất | [ ] |
+| A2 bộ lọc làm mờ (framemd5 + SHA-256 giống hệt) | [ ] |
+| C1 khóa phiên bản (chỉ đọc) · C2 `install_root()` | [ ] |
+| **Điểm gộp G1** | [ ] |
+| Người dùng chọn cách xử lý C1 trên CPU | [ ] |
+| E3 + đóng băng hồ sơ theo job | [ ] |
+| A3 NVENC trong root tạm; người dùng duyệt; `AGENTS.md` cập nhật | [ ] |
+| A4 (nếu làm) được duyệt; `AGENTS.md` cập nhật | [ ] |
 | B0 đo nền quét | [ ] |
-| B1 đợt `cli.py`/cache duy nhất (người dùng duyệt) | [ ] |
-| B2–B4 NVDEC, gộp giải mã, hash một lần | [ ] |
-| C0 `AGENTS.md`, `LICENSE` | [ ] |
-| C1 khóa phiên bản model | [ ] |
-| C2 `install_root()` | [ ] |
-| C3 khóa cache cho bản build | [ ] |
-| C4 biên dịch Nuitka | [ ] |
-| C5 Inno Setup | [ ] |
-| C6 kích hoạt + công cụ cấp key | [ ] |
-| C7 GitHub Actions build + cài thử | [ ] |
+| **B1 đợt sửa khóa cache duy nhất** (người dùng duyệt) | [ ] |
+| **Điểm gộp G2** | [ ] |
+| B2 · B3 · B4 · (B5) | [ ] |
+| E4 cổng CPU fp32 | [ ] |
+| A1b chạy song song nhiều làn | [ ] |
+| C3 · C4 · C5 · C6 · C7 · C8 | [ ] |
+| **Điểm gộp G3** | [ ] |
 | D dọn code | [ ] |
 | Bản cài đầu tiên được người dùng kiểm | [ ] |
 
 ## 12. Prompt dán cho từng session
 
 ```text
-[E – cloud] Repo dinhnguyentrungthanh/video-ai-edit. Đọc AGENTS.md và docs/PERF_INSTALL_PLAN.md (mục 3, 4, 9). Nhánh feat/hardware-profile từ main. Làm E0 trước và đưa hợp đồng cho tôi duyệt; sau đó E1–E3. Không sửa cli.py, run.ps1, stage_cache.py, cache_dependencies.py. Commit trên nhánh; hỏi tôi trước khi push.
+[E – cloud] Repo dinhnguyentrungthanh/video-ai-edit. Đọc AGENTS.md và docs/PERF_INSTALL_PLAN.md (mục 1–4, 9). Nhánh feat/hardware-profile từ main. Làm E0 và đưa hợp đồng cho tôi duyệt; sau đó E1–E2. Không sửa scheduler.py, cli.py, __main__.py, __init__.py, run.ps1, env.ps1, stage_cache.py, cache_dependencies.py, pyproject.toml, config/*, models\. Chỉ ghi số job/revision/nhãn L-H-T, không tên phim. Commit trên nhánh; hỏi tôi trước khi push.
 ```
 ```text
-[A – PC] Làm việc trong E:\DungChung\BiliFlow. Đọc AGENTS.md và docs/PERF_INSTALL_PLAN.md (mục 3, 5, 9). Worktree temp\wt-export-speed, nhánh perf/export-speed từ main. Làm A0 (đo) trước và báo số; rồi A1–A2. A3 dùng hồ sơ phần cứng của session E. Không sửa cli.py; không ghi vào input\/output\/reports\/archive thật. Chưa push/merge.
+[A – PC] Làm việc trong E:\DungChung\BiliFlow. Đọc AGENTS.md và docs/PERF_INSTALL_PLAN.md (mục 1–3, 5, 9). Worktree temp\wt-export-speed, nhánh perf/export-speed từ main (chuẩn bị theo mục 3.8). Làm A0 (đo) và báo số; rồi A1a, A2. Không sửa cli.py, run.ps1, stage_cache.py, cache_dependencies.py, config/*, models\. Không ghi vào input\/output\/reports\/archive thật; NVENC chỉ trong root tạm. Chưa push/merge.
 ```
 ```text
-[C – cloud] Repo dinhnguyentrungthanh/video-ai-edit. Đọc AGENTS.md và docs/PERF_INSTALL_PLAN.md (mục 3, 7, 9). Nhánh feat/installer từ main. Làm C0 (đề xuất thay đổi AGENTS.md/LICENSE để tôi duyệt), C1, C2. C3 chỉ làm sau đợt B1. Không đưa khóa bí mật cấp key vào repo. Commit trên nhánh; hỏi tôi trước khi push.
+[C – cloud] Repo dinhnguyentrungthanh/video-ai-edit. Đọc AGENTS.md và docs/PERF_INSTALL_PLAN.md (mục 1–3, 7, 9). Nhánh feat/installer từ main. Làm C0 (đề xuất sửa AGENTS.md/LICENSE để tôi duyệt), C1 (script chỉ đọc, không tải lại model), C2 (không sửa cli.py). C3 chỉ làm trong đợt B1. Không bao giờ tạo, đọc hay đưa khóa bí mật cấp key vào repo. Commit trên nhánh; hỏi tôi trước khi push.
 ```
 ```text
-[B – PC] Làm việc trong E:\DungChung\BiliFlow. Đọc AGENTS.md và docs/PERF_INSTALL_PLAN.md (mục 3, 6, 9). Chỉ bắt đầu khi A1 và E0–E2 đã vào main. Worktree temp\wt-scan-speed, nhánh perf/scan-decode. B0 đo trước; hỏi tôi trước khi làm B1. Mọi thay đổi qua cổng giống hệt. Chưa push/merge.
+[B – PC] Làm việc trong E:\DungChung\BiliFlow. Đọc AGENTS.md và docs/PERF_INSTALL_PLAN.md (mục 1–3, 6, 9). Chỉ bắt đầu sau điểm gộp G1. Worktree temp\wt-scan-speed, nhánh perf/scan-decode (mục 3.8). B0 đo trước; trình tôi danh sách B1 trước khi sửa. Mọi thay đổi qua cổng giống hệt. Không sửa models\. Chưa push/merge.
 ```
 ```text
-[D – cloud] Repo dinhnguyentrungthanh/video-ai-edit. Đọc AGENTS.md và docs/PERF_INSTALL_PLAN.md (mục 3, 8, 9). Chỉ bắt đầu khi A, B đã vào main. Nhánh refactor/shared-helpers. Hỏi tôi định dạng giờ trước khi đổi; phần chạm module quét gộp với đợt B1. Hỏi tôi trước khi push.
+[D – cloud] Repo dinhnguyentrungthanh/video-ai-edit. Đọc AGENTS.md và docs/PERF_INSTALL_PLAN.md (mục 1–3, 8, 9). Chỉ bắt đầu sau điểm gộp G3. Nhánh refactor/shared-helpers. Hỏi tôi định dạng giờ trước khi đổi. Phần chạm khóa cache đã đi theo B1; không sửa cli.py, stage_cache.py, __init__.py, pyproject.toml. Hỏi tôi trước khi push.
 ```
