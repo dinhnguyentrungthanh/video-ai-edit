@@ -57,3 +57,12 @@ Each step is gated against the step before it, both as frozen copies of `src` in
     `--baseline-mp4-sha256`) against step 1. Regions there are 30 rows or more, so the cap changes the graph but no
     byte: all four passed.
   - These ran while research agents of the same session also used the CPU: their times are not comparable.
+- Step 2, the feather mask made once:
+  - `<bench>/<stamp>-gate.json` stamped from 18:40 on 2026-10-11 (`smoke-synth` 18:40:39, `T71-thin60` 18:41:35,
+    `L39-1080-seg300` 18:42:37, `T74` 18:51:36, `T71` 01:01:17 on 2026-10-12): step 1 code (baseline) against step 2. Both
+    sides render, so each file is also a timing pair. All passed: framemd5 and mp4 SHA-256 identical.
+  - The PC was not idle while they ran: the A2 gate rendered T74 in 330.5 s, here the same bytes took 441.9 s. Compare
+    only the two sides of one file.
+  - `T71` ran while the user's video editor used the CPU (the Control Center ran nothing): its render of the same
+    bytes took 1,000.6 s against 438.5 s in step 1's gate, and its step 2 framemd5 was slower than step 1's. It shows
+    only that no byte changed.

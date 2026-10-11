@@ -1,0 +1,221 @@
+{
+  "schema_version": 1,
+  "name": "T71",
+  "tag": "20261012-010117",
+  "finished_at": "2026-10-12T01:51:10+07:00",
+  "scope": "full",
+  "machine": {
+    "cpu": "Intel64 Family 6 Model 165 Stepping 2, GenuineIntel",
+    "logical_cpus": 12,
+    "platform": "Windows-10-10.0.26300-SP0",
+    "python": "3.11.16",
+    "ffmpeg": "9.0.1"
+  },
+  "origin": {
+    "job_id": 71,
+    "segment": null,
+    "synthetic": null
+  },
+  "copy": {
+    "duration_seconds": 2594.132021,
+    "bytes": 350044866,
+    "width": 1280,
+    "height": 534,
+    "video_codec": "h264",
+    "pix_fmt": "yuv420p",
+    "frame_rate": "25/1",
+    "video_bit_rate": "1014001",
+    "audio_codec": "aac",
+    "file": "input/source.mp4"
+  },
+  "operations": [
+    {
+      "type": "blur",
+      "start_seconds": 0.0,
+      "end_seconds": 2594.132,
+      "region": {
+        "x": 37,
+        "y": 35,
+        "width": 208,
+        "height": 59
+      },
+      "blur": {
+        "sigma": 35,
+        "edge_feather_pixels": 2,
+        "edge_feather_mode": "all_edges",
+        "method": "delogo_blur_v1"
+      }
+    },
+    {
+      "type": "blur",
+      "start_seconds": 0.0,
+      "end_seconds": 2594.132,
+      "region": {
+        "x": 383,
+        "y": 489,
+        "width": 516,
+        "height": 34
+      },
+      "blur": {
+        "sigma": 28,
+        "edge_feather_pixels": 2,
+        "edge_feather_mode": "all_edges",
+        "method": "delogo_blur_v1"
+      }
+    },
+    {
+      "type": "blur",
+      "start_seconds": 8.0,
+      "end_seconds": 13.08,
+      "region": {
+        "x": 469,
+        "y": 179,
+        "width": 318,
+        "height": 168
+      },
+      "blur": {
+        "sigma": 101,
+        "edge_feather_pixels": 4,
+        "edge_feather_mode": "all_edges",
+        "method": "delogo_blur_v1"
+      }
+    },
+    {
+      "type": "blur",
+      "start_seconds": 2589.88,
+      "end_seconds": 2593.88,
+      "region": {
+        "x": 377,
+        "y": 203,
+        "width": 538,
+        "height": 108
+      },
+      "blur": {
+        "sigma": 65,
+        "edge_feather_pixels": 4,
+        "edge_feather_mode": "all_edges",
+        "method": "delogo_blur_v1"
+      }
+    }
+  ],
+  "size_policy": null,
+  "graph_changed": true,
+  "framemd5_identical": true,
+  "mp4_sha256_identical": true,
+  "sides": {
+    "baseline": {
+      "tag": "20261012-010117-baseline",
+      "code": {
+        "src_sha256": "39ad1a919db6b5586355d2393057f92ee4a7487725fbfcb8e8d0b90b988c0e66",
+        "tracked": false
+      },
+      "graph_chars": 3249,
+      "filter_threads": null,
+      "graph_sha256": "059e5595362418ca1082e8eaf86c12fab7e5f147e8b13354dbffe80e8215c7d2",
+      "framemd5_seconds": 390.119,
+      "framemd5_sha256": "ca44dddea0e146dc2ec29db90ce3f51a83cd05d03c7e1a572c3af008546741cb",
+      "framemd5_frames": 125645,
+      "render": {
+        "tag": "20261012-010117-baseline",
+        "total_seconds": 1064.107,
+        "events": [
+          {
+            "step": "sha256_source_before",
+            "seconds": 1.124,
+            "bytes": 350044866
+          },
+          {
+            "step": "ffprobe",
+            "seconds": 0.11
+          },
+          {
+            "step": "ffmpeg_render",
+            "seconds": 1000.574
+          },
+          {
+            "step": "ffprobe",
+            "seconds": 0.171
+          },
+          {
+            "step": "ffmpeg_decode_validation",
+            "seconds": 58.201
+          },
+          {
+            "step": "sha256_output",
+            "seconds": 2.453,
+            "bytes": 568387266
+          },
+          {
+            "step": "sha256_source_after",
+            "seconds": 1.441,
+            "bytes": 350044866
+          }
+        ],
+        "output_sha256": "437c60cc8dda369ef1baf1bc9222e8953cdf975cab72506df19e97994c3a83a5",
+        "output_bytes": 568387266,
+        "output_duration_seconds": 2594.027,
+        "manifest_elapsed_seconds": 1000.575,
+        "manifest_decode_validation_seconds": 58.201,
+        "manifest_video_seconds_per_processing_second": 2.593
+      }
+    },
+    "candidate": {
+      "tag": "20261012-010117-candidate",
+      "code": {
+        "src_sha256": "99a2d634ceccbdb3bbb4ccc1d8944853a27ebbb2add49af0ee9503032bb41458",
+        "tracked": false
+      },
+      "graph_chars": 3320,
+      "filter_threads": null,
+      "graph_sha256": "2e9e5440ee670f83b0991a5a170dc09e7b09009f6fbec40e9d656d092025a3ff",
+      "framemd5_seconds": 582.237,
+      "framemd5_sha256": "ca44dddea0e146dc2ec29db90ce3f51a83cd05d03c7e1a572c3af008546741cb",
+      "framemd5_frames": 125645,
+      "render": {
+        "tag": "20261012-010117-candidate",
+        "total_seconds": 953.358,
+        "events": [
+          {
+            "step": "sha256_source_before",
+            "seconds": 1.913,
+            "bytes": 350044866
+          },
+          {
+            "step": "ffprobe",
+            "seconds": 0.132
+          },
+          {
+            "step": "ffmpeg_render",
+            "seconds": 895.542
+          },
+          {
+            "step": "ffprobe",
+            "seconds": 0.13
+          },
+          {
+            "step": "ffmpeg_decode_validation",
+            "seconds": 52.541
+          },
+          {
+            "step": "sha256_output",
+            "seconds": 1.916,
+            "bytes": 568387266
+          },
+          {
+            "step": "sha256_source_after",
+            "seconds": 1.154,
+            "bytes": 350044866
+          }
+        ],
+        "output_sha256": "437c60cc8dda369ef1baf1bc9222e8953cdf975cab72506df19e97994c3a83a5",
+        "output_bytes": 568387266,
+        "output_duration_seconds": 2594.027,
+        "manifest_elapsed_seconds": 895.543,
+        "manifest_decode_validation_seconds": 52.541,
+        "manifest_video_seconds_per_processing_second": 2.897
+      }
+    }
+  },
+  "passed": true,
+  "framemd5_check_passed": true
+}

@@ -29,11 +29,22 @@ the gblur inside it.
 
 ## Fix (perf phase 2, step 1; the user approved it on 2026-10-11)
 
-Each regional gblur gets `threads=max(1, height // 2)`: the rows of its chroma plane (the branch is yuv420p, and crop
-rounds an odd height down). FFmpeg uses the smaller of this cap and its own filter thread count, and every count up to
-the row count gives the same pixels, so:
-- a region whose chroma rows reach the default thread count (26 rows or more on this PC) is unchanged;
-- a thinner region now comes out as with one thread: right, and the same on every run and every machine.
+Each regional gblur gets `threads=max(1, height // 2)`: the rows of its chroma plane for a 4:2:0 source (crop rounds
+an odd height down). FFmpeg uses the smaller of this cap and its own filter thread count. The cap leaves no gblur job
+without a row, which removes the race below on any CPU. What was measured, on this PC only (AVX2, 13 filter threads)
+and for regions wider than 16 pixels (all probes and gate regions were at least 128 pixels wide):
+- every thread count up to the row count gave the same pixels as one thread;
+- a region whose chroma rows reach the default thread count (26 rows or more here) is unchanged;
+- a thinner region now comes out as with one thread, and the same on every run.
+
+Not measured: other CPUs (AVX-512, SSE only), where FFmpeg runs other gblur code; regions 16 pixels wide or less (the
+second fault below: there the one-thread result itself is wrong, and the capped one may differ from it); and machines
+with more than 26 filter threads, where regions of 26 rows or more also change (from wrong to right).
+
+Not covered: a yuv410p (4:1:0) source, such as an old SVQ1 or Indeo file. Nothing converts the branch to 4:2:0 before
+gblur, so its chroma planes have `height // 4` rows and the cap is twice that: such a source keeps the old wrong,
+run-dependent chroma (no worse than before the fix). Proposed, not done (waits for the user): cap at `height // 4`
+when the probed source is yuv410p; for 4:2:0 sources the graph, and so every byte, stays as it is now.
 
 The full-frame gblur keeps FFmpeg's default (a whole frame has hundreds of rows).
 

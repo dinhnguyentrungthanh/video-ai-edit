@@ -13,6 +13,10 @@ DEFAULT_SIGMA = 28
 COVER_MARGIN_PIXELS = 8
 # The cover blur grows with the region: sigma 28 barely softens a 100-pixel-high logo.
 COVER_SIGMA_FRACTION = 0.6
+# alphamerge of the one-frame feather mask: after the mask's only frame it keeps
+# repeating it until the colour branch ends. These are FFmpeg's defaults, written
+# out so that a change of default cannot leave later frames without the mask.
+MASK_REPEAT_ALPHAMERGE = "alphamerge=eof_action=repeat:repeatlast=1:shortest=0"
 
 
 def blur_parameters(operation: dict) -> tuple[float, int]:
@@ -92,9 +96,10 @@ def regional_blur_filters(
 
     ``enable`` (an FFmpeg timeline option, ``enable='...'``) gates the final overlay
     and, since perf plan A2, also the costly per-frame filters of the branch
-    (delogo, gblur, geq): outside the blur times they pass their frame through
+    (delogo, gblur): outside the blur times they pass their frame through
     untouched and the overlay shows the unchanged picture, so every output frame
-    is the same as when the branch ran on every frame.
+    is the same as when the branch ran on every frame. The feather mask is made
+    once per branch (perf plan phase 2, step 2).
     """
     x, y = int(region["x"]), int(region["y"])
     width, height = int(region["width"]), int(region["height"])
@@ -149,11 +154,16 @@ def regional_blur_filters(
     # conversion FFmpeg can negotiate gray upstream from the mask branch and
     # silently desaturate the complete output frame.
     filters.append(f"[{colour_source}]format=yuv420p[{colour}]")
+    # The mask depends only on the region's size (X, Y, W, H), so geq makes it
+    # once, from the branch's first frame (never gated: that frame may fall
+    # outside the blur times; no setpts: it keeps the colour frame's time), and
+    # alphamerge repeats that frame for every later one: the same pixels as a
+    # mask made per frame.
     filters.append(
-        f"[{mask_source}]format=gray,"
-        f"geq=lum='255*min(1\\,{distance}/{safe_feather})':{enable}[{mask}]"
+        f"[{mask_source}]trim=end_frame=1,format=gray,"
+        f"geq=lum='255*min(1\\,{distance}/{safe_feather})'[{mask}]"
     )
-    filters.append(f"[{colour}][{mask}]alphamerge[{soft}]")
+    filters.append(f"[{colour}][{mask}]{MASK_REPEAT_ALPHAMERGE}[{soft}]")
     if method == COVER_METHOD:
         filters.append(f"[{clean}][{soft}]overlay=0:0[{patch}]")
         soft = patch
