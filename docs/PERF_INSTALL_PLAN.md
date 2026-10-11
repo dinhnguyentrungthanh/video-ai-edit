@@ -877,3 +877,87 @@ Session nào xong Phase 1 trước (ví dụ E, C) thì **không phải chờ G1
 ## Lưu ý cho người tiếp quản
 - <bẫy, giả định, file không được sửa>
 ```
+
+## 14. Trạng thái và quyết định mới nhất (2026-10-12, bàn giao cho session điều phối trên PC)
+
+Session cloud lập kế hoạch dừng vì hết credit. Một session **điều phối trên PC** tiếp quản: đọc mục này và các file bàn giao, soạn prompt để người dùng dán cho các session làm việc, gộp nhánh khi người dùng đồng ý, cập nhật kế hoạch. Session điều phối **không tự viết code tính năng**.
+
+### 14.1 Ưu tiên hiện tại (người dùng, 2026-10-12)
+
+- **Tiết kiệm token.** Chỉ tập trung vào **xuất và quét nhanh hơn**.
+- **Chỉ một session phát triển chạy tại một thời điểm.**
+- **Giảm mức effort:** không dùng `xhigh`/`ultracode`, không chạy agent phụ trừ khi người dùng đồng ý.
+- **C (bộ cài) và E (hồ sơ phần cứng) tạm dừng** sau khi lưu xong bước đang làm. Làm tiếp sau.
+- **Người dùng chủ yếu quét quảng cáo;** 18+ thỉnh thoảng; máu và bạo lực hiếm.
+
+### 14.2 Trạng thái từng session
+
+**A (xuất), nhánh `perf/export-speed`, worktree `temp\wt-export-speed`, chưa push:**
+- A0, A1a, A2 xong.
+  - A2 render nhanh hơn 1,6–1,9 lần, đầu ra giống hệt từng byte (job 71 và 74 trùng từng byte với bản đã xuất thật).
+  - Full suite đạt, sau khi cập nhật mã băm của trang dashboard cũ.
+- Commit `db0a139` có tiền tố `wip:`. **Không squash**; gộp bằng merge.
+- **Quyết định:** duyệt sửa lỗi gblur.
+- **Thứ tự tiếp theo:**
+  1. gộp phần đã xong vào bản đang chạy (worktree `merge/export`; khóa cache mọi stage không đổi; full suite; người dùng đồng ý; Control Center không có job; người dùng tự khởi động lại);
+  2. mặt nạ viền mềm tính một lần (cổng: giống hệt từng byte);
+  3. sửa gblur (vùng đúng giữ nguyên byte, vùng sai được sửa, chạy 2 lần cùng hash);
+  4. đồ thị bộ lọc qua file;
+  5. A3: encoder chọn bằng một lần encode thử (NVENC dùng được thì dùng, không thì x264), không chờ E. NVENC chỉ chạy trong root tạm tới khi người dùng duyệt SSIM và dung lượng trên 3 tập.
+- A có thể đang làm bước 2–4 trên nhánh xếp chồng `perf/export-speed-p2`.
+
+**C (bộ cài), nhánh `feat/installer`, worktree `temp\wt-installer` (đã chuyển từ cloud về PC), chưa push:**
+- Phase 1 xong: C0, C2, C6-lõi, script C1; commit cloud `c0d2bc3`, bàn giao `6fa889f`.
+- **C0 đã duyệt:**
+  - A1, A2, A4 nguyên văn;
+  - A3 thêm gạch đầu dòng: "Agents only write the public key into RELEASE_PUBLIC_KEY_HEX when the user gives it to them; they never generate or choose it.";
+  - LICENSE: chủ sở hữu "Endmin". **Chờ người dùng xác nhận tên pháp lý**, ví dụ "Endmin (<tên pháp lý>)";
+  - FFmpeg: bản build gyan.dev 9.0.1 "essentials" (GPL, không nonfree), **tải lúc cài**, ghim phiên bản và SHA-256, ghi link mã nguồn của bên build.
+- **Khóa model:**
+  - 6 dòng "!" đều do script: so SHA có phân biệt hoa/thường; không đọc được config của EasyOCR; khóa cả `.gitkeep` và `__pycache__`;
+  - người dùng **duyệt sửa script và test CRLF** (`tests/test_models_lock.py:114`), rồi chạy lại. Không còn "!" thì commit lock.
+- **Tạm dừng** sau bước này.
+
+**E (hồ sơ phần cứng), nhánh `feat/hardware-profile`, worktree `temp\wt-hardware-profile`, chưa push:**
+- E0 đã duyệt và commit (`958395c`, `e0549df`, `acce946`; `docs/HARDWARE_PROFILE.md`).
+- **Quyết định card chưa đo: phương án D.**
+  - Card NVIDIA đời chưa đo mà bản torch hỗ trợ: tự chạy chế độ chuẩn (tắt "Tăng tốc xử lý", không fp16, OCR batch 1) và tắt TF32 cho cả matmul và cuDNN. Ghi "chưa qua cổng trên đời card này".
+  - fp16 trên đời chưa đo: chỉ bật bằng công tắc riêng trên PC, mặc định tắt, có hộp xác nhận.
+  - Torch hoặc driver không hỗ trợ đời card đó: từ chối, kèm lý do cụ thể.
+  - Các lệch nhỏ ở mục 11 của E0: đồng ý.
+- Đang làm E1–E2. **Tạm dừng** sau bước đang làm.
+
+**B0:** chưa chạy. Thay bằng việc người dùng tự chạy `.\.venv\Scripts\python.exe -m biliflow.performance_report --job-id <N>` (chỉ đọc) cho 2 job quét quảng cáo gần đây, rồi dán cho session điều phối phân tích.
+
+**C-spike:** chưa chạy, để sau.
+
+### 14.3 Phạm vi B thu gọn (theo cách người dùng thực sự quét)
+
+- **B1 nhỏ, một lần làm mất cache quét, người dùng duyệt trước:**
+  - nạp thư viện khi cần trong `cli.py`;
+  - hash video gốc một lần;
+  - Florence và DINO chung một tiến trình;
+  - bỏ `__pycache__`/`*.pyc` và file không phải model khỏi khóa cache. Hiện khóa cache tính cả `models\florence_2_base\__pycache__\*.pyc`.
+- **B2/B3** (NVDEC và gộp lượt giải mã cho 18+, máu, bạo lực): **để sau.**
+- **Kỳ vọng với quét chỉ quảng cáo:** nhanh thêm khoảng 5–15% (ước tính). Thời gian tiết kiệm chính nằm ở **xuất**.
+- Số đo thật lấy từ `performance_report` của người dùng.
+
+### 14.4 Phát hiện cần nhớ
+
+- **Lỗi gblur:** vùng làm mờ thấp dưới khoảng 26 dòng bị sai màu và cho kết quả khác nhau giữa các lần chạy trên PC. Máy từ 16 luồng trở lên sẽ hỏng ở vùng 30 dòng. 22 bản xuất cũ không bị. Chi tiết: `docs/evidence/perf-export/gblur-threads.md` trên nhánh của A.
+- **Giới hạn dòng lệnh** 32.767 ký tự: plan có khoảng 19 lần cắt trở lên sẽ vượt. Sửa bằng cách truyền đồ thị bộ lọc qua file.
+- **Kế hoạch trên `main` đã cập nhật sau khi A, C, E tạo nhánh.** Các session đọc bản mới bằng `git show origin/main:docs/PERF_INSTALL_PLAN.md`.
+
+### 14.5 Việc người dùng còn phải làm
+
+- Chuyển repo sang **Private** trước bản build đầu tiên.
+- Xác nhận **tên pháp lý** cho `LICENSE`.
+- Sau mỗi lần cập nhật bản đang chạy: chờ Control Center hết job, rồi **tự khởi động lại**.
+
+### 14.6 Cách session điều phối làm việc
+
+- Làm trong worktree `temp\wt-coord`, nhánh `coord/plan` (từ `origin/main`). **Không sửa thư mục chính** đang chạy Control Center.
+- Đọc file bàn giao của các nhánh local bằng `git show <nhánh>:docs/handoff/<file>`, không checkout.
+- Cập nhật kế hoạch trên `coord/plan`. Chỉ đưa vào `main` và push khi người dùng đồng ý.
+- **Mỗi prompt soạn cho người dùng phải ghi rõ:** dán vào session nào (dùng lại hay mới), làm trên nhánh và worktree nào, file không được sửa, cổng kiểm tra, quy tắc bàn giao ở mục 13.
+- Trả lời ngắn. Đọc file bàn giao thay vì đọc code lớn.
