@@ -5,8 +5,9 @@ Run on the PC, from the installer worktree, against the install folder:
     .\\.venv\\Scripts\\python.exe temp\\wt-installer\\scripts\\models_lock.py --root E:\\DungChung\\BiliFlow ^
         --out temp\\wt-installer\\config\\models.lock.json
 
-It only reads: every file under ``<root>\\models\\<model>`` is opened read-only and hashed, nothing
-there is written, moved or deleted, and nothing is downloaded. The only file it writes is ``--out``
+It only reads: every model file under ``<root>\\models\\<model>`` is opened read-only and hashed
+(not ``manifest.json``, Hugging Face's ``.cache``, ``__pycache__``/``*.pyc`` or ``.gitkeep``, which
+are not part of a model), nothing there is written, moved or deleted, and nothing is downloaded. The only file it writes is ``--out``
 (refused inside ``models\\``; never overwritten unless ``--replace``). The lock records, per model,
 the source (Hugging Face repo and revision from ``manifest.json``, or the EasyOCR release file),
 the SHA-256 and size of every file and the manifest text itself, so a new install gets the same
@@ -45,6 +46,8 @@ PRODUCTION_MODELS = {
 _REVISION = re.compile(r"[0-9a-f]{40}")
 _LOCAL_PATH = re.compile(r"(?<![A-Za-z])[A-Za-z]:[\\/]|\\\\[A-Za-z0-9]")
 _CHUNK = 1024 * 1024
+_NOT_MODEL_NAMES = {".gitkeep"}
+_BYTECODE_SUFFIXES = {".pyc", ".pyo"}
 
 
 def sha256_file(path: Path) -> str:
@@ -55,25 +58,33 @@ def sha256_file(path: Path) -> str:
     return digest.hexdigest()
 
 
+def _constant_fields(node: ast.Dict) -> dict[str, str]:
+    """The ``filename``/``url``/``md5sum`` of one dict literal, when they are plain strings."""
+    fields = {}
+    for key, value in zip(node.keys, node.values):
+        if (isinstance(key, ast.Constant) and key.value in {"filename", "url", "md5sum"}
+                and isinstance(value, ast.Constant) and isinstance(value.value, str)):
+            fields[key.value] = value.value
+    return fields
+
+
 def parse_easyocr_config(text: str) -> dict[str, dict[str, str]]:
-    """``filename -> {url, md5sum}`` from easyocr/config.py, read with ``ast`` (never imported)."""
+    """``filename -> {url, md5sum}`` from easyocr/config.py, read with ``ast`` (never imported).
+
+    Each model entry is read on its own, so a computed value elsewhere in the table (EasyOCR 1.7.2
+    builds some ``characters`` with ``''.join(separator_char) + ...``) does not hide the others.
+    """
     found: dict[str, dict[str, str]] = {}
-
-    def visit(value):
-        if isinstance(value, dict):
-            if isinstance(value.get("filename"), str) and isinstance(value.get("url"), str):
-                found[value["filename"]] = {"url": value["url"], "md5sum": str(value.get("md5sum", ""))}
-            for item in value.values():
-                visit(item)
-
     for node in ast.parse(text).body:
-        if isinstance(node, ast.Assign) and any(
+        if not (isinstance(node, ast.Assign) and any(
                 isinstance(target, ast.Name) and target.id in {"detection_models", "recognition_models"}
-                for target in node.targets):
-            try:
-                visit(ast.literal_eval(node.value))
-            except ValueError:
-                continue
+                for target in node.targets)):
+            continue
+        for entry in ast.walk(node.value):
+            if isinstance(entry, ast.Dict):
+                fields = _constant_fields(entry)
+                if "filename" in fields and "url" in fields:
+                    found[fields["filename"]] = {"url": fields["url"], "md5sum": fields.get("md5sum", "")}
     return found
 
 
@@ -87,11 +98,20 @@ def easyocr_release_files() -> dict[str, dict[str, str]]:
     return {}
 
 
+def _not_a_model_file(relative: Path) -> bool:
+    """The manifest itself, and what is not part of a model: Hugging Face's ``.cache``, Python
+    bytecode written when a model's own code is imported (``trust_remote_code``) and placeholders."""
+    return (relative.as_posix() == "manifest.json"
+            or relative.name in _NOT_MODEL_NAMES
+            or relative.suffix in _BYTECODE_SUFFIXES
+            or any(part.startswith(".cache") or part == "__pycache__" for part in relative.parts))
+
+
 def _files_on_disk(folder: Path, problems: list[str]) -> list[dict]:
     files = []
     for path in sorted(folder.rglob("*")):
         relative = path.relative_to(folder)
-        if relative.as_posix() == "manifest.json" or any(part.startswith(".cache") for part in relative.parts):
+        if _not_a_model_file(relative):
             continue
         info = os.lstat(path)
         if stat.S_ISLNK(info.st_mode) or getattr(info, "st_file_attributes", 0) & 0x400:
@@ -117,8 +137,12 @@ def _compare_with_manifest(files: list[dict], listed: object, problems: list[str
         problems.append(f"{name}: trên đĩa có nhưng manifest không ghi")
     for name in sorted(set(named) & set(on_disk)):
         expected, actual = named[name], on_disk[name]
-        if (expected.get("sha256") not in (None, actual["sha256"])
-                or expected.get("bytes") not in (None, actual["bytes"])):
+        # Manifests differ in style (EasyOCR's has upper-case hex and ``size_bytes``); the lock
+        # always keeps the lower-case digest it computed.
+        digest = expected.get("sha256")
+        size = expected.get("bytes", expected.get("size_bytes"))
+        if ((digest is not None and str(digest).lower() != actual["sha256"])
+                or size not in (None, actual["bytes"])):
             problems.append(f"{name}: kích thước hoặc SHA-256 khác manifest")
 
 
