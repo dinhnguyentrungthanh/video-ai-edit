@@ -72,3 +72,8 @@ Each step is gated against the step before it, both as frozen copies of `src` in
   - Each side's `graph_option` names how its graph reached FFmpeg. The candidate render's is `-/filter_complex`, and
     `render_graphs_match` is true: the file FFmpeg read holds the graph measured. All three passed: framemd5 and mp4
     SHA-256 are identical, and the graph text is unchanged (`graph_changed: false`).
+- A3, the x264 path after merging G1 (frozen `a3` = `f4e80c2`, harness `harness-a3`):
+  - `<bench>/<stamp>-gate.json` stamped 08:54 on 2026-10-12 (`smoke-synth` 08:54:48, `T74` 08:54:58): `9f0581a`
+    (frozen `p2-step3`, baseline) against A3 with no `render_settings`. Both sides render.
+  - Both passed: framemd5 and mp4 SHA-256 identical, and the mp4s are those of A2 and steps 2 and 3 (`smoke-synth`
+    `1aa9f941…`, `T74` `3f2de702…`). The candidate's `encoding` records `libx264` and `nvenc_check: not_asked`.
