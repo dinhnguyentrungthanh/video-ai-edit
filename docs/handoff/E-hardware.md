@@ -95,7 +95,7 @@
 
 - **Người dùng duyệt ngày 2026-10-12** (ghi ở mục 10–11 của `docs/HARDWARE_PROFILE.md`):
   1. ba chỗ E2 lệch bản E0 (mục 11);
-  2. bốn cách hiểu 1–4 của E về phương án D (mục 10). Ý 5 (lần đo thất bại vì card không có mã torch hay driver dưới mức tối thiểu cho `ARCH_UNSUPPORTED`/`DRIVER_TOO_OLD`) không nằm trong bốn ý đã gửi; vẫn là cách hiểu của E;
+  2. bốn cách hiểu 1–4 của E về phương án D (mục 10). Ý 5 (lần đo thất bại vì card không có mã torch hay driver dưới mức tối thiểu cho `ARCH_UNSUPPORTED`/`DRIVER_TOO_OLD`) được duyệt sau đó cùng ngày, qua session điều phối lúc gộp G1;
   3. hai câu về nhãn và lời từ chối: giữ như đã làm.
   - Người dùng thêm cổng cho lần đo thật: RTX 2060 không bị `VRAM_TOO_SMALL` hay lời từ chối nào; ghi lại VRAM mà driver báo (mục 6.4).
   - `AGENTS.md`: session điều phối thêm các route `/api/hardware-profile*` và lệnh đo lúc gộp G1; E không sửa.
@@ -128,7 +128,6 @@
 
 ## Chờ người dùng
 - **Lần đo thật E2:** người dùng tắt Control Center thật ở khung GPU 3 rồi báo E (agent không bao giờ POST `/api/scheduler` và không tự tắt Control Center).
-- **Không bắt buộc:** xác nhận ý 5 của E về D (mục 10 của `docs/HARDWARE_PROFILE.md`), vì nó không nằm trong bốn ý đã duyệt ngày 2026-10-12.
 - **G1:** duyệt gộp nhánh.
 - Trước Đợt 2 (không thuộc E0–E2): chạy lại cổng framemd5 cả phim L ở khung GPU 3 (câu hỏi 1, phương án b; người dùng đã cho phép đọc bản L cho lần chạy đó).
 

@@ -1369,7 +1369,7 @@ Lỗi FFmpeg và lỗi phép thử encoder không làm lần đo thất bại (m
 | Tham số giống hệt | Bảng 1 không đổi; để sau B1 và A1b |
 | Mục 11 | Các lệch đã ghi được duyệt: fp32 ngầm trên dòng lệnh, NVML quyết định và `nvidia-smi` chỉ để đối chiếu, máy chưa từng có CUDA chờ E4 trên thư mục cài, clip tổng hợp thay clip mẫu |
 
-**Cách hiểu của E về D.** Ý 1–4 được người dùng duyệt ngày 2026-10-12. Ý 5 không nằm trong bốn ý đã gửi duyệt; nó vẫn là cách hiểu của E (đã làm theo, đổi lại được dễ):
+**Cách hiểu của E về D.** Ý 1–4 được người dùng duyệt ngày 2026-10-12; ý 5 được duyệt sau đó cùng ngày, qua session điều phối lúc gộp G1:
 1. D áp cho cả bản torch và driver chưa qua cổng trên card Turing, không chỉ đời card (mục 5.6).
 2. Thêm từ chối `VRAM_TOO_SMALL` khi VRAM nhỏ hơn 6144 MiB (mục 5.6).
 3. Khi công tắc có hiệu lực, cả ba họ Turing đều tắt TF32, để gần đường tham chiếu trên Turing, vốn không có TF32.
