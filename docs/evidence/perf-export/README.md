@@ -77,3 +77,15 @@ Each step is gated against the step before it, both as frozen copies of `src` in
     (frozen `p2-step3`, baseline) against A3 with no `render_settings`. Both sides render.
   - Both passed: framemd5 and mp4 SHA-256 identical, and the mp4s are those of A2 and steps 2 and 3 (`smoke-synth`
     `1aa9f941…`, `T74` `3f2de702…`). The candidate's `encoding` records `libx264` and `nvenc_check: not_asked`.
+- A3, NVENC against x264 (`<bench>/<stamp>-quality.json`, command `quality`, code `a3` = `f4e80c2`):
+  - `T71-seg300` (09:11) and `L39-1080-seg300` (09:35): sweep of p4/p5/p7 and `-cq` 19–27 (harness `harness-a3`).
+  - `T71` (10:26), `T74` (11:17): whole episodes, x264, "auto" (p5 `-cq` 23 through the renderer) and p5 `-cq` 25/27.
+    T74 was scored with two FFmpeg runs at a time and also records `vmaf_every3` (the same numbers from every
+    third frame only).
+  - `H37` (12:03): the whole film (job 37, 1920×1080, 24000/1001). Its sizes, render times and `fallback` are
+    right; its **SSIM and VMAF are not**: the scoring paired frames by timestamp, and this source's timestamps are
+    rounded to 1/90000 against the export's exact 1/24000, so many frames met their neighbour (VMAF percentiles 0
+    for every encoder). Fixed in `42282f8` (pairing by frame number); T71 and T74 (25/1) were not affected.
+  - `H37-seg1200` (14:47): 20 minutes of that film (from 2,400 s, the job's blur region), scored with the fix, every
+    frame. Its `size_policy` was set so the video maxrate is the whole film's (3,416,495 bit/s).
+  - Every render ran alone; scoring ran after all renders of a bench. VRAM is nvidia-smi's used memory (GPU 0).
