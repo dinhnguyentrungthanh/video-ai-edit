@@ -220,3 +220,78 @@ Lỗi này có từ trước B1; B1 không đổi đường dẫn nào. Phần d
 - **Không sửa:** `final_renderer.py`, `blur_filter.py`, `export_encoder.py`, `hardware_*.py`, `models\`. `scheduler.py` chỉ sửa khi bắt buộc, và báo người dùng trước. B1 không đụng `scheduler.py`.
 - **`prune()` và `prune_file_caches()` xóa file:** không bao giờ gọi trên thư mục cài khi đo.
 - **Không ghi vào repo** tên phim, tên file nguồn hay link. Tên thư mục report có chứa tên phim.
+
+# Đợt OCR (stage text)
+
+- **Nhánh:** `perf/scan-ocr`, tách từ `origin/main` 9ae104c (B1 đã gộp và push). Worktree: `temp\wt-scan-speed`.
+- **Trạng thái:** bước 1 (đo, chưa sửa code) **tạm dừng theo yêu cầu người dùng** ngày 2026-10-12, khoảng 23:05. Máy đang có ứng dụng khác chạy, làm số đo bị nhiễu. Người dùng sẽ báo khi máy trống để đo lại cho chính xác. Chưa trình danh sách; chưa sửa code.
+
+## Cách đo
+
+- **Root tạm:** `temp\b-ocr\root`, giữ lại để đo tiếp (7,5 GB). Gồm code của 9ae104c, bản sao models, tools, HF cache, và nguồn job 125 và 114 (đã kiểm SHA-256).
+- **Kết quả:** nằm ở `temp\b-ocr\results\<job>-<biến thể>`.
+- **Script đo:** `temp\b-ocr\harness\`, không commit:
+  - `ocr_probe.py setup|run <job> <biến thể>|cleanup`;
+  - `ocr_probe_inner.py`;
+  - `ocr_analyze.py`.
+- **Lệnh chạy:** đúng argv production của stage text ở chế độ "Tăng tốc xử lý": batch 8, cửa sổ 4 khung, detect fp16, kèm tiến trình con làm nóng routing logo bằng NVDEC.
+- **Điều kiện chạy:**
+  - chỉ chạy khi DB thật (`mode=ro`) không có stage RUNNING nào, kể cả xuất;
+  - giữ mutex `Local\BiliFlowGpuInference`;
+  - ghi mẫu GPU bằng `nvidia-smi` và mẫu CPU của cây tiến trình;
+  - kể từ lần chạy `125-probe-gpupre` trở đi, ghi thêm CPU của các tiến trình khác trên máy để nhận ra nhiễu.
+- **Bộ đo (`probe`):** hook lúc import, không sửa file nào; có `cuda.synchronize` quanh forward. Bộ đo làm chậm khoảng 6 s mỗi lần chạy.
+
+## Số đo đến lúc dừng
+
+Mỗi lần chạy stage text, tính bằng giây. Job 125 (L, 889 khung), job 114 (L, 1.113 khung).
+
+| Biến thể | 125 wall | 114 wall | Kết quả so với plain-a |
+|---|---|---|---|
+| plain-a / plain-b | 96,3 / 97,3 | 138,1 / 175,0 (\*) | giống hệt |
+| prefetch 2 khung | 96,2 | 133,7 | giống hệt; không nhanh hơn |
+| cửa sổ 8 khung | 98,2 | 135,9 | **không giống hệt** (`tracks[].max_confidence`); không nhanh hơn |
+| NVDEC cho OCR | 106,7 | 163,2 | giống hệt; chậm hơn 10–18 % |
+| không làm nóng routing (chỉ tham khảo) | 82,0 | 139,8 | giống hệt |
+
+(\*) Lần chạy bị nhiễu: các ứng dụng khác của người dùng chiếm CPU.
+
+**Tách thời gian** (lần `probe`; 125 / 114):
+
+- **detect:** tổng 63,0 / 94,8. Trong đó:
+  - forward GPU 37,1 / 56,6;
+  - normalize trên CPU 12,7 / 17,5;
+  - resize/pad trên CPU 3,4 / 4,6;
+  - hậu xử lý 2,0 / 5,4;
+  - phần còn lại khoảng 7,7 / 10,3 (chuyển dữ liệu, chép mảng).
+- **recognize:** 12,3 / 17,1 (forward GPU 8,7 / 12,2).
+- **Mô hình ngữ nghĩa:** nạp 7,2 / 5,8; phân loại khoảng 0,1.
+- **`model_load`:** 11,7 / 8,2 (import cộng `Reader` 3,0–3,4).
+- **Chờ khung:** 1,9 / 2,9.
+- **Chờ tiến trình làm nóng routing:** 0.
+- **Còn lại:** tracking và preview, mỗi phần khoảng 0,3.
+- **Máy:**
+  - GPU bận trung bình chỉ 42–48 %, không lúc nào chạm 90 %;
+  - FFmpeg giải mã bằng CPU tốn 174–262 giây CPU, tiến trình làm nóng routing 125–160;
+  - CPU 6 nhân bị chia giữa các tiến trình này.
+- **Khung giống hệt khung trước:** không có ở cả hai job. Job 114 có 5 khung trùng với một khung nào đó trước đó.
+- **Khung không có chữ:** 713/889 và 967/1.113.
+
+**Thí nghiệm** (chỉ trong script đo, không sửa code BiliFlow):
+
+- **`gpupre`:** dựng input của CRAFT trên GPU từ khung uint8. Resize cùng cỡ là bản chép (đã kiểm), đệm bằng số 0; phép trừ và chia làm ở float64 rồi làm tròn về float32.
+  - Job 125: **889/889 khung có detect giống hệt** (cùng hash hộp chữ).
+  - detect_total giảm từ 65,4 xuống 54,8 s. Nhưng lần chạy này bị nhiễu (CPU của tiến trình làm nóng routing tăng từ khoảng 138 lên 189 s), nên wall 116,8 s không dùng được.
+- **Chưa xong:**
+  - `125-gpupre` bị dừng giữa chừng: thư mục kết quả chưa đủ, phải chạy lại;
+  - chưa chạy: `sembg` (nạp mô hình ngữ nghĩa ở luồng nền), `both`, `plain-c`, và cả loạt của job 114.
+
+## Đang dở
+
+- **Đo lại khi người dùng báo máy trống:**
+  - các cặp plain/gpupre/sembg/both xen kẽ, lặp lại, lấy trung vị;
+  - kiểm detect từng khung (`probe-gpupre`) trên job 114;
+  - so report của mọi biến thể với plain-a.
+- Sau đó trình danh sách cho người dùng duyệt. Ứng viên chính:
+  - tiền xử lý detect trên GPU: ước tính 15–30 s mỗi job, cần chứng minh giống hệt; khóa cache chỉ đổi cho stage text;
+  - nạp mô hình ngữ nghĩa trong lúc OCR chạy: khoảng 6–7 s.
