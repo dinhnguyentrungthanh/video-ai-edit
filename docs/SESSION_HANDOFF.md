@@ -1,5 +1,12 @@
 # BiliFlow session handoff
 
+## G2 merge, scan B1 — 2026-10-12, branch `merge/g2` (worktree `temp\wt-merge-g2`), not yet in the main folder
+
+- **Request:** the user approved the B1 list (items 1, 8, 4, 5, 10, 7; item 6 option b), "keep quality as it is", the long-path skip, and merging B1 without waiting for E3.
+- **Merge:** `perf/scan-b1` into `merge/g2` from `main` `e534c12`, no conflict.
+- **Gates:** B's identical-output gate on jobs 125 and 114; full suite 3,159 tests with one environment failure (`ERR_NO_BUFFER_SPACE`), its module alone 3/3 OK.
+- **Next:** with the Control Center off, the coordinator fast-forwards the main folder to `merge/g2`; the user restarts it; push only on the user's word.
+
 ## G1 merge — 2026-10-12, branch `merge/g1` (worktree `temp\wt-merge-g1`), not yet in `main`
 
 - **Request:** the PC coordinator session (plan section 14.6); the user approved gathering C and E first, then A, and the C0 text with `LICENSE` owner Endmin.

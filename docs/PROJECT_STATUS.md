@@ -1,3 +1,8 @@
+## G2 merge, scan B1 (2026-10-12) — branch `merge/g2`, not yet in the main folder
+
+- B1 (session B, `perf/scan-b1`): faster stage start, cheaper cache pruning, scoped cache key, long-path skip. Outputs identical on jobs 125 and 114; scan about 5–9 % faster. Details in `CHANGELOG.md`.
+- Next: the main folder moves to `merge/g2` while the Control Center is off (the user restarts it); the scan cache of old jobs is rebuilt once when they rerun. E3 later.
+
 ## G1 merge (2026-10-12) — branch `merge/g1`, not yet in `main`
 
 - Contains C (C2, C1, C6 core), E (E0–E2), the approved C0 text with `LICENSE`, and A (A0, A1a, A2, phase 2 steps 1–3, A3 NVENC by default). Details in `CHANGELOG.md`.

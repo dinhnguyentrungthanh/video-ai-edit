@@ -1,3 +1,12 @@
+# G2 merge: scan B1 (2026-10-12, branch `merge/g2` from `main` `e534c12`; not yet in the main folder)
+
+- Merged `perf/scan-b1` with `--no-ff`: lazy imports in `cli.py`, cache pruning from the manifests' byte counts, a cache key limited to real model files (no `__pycache__`, `.cache`, `.gitkeep`) and to the stage's own models, torch/CUDA/GPU name/compute capability in the key (no driver), a fail-safe key for compiled builds (C3), `install_root()` in `cli.py`, `run.ps1` handles an abandoned mutex, one version number, and the stage cache is skipped with a WARN event when an entry path passes the Windows limit.
+- Gates (session B): on copies of jobs 125 and 114, two rounds, `text-scan.json`, `scan.json`, `scan-florence.json` and `review-queue.json` identical apart from 29 listed timing fields; the new pruning picks the same entries as the old one on a copy of the cache.
+- Speed: about 5–9 % less scan time per job (14–26 s), mostly from pruning and from `build_review` no longer importing torch.
+- The scan cache key changes once: every stage of an old job scans again the first time it is rerun.
+- E3 was not waited for (the user's choice): it will change the scan key again later, together with B2–B3 or the installer work.
+- Full suite: 3,159 tests, 1 failure in `test_download_account_e2e` (`net::ERR_NO_BUFFER_SPACE` while the PC was busy); that module alone passed 3/3.
+
 # G1 merge: installer core, hardware profile, faster export (2026-10-12, branch `merge/g1` from `origin/main` `00393ec`; not yet in `main`)
 
 - Merged with `--no-ff`, in this order: `feat/installer` (C2 `install_root()`, C1 model lock, C6 activation core), `feat/hardware-profile` (E0–E2), the approved C0 text (`AGENTS.md` blocks A1–A4 plus the hardware-profile entry, `THIRD_PARTY_NOTICES.md`, `LICENSE` with owner Endmin), `perf/export-speed` (A0, A1a, A2) `perf/export-speed-p2` (gblur fix, feather mask made once, graph through a file) and `perf/export-a3` (A3: exports choose NVENC p5 `-cq 25` by default, x264 fallback; the user's approval). E's record of the real measurement (2026-10-12 14:13, every gate passed) was merged too. The user also approved E's point 5 of option D.

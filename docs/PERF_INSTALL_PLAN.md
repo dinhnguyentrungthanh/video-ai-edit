@@ -625,8 +625,8 @@ Mỗi phép đo lấy khóa GPU hoặc khóa render (mục 3.7). Session nào th
 | E3 + đóng băng hồ sơ theo job | [ ] |
 | A3 NVENC trong root tạm; người dùng duyệt; `AGENTS.md` cập nhật | [x] 2026-10-12 (p5 `-cq 25` mặc định, gộp ở G1) |
 | A4 (nếu làm) được duyệt; `AGENTS.md` cập nhật | [ ] |
-| **B1 đợt sửa khóa cache duy nhất** (người dùng duyệt) | [ ] |
-| **Điểm gộp G2** | [ ] |
+| **B1 đợt sửa khóa cache duy nhất** (người dùng duyệt) | [x] 2026-10-12 (gộp ở G2, không chờ E3) |
+| **Điểm gộp G2** | [~] 2026-10-12: B1 trên `merge/g2`, cổng đạt; E3 để sau (mục 14.8) |
 | B2 · B3 · B4 · (B5) | [ ] |
 | E4 cổng CPU fp32 | [ ] |
 | A1b chạy song song nhiều làn | [ ] |
@@ -965,6 +965,14 @@ Session cloud lập kế hoạch dừng vì hết credit. Một session **điề
   - trước khi push: giữ hay viết lại các commit của A có banner của bên build FFmpeg (điều phối đề xuất giữ, vì `THIRD_PARTY_NOTICES.md` đã ghi tên bên build);
   - push khi người dùng đồng ý.
 - Tiếp theo: B (quét nhanh hơn) từ `performance_report` của người dùng; B1 và E3 đi cùng ở G2.
+
+### 14.8 G2 (2026-10-12): chỉ B1
+
+- Người dùng duyệt B1: mục 1, 8, 4, 5, 10, 7; mục 6 phương án (b) (torch, CUDA, tên GPU, compute capability; không driver); không làm 2, 3, 9. Yêu cầu giữ nguyên chất lượng: cổng giống hệt trên job 125 và 114 đạt.
+- Thêm: bỏ qua cache kèm cảnh báo khi đường dẫn mục cache vượt giới hạn Windows (trước đây làm job hỏng).
+- Tốc độ thật: quét nhanh hơn khoảng 5–9 % (14–26 s mỗi job), thấp hơn ước tính 12–14 %, vì stage vẫn tự nạp torch và transformers khi load model.
+- Người dùng chọn gộp B1 không chờ E3. E3 đổi khóa cache lần nữa; nên gộp cùng B2–B3 hoặc lúc làm bộ cài.
+- Chỗ còn đáng làm cho quét: stage `text` (OCR) chiếm khoảng 45 % thời gian quét; `build_review` 13–17 s cắt khung bằng FFmpeg.
 
 ### 14.6 Cách session điều phối làm việc
 
