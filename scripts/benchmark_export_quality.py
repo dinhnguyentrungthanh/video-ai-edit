@@ -108,15 +108,27 @@ def _vmaf_subsample(copy: dict) -> int:
     return max(1, math.ceil(frames / VMAF_FRAME_TARGET))
 
 
+def _frame_clock(frame_rate: str) -> str:
+    """Timestamps from the frame number alone, so the two inputs pair frame n with frame n.
+
+    Pairing by the inputs' own timestamps fails on a source whose timestamps are rounded
+    (24000/1001 fps in 1/90000 ticks against the export's exact 1/24000): the comparison
+    then meets the neighbouring frame, and a shot change scores near zero.
+    """
+    rate = Fraction(frame_rate)
+    return f"settb=1/{rate.numerator},setpts=N*{rate.denominator}"
+
+
 def _quality(
     ffmpeg: Path, source: Path, encoded: Path, graph: str, results: Path, tag: str, vmaf: bool,
-    *, threads: int, subsample: int,
+    *, threads: int, subsample: int, frame_rate: str,
 ) -> dict:
     """SSIM (and VMAF) of ``encoded`` against the export graph's frames, made again from ``source``."""
     lines = [graph]
     if "[aout]" in graph:
         lines.append("[aout]anullsink")
-    lines += ["[1:v:0]setpts=PTS-STARTPTS,format=yuv420p[dist]", "[vout]setpts=PTS-STARTPTS,format=yuv420p[ref]"]
+    clock = _frame_clock(frame_rate)
+    lines += [f"[1:v:0]{clock},format=yuv420p[dist]", f"[vout]{clock},format=yuv420p[ref]"]
     log = f"{tag}.vmaf.json"  # relative: FFmpeg runs in results/ (a drive colon would need escaping)
     if vmaf:
         lines += ["[dist]split[d1][d2]", "[ref]split[r1][r2]", "[d1][r1]ssim[s]",
@@ -226,7 +238,8 @@ def command_quality(args: argparse.Namespace) -> int:
         def score(index: int) -> dict:
             row, path = outputs[index]
             row.update(_quality(ffmpeg, source, path, x264["graph"], results, f"{tag}-q{index}", args.vmaf,
-                                threads=threads, subsample=subsample))
+                                threads=threads, subsample=subsample,
+                                frame_rate=str(prepared["copy"].get("frame_rate") or "25/1")))
             print(json.dumps({key: row.get(key) for key in ("label", "bytes", "ffmpeg_seconds", "ssim_all",
                                                              "vmaf_mean", "vmaf_p1", "vram_added_mib")}), flush=True)
             return row
