@@ -22,11 +22,14 @@ from __future__ import annotations
 import argparse
 import importlib
 import json
+import math
 import os
 import re
 import shutil
 import subprocess
 import threading
+from concurrent.futures import ThreadPoolExecutor
+from fractions import Fraction
 from pathlib import Path
 from typing import Any
 
@@ -35,6 +38,10 @@ import benchmark_export_steps as steps
 SSIM_SUMMARY = re.compile(r"SSIM Y:([0-9.]+) .*?All:([0-9.]+)")
 VRAM_INTERVAL_SECONDS = 0.5
 VMAF_PERCENTILES = (1, 5)
+# Scoring runs after every render is timed: two FFmpeg runs at once, each with half of the CPU threads.
+QUALITY_WORKERS = 2
+# VMAF on at most about this many frames (libvmaf n_subsample); SSIM always reads every frame.
+VMAF_FRAME_TARGET = 80_000
 
 
 class GpuMemory:
@@ -93,7 +100,16 @@ def _option(command: list[str], name: str) -> int | None:
     return int(command[command.index(name) + 1]) if name in command else None
 
 
-def _quality(ffmpeg: Path, source: Path, encoded: Path, graph: str, results: Path, tag: str, vmaf: bool) -> dict:
+def _vmaf_subsample(copy: dict) -> int:
+    """libvmaf n_subsample for a copy: 1 up to VMAF_FRAME_TARGET frames, then every n-th frame."""
+    frames = float(copy["duration_seconds"]) * float(Fraction(str(copy.get("frame_rate") or "25")))
+    return max(1, math.ceil(frames / VMAF_FRAME_TARGET))
+
+
+def _quality(
+    ffmpeg: Path, source: Path, encoded: Path, graph: str, results: Path, tag: str, vmaf: bool,
+    *, threads: int, subsample: int,
+) -> dict:
     """SSIM (and VMAF) of ``encoded`` against the export graph's frames, made again from ``source``."""
     lines = [graph]
     if "[aout]" in graph:
@@ -102,7 +118,8 @@ def _quality(ffmpeg: Path, source: Path, encoded: Path, graph: str, results: Pat
     log = f"{tag}.vmaf.json"  # relative: FFmpeg runs in results/ (a drive colon would need escaping)
     if vmaf:
         lines += ["[dist]split[d1][d2]", "[ref]split[r1][r2]", "[d1][r1]ssim[s]",
-                  f"[d2][r2]libvmaf=n_threads={os.cpu_count() or 1}:log_fmt=json:log_path={log}[m]"]
+                  f"[d2][r2]libvmaf=n_threads={threads}:n_subsample={subsample}"
+                  f":log_fmt=json:log_path={log}[m]"]
         maps = ["-map", "[s]", "-map", "[m]"]
     else:
         lines.append("[dist][ref]ssim[s]")
@@ -163,6 +180,7 @@ def command_quality(args: argparse.Namespace) -> int:
     results.mkdir(exist_ok=True)
     rows: list[dict] = []
     outputs: list[tuple[dict, Path]] = []
+    subsample = _vmaf_subsample(prepared["copy"])
     with steps._install_render_lock(install_root):
         with GpuMemory() as memory:
             x264 = steps._render_once(renderer, bench, ffmpeg, ffprobe, f"{tag}-x264")
@@ -192,10 +210,19 @@ def command_quality(args: argparse.Namespace) -> int:
                 }
                 rows.append(row)
                 outputs.append((row, output))
-        for index, (row, path) in enumerate(outputs):
-            row.update(_quality(ffmpeg, source, path, x264["graph"], results, f"{tag}-q{index}", args.vmaf))
+        # Every render is timed by now: the scoring runs side by side.
+        threads = max(1, (os.cpu_count() or 1) // QUALITY_WORKERS)
+
+        def score(index: int) -> dict:
+            row, path = outputs[index]
+            row.update(_quality(ffmpeg, source, path, x264["graph"], results, f"{tag}-q{index}", args.vmaf,
+                                threads=threads, subsample=subsample))
             print(json.dumps({key: row.get(key) for key in ("label", "bytes", "ffmpeg_seconds", "ssim_all",
                                                              "vmaf_mean", "vmaf_p1", "vram_added_mib")}), flush=True)
+            return row
+
+        with ThreadPoolExecutor(max_workers=QUALITY_WORKERS) as pool:
+            list(pool.map(score, range(len(outputs))))
     if not args.keep_outputs:
         for _, path in outputs:
             path.unlink(missing_ok=True)
@@ -206,6 +233,7 @@ def command_quality(args: argparse.Namespace) -> int:
         "origin": prepared.get("origin"),
         "copy": {key: value for key, value in prepared["copy"].items() if key != "file"},
         "size_policy": prepared.get("size_policy"), "vmaf": args.vmaf,
+        "vmaf_subsample": subsample if args.vmaf else None, "quality_workers": QUALITY_WORKERS,
         "rows": rows,
     }
     path = results / f"{tag}-quality.json"
