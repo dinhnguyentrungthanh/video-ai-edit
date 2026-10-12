@@ -34,6 +34,7 @@ import benchmark_export_steps as steps
 
 SSIM_SUMMARY = re.compile(r"SSIM Y:([0-9.]+) .*?All:([0-9.]+)")
 VRAM_INTERVAL_SECONDS = 0.5
+VMAF_PERCENTILES = (1, 5)
 
 
 class GpuMemory:
@@ -120,11 +121,21 @@ def _quality(ffmpeg: Path, source: Path, encoded: Path, graph: str, results: Pat
     facts = {"ssim_y": float(match.group(1)), "ssim_all": float(match.group(2)), "quality_seconds": round(seconds, 3)}
     if vmaf:
         log_path = results / log
-        pooled = json.loads(log_path.read_text(encoding="utf-8"))["pooled_metrics"]["vmaf"]
+        document = json.loads(log_path.read_text(encoding="utf-8"))
         log_path.unlink()
+        pooled = document["pooled_metrics"]["vmaf"]
+        # The hard scenes: one frame's minimum is noisy, the low percentiles are not.
+        frames = sorted(frame["metrics"]["vmaf"] for frame in document["frames"])
         facts.update({"vmaf_mean": pooled["mean"], "vmaf_min": pooled["min"],
-                      "vmaf_harmonic_mean": pooled["harmonic_mean"]})
+                      "vmaf_harmonic_mean": pooled["harmonic_mean"],
+                      **{f"vmaf_p{point}": _percentile(frames, point) for point in VMAF_PERCENTILES}})
     return facts
+
+
+def _percentile(ordered: list[float], point: float) -> float:
+    """The ``point`` percentile of sorted values (nearest rank)."""
+    rank = max(1, -(-len(ordered) * point // 100))
+    return round(ordered[int(rank) - 1], 3)
 
 
 def _render_row(label: str, render: dict, memory: GpuMemory) -> dict:
@@ -184,7 +195,7 @@ def command_quality(args: argparse.Namespace) -> int:
         for index, (row, path) in enumerate(outputs):
             row.update(_quality(ffmpeg, source, path, x264["graph"], results, f"{tag}-q{index}", args.vmaf))
             print(json.dumps({key: row.get(key) for key in ("label", "bytes", "ffmpeg_seconds", "ssim_all",
-                                                             "vmaf_mean", "vram_added_mib")}), flush=True)
+                                                             "vmaf_mean", "vmaf_p1", "vram_added_mib")}), flush=True)
     if not args.keep_outputs:
         for _, path in outputs:
             path.unlink(missing_ok=True)
