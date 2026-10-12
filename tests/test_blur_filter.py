@@ -61,6 +61,25 @@ class BlurFilterGraphTests(unittest.TestCase):
                         ))
                         self.assertEqual(re.findall(r"gblur=sigma=28:threads=(\d+):enable=1", chains), [str(threads)])
 
+    def test_a_yuv410p_source_caps_gblur_at_a_quarter_of_the_height(self):
+        # Perf plan A3: a yuv410p chroma plane has height // 4 rows.
+        for height, threads in ((3, 1), (4, 1), (8, 2), (15, 3), (24, 6), (64, 16), (301, 75)):
+            region = {"x": 0, "y": 0, "width": 40, "height": height}
+            for method in (GBLUR, COVER_METHOD):
+                for feather in (0, 3):
+                    with self.subTest(height=height, method=method, feather=feather):
+                        chains = ";".join(regional_blur_filters(
+                            input_label="in", output_label="out", prefix="p", region=region, sigma=28,
+                            feather=feather, enable="enable=1", method=method, frame_size=(320, 320),
+                            chroma_rows_divisor=4,
+                        ))
+                        self.assertEqual(re.findall(r"gblur=sigma=28:threads=(\d+):enable=1", chains), [str(threads)])
+        with self.assertRaisesRegex(ValueError, "chroma rows divisor"):
+            regional_blur_filters(
+                input_label="in", output_label="out", prefix="p", region=LOGO, sigma=28,
+                feather=0, enable="enable=1", chroma_rows_divisor=3,
+            )
+
     def test_cover_reads_a_margin_of_picture_and_crops_back_to_the_region(self):
         self.assertEqual(cover(LOGO)[1], (
             "[pcrop]crop=76:36:32:22,delogo=x=8:y=8:w=60:h=20:enable=1,crop=60:20:8:8,"
@@ -382,16 +401,20 @@ class ThinRegionBlurTests(unittest.TestCase):
     """The gblur thread cap: thin regions come out right and the same on every run; others keep their bytes."""
 
     SIZE = (320, 180)
+    PIX_FMT = "yuv420p"
+    ENCODE = ("-c:v", "libx264", "-preset", "veryfast", "-crf", "18")
+    SUFFIX = ".mp4"
+    CHROMA_ROWS_DIVISOR = 2
 
     @classmethod
     def setUpClass(cls):
         cls.directory = TemporaryDirectory()
-        cls.source = Path(cls.directory.name) / "source.mp4"
+        cls.source = Path(cls.directory.name) / f"source{cls.SUFFIX}"
         width, height = cls.SIZE
         subprocess.run(
             [str(FFMPEG), "-hide_banner", "-loglevel", "error",
              "-f", "lavfi", "-i", f"testsrc2=s={width}x{height}:r=25:d=2",
-             "-c:v", "libx264", "-preset", "veryfast", "-crf", "18", "-pix_fmt", "yuv420p", str(cls.source)],
+             *cls.ENCODE, "-pix_fmt", cls.PIX_FMT, str(cls.source)],
             capture_output=True, timeout=120, check=True,
         )
 
@@ -404,6 +427,7 @@ class ThinRegionBlurTests(unittest.TestCase):
         return ";".join(regional_blur_filters(
             input_label="0:v", output_label="out", prefix="p", region=region, sigma=28, feather=feather,
             enable="enable='between(t,0.2,1.6)'", method=method, frame_size=self.SIZE,
+            chroma_rows_divisor=self.CHROMA_ROWS_DIVISOR,
         ))
 
     def framemd5(self, graph, *options):
@@ -413,21 +437,25 @@ class ThinRegionBlurTests(unittest.TestCase):
             capture_output=True, timeout=120, check=True,
         ).stdout
 
+    def reference(self, graph):
+        """The graph on one filter thread: gblur cannot split a plane then."""
+        return self.framemd5(graph, "-filter_complex_threads", "1")
+
     def test_thin_regions_match_the_one_thread_result_on_every_run(self):
-        # Fewer chroma rows (height // 2) than this PC's filter threads before the cap.
+        # Fewer chroma rows (height // 2, or // 4) than this PC's filter threads before the cap.
         for height in (8, 15, 24):
             for method in (GBLUR, COVER_METHOD):
                 for feather in (0, 4):
                     with self.subTest(height=height, method=method, feather=feather):
                         graph = self.graph(height, method, feather)
-                        reference = self.framemd5(graph, "-filter_complex_threads", "1")
+                        reference = self.reference(graph)
                         self.assertGreater(reference.count(b"\n0,"), 40)
                         self.assertEqual(self.framemd5(graph), reference)
                         self.assertEqual(self.framemd5(graph), reference)
 
     def test_regions_with_enough_rows_keep_their_bytes(self):
-        height = 64  # 32 chroma rows: the cap changes nothing up to 32 filter threads
-        if (os.cpu_count() or 1) + 1 > height // 2:
+        height = 64  # 32 chroma rows (16 for yuv410p): the cap changes nothing up to that many filter threads
+        if (os.cpu_count() or 1) + 1 > height // self.CHROMA_ROWS_DIVISOR:
             self.skipTest("more filter threads than the region's chroma rows: the uncapped graph is unreliable")
         for method in (GBLUR, COVER_METHOD):
             for feather in (0, 4):
@@ -436,6 +464,30 @@ class ThinRegionBlurTests(unittest.TestCase):
                     uncapped = UNCAPPED_THREADS.sub("", capped)
                     self.assertNotEqual(capped, uncapped)
                     self.assertEqual(self.framemd5(capped), self.framemd5(uncapped))
+
+
+class Yuv410pThinRegionBlurTests(ThinRegionBlurTests):
+    """Perf plan A3: on a yuv410p source (FFV1 here; x264 has no 4:1:0) the cap is height // 4."""
+
+    PIX_FMT = "yuv410p"
+    ENCODE = ("-c:v", "ffv1")
+    SUFFIX = ".mkv"
+    CHROMA_ROWS_DIVISOR = 4
+
+    def reference(self, graph):
+        # gblur alone on one thread. FFmpeg converts yuv410p for the overlay after
+        # gblur, and that conversion itself changes with the filter threads.
+        return self.framemd5(UNCAPPED_THREADS.sub(":threads=1", graph))
+
+    def test_a_cap_of_height_over_2_is_not_enough_for_yuv410p(self):
+        # The gap A3 closes: gblur sees yuv410p (height // 4 chroma rows).
+        height = 8
+        if (os.cpu_count() or 1) + 1 < height // 2:
+            self.skipTest("too few filter threads to split the region's chroma rows")
+        graph = self.graph(height, GBLUR, 0).replace(
+            f":threads={height // 4}:", f":threads={height // 2}:",
+        )
+        self.assertNotEqual(self.framemd5(graph), self.reference(graph))
 
 
 if __name__ == "__main__":

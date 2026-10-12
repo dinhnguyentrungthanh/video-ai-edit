@@ -1,12 +1,14 @@
 import hashlib
 import json
 import os
+import re
 import subprocess
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
+from biliflow.export_encoder import NVENC_CQ, STOP_GRACE_SECONDS, EncoderChoice
 from biliflow.export_identity import manifest_problem, read_manifest
 from biliflow.final_renderer import (
     DEFAULT_MAX_OUTPUT_BYTES,
@@ -25,6 +27,8 @@ from biliflow.final_renderer import (
 
 # Largest value FFmpeg accepts for -maxrate and -bufsize (a signed 32-bit int).
 INT_MAX = 2**31 - 1
+# An edit plan's setting that keeps its export on x264 (perf plan A3; "auto" is the default).
+FORCED_X264 = {"video_encoder": "libx264"}
 
 
 class FinalRendererTests(unittest.TestCase):
@@ -327,30 +331,50 @@ class RenderCompletionTests(unittest.TestCase):
         self.commands = []
         self.audio = False
         self.render_fails = False
+        # (exit code, stderr) of a render FFmpeg ends without an output, None for one that works.
+        self.render_failure = lambda command: None
         self.graph_seen = None
         self.graph_path = render_graph_path(self.root, self.output)
+        self.output_bytes = lambda command: b"rendered video " * 64
+        self.pix_fmt = None
+        # Exit code of the NVENC trial encode (perf plan A3).
+        self.trial_code = 0
 
-    def write_plan(self):
-        """An approved edit plan of the source, which lasts ``self.duration`` seconds."""
-        self.plan_path.write_text(json.dumps({
+    def write_plan(self, operations=(), render_settings=FORCED_X264):
+        """An approved edit plan of the source, which lasts ``self.duration`` seconds.
+
+        Its exports are forced onto x264 unless a test asks otherwise; ``None``
+        leaves ``render_settings`` out, the "auto" every export gets by default.
+        """
+        plan = {
             "status": "READY_FOR_FINAL_RENDER", "final_export_allowed": True,
             "source": {"path": str(self.source), "sha256": self.sha, "duration_seconds": self.duration},
-            "approved_operations": [],
-        }), encoding="utf-8")
+            "approved_operations": list(operations),
+        }
+        if render_settings is not None:
+            plan["render_settings"] = render_settings
+        self.plan_path.write_text(json.dumps(plan), encoding="utf-8")
 
     def fake_run(self, command, **kwargs):
         self.commands.append(command)
+        if "lavfi" in command:  # the NVENC trial encode
+            return subprocess.CompletedProcess(command, self.trial_code, stdout="", stderr="")
         if "-/filter_complex" in command:
             # What FFmpeg would read from the graph file while it parses its options.
             self.graph_seen = Path(command[command.index("-/filter_complex") + 1]).read_bytes()
             if self.render_fails:
                 return subprocess.CompletedProcess(command, 1, stdout="", stderr="render failed")
-            Path(command[-1]).write_bytes(b"rendered video " * 64)
+            failure = self.render_failure(command)
+            if failure is not None:
+                Path(command[-1]).write_bytes(b"part of a video")  # what FFmpeg wrote before it ended
+                return subprocess.CompletedProcess(command, failure[0], stdout="", stderr=failure[1])
+            Path(command[-1]).write_bytes(self.output_bytes(command))
             self.during_render()
         return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
 
     def render(self, **limits):
-        streams = [{"codec_type": "video"}] + ([{"codec_type": "audio"}] if self.audio else [])
+        video = {"codec_type": "video", **({"pix_fmt": self.pix_fmt} if self.pix_fmt else {})}
+        streams = [video] + ([{"codec_type": "audio"}] if self.audio else [])
         probe = {"format": {"duration": str(self.duration)}, "streams": streams}
         with patch("biliflow.final_renderer.subprocess.run", side_effect=self.fake_run), \
                 patch("biliflow.final_renderer.probe_video", return_value=probe), \
@@ -457,6 +481,208 @@ class RenderCompletionTests(unittest.TestCase):
                 self.render()
         self.assertFalse(any("-/filter_complex" in item for item in self.commands))
         self.assertFalse(self.graph_path.exists())
+
+    @staticmethod
+    def encoder_of(command):
+        return command[command.index("-c:v") + 1]
+
+    def renders(self):
+        return [item for item in self.commands if "-/filter_complex" in item]
+
+    def nvenc_chosen(self):
+        """A temporary root where NVENC works (perf plan A3); the choice itself is in test_export_encoder."""
+        self.write_plan(render_settings={"video_encoder": "auto"})
+        choice = EncoderChoice("h264_nvenc", "auto", "trial_ok")
+        return patch("biliflow.final_renderer.choose_video_encoder", return_value=choice)
+
+    def test_a_forced_x264_export_keeps_its_exact_arguments_without_a_trial(self):
+        # Perf plan A3: the x264 path gates of export changes compare byte for byte.
+        manifest = self.render()
+        (command,) = self.renders()
+        start = command.index("-map_metadata")
+        self.assertEqual(command[start:start + 8],
+                         ["-map_metadata", "0", "-c:v", "libx264", "-preset", "veryfast", "-crf", "20"])
+        self.assertEqual(command[command.index("-b:v") + 2:command.index("-b:v") + 4], ["-pix_fmt", "yuv420p"])
+        self.assertFalse(any("h264_nvenc" in item for item in self.commands))
+        encoding = manifest["encoding"]
+        self.assertEqual(encoding["encoder"], "libx264")
+        self.assertEqual(encoding["validation_method"], "cpu_full_decode")
+        self.assertEqual(encoding["encoder_choice"], {"requested": "libx264", "nvenc_check": "not_asked"})
+        self.assertIsNone(encoding["fallback"])
+        self.assertFalse(encoding["gpu_used"])
+        self.assertEqual(encoding["video"], "libx264 CRF 20 with VBV size guard")
+        self.assertEqual(encoding["video_arguments"], command[start + 2:command.index("-pix_fmt")])
+        self.assertEqual(manifest["source"]["sha256_after_render"], self.sha)
+
+    def test_a_default_export_uses_nvenc_p5_at_cq_25_where_it_works(self):
+        # Perf plan A3, approved 2026-10-12: "auto" for every export, the install folder too.
+        self.write_plan(render_settings=None)
+        manifest = self.render()
+        (command,) = self.renders()
+        for option, value in (("-c:v", "h264_nvenc"), ("-preset", "p5"), ("-rc", "vbr"), ("-cq", "25")):
+            self.assertEqual(command[command.index(option) + 1], value, option)
+        encoding = manifest["encoding"]
+        self.assertEqual((encoding["encoder"], encoding["encoder_choice"]),
+                         ("h264_nvenc", {"requested": "auto", "nvenc_check": "trial_ok"}))
+        self.assertEqual(encoding["video"], "h264_nvenc p5 VBR CQ 25 with VBV size guard")
+        self.assertIsNone(encoding["fallback"])
+        self.assertTrue(encoding["full_decode_validation_passed"])
+        self.assertIsNone(manifest_problem(
+            self.root, self.output, read_manifest(self.output), source_sha256=self.sha, render=[],
+            source_path=str(self.source),
+        ))
+
+    def test_a_default_export_where_nvenc_does_not_work_is_the_x264_export_of_today(self):
+        forced = self.render()
+        (x264_command,) = self.renders()
+        self.output.unlink()
+        self.manifest_path.unlink()
+        self.commands = []
+        self.write_plan(render_settings=None)
+        self.trial_code = 1
+        manifest = self.render()
+        (command,) = self.renders()
+        self.assertEqual(command, x264_command)
+        self.assertEqual(manifest["encoding"]["encoder_choice"], {"requested": "auto", "nvenc_check": "trial_failed"})
+        same = ("video", "encoder", "video_arguments", "fallback", "validation_method", "gpu_used")
+        self.assertEqual({key: manifest["encoding"][key] for key in same},
+                         {key: forced["encoding"][key] for key in same})
+
+    def test_an_nvenc_export_aims_at_a_constant_quality_under_the_x264_size_guard(self):
+        x264 = self.rate_options(10.0)
+        self.commands = []
+        with self.nvenc_chosen():
+            manifest = self.render()
+        (command,) = self.renders()
+        self.assertEqual(self.encoder_of(command), "h264_nvenc")
+        for option, value in (("-rc", "vbr"), ("-cq", str(NVENC_CQ)), ("-b:v", "0"),
+                              ("-maxrate", str(x264["-maxrate"])), ("-bufsize", str(x264["-bufsize"]))):
+            self.assertEqual(command[command.index(option) + 1], value, option)
+        encoding = manifest["encoding"]
+        self.assertEqual(encoding["encoder"], "h264_nvenc")
+        self.assertEqual(encoding["encoder_choice"], {"requested": "auto", "nvenc_check": "trial_ok"})
+        self.assertTrue(encoding["gpu_used"])
+        self.assertEqual(encoding["validation_method"], "cpu_full_decode")
+        self.assertTrue(encoding["full_decode_validation_passed"])
+        self.assertIsNone(manifest_problem(
+            self.root, self.output, read_manifest(self.output), source_sha256=self.sha, render=[],
+        ))
+
+    def test_an_nvenc_export_over_the_size_limit_is_encoded_again_with_x264(self):
+        self.output_bytes = lambda command: b"v" * (600_000 if self.encoder_of(command) == "h264_nvenc" else 1_000)
+        with self.nvenc_chosen():
+            manifest = self.render(max_output_bytes=500_000, target_output_bytes=400_000)
+        self.assertEqual([self.encoder_of(item) for item in self.renders()], ["h264_nvenc", "libx264"])
+        encoding = manifest["encoding"]
+        self.assertEqual(encoding["encoder"], "libx264")
+        self.assertFalse(encoding["gpu_used"])
+        self.assertEqual(
+            {key: encoding["fallback"][key] for key in ("from", "reason", "bytes")},
+            {"from": "h264_nvenc", "reason": "size_limit", "bytes": 600_000},
+        )
+        self.assertEqual(manifest["output"]["bytes"], 1_000)
+        self.assertTrue(manifest["output"]["within_size_limit"])
+        self.assertFalse(self.partial.exists())
+        self.assertFalse(self.graph_path.exists())
+
+    def test_an_x264_export_over_the_size_limit_still_fails_without_a_second_render(self):
+        self.output_bytes = lambda command: b"v" * 600_000
+        with self.assertRaisesRegex(RuntimeError, "hard size limit"):
+            self.render(max_output_bytes=500_000, target_output_bytes=400_000)
+        self.assertEqual(len(self.renders()), 1)
+        self.assertFalse(self.partial.exists())
+        self.assertFalse(self.output.exists())
+
+    def nvenc_fails(self, returncode, stderr):
+        """FFmpeg ends every NVENC render with ``returncode`` and ``stderr``; x264 renders work."""
+        self.render_failure = lambda command: (
+            (returncode, stderr) if self.encoder_of(command) == "h264_nvenc" else None
+        )
+
+    def test_an_nvenc_export_ffmpeg_ends_on_its_own_error_is_encoded_again_with_x264(self):
+        # Perf plan A3, approved 2026-10-12: GPU busy, out of memory or an encoder error.
+        self.nvenc_fails(1, "[h264_nvenc @ 0000] OpenEncodeSessionEx failed: out of memory (10)\n"
+                            "Conversion failed!\n")
+        with self.nvenc_chosen(), patch("biliflow.final_renderer.time.sleep") as sleep:
+            manifest = self.render()
+        self.assertEqual([self.encoder_of(item) for item in self.renders()], ["h264_nvenc", "libx264"])
+        sleep.assert_called_once_with(STOP_GRACE_SECONDS)
+        encoding = manifest["encoding"]
+        self.assertEqual(encoding["encoder"], "libx264")
+        self.assertFalse(encoding["gpu_used"])
+        self.assertEqual(encoding["video"], "libx264 CRF 20 with VBV size guard")
+        self.assertEqual(encoding["encoder_choice"], {"requested": "auto", "nvenc_check": "trial_ok"})
+        fallback = encoding["fallback"]
+        self.assertEqual({key: fallback[key] for key in ("from", "reason", "returncode")},
+                         {"from": "h264_nvenc", "reason": "encoder_error", "returncode": 1})
+        self.assertIn("out of memory", fallback["message"])
+        self.assertEqual(manifest["source"]["sha256_after_render"], self.sha)
+        self.assertIsNone(manifest_problem(
+            self.root, self.output, read_manifest(self.output), source_sha256=self.sha, render=[],
+        ))
+        self.assertFalse(self.partial.exists())
+        self.assertFalse(self.graph_path.exists())
+
+    def test_an_nvenc_crash_without_a_message_is_encoded_again_with_x264(self):
+        self.nvenc_fails(0xC0000005, "")
+        with self.nvenc_chosen(), patch("biliflow.final_renderer.time.sleep"):
+            manifest = self.render()
+        fallback = manifest["encoding"]["fallback"]
+        self.assertEqual((fallback["reason"], fallback["returncode"], fallback["message"]),
+                         ("encoder_error", 0xC0000005, None))
+        self.assertEqual(manifest["encoding"]["encoder"], "libx264")
+
+    def test_a_stop_that_kills_an_nvenc_render_is_not_an_nvenc_error(self):
+        # Tạm dừng and Hủy kill the render tree (taskkill /T /F): FFmpeg ends with
+        # exit code 1 before it prints anything, and no x264 render may follow.
+        self.nvenc_fails(1, "")
+        with self.nvenc_chosen(), patch("biliflow.final_renderer.time.sleep") as sleep, \
+                self.assertRaisesRegex(RuntimeError, "Final FFmpeg render failed"):
+            self.render()
+        self.assertEqual([self.encoder_of(item) for item in self.renders()], ["h264_nvenc"])
+        sleep.assert_not_called()
+        self.assertFalse(self.partial.exists())
+        self.assertFalse(self.output.exists())
+        self.assertFalse(self.manifest_path.exists())
+
+    def test_an_x264_error_still_fails_without_a_second_render(self):
+        self.render_failure = lambda command: (1, "x264 failed")
+        with patch("biliflow.final_renderer.time.sleep") as sleep, \
+                self.assertRaisesRegex(RuntimeError, "x264 failed"):
+            self.render()
+        self.assertEqual(len(self.renders()), 1)
+        sleep.assert_not_called()
+        self.assertFalse(self.partial.exists())
+
+    def test_when_the_x264_retry_fails_too_its_own_error_is_reported(self):
+        self.render_failure = lambda command: (1, f"{self.encoder_of(command)} failed")
+        with self.nvenc_chosen(), patch("biliflow.final_renderer.time.sleep"), \
+                self.assertRaisesRegex(RuntimeError, "^libx264 failed$"):
+            self.render()
+        self.assertEqual([self.encoder_of(item) for item in self.renders()], ["h264_nvenc", "libx264"])
+        self.assertFalse(self.partial.exists())
+        self.assertFalse(self.output.exists())
+
+    def test_a_yuv410p_source_caps_gblur_at_its_chroma_rows_and_a_420_source_keeps_its_graph(self):
+        thin = {
+            "id": "blur-1", "type": "blur", "start_seconds": 1.0, "end_seconds": 2.0,
+            "region_source_pixels": {"x": 0, "y": 0, "width": 40, "height": 24},
+            "blur": {"sigma": 28, "edge_feather_pixels": 0, "edge_feather_mode": "all_edges", "method": "gblur"},
+        }
+        for pix_fmt, threads in ((None, 12), ("yuv420p", 12), ("yuv410p", 6)):
+            with self.subTest(pix_fmt=pix_fmt):
+                self.pix_fmt = pix_fmt
+                self.write_plan(operations=[thin])
+                self.render()
+                self.assertEqual(re.findall(rb"gblur=sigma=28:threads=(\d+):", self.graph_seen),
+                                 [str(threads).encode()])
+                self.output.unlink()
+                self.manifest_path.unlink()
+        expected, _ = build_final_filter_graph(operations=[thin], duration=self.duration, has_audio=False)
+        self.pix_fmt = "yuv420p"
+        self.write_plan(operations=[thin])
+        self.render()
+        self.assertEqual(self.graph_seen, expected.encode("utf-8"))
 
     def test_a_short_output_stays_within_the_encoder_limits(self):
         # FFmpeg takes -maxrate and -bufsize as 32-bit numbers: the size budget of

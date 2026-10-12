@@ -1,6 +1,40 @@
 # Bàn giao A – Xuất video nhanh hơn
-- Nhánh: `perf/export-speed` (A0–A2, tách từ `origin/main` `7d8b8bc`, giữ nguyên ở `05653c9`) và `perf/export-speed-p2` (phase 2, tách từ `05653c9`; worktree `temp\wt-export-speed` đang ở nhánh này) · Commit cuối: xem `git log -1` trong worktree · Cập nhật: 2026-10-12
-- Chạy ở: PC · Trạng thái: xong A0, A1a, A2 trên `perf/export-speed` (`05653c9`, giữ nguyên cho G1). Phase 2 đang làm trên `perf/export-speed-p2`, nhánh này gộp sau G1: xong cả ba bước: 1 (sửa gblur), 2 (mặt nạ viền mềm tính một lần) và 3 (đồ thị bộ lọc qua file). Chưa push, chưa merge. Chưa làm A3/A4 (theo lệnh người dùng).
+- Nhánh: `perf/export-speed` (A0–A2, tách từ `origin/main` `7d8b8bc`, giữ nguyên ở `05653c9`), `perf/export-speed-p2` (phase 2, tách từ `05653c9`, kết thúc ở `9f0581a`, đã gộp vào `merge/g1`) và `perf/export-a3` (A3, tách từ `9f0581a`; worktree `temp\wt-export-speed` đang ở nhánh này) · Commit cuối: xem `git log -1` trong worktree · Cập nhật: 2026-10-12
+- Chạy ở: PC · Trạng thái: xong A0, A1a, A2 và phase 2 (cả ba đã ở `merge/g1` = G1). A3 xong trên `perf/export-a3`: A3.1 (`f4e80c2`), cổng x264, đo NVENC, và bước duyệt NVENC (p5 `-cq` 25, "auto" là mặc định cho mọi bản xuất). Chờ điều phối gộp vào `merge/g1`. Chưa push, chưa merge. Chưa làm A1b/A4.
+
+## Quyết định của người dùng (2026-10-12, duyệt NVENC)
+- Duyệt preset p5, `-cq` 25.
+- Việc:
+  1. đổi `-cq` mặc định 23 → 25, kèm test;
+  2. "auto" thành mặc định cho mọi bản xuất, cả trên thư mục thật: gỡ luật chỉ chạy trong root tạm. Giữ fallback x264 khi NVENC lỗi hoặc file vượt giới hạn dung lượng, ghi lý do vào manifest. Máy không có NVENC thì dùng x264 như hôm nay;
+  3. `AGENTS.md`: chỉ thêm đúng một gạch đầu dòng người dùng viết, ngay sau dòng "Preserve the current detector thresholds and export behavior…".
+- Cổng:
+  - test liên quan đạt (không chạy full suite: điều phối chạy khi gộp);
+  - đường x264 (ép encoder x264) vẫn giống hệt từng byte trên `smoke-synth`;
+  - một bản xuất mặc định trong root tạm ra NVENC `-cq` 25, qua kiểm tra sau xuất và kiểm manifest của "Xóa video gốc"/"Lưu trữ" (gọi hàm kiểm trong root tạm, không bao giờ trên thư mục thật).
+- Không sửa: như mục A3 bên dưới; `AGENTS.md` ngoài gạch đầu dòng đó.
+- Bàn giao: commit, cập nhật file này. Không push, không merge; điều phối gộp vào `merge/g1`.
+
+## Quyết định của người dùng (2026-10-12, A3)
+- G1 đã làm: `merge/g1` = C + E + A + C0 (session điều phối gộp).
+- A3 làm ngay sau G1, trên nhánh `perf/export-a3` tách từ `9f0581a`. Từ giờ chỉ commit vào nhánh này.
+- Chờ người dùng báo "suite đạt" (full suite của `merge/g1`). Trước đó chỉ được đọc, thiết kế và viết code: không chạy test hay đo, không merge. Khi được báo: `git merge merge/g1` (không rebase), rồi mới chạy test và đo.
+- Việc:
+  1. chọn encoder: NVENC dùng được thì dùng, không thì x264. Hồ sơ phần cứng của E đã có kết quả NVENC thì dùng lại, không viết phép thử thứ hai; không có thì encode thử một lần. Lựa chọn nằm trong cài đặt render hoặc edit plan, không thêm cờ vào `cli.py`;
+  2. NVENC `-rc vbr -cq <N>` với `-maxrate`/`-bufsize`; bản xuất vượt kiểm tra dung lượng thì tự encode lại bằng x264; manifest ghi thêm `encoding.encoder` và `validation_method`, giữ nguyên các hash của nguồn;
+  3. yuv410p: nguồn yuv410p thì giới hạn số luồng gblur ở `chiều cao // 4`; nguồn 4:2:0 giữ nguyên đồ thị.
+- Cổng:
+  - x264 vẫn là mặc định; đường x264 giống hệt từng byte so với `9f0581a` (framemd5 + SHA-256 mp4) trên `smoke-synth` và T74;
+  - NVENC chỉ chạy trong root tạm, giữ khóa GPU hoặc khóa render; khóa đang bị giữ thì chờ, không chen ngang;
+  - đo SSIM (và VMAF nếu FFmpeg có), dung lượng và thời gian xuất trên 3 tập so với x264; trình bảng số đo cùng ngưỡng `-cq` đề xuất, rồi chờ người dùng duyệt;
+  - đo VRAM của riêng NVENC bằng nvidia-smi; đo chung với Qwen2-VL để sau, khi làm A1b.
+- Chưa làm A1b và A4. Không sửa: `scheduler.py`, `job_store.py`, `job_pipeline.py`, module quét, `hardware_*.py` (của E, chỉ đọc), `cli.py`, `__main__.py`, `__init__.py`, `run.ps1`, `env.ps1`, `stage_cache.py`, `cache_dependencies.py`, `pyproject.toml`, `config/*`, `models\`, `AGENTS.md`.
+- Lịch sử commit giữ nguyên: `THIRD_PARTY_NOTICES.md` đã ghi tên bên build FFmpeg (khối C đã duyệt), nên banner trong lịch sử không lộ thêm gì.
+- Bổ sung (2026-10-12, người dùng đã duyệt):
+  1. NVENC tự lỗi (không phải vượt dung lượng; ví dụ GPU bận, hết VRAM, encoder trả mã lỗi) thì tự encode lại bằng x264 và ghi lý do fallback vào manifest, như khi vượt dung lượng, kèm test. Hủy hay dừng bản xuất (người dùng bấm) không được coi là lỗi NVENC;
+  2. sau khi merge `merge/g1`, bỏ full suite: chỉ chạy test liên quan (`test_final_renderer`, `test_blur_filter`, file test mới, `test_scheduler`, `test_control_center`, `test_source_cleanup`, `test_skip_export`, test lưu trữ). Full suite để dành cho G2;
+  3. vẫn chờ "suite đạt" rồi mới merge, chạy test hay đo;
+  4. khóa GPU cho bản xuất khi NVENC thành mặc định: để sang A1b.
 
 ## Quyết định của người dùng (2026-10-11, sau khi A2 xong)
 - Duyệt sửa lỗi gblur.
@@ -202,13 +236,93 @@ Kết luận cho T71:
 | T74 đủ | Đạt: như trên, 133.989 dòng framemd5 giống hệt, mp4 `3f2de702…` (= bản xuất thật của job 74). FFmpeg render 394,9 s |
 
 ## Đang dở
-- Không có. Phase 2 (bước 1–3) đã xong và commit trên `perf/export-speed-p2`. Chưa push, chưa merge.
+- Không có việc dở: A3 xong, chờ điều phối gộp vào `merge/g1`.
+- **A3.2, duyệt NVENC** (2026-10-12, commit sau `545f86f`, xem `git log`):
+  - `export_encoder.py`: `NVENC_CQ` = 25 (preset vẫn p5). Không có `render_settings.video_encoder` thì là `"auto"`, ở mọi root (đã gỡ `is_temporary_root` và lý do `not_a_temporary_root`). `"libx264"` ép x264, không đọc hồ sơ, không encode thử. Máy không có NVENC (hồ sơ báo `failed`, hoặc lần encode thử 1 s thất bại hay không xong) thì xuất x264 với đúng lệnh hôm nay.
+  - `final_renderer.py` không đổi: fallback x264 khi NVENC tự lỗi hoặc vượt giới hạn dung lượng vẫn như A3.1, lý do ghi trong `encoding.fallback`.
+  - `AGENTS.md`: thêm đúng gạch đầu dòng người dùng viết, sau dòng "Preserve the current detector thresholds and export behavior…"; không đổi gì khác.
+  - Harness: `_render_once` và `_recorded_command` ép x264 (`render_settings` `{"video_encoder": "libx264"}`; code trước A3 bỏ qua khóa này và vẫn xuất x264), nên `measure`, `gate` và `stability` vẫn so đường x264 từng byte. Lệnh `quality` có dòng "x264 (forced)" và dòng 'default export ("auto")' (không có `render_settings`).
+  - Test:
+    - `test_export_encoder`: plan không có khóa là `"auto"`; "auto" thử NVENC ở mọi root, kể cả thư mục cài có file đánh dấu; ép x264 không đọc hồ sơ, không encode thử; `-cq` mặc định 25. Lần xuất NVENC thật trong root tạm giờ là một bản xuất mặc định (không có `render_settings`, có 1 vùng làm mờ). Test kiểm: encoder `h264_nvenc`, `-preset p5`, `-cq 25`, không fallback, `validation_method` `cpu_full_decode`, giải mã đủ khung đạt, hash nguồn sau render không đổi. Nó còn kiểm `export_identity.manifest_problem` với `render_identity` của thao tác và đường dẫn nguồn: đây là phép kiểm manifest mà "Xóa video gốc" và "Lưu trữ" dùng (`source_cleanup.assess_job`), chạy trong root tạm, không bao giờ trên thư mục thật.
+    - `test_final_renderer`: `write_plan` mặc định ép x264 (các test cũ giữ nguyên lệnh); thêm "bản xuất mặc định ra NVENC p5 `-cq` 25" và "máy không có NVENC: bản xuất mặc định giống hệt lệnh x264 ép buộc".
+    - `test_render_graph_file`: lần render thật ép x264 (test về file đồ thị, không về encoder; không chạy NVENC ngoài khóa GPU).
+    - `test_hardware_measure_trials` (của E): test đọc chữ `final_renderer.py` để tìm tham số x264 trượt từ A3.1, vì tham số đã dời sang `export_encoder.video_arguments`. Test nay kiểm chính hàm đó. Không sửa `hardware_*.py`.
+- **A3.1** (`f4e80c2`, nhánh `perf/export-a3`, sau khi merge `merge/g1`; dùng `install_paths` của C2 và `hardware_schema` của E). Mô tả dưới đây là lúc A3.1; A3.2 ở trên đã đổi mặc định và `-cq`:
+  - `src/biliflow/export_encoder.py` (mới):
+    - plan có `render_settings.video_encoder` = `"libx264"` (lúc A3.1 cũng là mặc định khi không có khóa) hoặc `"auto"`;
+    - lúc A3.1, `"auto"` chỉ dùng NVENC trong root tạm (root nằm trong một thư mục tên `temp` và không có file đánh dấu thư mục cài). A3.2 đã gỡ luật này;
+    - NVENC dùng được hay không: lấy từ hồ sơ của E ở root đó (`detection.ffmpeg.encoders.h264_nvenc.trial`, chỉ khi đường dẫn, kích thước và mtime của `ffmpeg.exe` khớp), không có thì encode thử 1 s (`-f null`, tối đa 60 s);
+    - `video_arguments`: x264 giữ đúng tham số cũ; NVENC `-preset p5 -rc vbr -cq <N> -b:v 0` cộng `-maxrate`/`-bufsize` như x264 và `-tune hq -spatial-aq 1 -rc-lookahead 20` (`-cq` 23 lúc A3.1, 25 từ A3.2).
+  - `final_renderer.py`:
+    - chọn encoder, chạy render; bản NVENC vượt giới hạn dung lượng thì xóa bản dở và encode lại bằng x264;
+    - NVENC tự lỗi thì cũng xóa bản dở và encode lại bằng x264 (`export_encoder.failed_by_itself`). Cách phân biệt với một lần dừng:
+      - FFmpeg phải thoát mã khác 0 và in thông báo lỗi (lệnh xuất chạy với `-loglevel error`), hoặc thoát bằng mã crash NTSTATUS (từ `0xC0000000`);
+      - Tạm dừng, Hủy hay tắt Control Center giết cả cây tiến trình render (`scheduler.terminate_process_tree`, `taskkill /T /F`): FFmpeg thoát mã 1 và không in gì, nên không được tính là lỗi;
+      - trước lần x264 còn chờ `STOP_GRACE_SECONDS` = 3 s: nếu `taskkill` giết FFmpeg trước tiến trình Python, lệnh dừng sẽ giết luôn Python trong lúc chờ, nên không có lần x264 nào chạy sau khi người dùng dừng (kể cả với nguồn làm FFmpeg in lỗi giải mã);
+      - x264 lỗi vẫn báo lỗi như cũ, không render lại;
+    - manifest thêm `encoding.encoder`, `video_arguments`, `encoder_choice` (`requested`, `nvenc_check`), `fallback` (`null`, `{from, reason: "size_limit", bytes, elapsed_seconds}` hoặc `{from, reason: "encoder_error", returncode, message, elapsed_seconds}`; `message` là tối đa 3 dòng đầu của FFmpeg, 500 ký tự: FFmpeg in nguyên nhân trước, các dòng sau chỉ báo luồng kết thúc) và `validation_method: "cpu_full_decode"`; `gpu_used` đúng với NVENC; các hash của nguồn giữ nguyên;
+    - nguồn yuv410p truyền `chroma_rows_divisor=4` xuống `blur_filter`;
+    - file dài 830 dòng, vượt mức mềm 800. Cố ý giữ: toàn bộ đường render nằm chung một module, và `scheduler.py` (không được sửa) import trực tiếp từ đó. Phần nhận diện lỗi và bản ghi fallback nằm ở `export_encoder.py`.
+  - `blur_filter.py`: `_gblur`/`regional_blur_filters` nhận `chroma_rows_divisor` (2 hoặc 4, mặc định 2, nên đồ thị 4:2:0 không đổi).
+  - Test (đạt, xem Cách kiểm):
+    - `tests/test_export_encoder.py` (mới): yêu cầu, root tạm, hồ sơ, chọn encoder, tham số, nhận diện lỗi và bản ghi fallback, và một lần xuất NVENC thật trong root tạm. Test thật này giữ khóa GPU, chờ tối đa 120 s, rồi bỏ qua nếu khóa vẫn bận;
+    - thêm vào `test_final_renderer` (kể cả NVENC tự lỗi, crash không thông báo, lần dừng không phải lỗi, x264 lỗi không render lại, x264 thay thế cũng lỗi) và `test_blur_filter`, kèm lớp `Yuv410pThinRegionBlurTests` (nguồn FFV1 yuv410p).
+  - Harness:
+    - lệnh mới `quality` (`scripts/benchmark_export_quality.py`): x264 hôm nay, `"auto"`, và lệnh x264 thay bằng tham số NVENC cho từng preset và `-cq`; đo dung lượng, thời gian, VRAM (nvidia-smi, mỗi 0,5 s), SSIM và VMAF so với chính khung của đồ thị;
+    - `_render_once` nhận `render_settings` và trả về thông tin encoder, bỏ `fallback.message` (chữ của FFmpeg có thể chứa đường dẫn, không được vào evidence); lần encode thử có nhãn riêng (`ffmpeg_encoder_trial`).
+- **Đã kiểm sau khi merge (2026-10-12, FFmpeg 9.0.1, clip tổng hợp trong `temp`):**
+  - Khoảng hở yuv410p có thật. `-loglevel debug` cho thấy FFmpeg chèn bộ đổi định dạng sau gblur (giữa gblur và overlay), nên gblur chạy trên yuv410p. Giới hạn `// 2` cho sai 36 trên 50 khung (đúng các khung trong khoảng làm mờ) so với gblur 1 luồng; giới hạn `// 4` khớp cả 50 khung, ở mọi lần chạy.
+  - Test yuv410p ban đầu so với `-filter_complex_threads 1` và trượt 12 lần, vì chính bộ đổi yuv410p sang 4:2:0 cho kết quả khác theo số luồng (một bản chép `null` không làm mờ cũng khác ở cả 50 khung). Test nay so với đồ thị đó với gblur 1 luồng, và có thêm test cho thấy `// 2` không đủ. Đổi định dạng theo số luồng là chuyện có từ trước, không do A3, và ảnh hưởng mọi bản xuất từ nguồn yuv410p (không chỉ vùng mỏng).
+  - Lệnh dừng: FFmpeg đang encode NVENC bị `taskkill /T /F` thì thoát mã 1, không in gì, nên `failed_by_itself` là `False`.
+  - Lỗi NVENC thật (khung 8192×8192): mã thoát `0xDFABA7BB`, dòng đầu "No capable devices found", nên `failed_by_itself` là `True`.
 
 ## Bước tiếp theo
-1. G1 (mục 9.5): gộp A1a rồi A2 (`perf/export-speed`) theo thứ tự đã định. Chạy full suite trên bản gộp. Nhánh `-p2` gộp sau G1: khi đó chạy full suite trên bản gộp có `-p2`.
-2. A3 (encoder theo hồ sơ phần cứng): chưa làm, chờ người dùng.
+1. Khi người dùng báo "suite đạt": `git merge merge/g1` (không rebase) vào `perf/export-a3`; chỉ chạy test liên quan, không chạy full suite (để dành cho G2): `test_final_renderer`, `test_blur_filter`, `test_export_encoder`, `test_render_graph_file`, `test_scheduler`, `test_control_center`, `test_source_cleanup`, `test_skip_export`, `test_source_archive` (test lưu trữ; trên `merge/g1` còn có `test_source_archive_http` và `test_source_cleanup_http`, chạy kèm); commit A3.1.
+2. ~~Cổng x264~~ **Đạt (2026-10-12 08:54).** Đã đông cứng `temp\perf-export\a3\src` (= `f4e80c2`) và harness `harness-a3`; chạy `gate --baseline-src p2-step3\src` (= `9f0581a`) `--candidate-src a3\src` trên `smoke-synth` và T74, cả hai phía render. framemd5 và SHA-256 mp4 giống hệt, và trùng mp4 của A2/bước 2/bước 3 (`smoke-synth` `1aa9f941…`, T74 `3f2de702…`; T74 mất 975 s). JSON trong `docs/evidence/perf-export/<bench>/20261012-0854*-gate.json`.
+3. Đo NVENC (`quality`, có `--vmaf`).
+   - **Dò xong (2026-10-12 09:11 và 09:35, harness `harness-a3`; JSON trong `docs/evidence/perf-export/{T71-seg300,L39-1080-seg300}/20261012-*-quality.json`).**
+     - p4 và p5 gần như như nhau; p7 chậm hơn ở 1080p (54–55 s so với 51,4 s) mà không hơn về chất lượng. Chọn p5.
+     - Thời gian FFmpeg so với x264: 1080p 51,4 s so với 75,9 s (nhanh hơn 48 %); 1280×534 39,6 s so với 46,7 s (17–18 %). Phần giải mã và bộ lọc trên CPU giới hạn tốc độ.
+     - VRAM NVENC: +182 MiB (1280×534), +284 MiB (1080p).
+     - So với x264 (VMAF trung bình 95,9 / 96,3, VMAF thấp nhất 88,1 / 88,8):
+       - `-cq` 27: dung lượng như x264, VMAF trung bình cao hơn (96,5 / 97,1) nhưng khung thấp nhất thấp hơn (78,6 / 86,7);
+       - `-cq` 25: dung lượng +7 % / +26 %;
+       - `-cq` 23: dung lượng +29 % / +58 %, khung thấp nhất không dưới x264.
+     - Vì khung thấp nhất là một khung lẻ, harness `harness-a3b` (`b99f130`) ghi thêm phân vị 1 % và 5 % của VMAF.
+   - **3 tập đủ** (x264, "auto" = p5 `-cq` 23 qua đường render thật có kiểm tra dung lượng, p5 `-cq` 25 và 27):
+     - T71 (10:26–11:17, harness `b99f130`) và T74 (11:17–12:03, harness `bf21391`) xong.
+     - Chấm điểm nhanh hơn (`39258d5`, `bf21391`): 2 bản cùng lúc sau khi mọi bản đã render xong (ở 1280×534 gần như không nhanh hơn, vì một lượt đã dùng gần hết CPU); VMAF lấy mẫu `n_subsample` khi video trên 80.000 khung (H37: 1/3); với video chấm đủ khung, ghi thêm kết quả nếu chỉ lấy mỗi khung thứ 3. Trên T74, VMAF trung bình, 1 % và 5 % theo 1/3 khung lệch tối đa 0,04 so với đủ khung (chỉ khung thấp nhất khác).
+     - **H37 lần 1 (12:04–14:09) chấm sai, không dùng:** VMAF trung bình 77 và phân vị 1 %, 5 % bằng 0 cho cả x264. Nguyên nhân: dấu thời gian của nguồn được làm tròn theo 1/90000 (bước 3753/3754 xen kẽ, không nhảy, không trôi), còn bản xuất mp4 dùng 1/24000 chính xác. `ssim`/`libvmaf` ghép khung theo dấu thời gian nên gặp khung kế bên; ở mỗi chỗ chuyển cảnh, khung đó bị chấm gần 0. Bản xuất đúng: cùng số khung (14.386 trong 10 phút đầu); ghép theo số thứ tự khung cho SSIM 0,9947, không khung nào dưới 0,9. T71 và T74 (25/1) không bị ảnh hưởng. Thời gian và dung lượng của lần 1 vẫn đúng: x264 1.025,0 s, 1.985 MB; `-cq` 23 711,4 s, 2.645 MB; `-cq` 25 713,1 s, 2.470 MB; `-cq` 27 713,9 s, 2.215 MB; không fallback (giới hạn 3,5 GB).
+     - Sửa (`42282f8`): `_quality` đặt dấu thời gian từ số thứ tự khung (`settb=1/<tử>,setpts=N*<mẫu>` theo `copy.frame_rate`).
+     - Người dùng thấy chạy lại cả phim quá lâu và chọn (2026-10-12, khoảng 14:45) chấm H37 trên 20 phút. Lần chạy lại cả phim (bắt đầu 14:17) bị dừng, và các file dở của nó trong bench H37 đã xóa.
+     - `H37-seg1200`: `prepare --name H37-seg1200 --job 37 --segment 2400 1200 --ops-file temp\perf-export\H37-seg1200.ops.json` (vùng làm mờ của job 37, từ 0 tới 1.199,5 s). `size_policy` trong `prepared.json` được đặt để video maxrate đúng bằng của cả phim (3.416.495 bit/s). Chấm đủ mọi khung; xong 15:24.
+   - **Bảng số đo** (chờ người dùng duyệt; "thời gian" là thời gian render FFmpeg):
+     | Tập | Bản | Dung lượng so với x264 | Thời gian | VMAF TB | VMAF 1 % | VMAF 5 % |
+     |---|---|---|---|---|---|---|
+     | T71 (1280×534) | x264 | 568 MB | 415,8 s | 95,26 | 90,15 | 91,57 |
+     | | `-cq` 23 / 25 / 27 | +33 % / +11 % / −7 % | −9 % / −10 % / −10 % | 97,92 / 97,21 / 96,14 | 93,87 / 92,27 / 89,82 | 95,32 / 94,15 / 92,46 |
+     | T74 (1280×534) | x264 | 547 MB | 348,1 s | 95,00 | 90,35 | 91,76 |
+     | | `-cq` 23 / 25 / 27 | +37 % / +14 % / −4 % | −16 % / −16 % / −15 % | 97,59 / 96,94 / 95,97 | 94,27 / 92,98 / 90,88 | 95,27 / 94,29 / 92,79 |
+     | H37 cả phim (1080p) | x264 | 1.985 MB | 1.025,0 s | — | — | — |
+     | | `-cq` 23 / 25 / 27 | +33 % / +24 % / +12 % | −31 % / −30 % / −30 % | — | — | — |
+     | H37 20 phút (1080p) | x264 | 325 MB | 183,8 s | 95,05 | 90,30 | 92,71 |
+     | | `-cq` 23 / 25 / 27 | +48 % / +34 % / +16 % | −30 % / −30 % / −30 % | 96,61 / 96,28 / 95,67 | 90,60 / 90,95 / 90,61 | 94,60 / 94,19 / 93,35 |
+     - Không fallback (mọi bản đều dưới 3,5 GB). VRAM NVENC: +161 MiB (1280×534), +244 MiB (1080p). Lấy mẫu 1/3 khung lệch dưới 0,1 so với đủ khung (T74, H37 20 phút).
+     - Đề xuất: p5 `-cq` 25.
+   - Kế hoạch ban đầu: dò preset và `-cq` trên 2 đoạn 300 s (`T71-seg300`, `L39-1080-seg300`), rồi 3 tập đủ với `-cq` đề xuất: T71, T74 (1280×534, 43 và 48 phút) và H37 (job 37 là phim hoạt hình, nhãn H; trước đây ghi nhầm là L37). Bản xuất của job 37 không còn trong `output\` (chỉ còn nguồn và edit plan đã duyệt), nên `prepare --job 37` thất bại. H37 được chuẩn bị bằng `prepare --name H37 --job 37 --ops-file temp\perf-export\H37.ops.json`; file thao tác chép từ `approved_operations` của edit plan đã duyệt (trạng thái `FINAL_RENDER_COMPLETED`; 1 vùng làm mờ suốt phim, 308×69). Bản sao: 1920×1080, 6.738 s, 23,976 khung/s, chính sách dung lượng mặc định. Không còn job 1080p nào giữ cả nguồn lẫn bản xuất; job 39 dài 11.763 s nên không dùng cả tập. Ghi VRAM. Trình bảng số đo và `-cq` đề xuất, chờ người dùng duyệt.
+4. ~~Sau khi duyệt~~ **Xong (2026-10-12, A3.2):** p5 `-cq` 25; "auto" là mặc định cho mọi bản xuất; gạch đầu dòng của người dùng trong `AGENTS.md`. Cổng đạt (xem Cách kiểm).
+5. Tiếp theo: điều phối gộp `perf/export-a3` vào `merge/g1` và chạy full suite. Còn lại: dòng NVENC trong bảng của E (không sửa `hardware_*.py` ở nhánh này), rồi A1b (khóa GPU cho bản xuất, đo VRAM chung với Qwen2-VL) và A4.
 
 ## Cách kiểm
+- **A3.2, duyệt NVENC** (2026-10-12; không chạy full suite: điều phối chạy khi gộp):
+  - Test liên quan: `test_export_encoder`, `test_final_renderer`, `test_render_graph_file`, `test_hardware_measure_trials`, `test_blur_filter`: 112 test OK (20,4 s). Lần xuất NVENC thật trong root tạm đã chạy, không bị bỏ qua.
+  - Thêm `test_scheduler`, `test_control_center`, `test_source_cleanup`, `test_source_cleanup_http`, `test_skip_export`, `test_source_archive`, `test_source_archive_http`, `test_export_identity`, `test_review_workflow`, `test_export_guards`: 436 test OK (129,1 s), không bỏ qua.
+  - Cổng x264 (15:49): đông cứng `src` của A3.2 vào `temp\perf-export\a3c\src` và harness vào `harness-a3c`. Chạy `gate --name smoke-synth --baseline-src temp\perf-export\p2-step3\src --candidate-src temp\perf-export\a3c\src`, cả hai phía render và cả hai ép x264.
+    - Kết quả đạt: framemd5 giống hệt, mp4 giống hệt (`1aa9f941…`, như A2, phase 2 và cổng A3.1), đồ thị không đổi.
+    - Phía ứng viên ghi `encoder: libx264`, `encoder_choice: {requested: libx264, nvenc_check: not_asked}`.
+    - JSON: `docs/evidence/perf-export/smoke-synth/20261012-154941-gate.json`. Script cổng: `run-a3c-gate.ps1` trong scratchpad của session (lệnh như trên).
+  - Bản xuất mặc định trong root tạm: `tests.test_export_encoder.NvencRenderTests` (xem Đang dở).
+- **Test liên quan của A3** (2026-10-12, sau khi merge `merge/g1` `6e813e0`; không chạy full suite, theo quyết định của người dùng): `test_final_renderer`, `test_blur_filter`, `test_export_encoder`, `test_render_graph_file`, `test_scheduler`, `test_control_center`, `test_source_cleanup`, `test_source_cleanup_http`, `test_skip_export`, `test_source_archive`, `test_source_archive_http`: 352 test trong 128,4 s, OK, không bỏ qua (kể cả lần xuất NVENC thật trong root tạm). Lượt đầu trượt 12 subtest yuv410p vì mốc so sai (xem Đang dở); đã sửa test, không sửa code.
 - **Full suite trên `perf/export-speed-p2`** (2026-10-12, code bước 3, có clip tổng hợp 1 s trong `input\` của worktree, đã xóa sau khi chạy): 2.684 test trong 2.207,7 s, OK: 0 fail, 0 lỗi, 26 bỏ qua (do môi trường, như lần trước).
   - Lượt đầu (02:10) bị ngắt lúc 02:14 khi phiên làm việc kết thúc. Lượt đó có 1 lỗi ở `test_download_account_browser` (test mở Edge thật của phần tải video; nhánh này không sửa phần đó).
   - Chạy riêng module đó: 65 test OK. Lượt full suite chạy lại (07:05, có giới hạn 70 phút) đạt như trên.
@@ -232,14 +346,14 @@ Kết luận cho T71:
 - Bản đông cứng: `temp\perf-export\p2-step2\src` (bước 2), `p2-step3\src` (bước 3); harness `harness-p2` (cổng bước 2) và `harness-p3` (cổng bước 3).
 
 ## Chờ người dùng
-- Điểm gộp G1.
-- A3 (người dùng đã dặn chưa làm).
+- Điều phối gộp `perf/export-a3` vào `merge/g1` (full suite ở đó).
+- Khóa GPU cho bản xuất để sang A1b (người dùng quyết ngày 2026-10-12). Từ A3.2, NVENC là mặc định, và render chỉ giữ khóa render. Vì vậy trên thư mục thật, một lần xuất NVENC (+161 MiB VRAM ở 1280×534, +244 MiB ở 1080p) có thể chạy cùng lúc với một lần quét trên GPU (6 GB). Nếu thiếu VRAM, NVENC tự lỗi và bản xuất được encode lại bằng x264 (lý do `encoder_error` trong manifest), nên không mất bản xuất.
 - **Lỗi có từ trước trong FFmpeg gblur, tìm thấy khi tự kiểm tra harness** (chi tiết và số đo trong `docs/evidence/perf-export/gblur-threads.md`). Người dùng đã duyệt sửa ngày 2026-10-11; đã sửa ở phase 2 bước 1 (ở trên).
   - Khi một mặt phẳng ảnh có ít dòng hơn số luồng bộ lọc, gblur cho điểm ảnh sai, lệch tới 171–178/255, ở mọi khung, và kết quả đổi giữa các lần chạy. Máy này có 13 luồng: vùng yuv420p thấp dưới 26 dòng bị sai màu, dưới 13 dòng sai cả độ sáng.
   - Không do A2, vì code cũ cũng vậy.
   - 22 bản xuất đã có không bị: vùng thấp nhất là 30 dòng. Nhưng trên máy có từ 16 luồng trở lên, vùng 30 dòng sẽ bị sai màu nếu chạy code chưa sửa (`perf/export-speed`, `main`).
-  - Còn hở (review 2026-10-11, LOW): nguồn yuv410p chưa được phủ. Đề xuất: khi nguồn dò ra là yuv410p thì giới hạn `chiều cao // 4`; với nguồn 4:2:0 đồ thị giữ nguyên nên không đổi byte nào. Chưa làm, chờ người dùng quyết.
-- **Tên miền của bên build FFmpeg trong lịch sử commit.** Banner phiên bản (có tên miền của bên build, không phải nguồn phim) nằm trong 3 file JSON đo A0 ở commit `a90bbf4` và `db0a139`; commit `05653c9` đã bỏ nó khỏi file. Người dùng đã quyết không squash `db0a139`, nên nếu gộp và push như hiện tại thì tên miền này lên lịch sử của repo công khai. Muốn lịch sử sạch thì phải viết lại lịch sử, việc này cần người dùng yêu cầu rõ. Người dùng chọn: giữ như vậy, hay viết lại lịch sử trước khi push.
+  - Còn hở (review 2026-10-11, LOW): nguồn yuv410p chưa được phủ. Người dùng quyết ngày 2026-10-12: gộp vào A3 (giới hạn `chiều cao // 4` khi nguồn là yuv410p, kèm test). Đã làm ở A3.1, xem mục Đang dở.
+- **Tên miền của bên build FFmpeg trong lịch sử commit** (`a90bbf4`, `db0a139`): người dùng quyết ngày 2026-10-12 giữ nguyên lịch sử, vì `THIRD_PARTY_NOTICES.md` đã ghi tên bên build theo khối C đã duyệt.
 
 ## Lưu ý cho người tiếp quản
 - Không sửa: `cli.py`, `__main__.py`, `__init__.py`, `run.ps1`, `env.ps1`, `stage_cache.py`, `cache_dependencies.py`, `pyproject.toml`, `config/*`, `models\`. Các file nhánh này đã sửa nằm ngoài dấu vân tay cache quét: đã kiểm bằng `stage_source_paths` cho cả 10 stage có cache.
@@ -248,6 +362,6 @@ Kết luận cho T71:
 - Lỗi có từ trước, không do A1a (theo đọc code, chưa tái hiện): nếu Hủy rơi vào khoảng vài mili giây giữa `claim_queued` và lúc `_execute` ghi stage RUNNING, một lệnh xuất đã hủy vẫn có thể chạy xong. A1a không đổi khoảng này. Chưa sửa.
 - Thư mục `temp\perf-export\` (bản sao video, kết quả thô, baseline `baseline-40a0125\src`) là dữ liệu tạm cục bộ, khoảng 0,9 GB. Xóa được sau G1. Bằng chứng cần giữ đã chép vào `docs/evidence/perf-export/`.
 - Commit `db0a139` mang tiền tố `wip:` vì được commit trước khi có kết quả cổng video thật. Không sửa lịch sử: commit sau ghi kết quả cổng. Người dùng đã quyết không squash commit này (2026-10-11).
-- Banner FFmpeg có tên miền của bên build nằm trong lịch sử (`a90bbf4`, `db0a139`), xem mục Chờ người dùng. Không tự squash hay viết lại lịch sử.
+- Banner FFmpeg có tên miền của bên build nằm trong lịch sử (`a90bbf4`, `db0a139`). Người dùng quyết giữ nguyên (2026-10-12). Không squash hay viết lại lịch sử.
 - x264 cho kết quả tất định trên máy này ở chế độ dung lượng mặc định (VBV): mỗi bản render lại đều trùng byte với bản xuất thật của job 71 và 74, và baseline chạy 2 lần cũng trùng. Trên máy khác, hoặc với số luồng khác, SHA-256 có thể khác. Khi đó framemd5 vẫn là bằng chứng chính.
 - Với code chưa sửa gblur (A2 và trước), cổng byte chỉ dùng được khi mọi vùng mờ cao ít nhất 2 × số luồng bộ lọc (26 dòng trên máy này). Nếu không, chính code đó cho ra kết quả khác nhau giữa các lần chạy. Các vùng của 4 bản đã cổng ở A2 đều cao từ 30 dòng, và `--baseline-twice` cho thấy kết quả ổn định. Bản tự kiểm tra 320×180 (vùng 8 và 15 dòng) đã fail đúng vì lỗi này, rồi được xóa. Từ bước 1 của phase 2, code đã sửa ổn định cả với vùng mỏng (`T71-thin60`).

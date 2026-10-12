@@ -65,18 +65,23 @@ def _cover_chain(region: dict, frame_size: tuple[int, int] | None, enable: str) 
     return chain + f"crop={width}:{height}:{left}:{top}"
 
 
-def _gblur(sigma: float, height: int, enable: str) -> str:
+def _gblur(sigma: float, height: int, enable: str, chroma_rows_divisor: int = 2) -> str:
     """gblur of one region, never with more threads than its chroma plane has rows.
 
     FFmpeg's gblur gives wrong, run-dependent pixels when a plane has fewer rows
-    than its threads (docs/evidence/perf-export/gblur-threads.md). The branch is
-    yuv420p and crop rounds an odd height down, so the chroma plane has
-    height // 2 rows. FFmpeg uses the smaller of this cap and its own thread count.
+    than its threads (docs/evidence/perf-export/gblur-threads.md). crop rounds the
+    height down to whole chroma rows, so a 4:2:0 branch has height // 2 chroma rows.
+    For a yuv410p source the cap is height // 4 (perf plan A3): FFmpeg keeps that
+    format through gblur and converts only for the overlay (FFmpeg 9.0.1), so its
+    chroma plane has height // 4 rows. FFmpeg uses the smaller of this cap and its
+    own thread count.
     A region with enough rows keeps its bytes. As measured on an AVX2 CPU with
     regions at least 128 pixels wide, a thin one now comes out as with one thread,
     the same on every run; the evidence file lists what was not measured.
     """
-    return f"gblur=sigma={sigma:g}:threads={max(1, height // 2)}:{enable}"
+    if chroma_rows_divisor not in (2, 4):
+        raise ValueError(f"Unsupported chroma rows divisor: {chroma_rows_divisor}")
+    return f"gblur=sigma={sigma:g}:threads={max(1, height // chroma_rows_divisor)}:{enable}"
 
 
 def blur_feather_mode(operation: dict) -> str:
@@ -91,7 +96,7 @@ def regional_blur_filters(
     *, input_label: str, output_label: str, prefix: str,
     region: dict, sigma: float, feather: int, enable: str,
     feather_mode: str = "all_edges", method: str = GBLUR,
-    frame_size: tuple[int, int] | None = None,
+    frame_size: tuple[int, int] | None = None, chroma_rows_divisor: int = 2,
 ) -> list[str]:
     """The split/crop/blur/overlay chains hiding one region while ``enable`` holds.
 
@@ -118,7 +123,7 @@ def regional_blur_filters(
     filters = [f"[{input_label}]split[{base}][{crop}]"]
     if feather <= 0:
         filters.append(
-            f"[{crop}]{region_chain},{_gblur(sigma, height, enable)}[{blurred}]"
+            f"[{crop}]{region_chain},{_gblur(sigma, height, enable, chroma_rows_divisor)}[{blurred}]"
         )
         filters.append(
             f"[{base}][{blurred}]overlay={x}:{y}:{enable}[{output_label}]"
@@ -144,11 +149,11 @@ def regional_blur_filters(
         patch = f"{prefix}patch"
         filters.append(f"[{crop}]{region_chain},split[{clean}][{blur_source}]")
         filters.append(
-            f"[{blur_source}]{_gblur(sigma, height, enable)},split[{colour_source}][{mask_source}]"
+            f"[{blur_source}]{_gblur(sigma, height, enable, chroma_rows_divisor)},split[{colour_source}][{mask_source}]"
         )
     else:
         filters.append(
-            f"[{crop}]{region_chain},{_gblur(sigma, height, enable)},"
+            f"[{crop}]{region_chain},{_gblur(sigma, height, enable, chroma_rows_divisor)},"
             f"split[{colour_source}][{mask_source}]"
         )
     # Pin the overlay branch to a colour format. Without this explicit
