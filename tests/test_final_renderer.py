@@ -27,6 +27,8 @@ from biliflow.final_renderer import (
 
 # Largest value FFmpeg accepts for -maxrate and -bufsize (a signed 32-bit int).
 INT_MAX = 2**31 - 1
+# An edit plan's setting that keeps its export on x264 (perf plan A3; "auto" is the default).
+FORCED_X264 = {"video_encoder": "libx264"}
 
 
 class FinalRendererTests(unittest.TestCase):
@@ -335,9 +337,15 @@ class RenderCompletionTests(unittest.TestCase):
         self.graph_path = render_graph_path(self.root, self.output)
         self.output_bytes = lambda command: b"rendered video " * 64
         self.pix_fmt = None
+        # Exit code of the NVENC trial encode (perf plan A3).
+        self.trial_code = 0
 
-    def write_plan(self, operations=(), render_settings=None):
-        """An approved edit plan of the source, which lasts ``self.duration`` seconds."""
+    def write_plan(self, operations=(), render_settings=FORCED_X264):
+        """An approved edit plan of the source, which lasts ``self.duration`` seconds.
+
+        Its exports are forced onto x264 unless a test asks otherwise; ``None``
+        leaves ``render_settings`` out, the "auto" every export gets by default.
+        """
         plan = {
             "status": "READY_FOR_FINAL_RENDER", "final_export_allowed": True,
             "source": {"path": str(self.source), "sha256": self.sha, "duration_seconds": self.duration},
@@ -349,6 +357,8 @@ class RenderCompletionTests(unittest.TestCase):
 
     def fake_run(self, command, **kwargs):
         self.commands.append(command)
+        if "lavfi" in command:  # the NVENC trial encode
+            return subprocess.CompletedProcess(command, self.trial_code, stdout="", stderr="")
         if "-/filter_complex" in command:
             # What FFmpeg would read from the graph file while it parses its options.
             self.graph_seen = Path(command[command.index("-/filter_complex") + 1]).read_bytes()
@@ -485,8 +495,8 @@ class RenderCompletionTests(unittest.TestCase):
         choice = EncoderChoice("h264_nvenc", "auto", "trial_ok")
         return patch("biliflow.final_renderer.choose_video_encoder", return_value=choice)
 
-    def test_an_export_without_render_settings_stays_on_x264_with_its_exact_arguments(self):
-        # Perf plan A3: x264 stays the default; its command is the one exports always ran.
+    def test_a_forced_x264_export_keeps_its_exact_arguments_without_a_trial(self):
+        # Perf plan A3: the x264 path gates of export changes compare byte for byte.
         manifest = self.render()
         (command,) = self.renders()
         start = command.index("-map_metadata")
@@ -503,6 +513,40 @@ class RenderCompletionTests(unittest.TestCase):
         self.assertEqual(encoding["video"], "libx264 CRF 20 with VBV size guard")
         self.assertEqual(encoding["video_arguments"], command[start + 2:command.index("-pix_fmt")])
         self.assertEqual(manifest["source"]["sha256_after_render"], self.sha)
+
+    def test_a_default_export_uses_nvenc_p5_at_cq_25_where_it_works(self):
+        # Perf plan A3, approved 2026-10-12: "auto" for every export, the install folder too.
+        self.write_plan(render_settings=None)
+        manifest = self.render()
+        (command,) = self.renders()
+        for option, value in (("-c:v", "h264_nvenc"), ("-preset", "p5"), ("-rc", "vbr"), ("-cq", "25")):
+            self.assertEqual(command[command.index(option) + 1], value, option)
+        encoding = manifest["encoding"]
+        self.assertEqual((encoding["encoder"], encoding["encoder_choice"]),
+                         ("h264_nvenc", {"requested": "auto", "nvenc_check": "trial_ok"}))
+        self.assertEqual(encoding["video"], "h264_nvenc p5 VBR CQ 25 with VBV size guard")
+        self.assertIsNone(encoding["fallback"])
+        self.assertTrue(encoding["full_decode_validation_passed"])
+        self.assertIsNone(manifest_problem(
+            self.root, self.output, read_manifest(self.output), source_sha256=self.sha, render=[],
+            source_path=str(self.source),
+        ))
+
+    def test_a_default_export_where_nvenc_does_not_work_is_the_x264_export_of_today(self):
+        forced = self.render()
+        (x264_command,) = self.renders()
+        self.output.unlink()
+        self.manifest_path.unlink()
+        self.commands = []
+        self.write_plan(render_settings=None)
+        self.trial_code = 1
+        manifest = self.render()
+        (command,) = self.renders()
+        self.assertEqual(command, x264_command)
+        self.assertEqual(manifest["encoding"]["encoder_choice"], {"requested": "auto", "nvenc_check": "trial_failed"})
+        same = ("video", "encoder", "video_arguments", "fallback", "validation_method", "gpu_used")
+        self.assertEqual({key: manifest["encoding"][key] for key in same},
+                         {key: forced["encoding"][key] for key in same})
 
     def test_an_nvenc_export_aims_at_a_constant_quality_under_the_x264_size_guard(self):
         x264 = self.rate_options(10.0)

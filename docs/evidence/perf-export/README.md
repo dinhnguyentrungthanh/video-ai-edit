@@ -89,3 +89,8 @@ Each step is gated against the step before it, both as frozen copies of `src` in
   - `H37-seg1200` (14:47): 20 minutes of that film (from 2,400 s, the job's blur region), scored with the fix, every
     frame. Its `size_policy` was set so the video maxrate is the whole film's (3,416,495 bit/s).
   - Every render ran alone; scoring ran after all renders of a bench. VRAM is nvidia-smi's used memory (GPU 0).
+- A3 after the user's approval (p5 `-cq` 25; exports default to "auto"; frozen `a3c`, harness `harness-a3c`):
+  - `smoke-synth/20261012-154941-gate.json`: `9f0581a` (frozen `p2-step3`, baseline) against the approved code. Both sides
+    render, and the harness forces x264 on both (`render_settings` `video_encoder: "libx264"`; the baseline ignores it).
+  - Passed: framemd5 and mp4 SHA-256 identical (`1aa9f941…`, as before). The candidate's `encoding` records `libx264`,
+    `requested: libx264` and `nvenc_check: not_asked`.

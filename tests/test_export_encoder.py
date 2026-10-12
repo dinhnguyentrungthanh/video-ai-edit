@@ -1,4 +1,4 @@
-"""The export's video encoder (perf plan A3): x264 by default, NVENC only where it works and only in a temporary root."""
+"""The export's video encoder (perf plan A3): "auto" by default, NVENC (p5, -cq 25) where it works, x264 otherwise."""
 import contextlib
 import ctypes
 import hashlib
@@ -12,9 +12,9 @@ from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
 from biliflow.export_encoder import (
+    AUTO,
     H264_NVENC,
     LIBX264,
-    NOT_A_TEMPORARY_ROOT,
     NOT_ASKED,
     NVENC_CQ,
     NVENC_OPTIONS,
@@ -27,7 +27,6 @@ from biliflow.export_encoder import (
     choose_video_encoder,
     error_fallback,
     failed_by_itself,
-    is_temporary_root,
     profile_nvenc_trial,
     requested_encoder,
     size_fallback,
@@ -50,10 +49,11 @@ def marker(folder: Path) -> None:
 
 
 class RequestTests(unittest.TestCase):
-    def test_a_plan_without_the_setting_asks_for_x264(self):
+    def test_a_plan_without_the_setting_asks_for_auto(self):
+        # The user's approval of 2026-10-12: every export chooses its encoder.
         for plan in ({}, {"render_settings": {}}, {"render_settings": {"other": 1}}):
             with self.subTest(plan=plan):
-                self.assertEqual(requested_encoder(plan), LIBX264)
+                self.assertEqual(requested_encoder(plan), AUTO)
 
     def test_a_plan_asks_for_x264_or_auto_and_nothing_else(self):
         self.assertEqual(requested_encoder({"render_settings": {"video_encoder": "libx264"}}), LIBX264)
@@ -65,28 +65,6 @@ class RequestTests(unittest.TestCase):
                     requested_encoder({"render_settings": {"video_encoder": value}})
         with self.assertRaisesRegex(ValueError, "render_settings"):
             requested_encoder({"render_settings": "auto"})
-
-
-class TemporaryRootTests(unittest.TestCase):
-    def setUp(self):
-        directory = TemporaryDirectory()
-        self.addCleanup(directory.cleanup)
-        self.base = Path(directory.name).resolve()
-
-    def test_a_root_inside_a_temp_folder_is_temporary(self):
-        root = self.base / "temp" / "bench"
-        root.mkdir(parents=True)
-        self.assertTrue(is_temporary_root(root))
-
-    def test_an_install_root_never_is_even_inside_a_temp_folder(self):
-        root = self.base / "temp" / "install"
-        root.mkdir(parents=True)
-        marker(root)
-        self.assertFalse(is_temporary_root(root))
-
-    def test_a_root_outside_every_temp_folder_is_not_temporary(self):
-        # Not created: only the path matters, and tests write only under temp.
-        self.assertFalse(is_temporary_root(Path(self.base.anchor) / "biliflow-a3-not-created" / "root"))
 
 
 class ProfileTests(unittest.TestCase):
@@ -157,16 +135,18 @@ class ChoiceTests(unittest.TestCase):
             choice = choose_video_encoder(project_root=root or self.temporary, ffmpeg_path=self.ffmpeg, plan=plan)
         return choice, reader.call_count, runs
 
-    def test_x264_is_kept_without_reading_the_profile_or_trying_nvenc(self):
-        choice, reads, runs = self.choose({})
+    def test_a_forced_x264_is_kept_without_reading_the_profile_or_trying_nvenc(self):
+        choice, reads, runs = self.choose({"render_settings": {"video_encoder": LIBX264}})
         self.assertEqual((choice.encoder, choice.record()), (LIBX264, {"requested": LIBX264, "nvenc_check": NOT_ASKED}))
         self.assertEqual((reads, runs), (0, []))
 
-    def test_auto_stays_on_x264_outside_a_temporary_root(self):
-        marker(self.temporary)
-        choice, reads, runs = self.choose(self.auto)
-        self.assertEqual((choice.encoder, choice.nvenc_check), (LIBX264, NOT_A_TEMPORARY_ROOT))
-        self.assertEqual((reads, runs), (0, []))
+    def test_a_plan_without_the_setting_tries_nvenc_in_any_root_the_install_root_too(self):
+        marker(self.temporary)  # an install root: the rule "temporary roots only" is gone
+        for trial, encoder, check in ((0, H264_NVENC, TRIAL_OK), (1, LIBX264, TRIAL_FAILED)):
+            with self.subTest(trial=trial):
+                choice, reads, runs = self.choose({}, trial=trial)
+                self.assertEqual(choice.record(), {"requested": AUTO, "nvenc_check": check})
+                self.assertEqual((choice.encoder, reads, runs), (encoder, 1, [trial_command(self.ffmpeg)]))
 
     def test_a_profile_result_is_used_without_a_second_trial(self):
         for recorded, encoder, check in (("ok", H264_NVENC, PROFILE_OK), ("failed", LIBX264, PROFILE_FAILED)):
@@ -193,6 +173,14 @@ class ChoiceTests(unittest.TestCase):
 
 
 class ArgumentTests(unittest.TestCase):
+    def test_nvenc_defaults_to_the_approved_p5_and_cq_25(self):
+        # The user's approval of 2026-10-12 (docs/evidence/perf-export, A3).
+        self.assertEqual((NVENC_PRESET, NVENC_CQ), ("p5", 25))
+        arguments = video_arguments(H264_NVENC, maxrate=None, target_bitrate=None)
+        self.assertEqual(arguments[:10], ["-c:v", "h264_nvenc", "-preset", "p5", "-rc", "vbr", "-cq", "25", "-b:v", "0"])
+        self.assertEqual(video_description(H264_NVENC, size_limited=False),
+                         "h264_nvenc p5 VBR CQ 25 without output size cap")
+
     def test_x264_keeps_the_export_arguments(self):
         self.assertEqual(
             video_arguments(LIBX264, maxrate=7_000_000, target_bitrate=900_000),
@@ -278,10 +266,10 @@ def gpu_slot(timeout_seconds: float):
 
 @unittest.skipUnless(sys.platform == "win32" and FFMPEG.exists(), "project FFmpeg on Windows is required")
 class NvencRenderTests(unittest.TestCase):
-    """A real NVENC export in a temporary root, inside the GPU slot."""
+    """A real default export in a temporary root, inside the GPU slot: NVENC p5 -cq 25 and every export check."""
 
-    def test_an_auto_export_in_a_temporary_root_uses_nvenc_and_passes_its_checks(self):
-        from biliflow.export_identity import manifest_problem, read_manifest
+    def test_a_default_export_uses_nvenc_at_cq_25_and_passes_the_checks_of_cleanup_and_archive(self):
+        from biliflow.export_identity import manifest_problem, read_manifest, render_identity
         from biliflow.final_renderer import render_final_output
 
         with gpu_slot(GPU_SLOT_WAIT_SECONDS) as held:
@@ -303,11 +291,17 @@ class NvencRenderTests(unittest.TestCase):
                     capture_output=True, timeout=120, check=True,
                 )
                 sha = hashlib.sha256(source.read_bytes()).hexdigest()
+                operations = [{
+                    "id": "blur-1", "type": "blur", "start_seconds": 0.2, "end_seconds": 1.6,
+                    "region_source_pixels": {"x": 100, "y": 50, "width": 160, "height": 64},
+                    "blur": {"sigma": 28, "edge_feather_pixels": 4, "edge_feather_mode": "all_edges",
+                             "method": "gblur"},
+                }]
                 plan_path = root / "work" / "plan.json"
-                plan_path.write_text(json.dumps({
+                plan_path.write_text(json.dumps({  # no render_settings: the default every export gets
                     "status": "READY_FOR_FINAL_RENDER", "final_export_allowed": True,
                     "source": {"path": str(source), "sha256": sha, "duration_seconds": 2.0},
-                    "approved_operations": [], "render_settings": {"video_encoder": "auto"},
+                    "approved_operations": operations,
                 }), encoding="utf-8")
                 output = root / "output" / "source-reviewed.mp4"
                 manifest = render_final_output(
@@ -315,12 +309,22 @@ class NvencRenderTests(unittest.TestCase):
                     ffmpeg_path=FFMPEG, ffprobe_path=FFMPEG.with_name("ffprobe.exe"),
                 )
                 encoding = manifest["encoding"]
-                self.assertEqual((encoding["encoder"], encoding["encoder_choice"]["nvenc_check"]),
-                                 (H264_NVENC, TRIAL_OK))
+                self.assertEqual((encoding["encoder"], encoding["encoder_choice"]),
+                                 (H264_NVENC, {"requested": AUTO, "nvenc_check": TRIAL_OK}))
+                arguments = encoding["video_arguments"]
+                self.assertEqual((arguments[arguments.index("-preset") + 1], arguments[arguments.index("-cq") + 1]),
+                                 ("p5", "25"))
+                self.assertIsNone(encoding["fallback"])
                 self.assertTrue(encoding["gpu_used"])
+                # The check after the export: every frame decoded on the CPU.
+                self.assertEqual(encoding["validation_method"], "cpu_full_decode")
                 self.assertTrue(encoding["full_decode_validation_passed"])
+                self.assertEqual(manifest["source"]["sha256_after_render"], sha)
+                # The manifest check "Xóa video gốc" and "Lưu trữ" run (source_cleanup.assess_job):
+                # the export proves the review's operations, with the same arguments they pass.
                 self.assertIsNone(manifest_problem(
-                    root, output, read_manifest(output), source_sha256=sha, render=[],
+                    root, output, read_manifest(output), source_sha256=sha,
+                    render=render_identity(operations), source_path=str(source),
                 ))
 
 

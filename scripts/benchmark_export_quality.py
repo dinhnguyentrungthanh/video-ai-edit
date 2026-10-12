@@ -5,8 +5,8 @@ Run as ``scripts/benchmark-export-steps.ps1 ... quality --name N [--src DIR]
 shared GPU slot and the final-render slot, and this holds <install>/state/final-render.lock.
 In the bench root N (made by ``prepare``), with the code in DIR:
 
-1. the export as it runs today: the real render_final_output, x264 (no render_settings);
-2. the real render_final_output asking for ``"auto"``: the encoder it chose and why
+1. the real render_final_output forced onto x264 (render_settings video_encoder "libx264");
+2. the default export, ``"auto"`` (no render_settings): the encoder it chose and why
    (the bench root's hardware profile or one trial encode), as its manifest records;
 3. for each preset and -cq: the very FFmpeg command of (1) with export_encoder's NVENC
    arguments in place of x264's;
@@ -15,7 +15,7 @@ In the bench root N (made by ``prepare``), with the code in DIR:
    export graph's own frames, made again from the source in the same FFmpeg run.
 
 Writes results/<stamp>-quality.json: numbers and encoder arguments only, no command
-lines or paths. NVENC runs only here, in a bench root under <install>/temp.
+lines or paths. Every render runs in the bench root under <install>/temp.
 """
 from __future__ import annotations
 
@@ -206,12 +206,11 @@ def command_quality(args: argparse.Namespace) -> int:
     with steps._install_render_lock(install_root):
         with GpuMemory() as memory:
             x264 = steps._render_once(renderer, bench, ffmpeg, ffprobe, f"{tag}-x264")
-        rows.append(_render_row("x264 (today's export)", x264, memory))
+        rows.append(_render_row("x264 (forced)", x264, memory))
         outputs.append((rows[-1], x264["output_path"]))
         with GpuMemory() as memory:
-            auto = steps._render_once(renderer, bench, ffmpeg, ffprobe, f"{tag}-auto",
-                                      render_settings={"video_encoder": "auto"})
-        rows.append(_render_row('render_settings "auto"', auto, memory))
+            auto = steps._render_once(renderer, bench, ffmpeg, ffprobe, f"{tag}-auto", render_settings=None)
+        rows.append(_render_row('default export ("auto")', auto, memory))
         outputs.append((rows[-1], auto["output_path"]))
         maxrate, target = _option(x264["command"], "-maxrate"), _option(x264["command"], "-b:v")
         base = steps._without_progress(steps._with_graph(x264["command"], x264["graph"], bench))

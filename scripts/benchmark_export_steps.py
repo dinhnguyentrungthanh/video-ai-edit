@@ -42,7 +42,10 @@ final-render slot; measure and gate also hold <install>/state/final-render.lock.
            Perf plan A3: the export with x264, the export asking for "auto", and
            the x264 command with NVENC arguments for each preset and -cq: size,
            time, GPU memory, SSIM (and VMAF) against the graph's own frames
-           (scripts/benchmark_export_quality.py). NVENC runs only in the bench root.
+           (scripts/benchmark_export_quality.py).
+Every render of measure, gate and stability forces x264 (render_settings
+video_encoder "libx264"): exports default to "auto" since A3, and NVENC output is
+not byte-reproducible, so gates compare the x264 path byte for byte.
 """
 from __future__ import annotations
 
@@ -76,6 +79,8 @@ VARIANTS = ("no_blur", "long_only", "short_only", "no_feather", "gblur_method")
 # A blur covering at least this share of the source counts as whole-length.
 LONG_BLUR_SHARE = 0.9
 CHUNK = 1024 * 1024
+# The edit plan setting that keeps a bench render on x264 (perf plan A3).
+FORCED_X264 = {"video_encoder": "libx264"}
 
 
 # --------------------------------------------------------------------------- helpers
@@ -469,10 +474,13 @@ class RenderProbe:
 
 
 def _render_once(renderer, bench: Path, ffmpeg: Path, ffprobe: Path, tag: str,
-                 render_settings: dict | None = None) -> dict:
+                 render_settings: dict | None = FORCED_X264) -> dict:
     """One real render_final_output in the bench root; returns timings and the manifest facts.
 
-    ``render_settings`` goes into the edit plan (perf plan A3: {"video_encoder": "auto"}).
+    ``render_settings`` goes into the edit plan. It forces x264 by default (perf plan
+    A3): exports default to "auto", and gates compare the x264 path byte for byte
+    (code from before A3 ignores the setting and renders with x264 anyway). ``None``
+    leaves it out, the default "auto".
     """
     plan = _read_json(bench / "work" / "plan.template.json")
     if render_settings is not None:
@@ -717,7 +725,7 @@ class _StopBeforeFfmpeg(Exception):
 
 
 def _recorded_command(renderer, bench: Path, ffmpeg: Path, ffprobe: Path, tag: str) -> tuple[list[str], str]:
-    """The exact render command render_final_output would run, and its graph, without running it."""
+    """The exact x264 render command render_final_output would run, and its graph, without running it."""
     probe = RenderProbe(renderer)
     original = renderer.subprocess.run
 
@@ -728,7 +736,7 @@ def _recorded_command(renderer, bench: Path, ffmpeg: Path, ffprobe: Path, tag: s
             raise _StopBeforeFfmpeg()
         return original(command, *args, **kwargs)
 
-    plan = _read_json(bench / "work" / "plan.template.json")
+    plan = {**_read_json(bench / "work" / "plan.template.json"), "render_settings": FORCED_X264}
     plan_path = bench / "work" / f"plan-record-{tag}.json"
     output_path = bench / "output" / f"record-{tag}.mp4"
     _write_json(plan_path, plan)

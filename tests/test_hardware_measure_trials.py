@@ -24,7 +24,6 @@ from biliflow.hardware_schema import NVDEC_CODECS
 from biliflow.hardware_system import NOT_FOUND, CommandResult
 
 TEMP_PARENT = recycle_bin.INSTALL_ROOT / "temp"
-CODE = Path(__file__).resolve().parents[1]
 LISTING = (
     "Encoders:\n V..... = Video\n ------\n"
     " V....D libx264              libx264 H.264 / AVC (codec h264)\n"
@@ -308,11 +307,14 @@ class CommandTests(TrialCase):
                 self.assertEqual(measured[-5:], ["-f", "framemd5", "-pix_fmt", "rgb24", str(out)])
 
     def test_the_libx264_trial_uses_the_export_settings(self):
-        renderer = (CODE / "src" / "biliflow" / "final_renderer.py").read_text(encoding="utf-8")
-        self.assertIn('"-c:v", "libx264", "-preset", "veryfast", "-crf", "20"', renderer)
+        # The export's x264 arguments live in export_encoder since perf plan A3.
+        from biliflow.export_encoder import video_arguments
+
+        export = video_arguments("libx264", maxrate=None, target_bitrate=None)
+        self.assertEqual(export, ["-c:v", "libx264", "-preset", "veryfast", "-crf", "20"])
         command = ht.encode_command(Path("ffmpeg.exe"), Path("clip.mp4"), Path("out.mp4"), "libx264")
         start = command.index("-c:v")
-        self.assertEqual(command[start:start + 6], ["-c:v", "libx264", "-preset", "veryfast", "-crf", "20"])
+        self.assertEqual(command[start:start + 6], export)
         self.assertEqual(command[command.index("-t") + 1], "5.000")
 
     def test_the_clip_is_the_fixed_synthetic_source(self):

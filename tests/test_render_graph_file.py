@@ -95,6 +95,8 @@ class RenderGraphFileTests(unittest.TestCase):
             "source": {"path": str(self.source), "duration_seconds": SECONDS,
                        "sha256": hashlib.sha256(self.source.read_bytes()).hexdigest()},
             "approved_operations": operations,
+            # This test is about the graph file, not the encoder: x264, outside the GPU slot.
+            "render_settings": {"video_encoder": "libx264"},
         }), encoding="utf-8")
         output = self.root / "output" / "long.mp4"
         manifest = render_final_output(project_root=self.root, plan_path=plan_path, output_path=output,

@@ -1,11 +1,9 @@
 """The video encoder of an export (perf plan A3, docs/PERF_INSTALL_PLAN.md section 5).
 
-x264 stays the default until the user approves NVENC. An edit plan asks for
-another choice with ``render_settings.video_encoder``: ``"libx264"`` (also when
-the key is missing) or ``"auto"``, NVENC where it works and x264 otherwise.
-Until the approval NVENC runs only in a temporary root: a root inside a folder
-named ``temp`` that is not itself an install root (an install root holds the
-install marker). Elsewhere ``"auto"`` stays on x264.
+Every export chooses its encoder (``"auto"``, the user's approval of 2026-10-12):
+NVENC where it works, x264 otherwise. An edit plan forces x264 with
+``render_settings.video_encoder: "libx264"`` (the gates of export changes compare
+that path byte for byte); a missing key means ``"auto"``.
 
 Whether NVENC works comes from the hardware profile of the root (session E's
 trial, ``detection.ffmpeg.encoders.h264_nvenc``) when the profile was measured
@@ -30,10 +28,10 @@ REQUESTS = (LIBX264, AUTO)
 # How the export is checked after it is written (the decode of every frame on the CPU).
 VALIDATION_METHOD = "cpu_full_decode"
 
-# NVENC settings: a starting point for the A3 measurement, which proposes the
-# values the user approves (-rc vbr -cq <N> under the same -maxrate/-bufsize as x264).
+# NVENC settings the user approved on 2026-10-12 after the A3 measurement
+# (docs/evidence/perf-export: -rc vbr -cq 25 under the same -maxrate/-bufsize as x264).
 NVENC_PRESET = "p5"
-NVENC_CQ = 23
+NVENC_CQ = 25
 NVENC_OPTIONS = ("-tune", "hq", "-spatial-aq", "1", "-rc-lookahead", "20")
 
 TRIAL_FRAMES = 25
@@ -41,7 +39,6 @@ TRIAL_TIMEOUT_SECONDS = 60
 
 # Why an "auto" export did or did not get NVENC (fixed words, never FFmpeg's text).
 NOT_ASKED = "not_asked"
-NOT_A_TEMPORARY_ROOT = "not_a_temporary_root"
 PROFILE_OK = "profile_ok"
 PROFILE_FAILED = "profile_failed"
 TRIAL_OK = "trial_ok"
@@ -72,26 +69,16 @@ class EncoderChoice:
 
 
 def requested_encoder(plan: dict) -> str:
-    """The plan's ``render_settings.video_encoder``; ``libx264`` when it is not set."""
+    """The plan's ``render_settings.video_encoder``; ``auto`` when it is not set."""
     settings = plan.get("render_settings")
     if settings is None:
-        return LIBX264
+        return AUTO
     if not isinstance(settings, dict):
         raise ValueError("render_settings must be an object")
-    value = settings.get("video_encoder", LIBX264)
+    value = settings.get("video_encoder", AUTO)
     if value not in REQUESTS:
         raise ValueError(f"Unsupported video encoder request: {value!r}")
     return value
-
-
-def is_temporary_root(project_root: Path) -> bool:
-    """A root inside a folder named ``temp`` that holds no install marker of its own."""
-    from biliflow.install_paths import MARKER_NAME, is_marker
-
-    resolved = Path(project_root).resolve()
-    if is_marker(resolved / MARKER_NAME):
-        return False
-    return any(parent.name.casefold() == "temp" for parent in resolved.parents)
 
 
 def _same_ffmpeg(recorded: dict, ffmpeg_path: Path) -> bool:
@@ -144,8 +131,6 @@ def choose_video_encoder(*, project_root: Path, ffmpeg_path: Path, plan: dict) -
     requested = requested_encoder(plan)
     if requested == LIBX264:
         return EncoderChoice(LIBX264, requested, NOT_ASKED)
-    if not is_temporary_root(project_root):
-        return EncoderChoice(LIBX264, requested, NOT_A_TEMPORARY_ROOT)
     recorded = profile_nvenc_trial(project_root, ffmpeg_path)
     if recorded is not None:
         check = PROFILE_OK if recorded == "ok" else PROFILE_FAILED
