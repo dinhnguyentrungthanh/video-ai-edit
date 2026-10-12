@@ -1,6 +1,6 @@
 # Bàn giao E – Hồ sơ phần cứng
-- Nhánh: `feat/hardware-profile` (từ `origin/main` `40a0125`, không theo dõi nhánh từ xa nào) · Commit cuối: code E2 `aa73419`, sau đó là commit tài liệu ghi các duyệt ngày 2026-10-12 (xem `git log -1`) · Cập nhật: 2026-10-12 07:15
-- Chạy ở: PC (`E:\DungChung\BiliFlow\temp\wt-hardware-profile`) · Trạng thái: **chờ người dùng**: E0–E2 xong và đã duyệt, trừ lần đo thật ở khung GPU 3 (chờ người dùng báo Control Center thật đã tắt); sau đó xong, chờ gộp G1
+- Nhánh: `feat/hardware-profile` (từ `origin/main` `40a0125`, không theo dõi nhánh từ xa nào) · Commit cuối: code E2 `aa73419`, tài liệu duyệt `46cf4cc`, rồi commit bàn giao lần đo thật (xem `git log -1`) · Cập nhật: 2026-10-12 14:17
+- Chạy ở: PC (`E:\DungChung\BiliFlow\temp\wt-hardware-profile`) · Trạng thái: **xong, chờ gộp G1**: E0–E2 xong và đã duyệt; lần đo thật ngày 2026-10-12 đạt mọi cổng
 
 ## Đã xong
 - **Chuẩn bị:**
@@ -100,16 +100,29 @@
   - Người dùng thêm cổng cho lần đo thật: RTX 2060 không bị `VRAM_TOO_SMALL` hay lời từ chối nào; ghi lại VRAM mà driver báo (mục 6.4).
   - `AGENTS.md`: session điều phối thêm các route `/api/hardware-profile*` và lệnh đo lúc gộp G1; E không sửa.
 
+- **Lần đo thật E2 (2026-10-12 14:13–14:16), đạt mọi cổng** (mục 6.4 của `docs/HARDWARE_PROFILE.md`):
+  - **Điều kiện:** người dùng đã tắt Control Center thật (kiểm lại: không tiến trình `control_entry`, không cổng 8765–8799). Benchmark xuất của session A đang chạy, nên người dùng chọn chờ A xong; lần đo bắt đầu khi A đã ngừng hơn 3 phút (từ 14:09:39) và GPU rảnh (9 %, encoder 0 %).
+  - **Lệnh:** `scripts\hardware-measure.ps1 -ProjectRoot <worktree>\temp\hw-measure-20261012 -GuardRoot <cùng root> -GuardRoot E:\DungChung\BiliFlow -Python E:\DungChung\BiliFlow\.venv\Scripts\python.exe`, FFmpeg chép từ thư mục cài vào `<worktree>\tools\ffmpeg\bin` (cùng SHA-256). Thoát 0 sau 178 s; đủ 13 bước; thư mục chạy đã được xóa.
+  - **Hồ sơ:** `attempt.result` `ok`, `writer.launched_by` `script`, file chính và last-good đều đọc được (`ok`); `history.had_cuda` đúng.
+  - **Máy:** NVIDIA GeForce RTX 2060, compute capability 7.5, driver 617.42, torch `2.14.0+cu126` (`arch_list` sm_50…sm_90, có sm_75), CUDA thấy 1 thiết bị, phép nhân fp32/fp16 đạt (tiến trình torch 13,5 s); i7-10750H 6 nhân 12 luồng, AVX2 có, AVX-512 không; RAM 15,8 GiB; cắm điện; adapter NVIDIA và Intel UHD.
+  - **VRAM mà driver báo:** NVML **6144 MiB** (`fingerprint.gate_key.nvidia_gpus`), `nvidia-smi` **6144 MiB** (`detection.nvidia_smi.gpus`), khớp nhau. Torch báo 6.442.123.264 byte (≈ 6143,7 MiB, ít hơn NVML 327.680 byte); E dùng số của NVML, đúng hợp đồng.
+  - **`resolve()` với quan sát nhẹ thật:** `ready`, dòng `nvidia-sm75-torch2.14.0+cu126` (`gated`, bảng 1), lý do "RTX 2060 (7.5), torch 2.14.0+cu126, driver 617.42 ≥ 576.80". Ba họ đều được cấp, không bị hạ: `fast` (giải mã logo `nvdec`), `standard_ocr8`, `standard`, TF32 `default`. Cảnh báo chung chỉ có `no_golden_gate`.
+  - **Cổng VRAM của người dùng:** đạt. Không `VRAM_TOO_SMALL`, không lời từ chối nào. VRAM 6144 MiB **bằng đúng** ngưỡng `UNTESTED_MIN_VRAM_MIB` (luật là "nhỏ hơn"), nên nếu RTX 2060 rơi vào đường chưa qua cổng (đổi torch hay driver) nó vẫn qua, nhưng không có dư. Nếu một ngày ngưỡng tính theo số của torch (6143 MiB) thì nó sẽ bị từ chối; không đổi gì, chỉ ghi lại.
+  - **Phép thử FFmpeg** (FFmpeg 9.0.1, clip tổng hợp 1080p30 20 s):
+    - mã hóa: libx264 (veryfast CRF 20) đạt, 24,1 fps; `h264_nvenc` đạt, 48,5 fps; `hevc_nvenc` đạt, 28,1 fps; `av1_nvenc` thất bại ("Nothing was written"), đúng dự kiến vì Turing không có NVENC AV1; QSV, AMF `not_run`;
+    - NVDEC theo codec: h264 đạt, hevc đạt, av1 thất bại (Turing không có NVDEC AV1; clip AV1 tạo được nhờ libaom-av1, nên khác ví dụ minh họa ở mục 3.7 ghi `not_run`);
+    - **chuỗi routing logo:** NVDEC đạt, **framemd5 giống hệt giải mã CPU** trên driver 617.42 (cổng từng driver của câu hỏi 1a); CPU 2,36× thời gian thực, NVDEC 4,30× thời gian thực;
+    - các phép thử thất bại chỉ được ghi lại, không làm lần đo thất bại và không có cảnh báo `ffmpeg_unavailable` (mục 6.3 bước 8).
+  - **Số đo:** 6 bản ghi, đều `clean` (CC tắt, không tải xuống, cắm điện cả hai đầu).
+  - **Thư mục cài thật không bị ghi:** không file `hardware*` trong `state\`; `final-render.lock` vẫn 1 byte, lần ghi cuối 2026-09-25; `control-center.sqlite3*` ghi lần cuối trước 14:13.
+  - Hồ sơ gốc nằm ở root tạm `<worktree>\temp\hw-measure-20261012` (gitignore, chỉ để xem; bản tóm tắt này là nơi ghi kết quả). Log: `<worktree>\temp\hw-measure-20261012.log`.
+
 ## Đang dở
-- **Lần đo thật ở khung GPU 3** (mục 6.4 của `docs/HARDWARE_PROFILE.md`): chưa chạy. Chờ người dùng báo **Control Center thật đã tắt**.
+- (trống)
 
 ## Bước tiếp theo
-1. **Lần đo thật**, chỉ sau lời báo của người dùng:
-   - chép `ffmpeg.exe` và `ffprobe.exe` của thư mục cài vào `<worktree>\tools\ffmpeg\bin` (đã gitignore);
-   - chạy lệnh của mục 6.4 với `-ProjectRoot` là một root tạm trong `temp\` của worktree và `-GuardRoot E:\DungChung\BiliFlow`;
-   - kiểm cổng của lần đo thật (mục "Cách kiểm" dưới đây);
-   - báo cáo chỉ ghi tóm tắt hồ sơ (trạng thái, dòng, kết quả phép thử, VRAM, thời gian); ghi vào file này và commit.
-2. **G1:** người dùng duyệt gộp; session điều phối thêm route và lệnh đo vào `AGENTS.md` lúc gộp.
+1. **G1:** người dùng duyệt gộp; session điều phối thêm route `/api/hardware-profile*` và lệnh đo vào `AGENTS.md` lúc gộp.
+2. Sau G1 (không thuộc E0–E2): E3 trên nhánh xếp chồng `feat/hardware-profile-e3` (kế hoạch mục 12.6), khi người dùng cho làm tiếp E (mục 14.1: E đang tạm dừng).
 
 ## Cách kiểm
 - **Lệnh test:** `E:\DungChung\BiliFlow\.venv\Scripts\python.exe -m unittest discover -s tests -p "test_hardware_*.py" -v`, với `PYTHONPATH=<worktree>\src`.
@@ -127,7 +140,6 @@
   - ngưỡng 6144 MiB chỉ áp trên đường chưa qua cổng, nhưng nếu driver báo dưới 6144 MiB thì RTX 2060 sẽ bị từ chối khi đổi sang torch hay driver chưa qua cổng: khi đó dừng và báo người dùng, không tự đổi ngưỡng.
 
 ## Chờ người dùng
-- **Lần đo thật E2:** người dùng tắt Control Center thật ở khung GPU 3 rồi báo E (agent không bao giờ POST `/api/scheduler` và không tự tắt Control Center).
 - **G1:** duyệt gộp nhánh.
 - Trước Đợt 2 (không thuộc E0–E2): chạy lại cổng framemd5 cả phim L ở khung GPU 3 (câu hỏi 1, phương án b; người dùng đã cho phép đọc bản L cho lần chạy đó).
 
