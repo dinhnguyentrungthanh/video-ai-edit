@@ -22,9 +22,9 @@ const TAB_KEYS = ['waiting', 'scan_queue', 'scanning', 'review', 'export', 'comp
 for (const id of [44, 45]) server.jobs.push({id, job_key: `ep-${id}`, source_path: `input/Tập ${id}.mp4`, state: 'QUEUED', updated_at: `2026-10-02T13:0${id - 40}:00`, priority: 100, queue_seq: id - 43, pending_stage: 'preflight', detector_groups: ['advertising'], content_style: 'live_action', profile: 'careful', progress: 0, ocr_recognition_batch_size: 1, fast_scan: true, active_queue_path: null});
 // #48 uses a Windows path: the card and the confirm must show only the file name.
 for (const id of [46, 47, 48]) server.jobs.push({id, job_key: `ep-${id}`, source_path: id === 48 ? ['E:', 'DungChung', 'BiliFlow', 'input', `Tập ${id}.mp4`].join(String.fromCharCode(92)) : `input/Tập ${id}.mp4`, state: 'NEEDS_METADATA', updated_at: `2026-10-02T12:${id}:00`, priority: 100, detector_groups: null, content_style: 'unknown', profile: 'careful', progress: 0, ocr_recognition_batch_size: 1, fast_scan: true, active_queue_path: null});
-// Mirrors JobScheduler.queue_order(): waiting jobs by priority, queue_seq (NULL last), id.
+// Mirrors JobScheduler.queue_order(): waiting jobs by priority, exports before scans, queue_seq (NULL last), id.
 function withQueue(jobs) {
-  const waiting = jobs.filter(j => j.state === 'QUEUED' && !j.stop_mode && j.pending_stage !== null).sort((a, b) => (a.priority - b.priority) || ((a.queue_seq == null) - (b.queue_seq == null)) || ((a.queue_seq || 0) - (b.queue_seq || 0)) || (a.id - b.id));
+  const waiting = jobs.filter(j => j.state === 'QUEUED' && !j.stop_mode && j.pending_stage !== null).sort((a, b) => (a.priority - b.priority) || ((a.pending_stage !== 'render') - (b.pending_stage !== 'render')) || ((a.queue_seq == null) - (b.queue_seq == null)) || ((a.queue_seq || 0) - (b.queue_seq || 0)) || (a.id - b.id));
   jobs.forEach(j => { const index = waiting.indexOf(j); j.queue_position = index < 0 ? null : index + 1; j.queue_kind = index < 0 ? null : (j.pending_stage === 'render' ? 'export' : 'scan'); });
   return {length: waiting.length, paused: server.paused};
 }
@@ -448,10 +448,11 @@ function setDetectors(page, id, values) {
   page.run(`captureDetectorDraft(${id})`);
 }
 async function queueScenario() {
-  // Shared FIFO: an export and two scans wait; #64 was paused out of the queue.
+  // Shared queue, exports first: the export #60 was clicked after the two waiting scans
+  // (queue_seq 5) and still goes first; #64 was paused out of the queue.
   server.jobs.length = 0;
   const base = {priority: 100, detector_groups: ['advertising'], content_style: 'animation', profile: 'careful', ocr_recognition_batch_size: 1, fast_scan: true, active_queue_path: null};
-  server.jobs.push({...base, id: 60, job_key: 'ep-60', source_path: 'input/Tập 60.mp4', state: 'QUEUED', current_stage: 'render', pending_stage: 'render', queue_seq: 1, progress: 1, updated_at: '2026-10-02T10:00:00', active_queue_path: 'reports/jobs/ep-60/review-queue.json'});
+  server.jobs.push({...base, id: 60, job_key: 'ep-60', source_path: 'input/Tập 60.mp4', state: 'QUEUED', current_stage: 'render', pending_stage: 'render', queue_seq: 5, progress: 1, updated_at: '2026-10-02T10:00:00', active_queue_path: 'reports/jobs/ep-60/review-queue.json'});
   server.jobs.push({...base, id: 61, job_key: 'ep-61', source_path: 'input/Tập 61.mp4', state: 'QUEUED', pending_stage: 'preflight', queue_seq: 3, progress: 0, updated_at: '2026-10-02T09:00:00'});
   server.jobs.push({...base, id: 62, job_key: 'ep-62', source_path: 'input/Tập 62.mp4', state: 'QUEUED', pending_stage: 'text', queue_seq: 2, progress: 0.4, updated_at: '2026-10-02T11:00:00'});
   server.jobs.push({...base, id: 63, job_key: 'ep-63', source_path: 'input/Tập 63.mp4', state: 'READY_TO_EXPORT', progress: 1, updated_at: '2026-10-02T12:00:00', active_queue_path: 'reports/jobs/ep-63/review-queue.json'});

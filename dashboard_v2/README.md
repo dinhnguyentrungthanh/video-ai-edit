@@ -24,7 +24,7 @@ không có API, proxy, thao tác xử lý video hay phụ thuộc cần cài th�
 - Tổng quan tách Đang quét cảnh, Chờ bạn duyệt, Sẵn sàng xuất, Đang xuất video và Hoàn tất; số đếm là video. Video chờ quét/chờ xuất hiển thị riêng, không cộng vào số đang chạy. Bấm mỗi ô lọc đúng nhóm và xóa từ khóa tìm kiếm cũ.
 - Chi tiết video ưu tiên tiến độ và 1–2 thao tác chính; mục **Thao tác khác** giữ các chức năng còn lại cùng điều kiện khóa và xác nhận.
 - Tổng quan, danh sách video với tìm kiếm / bộ lọc / phân trang.
-- Hàng đợi FIFO chung cho quét và xuất, tiến độ worker và tài nguyên máy.
+- Hàng đợi chung cho quét và xuất (lệnh xuất chạy trước, mỗi loại theo thứ tự bấm), tiến độ worker và tài nguyên máy.
 - Bảng chi tiết, thiết lập nhóm quét / OCR / chế độ, tiếp tục / dừng / hủy / thử lại / chạy lại.
 - **Duyệt cảnh** (hộp duyệt, `review*.js`, kế hoạch `docs/DASHBOARD_V2_REVIEW_PLAN.md`): nút "Duyệt cảnh" mở hộp trên màn đang xem (`#review/<id>/<màn>`); ảnh, video, dải khung, timeline, phóng to, quyết định, nút vùng, nhớ logo, phím tắt, hoàn tác, hàng loạt, xuất video. Bản demo dùng queue giả trong bộ nhớ; bản live dùng route review hiện có. NEEDS_MORE_CONTEXT chặn xuất. Trang duyệt cũ mở bằng link trong hộp.
 - Xuất với ba lựa chọn dung lượng, bỏ qua / mở lại.

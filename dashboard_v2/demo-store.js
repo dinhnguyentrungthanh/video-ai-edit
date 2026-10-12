@@ -30,7 +30,8 @@
       j.state = 'QUEUED'; j.queue_kind = kind; j.queue_position = place; delete j.error; j.render_request = kind === 'export';
     }
     function normalizeQueue() {
-      state.jobs.filter(j => j.state === 'QUEUED').sort((a, b) => a.queue_position - b.queue_position || a.id - b.id).forEach((j, i) => j.queue_position = i + 1);
+      // Exports before scans, each kind in click order (the scheduler's queue_order).
+      state.jobs.filter(j => j.state === 'QUEUED').sort((a, b) => (a.queue_kind !== 'export') - (b.queue_kind !== 'export') || a.queue_position - b.queue_position || a.id - b.id).forEach((j, i) => j.queue_position = i + 1);
       state.queue.length = state.jobs.filter(j => j.state === 'QUEUED').length;
       if (!state.jobs.some(j => j.id === state.active?.job_id && ['scanning', 'export'].includes(C.tab(j)) && j.state !== 'QUEUED')) state.active = null;
     }

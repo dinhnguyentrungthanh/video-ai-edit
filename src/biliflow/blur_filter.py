@@ -36,7 +36,7 @@ def cover_sigma(region: dict) -> int:
     return max(DEFAULT_SIGMA, round(side * COVER_SIGMA_FRACTION))
 
 
-def _cover_chain(region: dict, frame_size: tuple[int, int] | None) -> str:
+def _cover_chain(region: dict, frame_size: tuple[int, int] | None, enable: str) -> str:
     """Crop the region with a margin of picture, fill it with delogo, crop back to the region.
 
     delogo refuses a rectangle that touches the image edge, so the rectangle keeps one
@@ -57,7 +57,7 @@ def _cover_chain(region: dict, frame_size: tuple[int, int] | None) -> str:
     logo_width = min(crop_width - 1, left + width) - logo_x
     logo_height = min(crop_height - 1, top + height) - logo_y
     if logo_width >= 1 and logo_height >= 1:
-        chain += f"delogo=x={logo_x}:y={logo_y}:w={logo_width}:h={logo_height},"
+        chain += f"delogo=x={logo_x}:y={logo_y}:w={logo_width}:h={logo_height}:{enable},"
     return chain + f"crop={width}:{height}:{left}:{top}"
 
 
@@ -75,6 +75,14 @@ def regional_blur_filters(
     feather_mode: str = "all_edges", method: str = GBLUR,
     frame_size: tuple[int, int] | None = None,
 ) -> list[str]:
+    """The split/crop/blur/overlay chains hiding one region while ``enable`` holds.
+
+    ``enable`` (an FFmpeg timeline option, ``enable='...'``) gates the final overlay
+    and, since perf plan A2, also the costly per-frame filters of the branch
+    (delogo, gblur, geq): outside the blur times they pass their frame through
+    untouched and the overlay shows the unchanged picture, so every output frame
+    is the same as when the branch ran on every frame.
+    """
     x, y = int(region["x"]), int(region["y"])
     width, height = int(region["width"]), int(region["height"])
     if width <= 0 or height <= 0:
@@ -82,7 +90,7 @@ def regional_blur_filters(
     if method not in BLUR_METHODS:
         raise ValueError(f"Unsupported blur method: {method}")
     region_chain = (
-        _cover_chain(region, frame_size) if method == COVER_METHOD
+        _cover_chain(region, frame_size, enable) if method == COVER_METHOD
         else f"crop={width}:{height}:{x}:{y}"
     )
     base = f"{prefix}base"
@@ -91,7 +99,7 @@ def regional_blur_filters(
     filters = [f"[{input_label}]split[{base}][{crop}]"]
     if feather <= 0:
         filters.append(
-            f"[{crop}]{region_chain},gblur=sigma={sigma:g}[{blurred}]"
+            f"[{crop}]{region_chain},gblur=sigma={sigma:g}:{enable}[{blurred}]"
         )
         filters.append(
             f"[{base}][{blurred}]overlay={x}:{y}:{enable}[{output_label}]"
@@ -117,11 +125,11 @@ def regional_blur_filters(
         patch = f"{prefix}patch"
         filters.append(f"[{crop}]{region_chain},split[{clean}][{blur_source}]")
         filters.append(
-            f"[{blur_source}]gblur=sigma={sigma:g},split[{colour_source}][{mask_source}]"
+            f"[{blur_source}]gblur=sigma={sigma:g}:{enable},split[{colour_source}][{mask_source}]"
         )
     else:
         filters.append(
-            f"[{crop}]{region_chain},gblur=sigma={sigma:g},"
+            f"[{crop}]{region_chain},gblur=sigma={sigma:g}:{enable},"
             f"split[{colour_source}][{mask_source}]"
         )
     # Pin the overlay branch to a colour format. Without this explicit
@@ -130,7 +138,7 @@ def regional_blur_filters(
     filters.append(f"[{colour_source}]format=yuv420p[{colour}]")
     filters.append(
         f"[{mask_source}]format=gray,"
-        f"geq=lum='255*min(1\\,{distance}/{safe_feather})'[{mask}]"
+        f"geq=lum='255*min(1\\,{distance}/{safe_feather})':{enable}[{mask}]"
     )
     filters.append(f"[{colour}][{mask}]alphamerge[{soft}]")
     if method == COVER_METHOD:

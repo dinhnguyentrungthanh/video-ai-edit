@@ -1,8 +1,8 @@
 {
-  "note": "SHA-256 of the classic pages. /review/1 (token 'test-token') is unchanged since main f6996bb (before Dashboard V2). / was changed on purpose by D4 of the delete flow (permanent-delete dialogs, lost-videos notice, golden-set lock). Update only when the classic dashboard or review page is changed on purpose.",
+  "note": "SHA-256 of the classic pages. /review/1 (token 'test-token') is unchanged since main f6996bb (before Dashboard V2). / was changed on purpose by D4 of the delete flow (permanent-delete dialogs, lost-videos notice, golden-set lock) and by A1a of the perf plan (2026-10-11: three queue texts in scanStatus, exportStatus and jobCard say waiting exports run first). Update only when the classic dashboard or review page is changed on purpose.",
   "base_commit": "f6996bb",
-  "dashboard_sha256": "8a4d5be200ff068a5c79fc47897b6c5361abe9c6b8dd6cd811ded8a3ceddff63",
-  "dashboard_bytes": 101763,
+  "dashboard_sha256": "a876dd0bf57aed7db7f16a4cb1c8ade9eb7eb514acfca04e0d1a1e1bb2673a55",
+  "dashboard_bytes": 101790,
   "review_job_1_token_test_sha256": "a7e24f876093540d18fb9fd13bc8879c9b9b70bfa5c1f67bc03d01b82b868313",
   "review_bytes": 127875
 }

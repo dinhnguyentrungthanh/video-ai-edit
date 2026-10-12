@@ -1,5 +1,16 @@
 # BiliFlow session handoff
 
+## Faster export, session A (A0, A1a, A2) — 2026-10-11, branch `perf/export-speed` (worktree `temp\wt-export-speed`), not merged
+
+- **Request:** the user's Phase 1 prompt for session A (`docs/PERF_INSTALL_PLAN.md` §12.1): A0 → A1a → A2, not A3/A4; commit in the worktree after each step; no push or merge; report and wait for G1.
+- **Full record:** `docs/handoff/A-export.md` (Vietnamese, plan §13 template). Evidence: `docs/evidence/perf-export/`.
+- **Commits:** `8f1e496` harness (A0), `8b84149` A1a, `a90bbf4` A0 docs, `db0a139` A2 (prefixed `wip:` because it was committed before its real-video gate; not rewritten), then the commit recording the passed gate and the review fixes.
+- **Results:** A2 gate passed on four benches (identical framemd5 and x264 mp4 SHA-256); FFmpeg render T74 631.7 → 330.5 s, T71 741.8 → 451.4 s, L39 1080p 300 s 148.0 → 83.5 s. A1a: waiting exports go before waiting scans at the next stage boundary.
+- **Read-only review (16 agents, 4 lenses, adversarial verify):** no output-changing defect; 5 LOW confirmed: the graph is about 18 % longer (the pre-existing 32,767-character command-line limit moves from about 22 to about 19 cuts on a T71-shaped plan; propose a graph file with A3), and four harness/doc issues, fixed.
+- **Found, not fixed:** FFmpeg gblur's wrong output on planes with fewer rows than filter threads (`docs/evidence/perf-export/gblur-threads.md`); no past export affected; a fix (cap `threads` per regional gblur) changes output only where it is wrong today and waits for the user.
+- **Not touched:** `cli.py`, `__main__.py`, `__init__.py`, `run.ps1`, `env.ps1`, `stage_cache.py`, `cache_dependencies.py`, `pyproject.toml`, `config/*`, `models\`; no changed file is in a scan stage-cache fingerprint. No write to the real `input\`, `output\`, `reports\`, `archive\` or database; no Control Center route called.
+- **Local only:** `temp\perf-export\` (bench copies, about 0.9 GB) can be deleted after G1.
+
 ## Disk cleanup: evidence out of `temp` — 2026-10-11
 
 - **Request:** the user asked to free disk space, to remove what is already in `main` or redundant, and to keep the evidence that code and docs cite somewhere other than `temp`, committed where possible.
