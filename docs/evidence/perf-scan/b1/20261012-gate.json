@@ -1,0 +1,1280 @@
+{
+  "schema": "biliflow-b1-gate/1",
+  "date": "2026-10-12",
+  "revisions": {
+    "base": "e534c12",
+    "b1": "9f3f7f0 (perf/scan-b1)"
+  },
+  "setup": "Temporary root under <install>\\temp, copies of the two sources (SHA-256 checked), models, ffmpeg, HF cache, text seed and brand/studio memory. Scan through JobScheduler._select/_execute: live_action, careful, detector_groups=[advertising], ocr_recognition_batch_size=1, fast_scan=True. Stage cache off in both variants: with LongPathsEnabled=0 a cache store under the temporary root passes the 259-character path limit.",
+  "jobs": {
+    "125": "L, 44 min",
+    "114": "L, 56 min"
+  },
+  "runs": [
+    {
+      "variant": "base",
+      "job": 125,
+      "round": 1,
+      "order": 1,
+      "state": "WAITING_REVIEW",
+      "total_seconds": 255.21,
+      "stages": {
+        "preflight": {
+          "wall_seconds": 0.55,
+          "outside_model_work_seconds": 0.55
+        },
+        "text": {
+          "wall_seconds": 110.45,
+          "outside_model_work_seconds": 31.48
+        },
+        "visual_logo": {
+          "wall_seconds": 64.16,
+          "outside_model_work_seconds": 18.37
+        },
+        "localize_logo": {
+          "wall_seconds": 28.38,
+          "outside_model_work_seconds": 28.19
+        },
+        "build_review": {
+          "wall_seconds": 51.62,
+          "outside_model_work_seconds": 51.62
+        }
+      }
+    },
+    {
+      "variant": "b1",
+      "job": 125,
+      "round": 1,
+      "order": 2,
+      "state": "WAITING_REVIEW",
+      "total_seconds": 210.45,
+      "stages": {
+        "preflight": {
+          "wall_seconds": 0.54,
+          "outside_model_work_seconds": 0.54
+        },
+        "text": {
+          "wall_seconds": 94.24,
+          "outside_model_work_seconds": 18.34
+        },
+        "visual_logo": {
+          "wall_seconds": 61.92,
+          "outside_model_work_seconds": 18.09
+        },
+        "localize_logo": {
+          "wall_seconds": 12.19,
+          "outside_model_work_seconds": 12.02
+        },
+        "build_review": {
+          "wall_seconds": 41.5,
+          "outside_model_work_seconds": 41.5
+        }
+      }
+    },
+    {
+      "variant": "b1",
+      "job": 114,
+      "round": 1,
+      "order": 3,
+      "state": "WAITING_REVIEW",
+      "total_seconds": 292.63,
+      "stages": {
+        "preflight": {
+          "wall_seconds": 0.75,
+          "outside_model_work_seconds": 0.75
+        },
+        "text": {
+          "wall_seconds": 132.76,
+          "outside_model_work_seconds": 21.57
+        },
+        "visual_logo": {
+          "wall_seconds": 78.03,
+          "outside_model_work_seconds": 18.28
+        },
+        "localize_logo": {
+          "wall_seconds": 36.5,
+          "outside_model_work_seconds": 32.3
+        },
+        "build_review": {
+          "wall_seconds": 44.54,
+          "outside_model_work_seconds": 44.54
+        }
+      }
+    },
+    {
+      "variant": "base",
+      "job": 114,
+      "round": 1,
+      "order": 4,
+      "state": "WAITING_REVIEW",
+      "total_seconds": 294.79,
+      "stages": {
+        "preflight": {
+          "wall_seconds": 0.74,
+          "outside_model_work_seconds": 0.74
+        },
+        "text": {
+          "wall_seconds": 135.96,
+          "outside_model_work_seconds": 18.5
+        },
+        "visual_logo": {
+          "wall_seconds": 79.03,
+          "outside_model_work_seconds": 18.85
+        },
+        "localize_logo": {
+          "wall_seconds": 28.42,
+          "outside_model_work_seconds": 23.83
+        },
+        "build_review": {
+          "wall_seconds": 50.58,
+          "outside_model_work_seconds": 50.58
+        }
+      }
+    },
+    {
+      "variant": "b1",
+      "job": 125,
+      "round": 2,
+      "order": 5,
+      "state": "WAITING_REVIEW",
+      "total_seconds": 222.38,
+      "stages": {
+        "preflight": {
+          "wall_seconds": 0.54,
+          "outside_model_work_seconds": 0.54
+        },
+        "text": {
+          "wall_seconds": 96.2,
+          "outside_model_work_seconds": 19.83
+        },
+        "visual_logo": {
+          "wall_seconds": 61.76,
+          "outside_model_work_seconds": 18.04
+        },
+        "localize_logo": {
+          "wall_seconds": 21.28,
+          "outside_model_work_seconds": 21.16
+        },
+        "build_review": {
+          "wall_seconds": 42.53,
+          "outside_model_work_seconds": 42.53
+        }
+      }
+    },
+    {
+      "variant": "base",
+      "job": 125,
+      "round": 2,
+      "order": 6,
+      "state": "WAITING_REVIEW",
+      "total_seconds": 226.8,
+      "stages": {
+        "preflight": {
+          "wall_seconds": 0.57,
+          "outside_model_work_seconds": 0.57
+        },
+        "text": {
+          "wall_seconds": 95.39,
+          "outside_model_work_seconds": 17.4
+        },
+        "visual_logo": {
+          "wall_seconds": 61.78,
+          "outside_model_work_seconds": 18.08
+        },
+        "localize_logo": {
+          "wall_seconds": 20.32,
+          "outside_model_work_seconds": 20.2
+        },
+        "build_review": {
+          "wall_seconds": 48.69,
+          "outside_model_work_seconds": 48.69
+        }
+      }
+    },
+    {
+      "variant": "base",
+      "job": 114,
+      "round": 2,
+      "order": 7,
+      "state": "WAITING_REVIEW",
+      "total_seconds": 295.85,
+      "stages": {
+        "preflight": {
+          "wall_seconds": 0.78,
+          "outside_model_work_seconds": 0.78
+        },
+        "text": {
+          "wall_seconds": 130.9,
+          "outside_model_work_seconds": 17.08
+        },
+        "visual_logo": {
+          "wall_seconds": 76.96,
+          "outside_model_work_seconds": 17.84
+        },
+        "localize_logo": {
+          "wall_seconds": 36.43,
+          "outside_model_work_seconds": 32.34
+        },
+        "build_review": {
+          "wall_seconds": 50.73,
+          "outside_model_work_seconds": 50.73
+        }
+      }
+    },
+    {
+      "variant": "b1",
+      "job": 114,
+      "round": 2,
+      "order": 8,
+      "state": "WAITING_REVIEW",
+      "total_seconds": 290.65,
+      "stages": {
+        "preflight": {
+          "wall_seconds": 0.75,
+          "outside_model_work_seconds": 0.75
+        },
+        "text": {
+          "wall_seconds": 128.81,
+          "outside_model_work_seconds": 18.14
+        },
+        "visual_logo": {
+          "wall_seconds": 80.03,
+          "outside_model_work_seconds": 17.83
+        },
+        "localize_logo": {
+          "wall_seconds": 30.36,
+          "outside_model_work_seconds": 25.56
+        },
+        "build_review": {
+          "wall_seconds": 50.64,
+          "outside_model_work_seconds": 50.64
+        }
+      }
+    }
+  ],
+  "quality_gate": {
+    "files": [
+      "text/text-scan.json",
+      "visual-logo/scan.json",
+      "visual-logo/scan-florence.json",
+      "review-queue.json"
+    ],
+    "rule": "Only time and performance fields may differ; no missing key, no list length change.",
+    "ignored_fields": [
+      "/created_at",
+      "/metrics/cross_frame_recognition/detect_seconds",
+      "/metrics/cross_frame_recognition/recognize_seconds",
+      "/metrics/elapsed_seconds",
+      "/metrics/localization_performance/phases/frame_extract/wall_seconds",
+      "/metrics/localization_performance/phases/model_load/wall_seconds",
+      "/metrics/localization_performance/phases/model_step/wall_seconds",
+      "/metrics/localization_performance/total_wall_seconds",
+      "/metrics/localization_performance/unattributed_wall_seconds",
+      "/metrics/peak_process_ram_bytes",
+      "/metrics/performance/phases/frame_pipe_wait/wall_seconds",
+      "/metrics/performance/phases/model_load/wall_seconds",
+      "/metrics/performance/phases/model_step/wall_seconds",
+      "/metrics/performance/phases/prefetch_wait/wall_seconds",
+      "/metrics/performance/phases/preview_output/wall_seconds",
+      "/metrics/performance/phases/preview_write/wall_seconds",
+      "/metrics/performance/phases/source_hash/wall_seconds",
+      "/metrics/performance/phases/text_semantics/wall_seconds",
+      "/metrics/performance/phases/tracking/wall_seconds",
+      "/metrics/performance/total_wall_seconds",
+      "/metrics/performance/unattributed_wall_seconds",
+      "/metrics/video_seconds_per_processing_second",
+      "/metrics/vlm_prefetch_performance/phases/frame_write/wall_seconds",
+      "/metrics/vlm_prefetch_performance/phases/processor/wall_seconds",
+      "/metrics/vlm_prefetch_performance/total_wall_seconds",
+      "/metrics/vlm_prefetch_performance/unattributed_wall_seconds",
+      "/region_localization_summary/created_at",
+      "/region_localization_summary/elapsed_seconds",
+      "/updated_at"
+    ],
+    "pairs": [
+      {
+        "a": "base-125",
+        "b": "b1-125",
+        "files": {
+          "text/text-scan.json": {
+            "difference_kinds": [
+              "value"
+            ],
+            "differing_fields": [
+              "/created_at",
+              "/metrics/cross_frame_recognition/detect_seconds",
+              "/metrics/cross_frame_recognition/recognize_seconds",
+              "/metrics/elapsed_seconds",
+              "/metrics/peak_process_ram_bytes",
+              "/metrics/performance/phases/frame_pipe_wait/wall_seconds",
+              "/metrics/performance/phases/model_load/wall_seconds",
+              "/metrics/performance/phases/model_step/wall_seconds",
+              "/metrics/performance/phases/preview_output/wall_seconds",
+              "/metrics/performance/phases/preview_write/wall_seconds",
+              "/metrics/performance/phases/source_hash/wall_seconds",
+              "/metrics/performance/phases/text_semantics/wall_seconds",
+              "/metrics/performance/phases/tracking/wall_seconds",
+              "/metrics/performance/total_wall_seconds",
+              "/metrics/performance/unattributed_wall_seconds",
+              "/metrics/video_seconds_per_processing_second"
+            ]
+          },
+          "visual-logo/scan.json": {
+            "difference_kinds": [
+              "value"
+            ],
+            "differing_fields": [
+              "/created_at",
+              "/metrics/elapsed_seconds",
+              "/metrics/peak_process_ram_bytes",
+              "/metrics/performance/phases/model_load/wall_seconds",
+              "/metrics/performance/phases/model_step/wall_seconds",
+              "/metrics/performance/phases/prefetch_wait/wall_seconds",
+              "/metrics/performance/total_wall_seconds",
+              "/metrics/performance/unattributed_wall_seconds",
+              "/metrics/video_seconds_per_processing_second",
+              "/metrics/vlm_prefetch_performance/phases/frame_write/wall_seconds",
+              "/metrics/vlm_prefetch_performance/phases/processor/wall_seconds",
+              "/metrics/vlm_prefetch_performance/total_wall_seconds",
+              "/metrics/vlm_prefetch_performance/unattributed_wall_seconds"
+            ]
+          },
+          "visual-logo/scan-florence.json": {
+            "difference_kinds": [
+              "value"
+            ],
+            "differing_fields": [
+              "/created_at",
+              "/metrics/elapsed_seconds",
+              "/metrics/localization_performance/phases/frame_extract/wall_seconds",
+              "/metrics/localization_performance/phases/model_load/wall_seconds",
+              "/metrics/localization_performance/total_wall_seconds",
+              "/metrics/localization_performance/unattributed_wall_seconds",
+              "/metrics/peak_process_ram_bytes",
+              "/metrics/performance/phases/model_load/wall_seconds",
+              "/metrics/performance/phases/model_step/wall_seconds",
+              "/metrics/performance/phases/prefetch_wait/wall_seconds",
+              "/metrics/performance/total_wall_seconds",
+              "/metrics/performance/unattributed_wall_seconds",
+              "/metrics/video_seconds_per_processing_second",
+              "/metrics/vlm_prefetch_performance/phases/frame_write/wall_seconds",
+              "/metrics/vlm_prefetch_performance/phases/processor/wall_seconds",
+              "/metrics/vlm_prefetch_performance/total_wall_seconds",
+              "/metrics/vlm_prefetch_performance/unattributed_wall_seconds",
+              "/region_localization_summary/created_at",
+              "/region_localization_summary/elapsed_seconds"
+            ]
+          },
+          "review-queue.json": {
+            "difference_kinds": [
+              "value"
+            ],
+            "differing_fields": [
+              "/created_at",
+              "/updated_at"
+            ]
+          }
+        }
+      },
+      {
+        "a": "base-125-r2",
+        "b": "b1-125-r2",
+        "files": {
+          "text/text-scan.json": {
+            "difference_kinds": [
+              "value"
+            ],
+            "differing_fields": [
+              "/created_at",
+              "/metrics/cross_frame_recognition/detect_seconds",
+              "/metrics/cross_frame_recognition/recognize_seconds",
+              "/metrics/elapsed_seconds",
+              "/metrics/peak_process_ram_bytes",
+              "/metrics/performance/phases/frame_pipe_wait/wall_seconds",
+              "/metrics/performance/phases/model_load/wall_seconds",
+              "/metrics/performance/phases/model_step/wall_seconds",
+              "/metrics/performance/phases/preview_output/wall_seconds",
+              "/metrics/performance/phases/preview_write/wall_seconds",
+              "/metrics/performance/phases/source_hash/wall_seconds",
+              "/metrics/performance/phases/text_semantics/wall_seconds",
+              "/metrics/performance/phases/tracking/wall_seconds",
+              "/metrics/performance/total_wall_seconds",
+              "/metrics/performance/unattributed_wall_seconds",
+              "/metrics/video_seconds_per_processing_second"
+            ]
+          },
+          "visual-logo/scan.json": {
+            "difference_kinds": [
+              "value"
+            ],
+            "differing_fields": [
+              "/created_at",
+              "/metrics/elapsed_seconds",
+              "/metrics/peak_process_ram_bytes",
+              "/metrics/performance/phases/model_load/wall_seconds",
+              "/metrics/performance/phases/model_step/wall_seconds",
+              "/metrics/performance/phases/prefetch_wait/wall_seconds",
+              "/metrics/performance/total_wall_seconds",
+              "/metrics/performance/unattributed_wall_seconds",
+              "/metrics/video_seconds_per_processing_second",
+              "/metrics/vlm_prefetch_performance/phases/frame_write/wall_seconds",
+              "/metrics/vlm_prefetch_performance/phases/processor/wall_seconds",
+              "/metrics/vlm_prefetch_performance/total_wall_seconds",
+              "/metrics/vlm_prefetch_performance/unattributed_wall_seconds"
+            ]
+          },
+          "visual-logo/scan-florence.json": {
+            "difference_kinds": [
+              "value"
+            ],
+            "differing_fields": [
+              "/created_at",
+              "/metrics/elapsed_seconds",
+              "/metrics/localization_performance/phases/frame_extract/wall_seconds",
+              "/metrics/localization_performance/phases/model_load/wall_seconds",
+              "/metrics/localization_performance/total_wall_seconds",
+              "/metrics/localization_performance/unattributed_wall_seconds",
+              "/metrics/peak_process_ram_bytes",
+              "/metrics/performance/phases/model_load/wall_seconds",
+              "/metrics/performance/phases/model_step/wall_seconds",
+              "/metrics/performance/phases/prefetch_wait/wall_seconds",
+              "/metrics/performance/total_wall_seconds",
+              "/metrics/performance/unattributed_wall_seconds",
+              "/metrics/video_seconds_per_processing_second",
+              "/metrics/vlm_prefetch_performance/phases/frame_write/wall_seconds",
+              "/metrics/vlm_prefetch_performance/phases/processor/wall_seconds",
+              "/metrics/vlm_prefetch_performance/total_wall_seconds",
+              "/metrics/vlm_prefetch_performance/unattributed_wall_seconds",
+              "/region_localization_summary/created_at",
+              "/region_localization_summary/elapsed_seconds"
+            ]
+          },
+          "review-queue.json": {
+            "difference_kinds": [
+              "value"
+            ],
+            "differing_fields": [
+              "/created_at",
+              "/updated_at"
+            ]
+          }
+        }
+      },
+      {
+        "a": "base-125",
+        "b": "b1-125-r2",
+        "files": {
+          "text/text-scan.json": {
+            "difference_kinds": [
+              "value"
+            ],
+            "differing_fields": [
+              "/created_at",
+              "/metrics/cross_frame_recognition/detect_seconds",
+              "/metrics/cross_frame_recognition/recognize_seconds",
+              "/metrics/elapsed_seconds",
+              "/metrics/peak_process_ram_bytes",
+              "/metrics/performance/phases/frame_pipe_wait/wall_seconds",
+              "/metrics/performance/phases/model_load/wall_seconds",
+              "/metrics/performance/phases/model_step/wall_seconds",
+              "/metrics/performance/phases/preview_output/wall_seconds",
+              "/metrics/performance/phases/preview_write/wall_seconds",
+              "/metrics/performance/phases/source_hash/wall_seconds",
+              "/metrics/performance/phases/text_semantics/wall_seconds",
+              "/metrics/performance/phases/tracking/wall_seconds",
+              "/metrics/performance/total_wall_seconds",
+              "/metrics/performance/unattributed_wall_seconds",
+              "/metrics/video_seconds_per_processing_second"
+            ]
+          },
+          "visual-logo/scan.json": {
+            "difference_kinds": [
+              "value"
+            ],
+            "differing_fields": [
+              "/created_at",
+              "/metrics/elapsed_seconds",
+              "/metrics/peak_process_ram_bytes",
+              "/metrics/performance/phases/model_load/wall_seconds",
+              "/metrics/performance/phases/model_step/wall_seconds",
+              "/metrics/performance/phases/prefetch_wait/wall_seconds",
+              "/metrics/performance/total_wall_seconds",
+              "/metrics/performance/unattributed_wall_seconds",
+              "/metrics/video_seconds_per_processing_second",
+              "/metrics/vlm_prefetch_performance/phases/frame_write/wall_seconds",
+              "/metrics/vlm_prefetch_performance/phases/processor/wall_seconds",
+              "/metrics/vlm_prefetch_performance/total_wall_seconds",
+              "/metrics/vlm_prefetch_performance/unattributed_wall_seconds"
+            ]
+          },
+          "visual-logo/scan-florence.json": {
+            "difference_kinds": [
+              "value"
+            ],
+            "differing_fields": [
+              "/created_at",
+              "/metrics/elapsed_seconds",
+              "/metrics/localization_performance/phases/frame_extract/wall_seconds",
+              "/metrics/localization_performance/phases/model_load/wall_seconds",
+              "/metrics/localization_performance/total_wall_seconds",
+              "/metrics/localization_performance/unattributed_wall_seconds",
+              "/metrics/peak_process_ram_bytes",
+              "/metrics/performance/phases/model_load/wall_seconds",
+              "/metrics/performance/phases/model_step/wall_seconds",
+              "/metrics/performance/phases/prefetch_wait/wall_seconds",
+              "/metrics/performance/total_wall_seconds",
+              "/metrics/performance/unattributed_wall_seconds",
+              "/metrics/video_seconds_per_processing_second",
+              "/metrics/vlm_prefetch_performance/phases/frame_write/wall_seconds",
+              "/metrics/vlm_prefetch_performance/phases/processor/wall_seconds",
+              "/metrics/vlm_prefetch_performance/total_wall_seconds",
+              "/metrics/vlm_prefetch_performance/unattributed_wall_seconds",
+              "/region_localization_summary/created_at",
+              "/region_localization_summary/elapsed_seconds"
+            ]
+          },
+          "review-queue.json": {
+            "difference_kinds": [
+              "value"
+            ],
+            "differing_fields": [
+              "/created_at",
+              "/updated_at"
+            ]
+          }
+        }
+      },
+      {
+        "a": "b1-125",
+        "b": "b1-125-r2",
+        "files": {
+          "text/text-scan.json": {
+            "difference_kinds": [
+              "value"
+            ],
+            "differing_fields": [
+              "/created_at",
+              "/metrics/cross_frame_recognition/detect_seconds",
+              "/metrics/cross_frame_recognition/recognize_seconds",
+              "/metrics/elapsed_seconds",
+              "/metrics/peak_process_ram_bytes",
+              "/metrics/performance/phases/frame_pipe_wait/wall_seconds",
+              "/metrics/performance/phases/model_load/wall_seconds",
+              "/metrics/performance/phases/model_step/wall_seconds",
+              "/metrics/performance/phases/preview_output/wall_seconds",
+              "/metrics/performance/phases/preview_write/wall_seconds",
+              "/metrics/performance/phases/source_hash/wall_seconds",
+              "/metrics/performance/phases/text_semantics/wall_seconds",
+              "/metrics/performance/phases/tracking/wall_seconds",
+              "/metrics/performance/total_wall_seconds",
+              "/metrics/performance/unattributed_wall_seconds",
+              "/metrics/video_seconds_per_processing_second"
+            ]
+          },
+          "visual-logo/scan.json": {
+            "difference_kinds": [
+              "value"
+            ],
+            "differing_fields": [
+              "/created_at",
+              "/metrics/elapsed_seconds",
+              "/metrics/peak_process_ram_bytes",
+              "/metrics/performance/phases/model_load/wall_seconds",
+              "/metrics/performance/phases/model_step/wall_seconds",
+              "/metrics/performance/phases/prefetch_wait/wall_seconds",
+              "/metrics/performance/total_wall_seconds",
+              "/metrics/performance/unattributed_wall_seconds",
+              "/metrics/video_seconds_per_processing_second",
+              "/metrics/vlm_prefetch_performance/phases/frame_write/wall_seconds",
+              "/metrics/vlm_prefetch_performance/phases/processor/wall_seconds",
+              "/metrics/vlm_prefetch_performance/total_wall_seconds",
+              "/metrics/vlm_prefetch_performance/unattributed_wall_seconds"
+            ]
+          },
+          "visual-logo/scan-florence.json": {
+            "difference_kinds": [
+              "value"
+            ],
+            "differing_fields": [
+              "/created_at",
+              "/metrics/elapsed_seconds",
+              "/metrics/localization_performance/phases/frame_extract/wall_seconds",
+              "/metrics/localization_performance/phases/model_load/wall_seconds",
+              "/metrics/localization_performance/total_wall_seconds",
+              "/metrics/localization_performance/unattributed_wall_seconds",
+              "/metrics/peak_process_ram_bytes",
+              "/metrics/performance/phases/model_load/wall_seconds",
+              "/metrics/performance/phases/model_step/wall_seconds",
+              "/metrics/performance/phases/prefetch_wait/wall_seconds",
+              "/metrics/performance/total_wall_seconds",
+              "/metrics/performance/unattributed_wall_seconds",
+              "/metrics/video_seconds_per_processing_second",
+              "/metrics/vlm_prefetch_performance/phases/frame_write/wall_seconds",
+              "/metrics/vlm_prefetch_performance/phases/processor/wall_seconds",
+              "/metrics/vlm_prefetch_performance/total_wall_seconds",
+              "/metrics/vlm_prefetch_performance/unattributed_wall_seconds",
+              "/region_localization_summary/created_at",
+              "/region_localization_summary/elapsed_seconds"
+            ]
+          },
+          "review-queue.json": {
+            "difference_kinds": [
+              "value"
+            ],
+            "differing_fields": [
+              "/created_at",
+              "/updated_at"
+            ]
+          }
+        }
+      },
+      {
+        "a": "base-125",
+        "b": "base-125-r2",
+        "files": {
+          "text/text-scan.json": {
+            "difference_kinds": [
+              "value"
+            ],
+            "differing_fields": [
+              "/created_at",
+              "/metrics/cross_frame_recognition/detect_seconds",
+              "/metrics/cross_frame_recognition/recognize_seconds",
+              "/metrics/elapsed_seconds",
+              "/metrics/peak_process_ram_bytes",
+              "/metrics/performance/phases/frame_pipe_wait/wall_seconds",
+              "/metrics/performance/phases/model_load/wall_seconds",
+              "/metrics/performance/phases/model_step/wall_seconds",
+              "/metrics/performance/phases/preview_output/wall_seconds",
+              "/metrics/performance/phases/preview_write/wall_seconds",
+              "/metrics/performance/phases/source_hash/wall_seconds",
+              "/metrics/performance/phases/text_semantics/wall_seconds",
+              "/metrics/performance/phases/tracking/wall_seconds",
+              "/metrics/performance/total_wall_seconds",
+              "/metrics/performance/unattributed_wall_seconds",
+              "/metrics/video_seconds_per_processing_second"
+            ]
+          },
+          "visual-logo/scan.json": {
+            "difference_kinds": [
+              "value"
+            ],
+            "differing_fields": [
+              "/created_at",
+              "/metrics/elapsed_seconds",
+              "/metrics/peak_process_ram_bytes",
+              "/metrics/performance/phases/model_load/wall_seconds",
+              "/metrics/performance/phases/model_step/wall_seconds",
+              "/metrics/performance/phases/prefetch_wait/wall_seconds",
+              "/metrics/performance/total_wall_seconds",
+              "/metrics/performance/unattributed_wall_seconds",
+              "/metrics/video_seconds_per_processing_second",
+              "/metrics/vlm_prefetch_performance/phases/frame_write/wall_seconds",
+              "/metrics/vlm_prefetch_performance/phases/processor/wall_seconds",
+              "/metrics/vlm_prefetch_performance/total_wall_seconds",
+              "/metrics/vlm_prefetch_performance/unattributed_wall_seconds"
+            ]
+          },
+          "visual-logo/scan-florence.json": {
+            "difference_kinds": [
+              "value"
+            ],
+            "differing_fields": [
+              "/created_at",
+              "/metrics/elapsed_seconds",
+              "/metrics/localization_performance/phases/frame_extract/wall_seconds",
+              "/metrics/localization_performance/phases/model_load/wall_seconds",
+              "/metrics/localization_performance/total_wall_seconds",
+              "/metrics/localization_performance/unattributed_wall_seconds",
+              "/metrics/peak_process_ram_bytes",
+              "/metrics/performance/phases/model_load/wall_seconds",
+              "/metrics/performance/phases/model_step/wall_seconds",
+              "/metrics/performance/phases/prefetch_wait/wall_seconds",
+              "/metrics/performance/total_wall_seconds",
+              "/metrics/performance/unattributed_wall_seconds",
+              "/metrics/video_seconds_per_processing_second",
+              "/metrics/vlm_prefetch_performance/phases/frame_write/wall_seconds",
+              "/metrics/vlm_prefetch_performance/phases/processor/wall_seconds",
+              "/metrics/vlm_prefetch_performance/total_wall_seconds",
+              "/metrics/vlm_prefetch_performance/unattributed_wall_seconds",
+              "/region_localization_summary/created_at",
+              "/region_localization_summary/elapsed_seconds"
+            ]
+          },
+          "review-queue.json": {
+            "difference_kinds": [
+              "value"
+            ],
+            "differing_fields": [
+              "/created_at",
+              "/updated_at"
+            ]
+          }
+        }
+      },
+      {
+        "a": "base-114",
+        "b": "b1-114",
+        "files": {
+          "text/text-scan.json": {
+            "difference_kinds": [
+              "value"
+            ],
+            "differing_fields": [
+              "/created_at",
+              "/metrics/cross_frame_recognition/detect_seconds",
+              "/metrics/cross_frame_recognition/recognize_seconds",
+              "/metrics/elapsed_seconds",
+              "/metrics/peak_process_ram_bytes",
+              "/metrics/performance/phases/frame_pipe_wait/wall_seconds",
+              "/metrics/performance/phases/model_load/wall_seconds",
+              "/metrics/performance/phases/model_step/wall_seconds",
+              "/metrics/performance/phases/preview_output/wall_seconds",
+              "/metrics/performance/phases/preview_write/wall_seconds",
+              "/metrics/performance/phases/source_hash/wall_seconds",
+              "/metrics/performance/phases/text_semantics/wall_seconds",
+              "/metrics/performance/phases/tracking/wall_seconds",
+              "/metrics/performance/total_wall_seconds",
+              "/metrics/performance/unattributed_wall_seconds",
+              "/metrics/video_seconds_per_processing_second"
+            ]
+          },
+          "visual-logo/scan.json": {
+            "difference_kinds": [
+              "value"
+            ],
+            "differing_fields": [
+              "/created_at",
+              "/metrics/elapsed_seconds",
+              "/metrics/peak_process_ram_bytes",
+              "/metrics/performance/phases/model_load/wall_seconds",
+              "/metrics/performance/phases/model_step/wall_seconds",
+              "/metrics/performance/phases/prefetch_wait/wall_seconds",
+              "/metrics/performance/total_wall_seconds",
+              "/metrics/performance/unattributed_wall_seconds",
+              "/metrics/video_seconds_per_processing_second",
+              "/metrics/vlm_prefetch_performance/phases/frame_write/wall_seconds",
+              "/metrics/vlm_prefetch_performance/phases/processor/wall_seconds",
+              "/metrics/vlm_prefetch_performance/total_wall_seconds",
+              "/metrics/vlm_prefetch_performance/unattributed_wall_seconds"
+            ]
+          },
+          "visual-logo/scan-florence.json": {
+            "difference_kinds": [
+              "value"
+            ],
+            "differing_fields": [
+              "/created_at",
+              "/metrics/elapsed_seconds",
+              "/metrics/localization_performance/phases/frame_extract/wall_seconds",
+              "/metrics/localization_performance/phases/model_load/wall_seconds",
+              "/metrics/localization_performance/phases/model_step/wall_seconds",
+              "/metrics/localization_performance/total_wall_seconds",
+              "/metrics/localization_performance/unattributed_wall_seconds",
+              "/metrics/peak_process_ram_bytes",
+              "/metrics/performance/phases/model_load/wall_seconds",
+              "/metrics/performance/phases/model_step/wall_seconds",
+              "/metrics/performance/phases/prefetch_wait/wall_seconds",
+              "/metrics/performance/total_wall_seconds",
+              "/metrics/performance/unattributed_wall_seconds",
+              "/metrics/video_seconds_per_processing_second",
+              "/metrics/vlm_prefetch_performance/phases/frame_write/wall_seconds",
+              "/metrics/vlm_prefetch_performance/phases/processor/wall_seconds",
+              "/metrics/vlm_prefetch_performance/total_wall_seconds",
+              "/metrics/vlm_prefetch_performance/unattributed_wall_seconds",
+              "/region_localization_summary/created_at",
+              "/region_localization_summary/elapsed_seconds"
+            ]
+          },
+          "review-queue.json": {
+            "difference_kinds": [
+              "value"
+            ],
+            "differing_fields": [
+              "/created_at",
+              "/updated_at"
+            ]
+          }
+        }
+      },
+      {
+        "a": "base-114-r2",
+        "b": "b1-114-r2",
+        "files": {
+          "text/text-scan.json": {
+            "difference_kinds": [
+              "value"
+            ],
+            "differing_fields": [
+              "/created_at",
+              "/metrics/cross_frame_recognition/detect_seconds",
+              "/metrics/cross_frame_recognition/recognize_seconds",
+              "/metrics/elapsed_seconds",
+              "/metrics/peak_process_ram_bytes",
+              "/metrics/performance/phases/frame_pipe_wait/wall_seconds",
+              "/metrics/performance/phases/model_load/wall_seconds",
+              "/metrics/performance/phases/model_step/wall_seconds",
+              "/metrics/performance/phases/preview_output/wall_seconds",
+              "/metrics/performance/phases/preview_write/wall_seconds",
+              "/metrics/performance/phases/text_semantics/wall_seconds",
+              "/metrics/performance/phases/tracking/wall_seconds",
+              "/metrics/performance/total_wall_seconds",
+              "/metrics/performance/unattributed_wall_seconds",
+              "/metrics/video_seconds_per_processing_second"
+            ]
+          },
+          "visual-logo/scan.json": {
+            "difference_kinds": [
+              "value"
+            ],
+            "differing_fields": [
+              "/created_at",
+              "/metrics/elapsed_seconds",
+              "/metrics/peak_process_ram_bytes",
+              "/metrics/performance/phases/model_load/wall_seconds",
+              "/metrics/performance/phases/model_step/wall_seconds",
+              "/metrics/performance/phases/prefetch_wait/wall_seconds",
+              "/metrics/performance/total_wall_seconds",
+              "/metrics/performance/unattributed_wall_seconds",
+              "/metrics/video_seconds_per_processing_second",
+              "/metrics/vlm_prefetch_performance/phases/frame_write/wall_seconds",
+              "/metrics/vlm_prefetch_performance/phases/processor/wall_seconds",
+              "/metrics/vlm_prefetch_performance/total_wall_seconds",
+              "/metrics/vlm_prefetch_performance/unattributed_wall_seconds"
+            ]
+          },
+          "visual-logo/scan-florence.json": {
+            "difference_kinds": [
+              "value"
+            ],
+            "differing_fields": [
+              "/created_at",
+              "/metrics/elapsed_seconds",
+              "/metrics/localization_performance/phases/frame_extract/wall_seconds",
+              "/metrics/localization_performance/phases/model_load/wall_seconds",
+              "/metrics/localization_performance/phases/model_step/wall_seconds",
+              "/metrics/localization_performance/total_wall_seconds",
+              "/metrics/localization_performance/unattributed_wall_seconds",
+              "/metrics/peak_process_ram_bytes",
+              "/metrics/performance/phases/model_load/wall_seconds",
+              "/metrics/performance/phases/model_step/wall_seconds",
+              "/metrics/performance/phases/prefetch_wait/wall_seconds",
+              "/metrics/performance/total_wall_seconds",
+              "/metrics/performance/unattributed_wall_seconds",
+              "/metrics/video_seconds_per_processing_second",
+              "/metrics/vlm_prefetch_performance/phases/frame_write/wall_seconds",
+              "/metrics/vlm_prefetch_performance/phases/processor/wall_seconds",
+              "/metrics/vlm_prefetch_performance/total_wall_seconds",
+              "/metrics/vlm_prefetch_performance/unattributed_wall_seconds",
+              "/region_localization_summary/created_at",
+              "/region_localization_summary/elapsed_seconds"
+            ]
+          },
+          "review-queue.json": {
+            "difference_kinds": [
+              "value"
+            ],
+            "differing_fields": [
+              "/created_at",
+              "/updated_at"
+            ]
+          }
+        }
+      },
+      {
+        "a": "base-114",
+        "b": "b1-114-r2",
+        "files": {
+          "text/text-scan.json": {
+            "difference_kinds": [
+              "value"
+            ],
+            "differing_fields": [
+              "/created_at",
+              "/metrics/cross_frame_recognition/detect_seconds",
+              "/metrics/cross_frame_recognition/recognize_seconds",
+              "/metrics/elapsed_seconds",
+              "/metrics/peak_process_ram_bytes",
+              "/metrics/performance/phases/frame_pipe_wait/wall_seconds",
+              "/metrics/performance/phases/model_load/wall_seconds",
+              "/metrics/performance/phases/model_step/wall_seconds",
+              "/metrics/performance/phases/preview_output/wall_seconds",
+              "/metrics/performance/phases/preview_write/wall_seconds",
+              "/metrics/performance/phases/source_hash/wall_seconds",
+              "/metrics/performance/phases/text_semantics/wall_seconds",
+              "/metrics/performance/phases/tracking/wall_seconds",
+              "/metrics/performance/total_wall_seconds",
+              "/metrics/performance/unattributed_wall_seconds",
+              "/metrics/video_seconds_per_processing_second"
+            ]
+          },
+          "visual-logo/scan.json": {
+            "difference_kinds": [
+              "value"
+            ],
+            "differing_fields": [
+              "/created_at",
+              "/metrics/elapsed_seconds",
+              "/metrics/peak_process_ram_bytes",
+              "/metrics/performance/phases/model_load/wall_seconds",
+              "/metrics/performance/phases/model_step/wall_seconds",
+              "/metrics/performance/phases/prefetch_wait/wall_seconds",
+              "/metrics/performance/total_wall_seconds",
+              "/metrics/performance/unattributed_wall_seconds",
+              "/metrics/video_seconds_per_processing_second",
+              "/metrics/vlm_prefetch_performance/phases/frame_write/wall_seconds",
+              "/metrics/vlm_prefetch_performance/phases/processor/wall_seconds",
+              "/metrics/vlm_prefetch_performance/total_wall_seconds",
+              "/metrics/vlm_prefetch_performance/unattributed_wall_seconds"
+            ]
+          },
+          "visual-logo/scan-florence.json": {
+            "difference_kinds": [
+              "value"
+            ],
+            "differing_fields": [
+              "/created_at",
+              "/metrics/elapsed_seconds",
+              "/metrics/localization_performance/phases/frame_extract/wall_seconds",
+              "/metrics/localization_performance/phases/model_load/wall_seconds",
+              "/metrics/localization_performance/phases/model_step/wall_seconds",
+              "/metrics/localization_performance/total_wall_seconds",
+              "/metrics/localization_performance/unattributed_wall_seconds",
+              "/metrics/peak_process_ram_bytes",
+              "/metrics/performance/phases/model_load/wall_seconds",
+              "/metrics/performance/phases/model_step/wall_seconds",
+              "/metrics/performance/phases/prefetch_wait/wall_seconds",
+              "/metrics/performance/total_wall_seconds",
+              "/metrics/performance/unattributed_wall_seconds",
+              "/metrics/video_seconds_per_processing_second",
+              "/metrics/vlm_prefetch_performance/phases/frame_write/wall_seconds",
+              "/metrics/vlm_prefetch_performance/phases/processor/wall_seconds",
+              "/metrics/vlm_prefetch_performance/total_wall_seconds",
+              "/metrics/vlm_prefetch_performance/unattributed_wall_seconds",
+              "/region_localization_summary/created_at",
+              "/region_localization_summary/elapsed_seconds"
+            ]
+          },
+          "review-queue.json": {
+            "difference_kinds": [
+              "value"
+            ],
+            "differing_fields": [
+              "/created_at",
+              "/updated_at"
+            ]
+          }
+        }
+      },
+      {
+        "a": "b1-114",
+        "b": "b1-114-r2",
+        "files": {
+          "text/text-scan.json": {
+            "difference_kinds": [
+              "value"
+            ],
+            "differing_fields": [
+              "/created_at",
+              "/metrics/cross_frame_recognition/detect_seconds",
+              "/metrics/cross_frame_recognition/recognize_seconds",
+              "/metrics/elapsed_seconds",
+              "/metrics/peak_process_ram_bytes",
+              "/metrics/performance/phases/frame_pipe_wait/wall_seconds",
+              "/metrics/performance/phases/model_load/wall_seconds",
+              "/metrics/performance/phases/model_step/wall_seconds",
+              "/metrics/performance/phases/preview_output/wall_seconds",
+              "/metrics/performance/phases/preview_write/wall_seconds",
+              "/metrics/performance/phases/source_hash/wall_seconds",
+              "/metrics/performance/phases/text_semantics/wall_seconds",
+              "/metrics/performance/phases/tracking/wall_seconds",
+              "/metrics/performance/total_wall_seconds",
+              "/metrics/performance/unattributed_wall_seconds",
+              "/metrics/video_seconds_per_processing_second"
+            ]
+          },
+          "visual-logo/scan.json": {
+            "difference_kinds": [
+              "value"
+            ],
+            "differing_fields": [
+              "/created_at",
+              "/metrics/elapsed_seconds",
+              "/metrics/peak_process_ram_bytes",
+              "/metrics/performance/phases/model_load/wall_seconds",
+              "/metrics/performance/phases/model_step/wall_seconds",
+              "/metrics/performance/phases/prefetch_wait/wall_seconds",
+              "/metrics/performance/total_wall_seconds",
+              "/metrics/performance/unattributed_wall_seconds",
+              "/metrics/video_seconds_per_processing_second",
+              "/metrics/vlm_prefetch_performance/phases/frame_write/wall_seconds",
+              "/metrics/vlm_prefetch_performance/phases/processor/wall_seconds",
+              "/metrics/vlm_prefetch_performance/total_wall_seconds",
+              "/metrics/vlm_prefetch_performance/unattributed_wall_seconds"
+            ]
+          },
+          "visual-logo/scan-florence.json": {
+            "difference_kinds": [
+              "value"
+            ],
+            "differing_fields": [
+              "/created_at",
+              "/metrics/elapsed_seconds",
+              "/metrics/localization_performance/phases/frame_extract/wall_seconds",
+              "/metrics/localization_performance/phases/model_load/wall_seconds",
+              "/metrics/localization_performance/phases/model_step/wall_seconds",
+              "/metrics/localization_performance/total_wall_seconds",
+              "/metrics/localization_performance/unattributed_wall_seconds",
+              "/metrics/peak_process_ram_bytes",
+              "/metrics/performance/phases/model_load/wall_seconds",
+              "/metrics/performance/phases/model_step/wall_seconds",
+              "/metrics/performance/phases/prefetch_wait/wall_seconds",
+              "/metrics/performance/total_wall_seconds",
+              "/metrics/performance/unattributed_wall_seconds",
+              "/metrics/video_seconds_per_processing_second",
+              "/metrics/vlm_prefetch_performance/phases/frame_write/wall_seconds",
+              "/metrics/vlm_prefetch_performance/phases/processor/wall_seconds",
+              "/metrics/vlm_prefetch_performance/total_wall_seconds",
+              "/metrics/vlm_prefetch_performance/unattributed_wall_seconds",
+              "/region_localization_summary/created_at",
+              "/region_localization_summary/elapsed_seconds"
+            ]
+          },
+          "review-queue.json": {
+            "difference_kinds": [
+              "value"
+            ],
+            "differing_fields": [
+              "/created_at",
+              "/updated_at"
+            ]
+          }
+        }
+      },
+      {
+        "a": "base-114",
+        "b": "base-114-r2",
+        "files": {
+          "text/text-scan.json": {
+            "difference_kinds": [
+              "value"
+            ],
+            "differing_fields": [
+              "/created_at",
+              "/metrics/cross_frame_recognition/detect_seconds",
+              "/metrics/cross_frame_recognition/recognize_seconds",
+              "/metrics/elapsed_seconds",
+              "/metrics/peak_process_ram_bytes",
+              "/metrics/performance/phases/frame_pipe_wait/wall_seconds",
+              "/metrics/performance/phases/model_load/wall_seconds",
+              "/metrics/performance/phases/model_step/wall_seconds",
+              "/metrics/performance/phases/preview_output/wall_seconds",
+              "/metrics/performance/phases/preview_write/wall_seconds",
+              "/metrics/performance/phases/source_hash/wall_seconds",
+              "/metrics/performance/phases/text_semantics/wall_seconds",
+              "/metrics/performance/phases/tracking/wall_seconds",
+              "/metrics/performance/total_wall_seconds",
+              "/metrics/performance/unattributed_wall_seconds",
+              "/metrics/video_seconds_per_processing_second"
+            ]
+          },
+          "visual-logo/scan.json": {
+            "difference_kinds": [
+              "value"
+            ],
+            "differing_fields": [
+              "/created_at",
+              "/metrics/elapsed_seconds",
+              "/metrics/peak_process_ram_bytes",
+              "/metrics/performance/phases/model_load/wall_seconds",
+              "/metrics/performance/phases/model_step/wall_seconds",
+              "/metrics/performance/phases/prefetch_wait/wall_seconds",
+              "/metrics/performance/total_wall_seconds",
+              "/metrics/performance/unattributed_wall_seconds",
+              "/metrics/video_seconds_per_processing_second",
+              "/metrics/vlm_prefetch_performance/phases/frame_write/wall_seconds",
+              "/metrics/vlm_prefetch_performance/phases/processor/wall_seconds",
+              "/metrics/vlm_prefetch_performance/total_wall_seconds",
+              "/metrics/vlm_prefetch_performance/unattributed_wall_seconds"
+            ]
+          },
+          "visual-logo/scan-florence.json": {
+            "difference_kinds": [
+              "value"
+            ],
+            "differing_fields": [
+              "/created_at",
+              "/metrics/elapsed_seconds",
+              "/metrics/localization_performance/phases/frame_extract/wall_seconds",
+              "/metrics/localization_performance/phases/model_load/wall_seconds",
+              "/metrics/localization_performance/phases/model_step/wall_seconds",
+              "/metrics/localization_performance/total_wall_seconds",
+              "/metrics/localization_performance/unattributed_wall_seconds",
+              "/metrics/peak_process_ram_bytes",
+              "/metrics/performance/phases/model_load/wall_seconds",
+              "/metrics/performance/phases/model_step/wall_seconds",
+              "/metrics/performance/phases/prefetch_wait/wall_seconds",
+              "/metrics/performance/total_wall_seconds",
+              "/metrics/performance/unattributed_wall_seconds",
+              "/metrics/video_seconds_per_processing_second",
+              "/metrics/vlm_prefetch_performance/phases/frame_write/wall_seconds",
+              "/metrics/vlm_prefetch_performance/phases/processor/wall_seconds",
+              "/metrics/vlm_prefetch_performance/total_wall_seconds",
+              "/metrics/vlm_prefetch_performance/unattributed_wall_seconds",
+              "/region_localization_summary/created_at",
+              "/region_localization_summary/elapsed_seconds"
+            ]
+          },
+          "review-queue.json": {
+            "difference_kinds": [
+              "value"
+            ],
+            "differing_fields": [
+              "/created_at",
+              "/updated_at"
+            ]
+          }
+        }
+      }
+    ]
+  },
+  "prune_gate": {
+    "entries": 241,
+    "walked_bytes": 921972011,
+    "manifest_bytes": 921972011,
+    "cases": {
+      "defaults": {
+        "old": {
+          "removed_entries": 9,
+          "removed_bytes": 72327507,
+          "kept_bytes": 849644504,
+          "seconds": 3.969
+        },
+        "new": {
+          "removed_entries": 9,
+          "removed_bytes": 72327507,
+          "kept_bytes": 849644504,
+          "seconds": 1.701
+        },
+        "same_kept_entries": true,
+        "kept_count": 232
+      },
+      "cap_300MB": {
+        "old": {
+          "removed_entries": 138,
+          "removed_bytes": 608985594,
+          "kept_bytes": 312986417,
+          "seconds": 7.69
+        },
+        "new": {
+          "removed_entries": 138,
+          "removed_bytes": 608985594,
+          "kept_bytes": 312986417,
+          "seconds": 4.818
+        },
+        "same_kept_entries": true,
+        "kept_count": 103
+      },
+      "age_1day": {
+        "old": {
+          "removed_entries": 228,
+          "removed_bytes": 877877748,
+          "kept_bytes": 44094263,
+          "seconds": 10.661
+        },
+        "new": {
+          "removed_entries": 228,
+          "removed_bytes": 877877748,
+          "kept_bytes": 44094263,
+          "seconds": 5.247
+        },
+        "same_kept_entries": true,
+        "kept_count": 13
+      },
+      "cap_300MB_stripped": {
+        "old": {
+          "removed_entries": 138,
+          "removed_bytes": 608985510,
+          "kept_bytes": 312986354,
+          "seconds": 7.587
+        },
+        "new": {
+          "removed_entries": 138,
+          "removed_bytes": 608985510,
+          "kept_bytes": 312986354,
+          "seconds": 5.169
+        },
+        "same_kept_entries": true,
+        "kept_count": 103
+      }
+    },
+    "size_mismatches": 0,
+    "note": "Copy of cache\\stage-results (241 entries, 0.92 GB) under <install>\\temp, \\\\?\\ paths; seconds include deleting files; cap_300MB_stripped removes 'bytes' from 7 manifests.",
+    "steady_state_seconds": {
+      "old": [
+        3.54,
+        3.5
+      ],
+      "new": {
+        "cold": 0.66,
+        "warm": 0.066
+      }
+    }
+  },
+  "import_seconds": {
+    "note": "best of 3, import only (no model load), base cli imports every scanner",
+    "base": {
+      "text": 8.44,
+      "visual_logo": 8.97,
+      "build_review": 7.67
+    },
+    "b1": {
+      "text": 0.2,
+      "visual_logo": 0.18,
+      "build_review": 0.23
+    },
+    "loaded_at_model_load_anyway": {
+      "qwen2_vl (torch + transformers model module)": 6.34,
+      "easyocr + torch + transformers": 6.5,
+      "base cli set: torch, timm, transformers, easyocr, cv2": 5.54
+    }
+  },
+  "fingerprint_seconds_3_runs": {
+    "text": {
+      "old": [
+        0.892,
+        0.077,
+        0.075
+      ],
+      "new": [
+        0.18,
+        0.058,
+        0.055
+      ]
+    },
+    "visual_logo": {
+      "old": [
+        0.141,
+        0.124,
+        0.125
+      ],
+      "new": [
+        0.096,
+        0.101,
+        0.097
+      ]
+    },
+    "localize_logo": {
+      "old": [
+        0.153,
+        0.152,
+        0.146
+      ],
+      "new": [
+        0.128,
+        0.127,
+        0.131
+      ]
+    }
+  }
+}

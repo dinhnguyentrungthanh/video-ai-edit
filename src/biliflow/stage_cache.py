@@ -1,14 +1,19 @@
 from __future__ import annotations
 
+import ast
 import hashlib
+import importlib.util
 import json
 import os
+import re
 import shutil
+import stat
 from datetime import datetime, timedelta, timezone
+from functools import lru_cache
 from pathlib import Path
 from typing import Any, Iterable
 
-from biliflow.cache_dependencies import stage_source_paths
+from biliflow.cache_dependencies import STAGE_MODELS, STAGE_MODULES, stage_source_paths
 
 
 CACHE_SCHEMA_VERSION = 2
@@ -26,6 +31,17 @@ CACHEABLE_STAGES = frozenset({
     "visual_logo",
     "localize_logo",
 })
+# A build (no .py modules) keys its stages by this manifest at the install root.
+BUILD_MANIFEST_NAME = "biliflow-build.json"
+BUILD_MANIFEST_VERSION = 1
+MAX_BUILD_MANIFEST_BYTES = 4 * 1024 * 1024
+FILE_ATTRIBUTE_REPARSE_POINT = 0x400
+# Without Windows long paths a folder path may have at most 247 characters (CreateDirectoryW)
+# and a file path 259 (MAX_PATH); measured with LongPathsEnabled=0 on 2026-10-12.
+MAX_DIRECTORY_PATH_CHARS = 247
+MAX_FILE_PATH_CHARS = 259
+_NOT_MODEL_NAMES = frozenset({".gitkeep"})
+_BYTECODE_SUFFIXES = frozenset({".pyc", ".pyo"})
 
 
 def _utc_now() -> str:
@@ -39,11 +55,128 @@ def _json_digest(value: Any) -> str:
     return hashlib.sha256(encoded).hexdigest()
 
 
+def _not_a_model_file(relative: Path) -> bool:
+    """What under models\\ is not part of a model and changes without it: Hugging Face's
+    ``.cache``, bytecode written when a model's own code is imported (trust_remote_code) and
+    placeholders. The same filter as scripts/models_lock.py, except that a model's
+    manifest.json stays in the key."""
+    return (relative.name in _NOT_MODEL_NAMES
+            or relative.suffix in _BYTECODE_SUFFIXES
+            or any(part.startswith(".cache") or part == "__pycache__" for part in relative.parts))
+
+
+def _stage_sources(root: Path, stage_name: str) -> tuple[Path, ...] | None:
+    """The stage's code as source files; None when its modules are not .py files (a build)."""
+    package = root / "src" / "biliflow"
+    entries = [package / f"{name}.py" for name in STAGE_MODULES.get(stage_name, ("cli",))]
+    if not all(path.is_file() for path in entries):
+        return None
+    return stage_source_paths(root, stage_name)
+
+
+def _build_code_records(root: Path, stage_name: str) -> list[dict[str, Any]] | None:
+    """The stage's code identity from a build's manifest (made at build time by
+    build_code_manifest); None when the manifest is missing, invalid or lacks the stage."""
+    path = root / BUILD_MANIFEST_NAME
+    try:
+        info = os.lstat(path)
+        if (not stat.S_ISREG(info.st_mode) or info.st_size > MAX_BUILD_MANIFEST_BYTES
+                or getattr(info, "st_file_attributes", 0) & FILE_ATTRIBUTE_REPARSE_POINT):
+            return None
+        data = json.loads(path.read_bytes().decode("utf-8"))
+    except (OSError, UnicodeDecodeError, ValueError):
+        return None
+    if not isinstance(data, dict) or type(data.get("biliflow_build")) is not int:
+        return None
+    build_id, stages = data.get("build_id"), data.get("stages")
+    modules = stages.get(stage_name) if isinstance(stages, dict) else None
+    if (data["biliflow_build"] != BUILD_MANIFEST_VERSION
+            or not isinstance(build_id, str) or not build_id.strip()
+            or not isinstance(modules, dict) or not modules
+            or not all(isinstance(name, str) and isinstance(digest, str)
+                       and re.fullmatch(r"[0-9a-f]{64}", digest)
+                       for name, digest in modules.items())):
+        return None
+    return [{"build_id": build_id},
+            *({"module": name, "sha256": modules[name]} for name in sorted(modules))]
+
+
+def build_code_manifest(source_root: Path, build_id: str) -> dict[str, Any]:
+    """The content of a build's biliflow-build.json, made from the source tree when the build
+    is made: the build id and, for each cached stage, the SHA-256 of every source file in its
+    key. A build keys its stages by this; without .py files or this manifest nothing is cached."""
+    if not build_id.strip():
+        raise ValueError("build_id must not be empty")
+    source_root = source_root.resolve(strict=True)
+    stages = {}
+    for stage in sorted(CACHEABLE_STAGES):
+        sources = _stage_sources(source_root, stage)
+        if sources is None:
+            raise ValueError(f"Stage {stage} has no source files in {source_root}")
+        stages[stage] = {
+            path.relative_to(source_root).as_posix(): hashlib.sha256(path.read_bytes()).hexdigest()
+            for path in sources
+        }
+    return {"biliflow_build": BUILD_MANIFEST_VERSION, "build_id": build_id, "stages": stages}
+
+
+def _torch_versions() -> dict[str, Any]:
+    """torch's version and its CUDA build, read as text from torch/version.py: the
+    Control Center never imports torch."""
+    try:
+        spec = importlib.util.find_spec("torch")
+    except (ImportError, ValueError):
+        spec = None
+    for location in (spec.submodule_search_locations or []) if spec else []:
+        try:
+            tree = ast.parse((Path(location) / "version.py").read_text(encoding="utf-8"))
+        except (OSError, SyntaxError, UnicodeDecodeError):
+            continue
+        values = {}
+        for node in tree.body:
+            if isinstance(node, ast.Assign) and len(node.targets) == 1:
+                target, value = node.targets[0], node.value
+            elif isinstance(node, ast.AnnAssign):
+                target, value = node.target, node.value
+            else:
+                continue
+            if isinstance(target, ast.Name) and isinstance(value, ast.Constant):
+                values[target.id] = value.value
+        return {"torch": values.get("__version__"), "cuda": values.get("cuda")}
+    return {"torch": None, "cuda": None}
+
+
+@lru_cache(maxsize=1)
+def _gpu_identity() -> tuple[tuple[str, str], ...] | str:
+    """Name and compute capability of each NVIDIA GPU (never the driver), read once per
+    process through NVML: the GPU cannot change while the Control Center runs. A failed
+    read gives its status, so those keys never match a working GPU's."""
+    from biliflow.hardware_system import WindowsSystem
+
+    read = WindowsSystem().nvml()
+    if read.status != "ok":
+        return read.status
+    return tuple((gpu.name, gpu.compute_capability) for gpu in read.gpus)
+
+
+def _runtime_identity() -> dict[str, Any]:
+    gpus = _gpu_identity()
+    return {
+        **_torch_versions(),
+        "gpus": ([{"name": name, "compute_capability": capability} for name, capability in gpus]
+                 if isinstance(gpus, tuple) else {"nvml": gpus}),
+    }
+
+
 def _tree_fingerprint(root: Path, stage_name: str = "") -> str:
-    """Fingerprint code/config and model identities without hashing large weights."""
-    records: list[dict[str, Any]] = []
+    """Fingerprint code/config, the stage's models and the torch/GPU runtime without
+    hashing large weights."""
+    sources = _stage_sources(root, stage_name)
+    records: list[dict[str, Any]] = (
+        [] if sources is not None else list(_build_code_records(root, stage_name) or ())
+    )
     for relative in (
-        *(path.relative_to(root).as_posix() for path in stage_source_paths(root, stage_name)),
+        *(path.relative_to(root).as_posix() for path in sources or ()),
         "config/processing_profiles.json",
         "config/detection_policy.yaml",
         "config/text_review_policy.json",
@@ -62,17 +195,17 @@ def _tree_fingerprint(root: Path, stage_name: str = "") -> str:
         for path in paths:
             if path.suffix in {".pyc", ".pyo"} or "__pycache__" in path.parts:
                 continue
-            stat = path.stat()
+            info = path.stat()
             item: dict[str, Any] = {
                 "path": path.relative_to(root).as_posix(),
-                "size": stat.st_size,
+                "size": info.st_size,
             }
             # Source and small configuration files are content hashed. Large model
             # weights are represented by their manifest plus stable file metadata.
-            if stat.st_size <= 8 * 1024 * 1024:
+            if info.st_size <= 8 * 1024 * 1024:
                 item["sha256"] = hashlib.sha256(path.read_bytes()).hexdigest()
             else:
-                item["mtime_ns"] = stat.st_mtime_ns
+                item["mtime_ns"] = info.st_mtime_ns
             records.append(item)
     if stage_name in {"visual_logo", "localize_logo"}:
         memory = root / "state" / "brand-memory.json"
@@ -81,22 +214,87 @@ def _tree_fingerprint(root: Path, stage_name: str = "") -> str:
     for name in ("ffmpeg", "ffprobe"):
         executable = root / "tools" / "ffmpeg" / "bin" / (name + ".exe")
         if executable.is_file():
-            stat = executable.stat()
-            records.append({"tool": name, "size": stat.st_size, "mtime_ns": stat.st_mtime_ns})
+            info = executable.stat()
+            records.append({"tool": name, "size": info.st_size, "mtime_ns": info.st_mtime_ns})
     models = root / "models"
     if models.exists():
-        for path in sorted(item for item in models.rglob("*") if item.is_file()):
-            stat = path.stat()
-            item = {
-                "path": path.relative_to(root).as_posix(),
-                "size": stat.st_size,
-            }
-            if path.name in {"manifest.json", "config.json"} or stat.st_size <= 128 * 1024:
-                item["sha256"] = hashlib.sha256(path.read_bytes()).hexdigest()
-            else:
-                item["mtime_ns"] = stat.st_mtime_ns
-            records.append(item)
+        names = STAGE_MODELS.get(stage_name)
+        for folder in [models] if names is None else [models / name for name in sorted(names)]:
+            if not folder.is_dir():
+                records.append({"model": folder.relative_to(root).as_posix(), "missing": True})
+                continue
+            for path in sorted(item for item in folder.rglob("*") if item.is_file()):
+                if _not_a_model_file(path.relative_to(models)):
+                    continue
+                info = path.stat()
+                item = {
+                    "path": path.relative_to(root).as_posix(),
+                    "size": info.st_size,
+                }
+                if path.name in {"manifest.json", "config.json"} or info.st_size <= 128 * 1024:
+                    item["sha256"] = hashlib.sha256(path.read_bytes()).hexdigest()
+                else:
+                    item["mtime_ns"] = info.st_mtime_ns
+                records.append(item)
+    records.append({"runtime": _runtime_identity()})
     return _json_digest(records)
+
+
+def _entry_bytes(manifest_path: Path) -> int:
+    """Bytes of one cache entry: the snapshot size its manifest recorded plus the manifest.
+    Walking every snapshot file instead cost ~5.5 s per stage on 45,726 files. An entry
+    whose manifest has no usable size is walked as before."""
+    try:
+        recorded = json.loads(manifest_path.read_text(encoding="utf-8")).get("bytes")
+    except (OSError, UnicodeDecodeError, ValueError, AttributeError):
+        recorded = None
+    if type(recorded) is int and recorded >= 0:
+        return recorded + manifest_path.stat().st_size
+    return sum(path.stat().st_size for path in manifest_path.parent.rglob("*") if path.is_file())
+
+
+class StageCachePathTooLong(OSError):
+    """A path of the cache entry would pass the Windows path limit; nothing was written."""
+
+    def __init__(self, path: str, limit: int) -> None:
+        super().__init__(
+            f"a path of the cache entry would be {len(path)} characters; the Windows limit is {limit}"
+        )
+        self.path = path
+        self.limit = limit
+
+
+def _long_paths_enabled() -> bool:
+    """Whether this process may use paths past MAX_PATH (Windows long paths on, or not Windows)."""
+    if os.name != "nt":
+        return True
+    try:
+        import ctypes
+        return bool(ctypes.windll.ntdll.RtlAreLongPathsEnabled())
+    except (AttributeError, OSError):
+        return False
+
+
+def _check_entry_paths(temporary: Path, report_root: Path, roots: Iterable[Path]) -> None:
+    """Raises StageCachePathTooLong when a folder or file that store() would write under the
+    entry's .tmp folder (its longest form) passes the limit. Checked before anything is written,
+    so a refused entry leaves no partial folder."""
+    base = os.path.abspath(temporary)
+    if _long_paths_enabled() or base.startswith("\\\\?\\"):
+        return
+    snapshot = Path(base) / "snapshot"
+    directories = [Path(base), snapshot]
+    files = [Path(base) / "manifest.json"]
+    for root in roots:
+        destination = snapshot / root.relative_to(report_root)
+        for current, _folders, names in os.walk(root):
+            target = destination / Path(current).relative_to(root)
+            directories.append(target)
+            files.extend(target / name for name in names)
+    for paths, limit in ((directories, MAX_DIRECTORY_PATH_CHARS), (files, MAX_FILE_PATH_CHARS)):
+        longest = max((str(path) for path in paths), key=len)
+        if len(longest) > limit:
+            raise StageCachePathTooLong(longest, limit)
 
 
 def _artifact_roots(paths: Iterable[Path]) -> tuple[Path, ...]:
@@ -125,7 +323,13 @@ class StageArtifactCache:
         self.cache_root = self.root / "cache" / "stage-results"
 
     def cacheable(self, stage_name: str, artifact_paths: Iterable[Path]) -> bool:
-        return stage_name in CACHEABLE_STAGES and bool(tuple(artifact_paths))
+        # Refuse safely: a stage whose code is neither .py files nor in a build manifest
+        # would get a key that no code change can alter.
+        return (
+            stage_name in CACHEABLE_STAGES and bool(tuple(artifact_paths))
+            and (_stage_sources(self.root, stage_name) is not None
+                 or _build_code_records(self.root, stage_name) is not None)
+        )
 
     def _fingerprint(self, stage_name: str) -> str:
         # A dashboard can stay open across code/model/config changes. Never pin
@@ -327,6 +531,7 @@ class StageArtifactCache:
         entry = self.entry(source_sha256, stage_name, key)
         snapshot = entry / "snapshot"
         temporary = entry.with_name(entry.name + ".tmp")
+        _check_entry_paths(temporary, resolved_report_root, roots)
         if temporary.exists():
             shutil.rmtree(temporary)
         temporary.mkdir(parents=True, exist_ok=True)
@@ -377,9 +582,7 @@ class StageArtifactCache:
             entry = manifest_path.parent
             try:
                 modified = manifest_path.stat().st_mtime
-                size = sum(
-                    path.stat().st_size for path in entry.rglob("*") if path.is_file()
-                )
+                size = _entry_bytes(manifest_path)
             except OSError:
                 continue
             entries.append((modified, size, entry))

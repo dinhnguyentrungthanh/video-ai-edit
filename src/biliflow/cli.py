@@ -5,46 +5,23 @@ import json
 import sys
 from pathlib import Path
 
+# Only light modules load here. Each command imports its own scanner below: every
+# stage runs in its own process, and importing all of them (torch, timm, easyocr,
+# transformers) cost each stage about 7 s (docs/handoff/B-scan.md).
 from biliflow.adult_verification import (
     ADULT_TRIAGE_LEVEL,
     ADULT_TRIAGE_LEVELS,
     VERIFIER_BATCH_SIZE,
     VERIFIER_MODEL_DIR,
-    verify_adult_report,
 )
-from biliflow.brand_memory import rebuild_brand_memory
-from biliflow.cleanup import cleanup_candidates
-from biliflow.animation_safety_scanner import scan_animation_safety
-from biliflow.animation_policy import DIRECT_VIOLENCE_LABELS
-from biliflow.ad_candidate_pipeline import augment_grounding_regions, benchmark_ad_candidates
-from biliflow.content_scanner import scan_content
-from biliflow.image_benchmark import benchmark_images
-from biliflow.license_policy import audit_project_models, ensure_model_allowed
-from biliflow.final_renderer import approve_previews, render_final_output
-from biliflow.scanner import scan_nsfw
-from biliflow.review_workflow import (
-    CONTENT_STYLES,
-    build_edit_plan,
-    build_review_queue,
-    record_review_decision,
-    render_edit_previews,
-    serve_review_ui,
-    studio_logo_memory_allowed,
-)
-from biliflow.storage import storage_status
-from biliflow.textscan import scan_text
-from biliflow.text_semantics import classify_text_report
-from biliflow.violence_scanner import scan_violence
-from biliflow.live_safety_scanner import scan_live_safety
-from biliflow.video_benchmark import benchmark_videos
-from biliflow.vlm_confirmation import confirm_violence_report
-from biliflow.visual_logo_scanner import scan_visual_logos
-from biliflow.control_center import serve_control_center
 from biliflow.http_guards import loopback_host_argument
+from biliflow.install_paths import install_root
+from biliflow.job_pipeline import CONTENT_STYLES
+from biliflow.license_policy import audit_project_models, ensure_model_allowed
 
 
 def build_parser() -> argparse.ArgumentParser:
-    root = Path(__file__).resolve().parents[2]
+    root = install_root()
     parser = argparse.ArgumentParser(prog="biliflow")
     parser.add_argument("--project-root", type=Path, default=root)
     sub = parser.add_subparsers(dest="command", required=True)
@@ -489,9 +466,11 @@ def main() -> int:
     args = build_parser().parse_args()
     root = args.project_root.resolve(strict=True)
     if args.command == "storage":
+        from biliflow.storage import storage_status
         print(json.dumps(storage_status(root).as_dict(), indent=2))
         return 0
     if args.command == "cleanup-preview":
+        from biliflow.cleanup import cleanup_candidates
         candidates = cleanup_candidates(root)
         print(json.dumps({"mode": "DRY_RUN", "count": len(candidates), "files": candidates}, indent=2))
         return 0
@@ -499,9 +478,11 @@ def main() -> int:
         print(json.dumps(audit_project_models(root), indent=2, ensure_ascii=False))
         return 0
     if args.command == "rebuild-brand-memory":
+        from biliflow.brand_memory import rebuild_brand_memory
         print(json.dumps(rebuild_brand_memory(root), indent=2, ensure_ascii=False))
         return 0
     if args.command == "scan":
+        from biliflow.scanner import scan_nsfw
         ensure_model_allowed(root, args.model)
         payload = scan_nsfw(
             project_root=root,
@@ -528,6 +509,7 @@ def main() -> int:
         print(json.dumps(payload, indent=2, ensure_ascii=False))
         return 0
     if args.command == "scan-text":
+        from biliflow.textscan import scan_text
         ensure_model_allowed(root, args.model_dir)
         if not args.skip_semantic_routing:
             ensure_model_allowed(root, args.semantic_model)
@@ -585,6 +567,7 @@ def main() -> int:
         }, indent=2, ensure_ascii=False))
         return 0
     if args.command == "classify-text":
+        from biliflow.text_semantics import classify_text_report
         ensure_model_allowed(root, args.model)
         payload = classify_text_report(
             project_root=root,
@@ -602,6 +585,7 @@ def main() -> int:
         }, indent=2, ensure_ascii=False))
         return 0
     if args.command == "scan-animation-safety":
+        from biliflow.animation_safety_scanner import scan_animation_safety
         ensure_model_allowed(root, args.model)
         payload = scan_animation_safety(
             project_root=root,
@@ -633,6 +617,7 @@ def main() -> int:
         print(json.dumps(payload, indent=2, ensure_ascii=False))
         return 0
     if args.command == "scan-live-safety":
+        from biliflow.live_safety_scanner import scan_live_safety
         ensure_model_allowed(root, args.gore_model)
         ensure_model_allowed(root, args.violence_model)
         payload = scan_live_safety(
@@ -667,6 +652,9 @@ def main() -> int:
         }, indent=2, ensure_ascii=False))
         return 0
     if args.command == "scan-content":
+        from biliflow.animation_policy import DIRECT_VIOLENCE_LABELS
+        from biliflow.content_scanner import scan_content
+        from biliflow.violence_scanner import scan_violence
         if args.kind == "violence":
             selected_model = args.model or root / "models" / "vit_base_violence_detection"
             manifest_path = selected_model / "manifest.json"
@@ -763,6 +751,7 @@ def main() -> int:
         print(json.dumps(payload, indent=2, ensure_ascii=False))
         return 0
     if args.command == "benchmark-ad-pipeline":
+        from biliflow.ad_candidate_pipeline import benchmark_ad_candidates
         ensure_model_allowed(root, args.grounding_model)
         ensure_model_allowed(root, args.ranker_model)
         payload = benchmark_ad_candidates(
@@ -788,6 +777,7 @@ def main() -> int:
         }, indent=2, ensure_ascii=False))
         return 0
     if args.command == "augment-grounding-regions":
+        from biliflow.ad_candidate_pipeline import augment_grounding_regions
         ensure_model_allowed(root, args.model)
         payload = augment_grounding_regions(
             project_root=root,
@@ -802,6 +792,7 @@ def main() -> int:
         print(json.dumps(payload, indent=2, ensure_ascii=False))
         return 0
     if args.command == "benchmark-images":
+        from biliflow.image_benchmark import benchmark_images
         ensure_model_allowed(root, args.model)
         payload = benchmark_images(
             project_root=root,
@@ -816,6 +807,7 @@ def main() -> int:
         print(json.dumps(payload, indent=2, ensure_ascii=False))
         return 0
     if args.command == "confirm-violence":
+        from biliflow.vlm_confirmation import confirm_violence_report
         ensure_model_allowed(root, args.model)
         payload = confirm_violence_report(
             project_root=root,
@@ -829,6 +821,7 @@ def main() -> int:
         print(json.dumps(payload, indent=2, ensure_ascii=False))
         return 0
     if args.command == "scan-visual-logo":
+        from biliflow.visual_logo_scanner import scan_visual_logos
         ensure_model_allowed(root, args.model)
         payload = scan_visual_logos(
             project_root=root, input_path=args.input, report_dir=args.report_dir,
@@ -863,6 +856,7 @@ def main() -> int:
         }, indent=2, ensure_ascii=False))
         return 0
     if args.command == "benchmark-videos":
+        from biliflow.video_benchmark import benchmark_videos
         ensure_model_allowed(root, args.model)
         payload = benchmark_videos(
             project_root=root, manifest_path=args.manifest, report_dir=args.report_dir,
@@ -872,6 +866,7 @@ def main() -> int:
         print(json.dumps(payload, indent=2, ensure_ascii=False))
         return 0
     if args.command == "build-review":
+        from biliflow.review_workflow import build_review_queue, studio_logo_memory_allowed
         payload = build_review_queue(
             project_root=root, report_paths=args.report, queue_path=args.queue,
             merge_gap_seconds=args.merge_gap_seconds,
@@ -885,6 +880,7 @@ def main() -> int:
         print(json.dumps(payload, indent=2, ensure_ascii=False))
         return 0
     if args.command == "verify-adult":
+        from biliflow.adult_verification import verify_adult_report
         ensure_model_allowed(root, args.model)
         payload = verify_adult_report(
             project_root=root,
@@ -902,6 +898,7 @@ def main() -> int:
         }, indent=2, ensure_ascii=False))
         return 0
     if args.command == "review-decide":
+        from biliflow.review_workflow import record_review_decision
         payload = record_review_decision(
             project_root=root, queue_path=args.queue, item_id=args.id,
             decision=args.decision, note=args.note,
@@ -913,12 +910,14 @@ def main() -> int:
         print(json.dumps(payload, indent=2, ensure_ascii=False))
         return 0
     if args.command == "build-edit-plan":
+        from biliflow.review_workflow import build_edit_plan
         payload = build_edit_plan(
             project_root=root, queue_path=args.queue, plan_path=args.output,
         )
         print(json.dumps(payload, indent=2, ensure_ascii=False))
         return 0
     if args.command == "render-previews":
+        from biliflow.review_workflow import render_edit_previews
         payload = render_edit_previews(
             project_root=root, plan_path=args.plan, output_dir=args.output_dir,
             ffmpeg_path=args.ffmpeg, ffprobe_path=args.ffprobe,
@@ -928,11 +927,13 @@ def main() -> int:
         print(json.dumps(payload, indent=2, ensure_ascii=False))
         return 0
     if args.command == "review-ui":
+        from biliflow.review_workflow import serve_review_ui
         serve_review_ui(
             project_root=root, queue_path=args.queue, host=args.host, port=args.port,
         )
         return 0
     if args.command == "approve-previews":
+        from biliflow.final_renderer import approve_previews
         plan, manifest = approve_previews(
             project_root=root, plan_path=args.plan,
             preview_manifest_path=args.manifest, actor=args.actor,
@@ -941,6 +942,7 @@ def main() -> int:
         print(json.dumps({"plan": plan, "preview_manifest": manifest}, indent=2, ensure_ascii=False))
         return 0
     if args.command == "render-final":
+        from biliflow.final_renderer import render_final_output
         maximum_output_bytes = None if args.no_output_size_limit else args.max_output_bytes
         target_output_bytes = None if args.no_output_size_limit else args.target_output_bytes
         payload = render_final_output(
@@ -952,6 +954,7 @@ def main() -> int:
         print(json.dumps(payload, indent=2, ensure_ascii=False))
         return 0
     if args.command == "control-center":
+        from biliflow.control_center import serve_control_center
         serve_control_center(
             project_root=root, host=args.host, port=args.port,
             stable_seconds=args.stable_seconds,

@@ -101,8 +101,6 @@ def _head_module(relative: str, name: str):
 
 def _head_patches() -> list:
     """Point the CLI dispatch (and R3's lazy shot_cuts import) at the committed code."""
-    from biliflow import cli
-
     shot_cuts = _head_module("src/biliflow/shot_cuts.py", "shot_cuts")
     scanner = _head_module("src/biliflow/scanner.py", "scanner")
     content = _head_module("src/biliflow/content_scanner.py", "content_scanner")
@@ -113,11 +111,11 @@ def _head_patches() -> list:
     logo = _head_module("src/biliflow/visual_logo_scanner.py", "visual_logo_scanner")
     return [
         mock.patch("biliflow.shot_cuts.find_window_cuts", shot_cuts.find_window_cuts),
-        mock.patch.object(cli, "scan_nsfw", scanner.scan_nsfw),
-        mock.patch.object(cli, "scan_live_safety", live.scan_live_safety),
-        mock.patch.object(cli, "confirm_violence_report", vlm.confirm_violence_report),
-        mock.patch.object(cli, "scan_animation_safety", animation.scan_animation_safety),
-        mock.patch.object(cli, "scan_visual_logos", logo.scan_visual_logos),
+        mock.patch("biliflow.scanner.scan_nsfw", scanner.scan_nsfw),
+        mock.patch("biliflow.live_safety_scanner.scan_live_safety", live.scan_live_safety),
+        mock.patch("biliflow.vlm_confirmation.confirm_violence_report", vlm.confirm_violence_report),
+        mock.patch("biliflow.animation_safety_scanner.scan_animation_safety", animation.scan_animation_safety),
+        mock.patch("biliflow.visual_logo_scanner.scan_visual_logos", logo.scan_visual_logos),
     ]
 
 

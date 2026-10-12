@@ -33,7 +33,12 @@ try {
         $ResourceMutex = [Threading.Mutex]::new($false, $MutexName)
         Write-Host "BiliFlow: waiting for resource slot $MutexName"
         $SlotWait = [Diagnostics.Stopwatch]::StartNew()
-        $HasMutex = $ResourceMutex.WaitOne()
+        try {
+            $HasMutex = $ResourceMutex.WaitOne()
+        } catch [Threading.AbandonedMutexException] {
+            # The previous holder exited without releasing it; the wait still made this process the owner.
+            $HasMutex = $true
+        }
         $SlotWait.Stop()
         Write-Host "BiliFlow: resource slot acquired"
         Write-Host ("BiliFlow performance: resource_wait_seconds={0:F3}" -f $SlotWait.Elapsed.TotalSeconds)

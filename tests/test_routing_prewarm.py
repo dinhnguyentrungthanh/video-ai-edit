@@ -71,7 +71,7 @@ class RoutingPrewarmTests(unittest.TestCase):
                 "--prewarm-logo-routing", "--logo-sample-every", "2.0", "--logo-routing-workers", "3"]
         with mock.patch.object(sys, "argv", ["biliflow", *args]), \
                 mock.patch.object(cli, "ensure_model_allowed"), \
-                mock.patch.object(cli, "scan_text", side_effect=scan_effect), \
+                mock.patch("biliflow.textscan.scan_text", side_effect=scan_effect), \
                 mock.patch("biliflow.routing_prewarm.RoutingPrewarm", FakePrewarm):
             try:
                 code = cli.main()

@@ -583,7 +583,7 @@ class GoreTriageTests(unittest.TestCase):
 
         argv = ["biliflow", "--project-root", str(self.root), "build-review", "--report", str(self.gore),
                 "--queue", str(self.queue), "--content-style", "animation"]
-        with mock.patch("biliflow.cli.build_review_queue", return_value={}) as build, \
+        with mock.patch("biliflow.review_workflow.build_review_queue", return_value={}) as build, \
                 mock.patch("sys.stdout", new_callable=io.StringIO), mock.patch("sys.argv", argv):
             self.assertEqual(cli.main(), 0)
         self.assertNotIn("gore_triage_level", build.call_args.kwargs)
