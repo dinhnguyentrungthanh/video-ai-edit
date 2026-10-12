@@ -269,7 +269,22 @@ Kết luận cho T71:
      - T71 (10:26–11:17, harness `b99f130`) và T74 (11:17–12:03, harness `bf21391`) xong.
      - Chấm điểm nhanh hơn (`39258d5`, `bf21391`): 2 bản cùng lúc sau khi mọi bản đã render xong (ở 1280×534 gần như không nhanh hơn, vì một lượt đã dùng gần hết CPU); VMAF lấy mẫu `n_subsample` khi video trên 80.000 khung (H37: 1/3); với video chấm đủ khung, ghi thêm kết quả nếu chỉ lấy mỗi khung thứ 3. Trên T74, VMAF trung bình, 1 % và 5 % theo 1/3 khung lệch tối đa 0,04 so với đủ khung (chỉ khung thấp nhất khác).
      - **H37 lần 1 (12:04–14:09) chấm sai, không dùng:** VMAF trung bình 77 và phân vị 1 %, 5 % bằng 0 cho cả x264. Nguyên nhân: dấu thời gian của nguồn được làm tròn theo 1/90000 (bước 3753/3754 xen kẽ, không nhảy, không trôi), còn bản xuất mp4 dùng 1/24000 chính xác. `ssim`/`libvmaf` ghép khung theo dấu thời gian nên gặp khung kế bên; ở mỗi chỗ chuyển cảnh, khung đó bị chấm gần 0. Bản xuất đúng: cùng số khung (14.386 trong 10 phút đầu); ghép theo số thứ tự khung cho SSIM 0,9947, không khung nào dưới 0,9. T71 và T74 (25/1) không bị ảnh hưởng. Thời gian và dung lượng của lần 1 vẫn đúng: x264 1.025,0 s, 1.985 MB; `-cq` 23 711,4 s, 2.645 MB; `-cq` 25 713,1 s, 2.470 MB; `-cq` 27 713,9 s, 2.215 MB; không fallback (giới hạn 3,5 GB).
-     - Sửa (`42282f8`): `_quality` đặt dấu thời gian từ số thứ tự khung (`settb=1/<tử>,setpts=N*<mẫu>` theo `copy.frame_rate`). H37 chạy lại từ 14:32 với `--keep-outputs` (`run-a3-h37.ps1`, log `temp\perf-export\H37\a3-h37.log`).
+     - Sửa (`42282f8`): `_quality` đặt dấu thời gian từ số thứ tự khung (`settb=1/<tử>,setpts=N*<mẫu>` theo `copy.frame_rate`).
+     - Người dùng thấy chạy lại cả phim quá lâu và chọn (2026-10-12, khoảng 14:45) chấm H37 trên 20 phút. Lần chạy lại cả phim (bắt đầu 14:17) bị dừng, và các file dở của nó trong bench H37 đã xóa.
+     - `H37-seg1200`: `prepare --name H37-seg1200 --job 37 --segment 2400 1200 --ops-file temp\perf-export\H37-seg1200.ops.json` (vùng làm mờ của job 37, từ 0 tới 1.199,5 s). `size_policy` trong `prepared.json` được đặt để video maxrate đúng bằng của cả phim (3.416.495 bit/s). Chấm đủ mọi khung; xong 15:24.
+   - **Bảng số đo** (chờ người dùng duyệt; "thời gian" là thời gian render FFmpeg):
+     | Tập | Bản | Dung lượng so với x264 | Thời gian | VMAF TB | VMAF 1 % | VMAF 5 % |
+     |---|---|---|---|---|---|---|
+     | T71 (1280×534) | x264 | 568 MB | 415,8 s | 95,26 | 90,15 | 91,57 |
+     | | `-cq` 23 / 25 / 27 | +33 % / +11 % / −7 % | −9 % / −10 % / −10 % | 97,92 / 97,21 / 96,14 | 93,87 / 92,27 / 89,82 | 95,32 / 94,15 / 92,46 |
+     | T74 (1280×534) | x264 | 547 MB | 348,1 s | 95,00 | 90,35 | 91,76 |
+     | | `-cq` 23 / 25 / 27 | +37 % / +14 % / −4 % | −16 % / −16 % / −15 % | 97,59 / 96,94 / 95,97 | 94,27 / 92,98 / 90,88 | 95,27 / 94,29 / 92,79 |
+     | H37 cả phim (1080p) | x264 | 1.985 MB | 1.025,0 s | — | — | — |
+     | | `-cq` 23 / 25 / 27 | +33 % / +24 % / +12 % | −31 % / −30 % / −30 % | — | — | — |
+     | H37 20 phút (1080p) | x264 | 325 MB | 183,8 s | 95,05 | 90,30 | 92,71 |
+     | | `-cq` 23 / 25 / 27 | +48 % / +34 % / +16 % | −30 % / −30 % / −30 % | 96,61 / 96,28 / 95,67 | 90,60 / 90,95 / 90,61 | 94,60 / 94,19 / 93,35 |
+     - Không fallback (mọi bản đều dưới 3,5 GB). VRAM NVENC: +161 MiB (1280×534), +244 MiB (1080p). Lấy mẫu 1/3 khung lệch dưới 0,1 so với đủ khung (T74, H37 20 phút).
+     - Đề xuất: p5 `-cq` 25.
    - Kế hoạch ban đầu: dò preset và `-cq` trên 2 đoạn 300 s (`T71-seg300`, `L39-1080-seg300`), rồi 3 tập đủ với `-cq` đề xuất: T71, T74 (1280×534, 43 và 48 phút) và H37 (job 37 là phim hoạt hình, nhãn H; trước đây ghi nhầm là L37). Bản xuất của job 37 không còn trong `output\` (chỉ còn nguồn và edit plan đã duyệt), nên `prepare --job 37` thất bại. H37 được chuẩn bị bằng `prepare --name H37 --job 37 --ops-file temp\perf-export\H37.ops.json`; file thao tác chép từ `approved_operations` của edit plan đã duyệt (trạng thái `FINAL_RENDER_COMPLETED`; 1 vùng làm mờ suốt phim, 308×69). Bản sao: 1920×1080, 6.738 s, 23,976 khung/s, chính sách dung lượng mặc định. Không còn job 1080p nào giữ cả nguồn lẫn bản xuất; job 39 dài 11.763 s nên không dùng cả tập. Ghi VRAM. Trình bảng số đo và `-cq` đề xuất, chờ người dùng duyệt.
 4. Sau khi duyệt (chưa làm): đặt giá trị đã duyệt; "auto" thành mặc định cho root thật; ghi vào `AGENTS.md` (người dùng/điều phối) rằng bản xuất NVENC được dùng làm bằng chứng cho "Xóa video gốc" và "Lưu trữ"; dòng NVENC trong bảng của E. Sau đó mới đến A1b.
 

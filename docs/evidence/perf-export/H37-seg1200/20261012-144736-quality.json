@@ -1,0 +1,232 @@
+{
+  "schema_version": 1,
+  "name": "H37-seg1200",
+  "tag": "20261012-144736",
+  "finished_at": "2026-10-12T15:24:41+07:00",
+  "machine": {
+    "cpu": "Intel64 Family 6 Model 165 Stepping 2, GenuineIntel",
+    "logical_cpus": 12,
+    "platform": "Windows-10-10.0.26300-SP0",
+    "python": "3.11.16",
+    "ffmpeg": "9.0.1"
+  },
+  "code": {
+    "src_sha256": "4ff01766349b005ca55f776f3178faad8eaea1dbf9ea42c6da9d71e698349128",
+    "tracked": false
+  },
+  "origin": {
+    "job_id": 37,
+    "segment": [
+      2400.0,
+      1200.0
+    ],
+    "synthetic": null,
+    "ops_file": "H37-seg1200.ops.json"
+  },
+  "copy": {
+    "duration_seconds": 1201.792333,
+    "bytes": 396058993,
+    "width": 1920,
+    "height": 1080,
+    "video_codec": "h264",
+    "pix_fmt": "yuv420p",
+    "frame_rate": "24000/1001",
+    "video_bit_rate": "2502934",
+    "audio_codec": "aac"
+  },
+  "size_policy": {
+    "max_output_bytes": 624254926,
+    "target_output_bytes": 588583216
+  },
+  "vmaf": true,
+  "vmaf_subsample": 1,
+  "quality_workers": 2,
+  "rows": [
+    {
+      "label": "x264 (today's export)",
+      "encoder": "libx264",
+      "video_arguments": [
+        "-c:v",
+        "libx264",
+        "-preset",
+        "veryfast",
+        "-crf",
+        "20",
+        "-maxrate",
+        "3416495",
+        "-bufsize",
+        "6832990",
+        "-b:v",
+        "2878374"
+      ],
+      "encoder_choice": {
+        "requested": "libx264",
+        "nvenc_check": "not_asked"
+      },
+      "fallback": null,
+      "bytes": 324549900,
+      "ffmpeg_seconds": 183.806,
+      "video_seconds_per_second": 6.538,
+      "vram_before_mib": 380,
+      "vram_peak_mib": 380,
+      "vram_added_mib": 0,
+      "ssim_y": 0.995333,
+      "ssim_all": 0.995087,
+      "quality_seconds": 808.954,
+      "vmaf_mean": 95.050076,
+      "vmaf_min": 67.569361,
+      "vmaf_harmonic_mean": 95.009089,
+      "vmaf_p1": 90.297,
+      "vmaf_p5": 92.706,
+      "vmaf_every3": {
+        "mean": 95.047912,
+        "min": 68.118126,
+        "p1": 90.387,
+        "p5": 92.713
+      }
+    },
+    {
+      "label": "render_settings \"auto\"",
+      "encoder": "h264_nvenc",
+      "video_arguments": [
+        "-c:v",
+        "h264_nvenc",
+        "-preset",
+        "p5",
+        "-rc",
+        "vbr",
+        "-cq",
+        "23",
+        "-b:v",
+        "0",
+        "-maxrate",
+        "3416495",
+        "-bufsize",
+        "6832990",
+        "-tune",
+        "hq",
+        "-spatial-aq",
+        "1",
+        "-rc-lookahead",
+        "20"
+      ],
+      "encoder_choice": {
+        "requested": "auto",
+        "nvenc_check": "trial_ok"
+      },
+      "fallback": null,
+      "bytes": 479343496,
+      "ffmpeg_seconds": 127.751,
+      "video_seconds_per_second": 9.407,
+      "vram_before_mib": 380,
+      "vram_peak_mib": 624,
+      "vram_added_mib": 244,
+      "ssim_y": 0.997093,
+      "ssim_all": 0.996768,
+      "quality_seconds": 800.793,
+      "vmaf_mean": 96.606862,
+      "vmaf_min": 78.788648,
+      "vmaf_harmonic_mean": 96.575917,
+      "vmaf_p1": 90.603,
+      "vmaf_p5": 94.603,
+      "vmaf_every3": {
+        "mean": 96.601155,
+        "min": 78.788648,
+        "p1": 90.716,
+        "p5": 94.586
+      }
+    },
+    {
+      "label": "h264_nvenc p5 cq 25",
+      "encoder": "h264_nvenc",
+      "video_arguments": [
+        "-c:v",
+        "h264_nvenc",
+        "-preset",
+        "p5",
+        "-rc",
+        "vbr",
+        "-cq",
+        "25",
+        "-b:v",
+        "0",
+        "-maxrate",
+        "3416495",
+        "-bufsize",
+        "6832990",
+        "-tune",
+        "hq",
+        "-spatial-aq",
+        "1",
+        "-rc-lookahead",
+        "20"
+      ],
+      "bytes": 434538791,
+      "ffmpeg_seconds": 128.337,
+      "video_seconds_per_second": 9.364,
+      "vram_before_mib": 380,
+      "vram_peak_mib": 624,
+      "vram_added_mib": 244,
+      "ssim_y": 0.996732,
+      "ssim_all": 0.996313,
+      "quality_seconds": 799.26,
+      "vmaf_mean": 96.28064,
+      "vmaf_min": 80.450192,
+      "vmaf_harmonic_mean": 96.248065,
+      "vmaf_p1": 90.951,
+      "vmaf_p5": 94.194,
+      "vmaf_every3": {
+        "mean": 96.274723,
+        "min": 80.642018,
+        "p1": 91.106,
+        "p5": 94.198
+      }
+    },
+    {
+      "label": "h264_nvenc p5 cq 27",
+      "encoder": "h264_nvenc",
+      "video_arguments": [
+        "-c:v",
+        "h264_nvenc",
+        "-preset",
+        "p5",
+        "-rc",
+        "vbr",
+        "-cq",
+        "27",
+        "-b:v",
+        "0",
+        "-maxrate",
+        "3416495",
+        "-bufsize",
+        "6832990",
+        "-tune",
+        "hq",
+        "-spatial-aq",
+        "1",
+        "-rc-lookahead",
+        "20"
+      ],
+      "bytes": 375331715,
+      "ffmpeg_seconds": 127.863,
+      "video_seconds_per_second": 9.399,
+      "vram_before_mib": 380,
+      "vram_peak_mib": 624,
+      "vram_added_mib": 244,
+      "ssim_y": 0.995951,
+      "ssim_all": 0.99543,
+      "quality_seconds": 794.723,
+      "vmaf_mean": 95.670349,
+      "vmaf_min": 80.816479,
+      "vmaf_harmonic_mean": 95.631861,
+      "vmaf_p1": 90.61,
+      "vmaf_p5": 93.353,
+      "vmaf_every3": {
+        "mean": 95.665351,
+        "min": 81.631726,
+        "p1": 90.623,
+        "p5": 93.366
+      }
+    }
+  ]
+}
