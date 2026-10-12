@@ -136,6 +136,12 @@ PC_ONLY_POSTS = {
 PC_ONLY_TAILSCALE = "Chỉ làm trên PC: cài, đăng nhập và điều khiển Tailscale chỉ làm trên PC."
 TAILSCALE_ACTIONS = ("install", "start-service", "firewall", "login", "up", "down", "logout", "remote-on")
 PC_ONLY_POSTS.update({f"/api/tailscale/{action}": PC_ONLY_TAILSCALE for action in TAILSCALE_ACTIONS})
+# Dashboard V2 → Cài đặt → Phần cứng (docs/HARDWARE_PROFILE.md 6.1): reading the hardware profile, "Đo lại" and
+# its two switches are PC only. GET /api/hardware-profile refuses the phone in its own route (no GET allow-list).
+PC_ONLY_HARDWARE = ("Chỉ làm trên PC: xem hồ sơ phần cứng, Đo lại và bật/tắt các công tắc phần cứng chỉ làm "
+                    "trên PC.")
+HARDWARE_ACTIONS = ("remeasure", "cpu-only", "untested-fast")
+PC_ONLY_POSTS.update({f"/api/hardware-profile/{action}": PC_ONLY_HARDWARE for action in HARDWARE_ACTIONS})
 # "Tài khoản nguồn phim" (docs/SOURCE_ACCOUNTS_PLAN.md 9.14): signing in to a source, cancelling it and
 # disconnecting are PC only; their paths carry the source id, so they are matched as patterns (full match).
 PC_ONLY_SOURCE_ACCOUNTS = ("Chỉ làm trên PC: đăng nhập, hủy đăng nhập và ngắt kết nối tài khoản nguồn phim chỉ làm "

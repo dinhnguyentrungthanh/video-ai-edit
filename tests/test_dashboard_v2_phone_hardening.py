@@ -237,7 +237,10 @@ class H2AllowList(HardeningBase):
         self.assertIn("/api/source-cleanup", allowed)
         self.assertIn("/api/job-delete", allowed)
         for pc_only in ("/api/shutdown", "/api/source-archive", "/api/source-archive/restore",
-                        "/api/source-recycle-check", "/api/logo-memory/delete", "/api/phone-mode"):
+                        "/api/source-recycle-check", "/api/logo-memory/delete", "/api/phone-mode",
+                        "/api/hardware-profile/remeasure", "/api/hardware-profile/cpu-only",
+                        "/api/hardware-profile/untested-fast"):
+            self.assertIn(pc_only, examples)
             self.assertNotIn(pc_only, allowed)
 
     def test_an_unknown_post_is_pc_only_by_default_and_answered_before_the_body(self):

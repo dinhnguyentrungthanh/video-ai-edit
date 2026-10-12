@@ -41,7 +41,11 @@
     downloadGroupRemove:['POST','/api/downloads/groups/{id}/remove'],
     /* PC only (127.0.0.1 + token; the phone listener answers 403 pc_only): the page never offers them on the phone. */
     accountLogin:['POST','/api/download-accounts/{source}/login'],accountCancelLogin:['POST','/api/download-accounts/{source}/cancel-login'],
-    accountDisconnect:['POST','/api/download-accounts/{source}/disconnect']
+    accountDisconnect:['POST','/api/download-accounts/{source}/disconnect'],
+    /* Cài đặt → Phần cứng (docs/HARDWARE_PROFILE.md 6.1): PC only, the GET too (the phone listener answers 403 pc_only).
+     * cpu-only and untested-fast take exactly {enabled: <bool>}; remeasure ignores its body. */
+    hardwareProfile:['GET','/api/hardware-profile'],hardwareRemeasure:['POST','/api/hardware-profile/remeasure'],
+    hardwareCpuOnly:['POST','/api/hardware-profile/cpu-only'],hardwareUntestedFast:['POST','/api/hardware-profile/untested-fast']
   };
   /* A configured source id (download_account_api.ACCOUNT_ACTION): the only value a {source} placeholder takes. */
   const SOURCE_ID = /^[a-z0-9][a-z0-9-]{0,39}$/;

@@ -157,13 +157,17 @@ class RepositoryCacheScopeTests(unittest.TestCase):
     # 2026-10-03, batch 2 adds the shared export dialog; 2026-10-03, batch 3 adds
     # source cleanup; 2026-10-03, batch 4 adds source archive; 2026-10-05, the
     # permanent delete flow adds job removal; 2026-10-07, the anime gore triage
-    # settings, read only when a queue is built).
+    # settings, read only when a queue is built; 2026-10-11, the hardware profile, E1).
     CONTROL_PLANE = (
         "control_center.py", "scheduler.py", "job_store.py", "job_import.py",
         "review_workflow.py", "export_dialog.py",
         "export_guards.py", "recycle_bin.py", "source_cleanup.py",
         "source_archive.py", "source_archive_files.py", "source_archive_restore.py",
         "job_purge.py", "job_delete.py", "gore_triage.py",
+        "hardware_schema.py", "hardware_profile.py", "hardware_resolve.py", "hardware_table.py",
+        "hardware_detect.py", "hardware_system.py", "hardware_measure.py", "hardware_locks.py",
+        "hardware_idle.py", "hardware_tools.py", "hardware_trials.py", "hardware_manager.py",
+        "hardware_status.py",
     )
 
     def test_control_plane_modules_are_in_no_scan_stage_key(self):

@@ -309,7 +309,14 @@ class PhoneModeTests(unittest.TestCase):
             "/api/logo-memory/class": {"key": "k", "memory_class": "studio_logo", "expected_sha256": "a" * 64},
             "/api/logo-memory/delete": {"key": "k", "expected_sha256": "a" * 64},
             "/api/phone-mode": {"enabled": False},
+            # Cài đặt → Phần cứng (docs/HARDWARE_PROFILE.md 6.1): "Đo lại" and its two switches.
+            "/api/hardware-profile/remeasure": {},
+            "/api/hardware-profile/cpu-only": {"enabled": False},
+            "/api/hardware-profile/untested-fast": {"enabled": False},
         }
+        # A stand-in manager: the PC loop below reaches the routes, nothing is measured or written.
+        self.center.hardware = Mock(**{"start.return_value": {}, "set_cpu_only.return_value": {},
+                                       "set_untested_fast.return_value": {}})
         for path, payload in pc_only.items():
             with self.subTest(path=path):
                 code, _, body = self.post(self.port, path, payload, {"Cookie": cookie, "X-BiliFlow-Token": "test-token"})
@@ -319,6 +326,7 @@ class PhoneModeTests(unittest.TestCase):
                 self.assertTrue(answer["error"].startswith("Chỉ làm trên PC"))
         self.assertFalse(self.center._stopping.is_set(), "shutdown never ran")
         self.assertTrue(self.phone.enabled, "the phone cannot turn the phone mode off")
+        self.assertEqual(self.center.hardware.mock_calls, [], "the phone never reaches the hardware manager")
         # "Xóa video gốc" and "Xóa video" reach their handlers from the phone (the user's choice, 2026-10-06):
         # without confirm_permanent each is a 400 and the deleter (it fails the test) is never called.
         for path in ("/api/source-cleanup", "/api/job-delete"):

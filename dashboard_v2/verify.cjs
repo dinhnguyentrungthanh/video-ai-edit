@@ -341,4 +341,248 @@ check('"Gia hạn": the toast says what was added and the new auto-off time (add
   assert.match(src,/extendToast\(result&&result\.body&&result\.body\.added_seconds,/, 'the amount comes from the server');
   assert.ok((src.match(/\+EXTEND_NOTE/g)||[]).length===2,'the 24-hour note under both extend buttons');
 });
+/* Cài đặt → Phần cứng (hardware-view.js, docs/HARDWARE_PROFILE.md 6.1-6.2): GET samples shaped like the contract. */
+const HW=require('./hardware-view.js');
+const hwEsc=value=>String(value??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const HW_READY={status:'ready',applies_to_jobs:false,row:{id:'nvidia-sm75-torch2.14.0+cu126',status:'gated',table_version:1},
+  families:{fast:{family:'fast',capped:false,logo_decode:'nvdec',tf32:'default',refusal:null},standard_ocr8:{family:'standard_ocr8',capped:false,tf32:'default',refusal:null},
+    standard:{family:'standard',capped:false,tf32:'default',refusal:null,warnings:[{code:'c1_off_fp32',text:'Họ fp32 tắt luật máu anime C1.'}]}},
+  reasons:[{code:'row_match',text:'RTX 2060 (7.5), torch 2.14.0+cu126, driver 617.42 ≥ 576.80'}],
+  warnings:[{code:'nvdec_unverified',text:'Driver NVDEC chưa qua phép tự kiểm: giải mã logo bằng CPU.'}],
+  cpu_only:{value:false,valid:true},untested_fast:{value:false,gpu:null,applies:false},
+  profile:{present:true,source:'main',written_at:'2026-10-11T09:30:00+07:00',result:'ok',failure:null,power:{battery_present:false,ac_online:true}},
+  detection:{gpu:'NVIDIA GeForce RTX 2060',compute_capability:'7.5',vram_mib:6144,driver:'617.42',torch:'2.14.0+cu126',cpu:'CPU mẫu 8 nhân',ram_gib:15.8,
+    ffmpeg:{version:'9.0.1',encoders:{libx264:'ok',h264_nvenc:'ok',hevc_nvenc:'ok',av1_nvenc:'failed'},nvdec:{trial:'ok',framemd5_equal_cpu:true},nvdec_codecs:{h264:'ok',hevc:'ok',av1:'not_run'}}},
+  task:null,can_remeasure:{ok:false,reason:'not_paused',text:'Hãy tạm dừng hàng đợi trước'}};
+const HW_NEEDS={status:'needs_measurement',applies_to_jobs:false,row:null,
+  families:{fast:{family:null,refusal:'needs_measurement'},standard_ocr8:{family:null,refusal:'needs_measurement'},standard:{family:null,refusal:'needs_measurement'}},
+  reasons:[],warnings:[],cpu_only:{value:false,valid:true},untested_fast:{value:false,gpu:null,applies:false},
+  profile:{present:false,source:null,main_state:'missing',last_good_state:'missing'},detection:null,task:null,
+  can_remeasure:{ok:true,reason:null,text:''}};
+/* hardware_manager: a run of this page's Control Center (BUSY_MESSAGE), and one left by an earlier Control Center
+   that the mutex probe could not tell about (PROBE_UNKNOWN_MESSAGE, both in task.message and can_remeasure.text). */
+const HW_BUSY='Đang đo phần cứng; chờ lần đo xong rồi bấm lại.';
+const HW_PROBE_UNKNOWN='Không kiểm tra được có lần đo nào đang chạy hay không; thử lại sau.';
+const HW_RUNNING={...HW_NEEDS,task:{running:true,previous_run:false,step:'torch_probe',index:3,total:9,started_at:'2026-10-11T09:31:00+07:00'},
+  can_remeasure:{ok:false,reason:'busy',text:HW_BUSY}};
+const HW_UNTESTED={...HW_READY,status:'ready_untested',row:{id:'nvidia-untested',status:'untested',table_version:1},
+  families:{fast:{family:'standard',capped:true,tf32:'off',refusal:null},standard_ocr8:{family:'standard',capped:true,tf32:'off',refusal:null},standard:{family:'standard',capped:false,tf32:'off',refusal:null}},
+  warnings:[{code:'untested_arch',text:'Chưa qua cổng trên đời card này (sm_86)'},{code:'tf32_off',text:'Tắt TF32: matmul và cuDNN chạy fp32 IEEE (cần cờ dòng lệnh của Đợt 2).'}],
+  detection:{...HW_READY.detection,gpu:'NVIDIA GeForce RTX 3060',compute_capability:'8.6',vram_mib:12288},can_remeasure:{ok:true,reason:null,text:''}};
+const hwPc=(hardware,extra={})=>({device:'pc',remote:false,offline:false,hardware,...extra});
+/* One module over a fake store; ref.s is the snapshot the store hands out (a test changes it between calls) and
+   ref.after the one a write leaves behind (the real store reads the panel again after every write). */
+function hwModule(ref){
+  const calls={toasts:[],modals:[],actions:[],watch:[]};
+  const store={snapshot:()=>ref.s,watchHardware:on=>calls.watch.push(on),
+    hardwareAction:async(op,enabled)=>{calls.actions.push([op,enabled]);if(ref.after){ref.s=ref.after;ref.after=null;}return {};}};
+  const m=HW.create({store,esc:hwEsc,toast:(message,error)=>calls.toasts.push([message,!!error]),showModal:(title,body,commit,label)=>calls.modals.push({title,body,commit,label})});
+  return {m,calls};
+}
+const hwButton=(op,enabled)=>({dataset:enabled===undefined?{op}:{op,enabled}});
+check('Cài đặt → Phần cứng: contract endpoints, the module\'s operations, live.html only, app.js wiring under 800 lines',()=>{
+  assert.deepEqual([C.endpoints.hardwareProfile,C.endpoints.hardwareRemeasure,C.endpoints.hardwareCpuOnly,C.endpoints.hardwareUntestedFast],
+    [['GET','/api/hardware-profile'],['POST','/api/hardware-profile/remeasure'],['POST','/api/hardware-profile/cpu-only'],['POST','/api/hardware-profile/untested-fast']]);
+  for(const [op,operation] of Object.entries(HW.OPS))assert.deepEqual(C.endpoints[operation],['POST','/api/hardware-profile/'+op]);
+  const live=fs.readFileSync(path.join(__dirname,'live.html'),'utf8'),demo=fs.readFileSync(path.join(__dirname,'index.html'),'utf8');
+  assert.ok(live.includes('<script defer src="download-live.js"></script><script defer src="hardware-view.js"></script><script defer src="review-core.js"></script>'));
+  assert.ok(!demo.includes('hardware-view.js'),'the demo never loads it');
+  const app=fs.readFileSync(path.join(__dirname,'app.js'),'utf8');
+  assert.ok(app.split('\n').length<=800,'app.js stays under 800 lines');
+  assert.match(app,/const HW=LIVE&&window\.BFHardware\?window\.BFHardware\.create\(\{store,toast:[^}]*esc\}\):null;/);
+  assert.match(app,/tailscalePanel\(\)\+\(HW\?HW\.panel\(state\):LIVE\?'':'<section class="panel hardware-panel"[^']*Chỉ có ở bản live[^']*'\)\+/,'the demo says it is live only');
+  assert.match(app,/else if\(action==='hw'\)\{if\(HW\)HW\.onAction\(el\);\}/);
+  assert.match(app,/if\(HW\)HW\.watch\(view==='settings'\);/);
+  assert.match(app,/tailscaleToast\(\);if\(HW\)HW\.onSnapshot\(\);/);
+});
+check('Phần cứng on the PC (READY): badge, GPU, VRAM, driver, torch, FFmpeg trials, row and families, last measurement; "Đo lại" locked with its reason',()=>{
+  const {m}=hwModule({s:hwPc(HW_READY)}),html=m.panel(hwPc(HW_READY));
+  assert.match(html,/^<section class="panel hardware-panel" id="hw-panel"/);
+  assert.match(html,/<span class="badge hw-status">Sẵn sàng<\/span>/);
+  for(const text of ['NVIDIA GeForce RTX 2060','6144 MiB','617.42','2.14.0+cu126','CPU mẫu 8 nhân','15,8 GiB','9.0.1',
+    'libx264 đạt · h264_nvenc đạt · hevc_nvenc đạt · av1_nvenc lỗi','h264 đạt · hevc đạt · av1 chưa thử','NVDEC đạt, khung hình giống giải mã CPU',
+    'nvidia-sm75-torch2.14.0+cu126 · đã qua cổng · bảng 1','Tăng tốc xử lý</span><span>Tăng tốc xử lý · giải mã logo NVDEC','Họ fp32 tắt luật máu anime C1.',
+    hwEsc(HW_READY.reasons[0].text),'Driver NVDEC chưa qua phép tự kiểm','Thành công','Cắm điện · không có pin',HW.NOT_APPLIED])assert.ok(html.includes(text),text);
+  assert.ok(html.includes('data-op="remeasure" disabled title="Hãy tạm dừng hàng đợi trước">Đo lại</button>'),'locked with can_remeasure.text');
+  assert.ok(html.includes('<p class="muted hw-remeasure-reason">Hãy tạm dừng hàng đợi trước</p>'),'the reason is visible, not only a title');
+  assert.ok(html.includes('<button class="secondary" data-action="hw" data-op="cpu-only" data-enabled="1">Chỉ dùng CPU</button>'),'a button, not a checkbox');
+  assert.ok(!html.includes('untested-fast')&&!html.includes(HW.UNTESTED_LABEL),'no fast switch on a gated card');
+  assert.ok(!/<input/.test(html));
+});
+check('Phần cứng: NEEDS_MEASUREMENT asks for a first measurement; a running one shows its step and locks "Đo lại"',()=>{
+  const {m}=hwModule({s:hwPc(HW_NEEDS)}),needs=m.panel(hwPc(HW_NEEDS));
+  assert.match(needs,/<span class="badge blue hw-status">Chưa đo<\/span>/);
+  assert.ok(needs.includes('Không cấp: Chưa đo')&&needs.includes('Chưa đo lần nào.'));
+  assert.ok(needs.includes('data-op="remeasure">Đo lại</button>'),'"Đo lại" open when can_remeasure.ok');
+  assert.ok(!needs.includes('Driver NVIDIA'),'no detection rows before a measurement');
+  const running=m.panel(hwPc(HW_RUNNING));
+  assert.ok(running.includes('<div class="ts-task hw-task" role="status">'));
+  assert.ok(running.includes('Thử torch và CUDA (bước 3/9)')&&running.includes('<div class="meter"><i style="width:33%"></i></div>'));
+  assert.ok(running.includes('data-op="remeasure" disabled title="'+HW_BUSY+'">'),'locked with can_remeasure.text, never the panel\'s own words');
+  assert.ok(running.includes('<p class="muted hw-remeasure-reason">'+HW_BUSY+'</p>'));
+  const failed=m.panel(hwPc({...HW_READY,status:'cuda_unavailable',profile:{present:true,source:'main',written_at:'2026-10-11T09:30:00+07:00',result:'failed',
+    failure:{code:'cuda_unavailable',step:'torch_probe',text:'Không dùng được CUDA.',message:'cuda_matmul_failed: lỗi mẫu'},power:{battery_present:false,ac_online:true}}}));
+  assert.ok(failed.includes('<span class="badge red hw-status">Không dùng được CUDA</span>'));
+  assert.ok(failed.includes('Thất bại: Không dùng được CUDA. · cuda_matmul_failed: lỗi mẫu'),'the user text, then the error');
+  const offline=m.panel(hwPc(HW_NEEDS,{offline:true}));
+  assert.ok(offline.includes('data-op="remeasure" disabled')&&offline.includes('data-op="cpu-only" data-enabled="1" disabled'),'offline: every button off');
+});
+check('Phần cứng: the card is untested (READY_UNTESTED): label, warnings and the fast switch; its dialog lists the three risks; body {enabled:true}',async()=>{
+  const ref={s:hwPc(HW_UNTESTED)},{m,calls}=hwModule(ref),html=m.panel(ref.s);
+  assert.ok(html.includes('<span class="badge amber hw-status">Card chưa qua cổng</span>'));
+  assert.ok(html.includes('<span class="badge amber hw-untested" style="white-space:normal">'+HW.UNTESTED_LABEL+'</span>'),'the label next to the row and the families');
+  assert.ok(html.includes('Chưa qua cổng trên đời card này (sm_86)')&&html.includes('Tắt TF32: matmul'));
+  assert.ok(html.includes('Chuẩn (bị hạ) · TF32 tắt'),'fast and OCR 8 are capped to standard');
+  assert.ok(html.includes('data-op="untested-fast" data-enabled="1">Bật chế độ nhanh</button>'));
+  m.onAction(hwButton('untested-fast','1'));
+  assert.equal(calls.modals.length,1);
+  const modal=calls.modals[0];
+  assert.equal(modal.title,'Chế độ nhanh trên card chưa qua cổng');
+  assert.equal(HW.UNTESTED_FAST_RISKS.length,3);
+  for(const risk of HW.UNTESTED_FAST_RISKS)assert.ok(modal.body.includes('<li>'+hwEsc(risk)+'</li>'),risk);
+  assert.ok(modal.body.includes('có hiệu lực cho job mới từ Đợt 2')&&modal.body.includes('NVIDIA GeForce RTX 3060 (8.6)'));
+  assert.equal(await modal.commit(),true);
+  assert.deepEqual(calls.actions,[['hardwareUntestedFast',true]]);
+  const on={...HW_UNTESTED,untested_fast:{value:true,gpu:{name:'NVIDIA GeForce RTX 3060',compute_capability:'8.6'},applies:true}};
+  const shownOn=m.panel(hwPc(on));
+  assert.ok(shownOn.includes('Đang bật cho NVIDIA GeForce RTX 3060 (8.6)')&&shownOn.includes('data-enabled="0">Tắt chế độ nhanh</button>'));
+  assert.ok(!shownOn.includes(HW.OTHER_CARD));
+  const other={...HW_READY,untested_fast:{value:true,gpu:{name:'NVIDIA GeForce RTX 3060',compute_capability:'8.6'},applies:false}};
+  const shownOther=m.panel(hwPc(other));
+  assert.ok(shownOther.includes(HW.OTHER_CARD),'switched on for another card');
+  assert.ok(shownOther.includes('data-enabled="1" disabled title="Chỉ bật được khi card hiện tại chưa qua cổng.">Bật lại cho card này</button>'));
+  assert.ok(shownOther.includes('data-enabled="0">Tắt chế độ nhanh</button>'),'turning it off always works');
+  const warned=m.panel(hwPc({...other,status:'ready_untested',warnings:[{code:'untested_fast_other_card',text:HW.OTHER_CARD}]}));
+  assert.equal(warned.split(HW.OTHER_CARD).length,2,'the sentence once when the server already warns');
+  assert.ok(warned.includes('data-enabled="1">Bật lại cho card này</button>'),'on an untested card it can be bound again');
+  ref.s=hwPc(other);m.onAction(hwButton('untested-fast','1'));
+  assert.equal(calls.modals.length,1,'no dialog to turn it on while the card is not untested');
+  m.onAction(hwButton('untested-fast','0'));
+  await calls.modals[1].commit();
+  assert.deepEqual(calls.actions[1],['hardwareUntestedFast',false]);
+});
+check('Phần cứng: the fast switch on for THIS card in a state that never grants it says so, never "card khác"',()=>{
+  const {m}=hwModule({s:hwPc(HW_READY)});
+  const here={name:'NVIDIA GeForce RTX 2060',compute_capability:'7.5'};
+  for(const [name,hw,label] of [['gated now',{...HW_READY,untested_fast:{value:true,gpu:here,applies:false}},'Sẵn sàng'],
+    ['CUDA lost',{...HW_READY,status:'cuda_unavailable',untested_fast:{value:true,gpu:here,applies:false}},'Không dùng được CUDA'],
+    ['no profile',{...HW_NEEDS,untested_fast:{value:true,gpu:here,applies:false}},'Chưa đo']]){
+    const html=m.panel(hwPc(hw));
+    assert.ok(html.includes('<p class="muted hw-fast-idle">'+HW.IDLE_SWITCH+' ('+label+').</p>'),name);
+    assert.ok(!html.includes(HW.OTHER_CARD)&&!html.includes('Bật lại cho card này'),name+': not another card');
+    assert.ok(html.includes('data-enabled="0">Tắt chế độ nhanh</button>'),name+': it can still be turned off');
+  }
+  const sameNameOtherArch=m.panel(hwPc({...HW_READY,untested_fast:{value:true,gpu:{...here,compute_capability:'8.6'},applies:false}}));
+  assert.ok(sameNameOtherArch.includes(HW.OTHER_CARD)&&!sameNameOtherArch.includes(HW.IDLE_SWITCH),'name and compute capability both count');
+});
+check('Phần cứng: an earlier run the server could not tell about is never "Đang đo"; "Đo lại" keeps can_remeasure.text',()=>{
+  const {m}=hwModule({s:hwPc(HW_READY)});
+  const previous=message=>({running:true,previous_run:true,step:null,index:null,total:null,started_at:null,...(message===undefined?{}:{message})});
+  const unknown=m.panel(hwPc({...HW_READY,task:previous(HW_PROBE_UNKNOWN),can_remeasure:{ok:false,reason:'busy',text:HW_PROBE_UNKNOWN}}));
+  assert.ok(unknown.includes('<div class="ts-task hw-task" role="status"><div class="key-value"><span>Đo phần cứng</span><span>'+HW_PROBE_UNKNOWN+'</span></div></div>'));
+  assert.ok(!unknown.includes('<span>Đang đo</span>')&&!unknown.includes('class="meter"'),'no claim that a measurement runs');
+  assert.ok(unknown.includes('data-op="remeasure" disabled title="'+HW_PROBE_UNKNOWN+'">'),'"Đo lại" locked with the server\'s text');
+  const held=m.panel(hwPc({...HW_READY,task:previous('Đang đo (từ lần chạy trước)'),can_remeasure:{ok:false,reason:'busy',text:'Đang đo (từ lần chạy trước)'}}));
+  assert.ok(held.includes('<span>Đo phần cứng</span><span>Đang đo (từ lần chạy trước)</span>'),'the server\'s sentence as it is');
+  const bare=m.panel(hwPc({...HW_READY,task:previous(),can_remeasure:{ok:false,reason:'busy',text:null}}));
+  assert.ok(bare.includes('<span>'+HW.PREVIOUS_UNKNOWN+'</span>')&&!bare.includes('<span>Đang đo</span>'),'no sentence: still no claim');
+  assert.ok(bare.includes('data-op="remeasure" disabled title="Chưa đo lại được lúc này.">'));
+  assert.ok(!m.panel(hwPc({...HW_READY,task:HW_RUNNING.task,can_remeasure:{ok:false,reason:'busy',text:null}})).includes('Đang đo; đợi'),'never the panel\'s own "running" reason');
+});
+check('Phần cứng: "Lần đo gần nhất" says "Chưa đo lần nào." only when there is no file; a broken file matches the "Hồ sơ hỏng" badge',()=>{
+  const {m}=hwModule({s:hwPc(HW_NEEDS)});
+  const absent={present:false,source:null};
+  const broken=m.panel(hwPc({...HW_NEEDS,status:'invalid',profile:{...absent,main_state:'invalid',last_good_state:'missing'}}));
+  assert.ok(broken.includes('<span class="badge red hw-status">Hồ sơ hỏng</span>'));
+  assert.ok(broken.includes('<p class="muted hw-profile-none">'+HW.PROFILE_UNREADABLE+'</p>')&&!broken.includes(HW.NEVER_MEASURED));
+  const brokenBackup=m.panel(hwPc({...HW_NEEDS,status:'invalid',profile:{...absent,main_state:'missing',last_good_state:'invalid'}}));
+  assert.ok(brokenBackup.includes(HW.PROFILE_UNREADABLE)&&!brokenBackup.includes(HW.NEVER_MEASURED),'a broken last-good copy is a file too');
+  const needs=m.panel(hwPc(HW_NEEDS));
+  assert.ok(needs.includes('<p class="muted hw-profile-none">'+HW.NEVER_MEASURED+'</p>')&&!needs.includes(HW.PROFILE_UNREADABLE));
+  assert.ok(m.panel(hwPc({...HW_NEEDS,profile:{present:false}})).includes(HW.NEVER_MEASURED),'NEEDS_MEASUREMENT without the file states');
+  const fallback=m.panel(hwPc({...HW_NEEDS,status:'invalid',message:'Lỗi nội bộ khi đọc hồ sơ phần cứng (KeyError).',profile:absent}));
+  assert.ok(!fallback.includes(HW.NEVER_MEASURED)&&!fallback.includes(HW.PROFILE_UNREADABLE)&&fallback.includes('Lỗi nội bộ'),'the fallback answer: its message only');
+  const unknownStates=m.panel(hwPc({...HW_NEEDS,status:'invalid',profile:{...absent,main_state:'unknown',last_good_state:'unknown'}}));
+  assert.ok(!unknownStates.includes(HW.NEVER_MEASURED)&&!unknownStates.includes(HW.PROFILE_UNREADABLE),'states resolve() could not read');
+});
+check('Phần cứng: "" on the phone and while the mode is unknown; an older Control Center and a failed first read say so',()=>{
+  const {m,calls}=hwModule({s:{device:'phone',remote:true,hardware:HW_READY}});
+  assert.equal(m.panel({device:'phone',remote:true,hardware:HW_READY}),'');
+  assert.equal(m.panel({device:null,remote:false,hardware:HW_READY}),'','no buttons before /api/phone-mode said PC');
+  assert.ok(!m.panel({device:null,remote:false,device_error:'mất kết nối'}).includes('data-action'));
+  m.onAction(hwButton('cpu-only','1'));m.onAction(hwButton('remeasure'));
+  assert.deepEqual([calls.modals.length,calls.actions.length],[0,0],'the phone never asks');
+  assert.match(m.panel(hwPc(null)),/Đang đọc hồ sơ phần cứng/);
+  assert.match(m.panel(hwPc({unavailable:true})),/Control Center đang chạy chưa có hồ sơ phần cứng/);
+  const failed=m.panel(hwPc({load_error:'Control Center gặp lỗi khi xử lý (500).'}));
+  assert.match(failed,/Không đọc được hồ sơ phần cứng: Control Center gặp lỗi/);
+  assert.ok(!failed.includes('Chưa đo')&&!failed.includes('data-action'),'a failed read is never "not measured"');
+  assert.match(m.panel(hwPc({...HW_READY,load_error:'boom'})),/Lần đọc gần nhất lỗi; đang hiện trạng thái trước đó: boom/);
+});
+check('Phần cứng: "Chỉ dùng CPU" and "Đo lại" ask first with the contract\'s texts; watch is idempotent',async()=>{
+  const ref={s:hwPc(HW_NEEDS)},{m,calls}=hwModule(ref);
+  m.onAction(hwButton('cpu-only','1'));
+  const cpu=calls.modals[0];
+  for(const text of ['Chậm hơn nhiều','Tắt luật C1','Đường CPU chưa qua cổng (E4)','có hiệu lực cho job mới từ Đợt 2','chưa áp dụng trước đó','Job đã xếp giữ thiết bị đã đóng băng'])
+    assert.ok(cpu.body.includes(text),text);
+  assert.equal(cpu.label,'Bật Chỉ dùng CPU');
+  await cpu.commit();
+  assert.deepEqual(calls.actions,[['hardwareCpuOnly',true]],'exactly a boolean, never the attribute string');
+  m.onAction(hwButton('remeasure'));
+  const again=calls.modals[1];
+  assert.ok(again.body.includes('dùng GPU vài phút')&&again.body.includes('Hàng đợi phải đang tạm dừng, và stage đang chạy phải xong'));
+  await again.commit();
+  assert.deepEqual(calls.actions[1],['hardwareRemeasure',undefined]);
+  ref.s=hwPc({...HW_READY,cpu_only:{value:true,valid:true}});
+  assert.ok(m.panel(ref.s).includes('data-op="cpu-only" data-enabled="0">Tắt Chỉ dùng CPU</button>'));
+  m.onAction(hwButton('cpu-only','0'));
+  await calls.modals[2].commit();
+  assert.deepEqual(calls.actions[2],['hardwareCpuOnly',false]);
+  ref.s=hwPc(HW_READY);m.onAction(hwButton('remeasure'));
+  assert.equal(calls.modals.length,3,'"Đo lại" locked: no dialog');
+  m.watch(true);m.watch(true);m.watch(false);
+  assert.deepEqual(calls.watch,[true,false]);
+});
+check('Phần cứng: the end of a measurement seen running on this page gets one toast; an old result none',async()=>{
+  const ref={s:hwPc({...HW_NEEDS,task:{running:false,exit:0,outcome:'done',message:'Đo xong lần trước.',finished_at:'2026-10-10T08:00:00+07:00'}})},{m,calls}=hwModule(ref);
+  m.onSnapshot();
+  assert.equal(calls.toasts.length,0,'a result from before this page');
+  ref.s=hwPc(HW_RUNNING);m.onSnapshot();m.onSnapshot();
+  ref.s=hwPc({...HW_READY,task:{running:false,exit:10,outcome:'failed',message:'Lần đo thất bại: không dùng được CUDA.',finished_at:'2026-10-11T09:35:00+07:00'}});
+  m.onSnapshot();m.onSnapshot();
+  assert.deepEqual(calls.toasts,[['Đo phần cứng: Lần đo thất bại: không dùng được CUDA.',true]]);
+  // "Đo lại" that ends before the next poll: the toast still comes, once.
+  ref.s=hwPc({...HW_NEEDS});
+  m.onAction(hwButton('remeasure'));
+  const done={running:false,exit:75,outcome:'busy',message:'Hàng đợi chưa rảnh.',finished_at:'2026-10-11T09:40:00+07:00'};
+  ref.after=hwPc({...HW_NEEDS,task:done});
+  await calls.modals[0].commit();
+  m.onSnapshot();
+  assert.deepEqual(calls.toasts.slice(1),[['Đã bắt đầu đo lại phần cứng; khung Phần cứng hiện tiến độ.',false],['Đo phần cứng: Hàng đợi chưa rảnh.',true]]);
+});
+check('Phần cứng: a run of an earlier Control Center that ends (previous_done, no exit code) is never shown as an error',()=>{
+  const ref={s:hwPc({...HW_READY,task:{running:true,previous_run:true,step:null,index:null,total:null,started_at:null,message:'Đang đo (từ lần chạy trước)'}})},{m,calls}=hwModule(ref);
+  m.onSnapshot();
+  const ended={running:false,previous_run:true,exit:null,outcome:'previous_done',message:'Lần đo của lần chạy trước đã xong.',finished_at:'2026-10-11T09:50:00+07:00'};
+  ref.s=hwPc({...HW_READY,task:ended});
+  m.onSnapshot();
+  assert.deepEqual(calls.toasts,[['Đo phần cứng: Lần đo của lần chạy trước đã xong.',false]]);
+  assert.ok(m.panel(ref.s).includes('<p class="muted hw-task">Lần đo gần nhất trên trang: Lần đo của lần chạy trước đã xong.'),'a plain line');
+  const unknownExit=m.panel(hwPc({...HW_READY,task:{...ended,outcome:'killed'}}));
+  assert.ok(unknownExit.includes('<p class="notice hw-task">'),'any other end without exit 0 stays a notice');
+});
+check('Phần cứng: every server string is escaped, attributes included',()=>{
+  const evil='<img src=x onerror=alert(1)>"\'';
+  const bad={...HW_UNTESTED,message:evil,reasons:[{code:'x',text:evil}],warnings:[{code:'y',text:evil}],row:{id:evil,status:'untested',table_version:evil},
+    families:{standard:{family:evil,capped:false,tf32:'off',refusal:null,warnings:[{code:'z',text:evil}]}},
+    untested_fast:{value:true,gpu:{name:evil,compute_capability:evil},applies:false},
+    profile:{present:true,source:'main',written_at:evil,result:evil,failure:{code:'c',message:evil},power:null},
+    detection:{gpu:evil,compute_capability:evil,vram_mib:evil,driver:evil,torch:evil,cpu:evil,ram_gib:null,ffmpeg:{version:evil,encoders:{[evil]:evil},nvdec:{trial:evil},nvdec_codecs:{av1:{trial:'not_run',reason:evil}}}},
+    task:{running:true,step:evil,index:evil,total:evil},can_remeasure:{ok:false,text:evil}};
+  const {m}=hwModule({s:hwPc(bad)}),html=m.panel(hwPc(bad));
+  assert.ok(!html.includes('<img'),'no markup from the server');
+  assert.ok(!/title="[^"]*"'/.test(html));
+  assert.ok(html.includes(hwEsc(evil)));
+  assert.ok(!/style="width:NaN%"/.test(html),'a bad progress shows no meter');
+});
 Promise.all(pending).then(()=>process.stdout.write(JSON.stringify({passed:checks,failed:0})+'\n'),error=>{console.error(error);process.exitCode=1;});

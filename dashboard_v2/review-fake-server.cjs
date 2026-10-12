@@ -19,7 +19,7 @@ const ROOT = __dirname;
 const TOKEN = 'browser-token';
 const TYPES = {'.css': 'text/css', '.js': 'text/javascript', '.svg': 'image/svg+xml', '.html': 'text/html'};
 const ASSETS = new Set(['styles.css', 'theme.css', 'review.css', 'contracts.js', 'adapter.js', 'download-demo.js', 'download-core.js',
-  'download-view.js', 'download-live.js', 'mock-data.js', 'demo-store.js',
+  'download-view.js', 'download-episodes.js', 'download-live.js', 'hardware-view.js', 'mock-data.js', 'demo-store.js',
   'review-core.js', 'review-detail.js', 'review-media.js', 'review-cards.js', 'review.js', 'app.js', ...fs.readdirSync(path.join(ROOT, 'assets')).map(f => 'assets/' + f)]);
 const DECISIONS = ['KEEP', 'BLUR', 'CUT', 'NEEDS_MORE_CONTEXT'];
 

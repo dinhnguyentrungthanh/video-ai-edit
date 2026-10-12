@@ -33,6 +33,22 @@ ROOT = Path(__file__).resolve().parents[1]
 CLASSIC = json.loads((ROOT / "tests" / "fixtures" / "dashboard_v2_classic_pages.json").read_text(encoding="utf-8"))
 
 
+class HardwarePanelPageTests(unittest.TestCase):
+    """E2 (docs/HARDWARE_PROFILE.md 6.2): hardware-view.js is whitelisted and loaded by live.html only (file reads)."""
+
+    def test_live_page_loads_the_hardware_panel_between_the_download_and_review_modules_and_the_demo_does_not(self):
+        live = (DASHBOARD_V2_DIR / "live.html").read_text(encoding="utf-8")
+        demo = (DASHBOARD_V2_DIR / "index.html").read_text(encoding="utf-8")
+        tag = '<script defer src="hardware-view.js"></script>'
+
+        self.assertIn("hardware-view.js", DASHBOARD_V2_FILES)
+        self.assertEqual(live.count(tag), 1)
+        self.assertIn('<script defer src="download-live.js"></script>' + tag + '<script defer src="review-core.js"></script>', live)
+        self.assertLess(live.index(tag), live.index('src="app.js"'))
+        self.assertLess(live.index(tag), live.index("<body>"), "in <head>: the two bodies stay identical")
+        self.assertNotIn("hardware-view.js", demo)
+
+
 class DashboardV2RouteTests(unittest.TestCase):
     def setUp(self):
         self.temp = TemporaryDirectory()
