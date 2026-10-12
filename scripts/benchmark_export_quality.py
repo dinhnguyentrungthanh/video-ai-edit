@@ -42,6 +42,8 @@ VMAF_PERCENTILES = (1, 5)
 QUALITY_WORKERS = 2
 # VMAF on at most about this many frames (libvmaf n_subsample); SSIM always reads every frame.
 VMAF_FRAME_TARGET = 80_000
+# Checked on videos scored in full: the same numbers from every n-th frame only.
+VMAF_SAMPLING_CHECK = 3
 
 
 class GpuMemory:
@@ -142,10 +144,18 @@ def _quality(
         log_path.unlink()
         pooled = document["pooled_metrics"]["vmaf"]
         # The hard scenes: one frame's minimum is noisy, the low percentiles are not.
-        frames = sorted(frame["metrics"]["vmaf"] for frame in document["frames"])
+        scores = [frame["metrics"]["vmaf"] for frame in document["frames"]]
+        frames = sorted(scores)
         facts.update({"vmaf_mean": pooled["mean"], "vmaf_min": pooled["min"],
                       "vmaf_harmonic_mean": pooled["harmonic_mean"],
                       **{f"vmaf_p{point}": _percentile(frames, point) for point in VMAF_PERCENTILES}})
+        if subsample == 1:
+            # What sampling every n-th frame (as on the longest videos) would have given here.
+            sampled = sorted(scores[::VMAF_SAMPLING_CHECK])
+            facts[f"vmaf_every{VMAF_SAMPLING_CHECK}"] = {
+                "mean": round(sum(sampled) / len(sampled), 6), "min": round(sampled[0], 6),
+                **{f"p{point}": _percentile(sampled, point) for point in VMAF_PERCENTILES},
+            }
     return facts
 
 
