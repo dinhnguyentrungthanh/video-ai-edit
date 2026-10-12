@@ -704,7 +704,7 @@ class SceneCardQueueTests(unittest.TestCase):
             argv = ["biliflow", "--project-root", str(self.root), "build-review", "--report", str(reports[0]),
                     "--queue", str(queue_path), *extra]
             clean = {key: value for key, value in os.environ.items() if key != "BILIFLOW_BENCHMARK_CACHE"}
-            with mock.patch.object(sys, "argv", argv), mock.patch.object(cli, "build_review_queue", fake_build), \
+            with mock.patch.object(sys, "argv", argv), mock.patch("biliflow.review_workflow.build_review_queue", fake_build), \
                     mock.patch.dict(os.environ, {**clean, **environment}, clear=True), \
                     mock.patch("builtins.print"):
                 self.assertEqual(cli.main(), 0)

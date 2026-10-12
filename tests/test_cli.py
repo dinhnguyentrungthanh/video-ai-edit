@@ -1,4 +1,5 @@
 import io
+import subprocess
 import sys
 import unittest
 from contextlib import redirect_stdout
@@ -17,7 +18,7 @@ class CliTests(unittest.TestCase):
                 "--input", "input.mp4", "--report-dir", "reports/result",
             ]
             with patch.object(sys, "argv", argv), patch(
-                "biliflow.cli.scan_nsfw", return_value={"status": "COMPLETED"}
+                "biliflow.scanner.scan_nsfw", return_value={"status": "COMPLETED"}
             ) as scanner, patch(
                 "biliflow.cli.ensure_model_allowed"
             ), redirect_stdout(io.StringIO()):
@@ -46,7 +47,7 @@ class CliTests(unittest.TestCase):
                 "metrics": {},
             }
             with patch.object(sys, "argv", argv), patch(
-                "biliflow.cli.scan_visual_logos", return_value=result
+                "biliflow.visual_logo_scanner.scan_visual_logos", return_value=result
             ) as scanner, patch(
                 "biliflow.cli.ensure_model_allowed"
             ), redirect_stdout(io.StringIO()):
@@ -62,10 +63,19 @@ class CliTests(unittest.TestCase):
                 "--operation-id", "op-blur",
             ]
             with patch.object(sys, "argv", argv), patch(
-                "biliflow.cli.render_edit_previews", return_value={"status": "done"}
+                "biliflow.review_workflow.render_edit_previews", return_value={"status": "done"}
             ) as renderer, redirect_stdout(io.StringIO()):
                 self.assertEqual(main(), 0)
             self.assertEqual(renderer.call_args.kwargs["operation_ids"], ("op-blur",))
+
+    def test_importing_the_cli_loads_no_model_library(self):
+        # Each stage is its own process; the CLI must leave torch, timm, easyocr and
+        # transformers to the one command that needs them.
+        code = ("import sys, biliflow.cli; print(','.join(sorted(name for name in "
+                "('torch', 'timm', 'easyocr', 'transformers', 'cv2') if name in sys.modules)))")
+        done = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True,
+                              cwd=Path(__file__).resolve().parents[1], check=True)
+        self.assertEqual(done.stdout.strip(), "")
 
 
 if __name__ == "__main__":

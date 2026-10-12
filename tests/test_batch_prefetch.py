@@ -126,7 +126,7 @@ class AnimationPrecisionCliTests(unittest.TestCase):
             argv = ["biliflow", "--project-root", directory, "scan-animation-safety",
                     "--input", "input.mp4", "--report-dir", "reports/result", *extra]
             with patch.object(sys, "argv", argv), patch(
-                "biliflow.cli.scan_animation_safety", return_value={"status": "COMPLETED"}
+                "biliflow.animation_safety_scanner.scan_animation_safety", return_value={"status": "COMPLETED"}
             ) as scanner, patch("biliflow.cli.ensure_model_allowed"), redirect_stdout(io.StringIO()):
                 self.assertEqual(main(), 0)
             return scanner.call_args.kwargs
@@ -270,7 +270,7 @@ class LiveSafetyPrecisionTests(unittest.TestCase):
             payload = {"gore": {"status": "COMPLETED", "frames_scanned": 1},
                        "violence": {"status": "COMPLETED", "frames_scanned": 4}}
             with patch.object(sys, "argv", argv), patch(
-                "biliflow.cli.scan_live_safety", return_value=payload
+                "biliflow.live_safety_scanner.scan_live_safety", return_value=payload
             ) as scanner, patch("biliflow.cli.ensure_model_allowed"), redirect_stdout(io.StringIO()):
                 main()
             return scanner.call_args.kwargs

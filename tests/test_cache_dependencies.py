@@ -2,7 +2,7 @@ import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
-from biliflow.cache_dependencies import stage_source_paths
+from biliflow.cache_dependencies import STAGE_MODELS, stage_source_paths
 from biliflow.stage_cache import CACHEABLE_STAGES, StageArtifactCache
 
 
@@ -67,9 +67,11 @@ class CacheDependencyTests(unittest.TestCase):
 
     def test_config_seed_and_model_changes_invalidate_same_instance(self):
         args = self.arguments()
+        # The adult stage's key covers its own model folder (STAGE_MODELS).
         for relative in ("config/text_review_policy.json", "annotations/text_semantics_seed_v1.json",
-                         "models/test/manifest.json", "models/test/config.json", "models/test/weights.bin",
-                         "scripts/env.ps1"):
+                         "models/nsfw_detection_2_nano/manifest.json",
+                         "models/nsfw_detection_2_nano/config.json",
+                         "models/nsfw_detection_2_nano/weights.bin", "scripts/env.ps1"):
             with self.subTest(relative=relative):
                 path = self.root / relative
                 path.parent.mkdir(parents=True, exist_ok=True)
@@ -193,6 +195,68 @@ class RepositoryCacheScopeTests(unittest.TestCase):
                 names = {path.name for path in stage_source_paths(root, stage)}
                 self.assertEqual(names & build_time, set())
                 self.assertEqual("platform_names.py" in names, stage == "text")
+
+
+class StageModelsTest(unittest.TestCase):
+    """Every model folder a cached stage can load is in its STAGE_MODELS entry."""
+
+    def test_stage_models_cover_defaults_branches_and_scanner_code(self):
+        import ast
+        import json
+
+        from biliflow.cli import build_parser
+        from biliflow.install_paths import install_root
+        from biliflow.job_pipeline import pipeline_stages
+
+        repo = Path(__file__).resolve().parents[1]
+        lock = json.loads((repo / "config" / "models.lock.json").read_text(encoding="utf-8"))
+        names = set(lock["models"])
+        self.assertEqual(set(STAGE_MODELS), set(CACHEABLE_STAGES))
+        for stage, folders in STAGE_MODELS.items():
+            self.assertLessEqual(set(folders), names, stage)
+
+        def literals(path: Path, command: str | None = None) -> set[str]:
+            tree = ast.parse(path.read_text(encoding="utf-8-sig"))
+            if command is not None:  # only the cli.main branch of this command
+                tree = next(node for node in ast.walk(tree) if isinstance(node, ast.If)
+                            and isinstance(node.test, ast.Compare)
+                            and getattr(node.test.left, "attr", "") == "command"
+                            and node.test.comparators[0].value == command)
+            return {node.value for node in ast.walk(tree)
+                    if isinstance(node, ast.Constant) and node.value in names}
+
+        found: dict[str, set[str]] = {stage: set() for stage in CACHEABLE_STAGES}
+        parser = build_parser()
+        models = install_root() / "models"
+        # One group alone gives the separate gore and violence stages; both share live_safety.
+        runs = [(style, fast, groups) for style in ("animation", "live_action", "mixed")
+                for fast in (False, True) for groups in (["all"], ["gore"], ["violence"])]
+        for style, fast, groups in runs:
+            for profile in ("careful", "fast"):
+                for stage in pipeline_stages(root=repo, job_key="guard", source=repo / "README.md",
+                                             content_style=style, profile=profile,
+                                             detector_groups=groups, fast_scan=fast):
+                    if stage.name not in found:
+                        continue
+                    for command in stage.commands:
+                        argv = list(command.argv[command.argv.index(str(repo / "scripts" / "run.ps1")) + 1:])
+                        if argv[0] == "localize-visual-logo":
+                            found[stage.name] |= literals(repo / "scripts" / "localize_visual_logo_report.py")
+                            continue
+                        arguments = vars(parser.parse_args(argv))
+                        found[stage.name] |= {value.name for value in arguments.values()
+                                              if isinstance(value, Path) and value.parent == models}
+                        found[stage.name] |= literals(repo / "src" / "biliflow" / "cli.py", argv[0])
+        for stage in CACHEABLE_STAGES:
+            for path in stage_source_paths(repo, stage):
+                # Dispatch boundaries; cache_dependencies.py holds STAGE_MODELS itself.
+                if path.name not in {"cli.py", "__init__.py", "__main__.py", "stage_cache.py",
+                                     "cache_dependencies.py"}:
+                    found[stage] |= literals(path)
+        for stage in sorted(CACHEABLE_STAGES):
+            with self.subTest(stage):
+                self.assertTrue(found[stage])
+                self.assertLessEqual(found[stage], set(STAGE_MODELS[stage]))
 
 
 if __name__ == "__main__":

@@ -27,6 +27,9 @@ DETECTOR_GROUPS: dict[str, dict[str, str]] = {
     },
 }
 DEFAULT_DETECTOR_GROUPS = tuple(DETECTOR_GROUPS)
+# A job's content style; "unknown" until the user confirms one. Kept here, not in
+# review_workflow, so the CLI parser does not import the review code.
+CONTENT_STYLES = ("animation", "live_action", "mixed", "unknown")
 
 
 def normalize_detector_groups(values: list[str] | tuple[str, ...] | None) -> tuple[str, ...]:

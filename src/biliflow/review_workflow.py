@@ -64,7 +64,7 @@ from biliflow.gore_triage import (
     normalize_gore_triage_level,
     valid_gore_tag_evidence,
 )
-from biliflow.job_pipeline import DEFAULT_DETECTOR_GROUPS
+from biliflow.job_pipeline import CONTENT_STYLES, DEFAULT_DETECTOR_GROUPS
 from biliflow.platform_cards import (
     ENDING_LABEL,
     build_platform_cards,
@@ -986,7 +986,6 @@ def revalidate_preserved_review_items(
     return required, advisory
 
 
-CONTENT_STYLES = ("animation", "live_action", "mixed", "unknown")
 # Tolerance for a source interval that must still overlap the item that cites it.
 _ADULT_REF_OVERLAP_TOLERANCE = 1.0
 

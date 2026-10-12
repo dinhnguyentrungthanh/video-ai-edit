@@ -507,7 +507,7 @@ class CliShotCompletionTests(unittest.TestCase):
             argv = ["biliflow", "--project-root", directory, "scan",
                     "--input", "input.mp4", "--report-dir", "reports/result", *extra]
             with mock.patch.object(sys, "argv", argv), mock.patch(
-                "biliflow.cli.scan_nsfw", return_value={"status": "COMPLETED"}
+                "biliflow.scanner.scan_nsfw", return_value={"status": "COMPLETED"}
             ) as scanner, mock.patch("biliflow.cli.ensure_model_allowed"), redirect_stdout(io.StringIO()):
                 self.assertEqual(main(), 0)
         return scanner.call_args.kwargs

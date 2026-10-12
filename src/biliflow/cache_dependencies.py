@@ -20,6 +20,23 @@ STAGE_MODULES = {
     "violence": ("content_scanner", "animation_safety_scanner", "violence_scanner"),
 }
 
+# Model folders under models\ that each stage loads (cli.py defaults and branches,
+# scripts/localize_visual_logo_report.py). A stage's cache key covers only these;
+# a stage missing here covers every model folder.
+STAGE_MODELS = {
+    "adult": ("nsfw_detection_2_nano",),
+    "verify_adult": ("image_safety_classifier_m",),
+    "text": ("easyocr", "multilingual_minilm_text_semantics"),
+    "visual_logo": ("qwen2_vl_2b_instruct",),
+    "localize_logo": ("florence_2_base", "grounding_dino_tiny"),
+    "confirm_violence": ("qwen2_vl_2b_instruct",),
+    "animation_safety": ("wd_vit_tagger_v3",),
+    "live_safety": ("image_safety_classifier_m", "vit_base_violence_detection"),
+    # scan-content picks its model by kind and style; keep every one it can pick.
+    "gore": ("image_safety_classifier_m", "vit_base_violence_detection", "wd_vit_tagger_v3"),
+    "violence": ("image_safety_classifier_m", "vit_base_violence_detection", "wd_vit_tagger_v3"),
+}
+
 
 def stage_source_paths(root: Path, stage: str) -> tuple[Path, ...]:
     """Follow eager AND lazy local imports; uncertain analysis hashes all source.

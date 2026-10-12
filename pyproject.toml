@@ -4,7 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "biliflow"
-version = "0.7.19"
+# One source: src/biliflow/__init__.py (__version__), read by setuptools below.
+dynamic = ["version"]
 description = "Local-first video review and automation pipeline"
 requires-python = ">=3.11,<3.12"
 dependencies = [
@@ -29,3 +30,6 @@ package-dir = {"" = "src"}
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.setuptools.dynamic]
+version = {attr = "biliflow.__version__"}
