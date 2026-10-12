@@ -48,7 +48,7 @@ from biliflow.final_renderer import (
 )
 from biliflow.probe import duration_seconds, probe_video
 from biliflow.license_policy import audit_project_models
-from biliflow.stage_cache import StageArtifactCache
+from biliflow.stage_cache import StageArtifactCache, StageCachePathTooLong
 from biliflow.cleanup import prune_file_caches
 
 
@@ -812,15 +812,27 @@ class JobScheduler:
                         raise RuntimeError(f"Stage process exited with code {code}; see {log_path}")
                     for artifact in command.expected_artifacts:
                         self._register_artifact(job_id, name, artifact)
-                cached = self._stage_cache.store(
-                    stage_name=name,
-                    source_sha256=str(job["source_sha256"]),
-                    source_path=Path(job["source_path"]),
-                    report_root=report_root,
-                    commands=(command.argv for command in definition.commands),
-                    artifact_paths=artifacts,
-                    expected_key=cache_key,
-                )
+                try:
+                    cached = self._stage_cache.store(
+                        stage_name=name,
+                        source_sha256=str(job["source_sha256"]),
+                        source_path=Path(job["source_path"]),
+                        report_root=report_root,
+                        commands=(command.argv for command in definition.commands),
+                        artifact_paths=artifacts,
+                        expected_key=cache_key,
+                    )
+                except StageCachePathTooLong as skipped:
+                    # The stage's own result is complete; only its exact-rerun copy is left out.
+                    cached = None
+                    warning = (f"Stage {name} finished but was not saved to the stage cache: {skipped}. "
+                               "It will run again instead of being restored. A shorter install folder "
+                               "or Windows long paths would allow the cache.")
+                    with log_path.open("ab") as handle:
+                        handle.write(f"\nWARNING: {warning}\n  path: {skipped.path}\n".encode("utf-8"))
+                    self.store.add_event(job_id, "STAGE_CACHE_SKIPPED", warning, level="WARN",
+                                         payload={"stage": name, "path_characters": len(skipped.path),
+                                                  "limit": skipped.limit})
                 if cached is not None:
                     pruning = self._stage_cache.prune()
                     file_pruning = prune_file_caches(self.root)

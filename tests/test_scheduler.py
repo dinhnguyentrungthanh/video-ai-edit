@@ -368,6 +368,57 @@ class SchedulerTests(unittest.TestCase):
                 scheduler.shutdown(immediate=True)
                 store.close()
 
+    def test_cache_entry_past_the_path_limit_completes_the_stage_with_a_warning(self):
+        # A deep install folder (140 characters): the reports and logs fit the Windows path limit,
+        # the stage's cache entry (its .tmp folder) does not.
+        with TemporaryDirectory() as directory:
+            prefix = "deep-install-"
+            width = 140 - len(directory) - 1 - len(prefix)
+            if width < 1:
+                self.skipTest("the temporary folder is too deep for a 140-character root")
+            root = Path(directory) / (prefix + "x" * width)
+            for name in ("input", "reports/jobs", "logs", "config", "scripts", "src/biliflow"):
+                (root / name).mkdir(parents=True, exist_ok=True)
+            for name in ("worker", "scanner", "license_policy", "control_center"):
+                (root / "src/biliflow" / (name + ".py")).write_text("# original", encoding="utf-8")
+            (root / "config" / "processing_profiles.json").write_text("{}", encoding="utf-8")
+            (root / "scripts" / "run.ps1").write_text("run", encoding="utf-8")
+            source = root / "input" / "video.mp4"
+            source.write_bytes(b"video")
+            source_sha = "b" * 64
+            store = JobStore(root / "jobs.sqlite3")
+            job = store.upsert_job(
+                job_key="run-1", source_path=source, source_sha256=source_sha, source_size_bytes=5,
+                source_mtime_ns=source.stat().st_mtime_ns, content_style="live_action", state="QUEUED",
+            )
+            store.replace_stages(job["id"], ["adult"])
+            artifact = root / "reports" / "jobs" / "run-1" / "adult" / "scan.json"
+            code = (
+                "import json,pathlib; p=pathlib.Path(r'%s'); p.parent.mkdir(parents=True,exist_ok=True); "
+                "p.write_text(json.dumps({'status':'COMPLETED','input_sha256':'%s'}),encoding='utf-8')"
+            ) % (artifact, source_sha)
+            definition = PipelineStage(
+                "adult", "SCANNING_SAFETY", (StageCommand((sys.executable, "-c", code), (artifact,)),),
+            )
+            scheduler = JobScheduler(root, store)
+            try:
+                with patch("biliflow.stage_cache._long_paths_enabled", return_value=False):
+                    scheduler._execute(store.get_job(job["id"]), store.stage(job["id"], "adult"), definition)
+                self.assertEqual(store.stage(job["id"], "adult")["state"], "COMPLETED")
+                self.assertNotEqual(store.get_job(job["id"])["state"], "FAILED")
+                self.assertTrue(artifact.is_file())
+                events = store.events(job["id"])
+                skipped = [item for item in events if item["event_type"] == "STAGE_CACHE_SKIPPED"]
+                self.assertEqual([item["level"] for item in skipped], ["WARN"])
+                self.assertFalse({"STAGE_CACHE_STORED", "STAGE_FAILED"} & {item["event_type"] for item in events})
+                log = next((root / "logs" / "control-center").glob(f"job-{job['id']}-adult-attempt-*.log"))
+                self.assertIn("WARNING: Stage adult finished but was not saved to the stage cache",
+                              log.read_text(encoding="utf-8"))
+                cache_root = root / "cache" / "stage-results"
+                self.assertEqual(list(cache_root.rglob("*")) if cache_root.exists() else [], [])
+            finally:
+                store.close()
+
 
 
 class SchedulerFixture(unittest.TestCase):

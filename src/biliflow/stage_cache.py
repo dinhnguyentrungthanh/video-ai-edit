@@ -36,6 +36,10 @@ BUILD_MANIFEST_NAME = "biliflow-build.json"
 BUILD_MANIFEST_VERSION = 1
 MAX_BUILD_MANIFEST_BYTES = 4 * 1024 * 1024
 FILE_ATTRIBUTE_REPARSE_POINT = 0x400
+# Without Windows long paths a folder path may have at most 247 characters (CreateDirectoryW)
+# and a file path 259 (MAX_PATH); measured with LongPathsEnabled=0 on 2026-10-12.
+MAX_DIRECTORY_PATH_CHARS = 247
+MAX_FILE_PATH_CHARS = 259
 _NOT_MODEL_NAMES = frozenset({".gitkeep"})
 _BYTECODE_SUFFIXES = frozenset({".pyc", ".pyo"})
 
@@ -247,6 +251,50 @@ def _entry_bytes(manifest_path: Path) -> int:
     if type(recorded) is int and recorded >= 0:
         return recorded + manifest_path.stat().st_size
     return sum(path.stat().st_size for path in manifest_path.parent.rglob("*") if path.is_file())
+
+
+class StageCachePathTooLong(OSError):
+    """A path of the cache entry would pass the Windows path limit; nothing was written."""
+
+    def __init__(self, path: str, limit: int) -> None:
+        super().__init__(
+            f"a path of the cache entry would be {len(path)} characters; the Windows limit is {limit}"
+        )
+        self.path = path
+        self.limit = limit
+
+
+def _long_paths_enabled() -> bool:
+    """Whether this process may use paths past MAX_PATH (Windows long paths on, or not Windows)."""
+    if os.name != "nt":
+        return True
+    try:
+        import ctypes
+        return bool(ctypes.windll.ntdll.RtlAreLongPathsEnabled())
+    except (AttributeError, OSError):
+        return False
+
+
+def _check_entry_paths(temporary: Path, report_root: Path, roots: Iterable[Path]) -> None:
+    """Raises StageCachePathTooLong when a folder or file that store() would write under the
+    entry's .tmp folder (its longest form) passes the limit. Checked before anything is written,
+    so a refused entry leaves no partial folder."""
+    base = os.path.abspath(temporary)
+    if _long_paths_enabled() or base.startswith("\\\\?\\"):
+        return
+    snapshot = Path(base) / "snapshot"
+    directories = [Path(base), snapshot]
+    files = [Path(base) / "manifest.json"]
+    for root in roots:
+        destination = snapshot / root.relative_to(report_root)
+        for current, _folders, names in os.walk(root):
+            target = destination / Path(current).relative_to(root)
+            directories.append(target)
+            files.extend(target / name for name in names)
+    for paths, limit in ((directories, MAX_DIRECTORY_PATH_CHARS), (files, MAX_FILE_PATH_CHARS)):
+        longest = max((str(path) for path in paths), key=len)
+        if len(longest) > limit:
+            raise StageCachePathTooLong(longest, limit)
 
 
 def _artifact_roots(paths: Iterable[Path]) -> tuple[Path, ...]:
@@ -483,6 +531,7 @@ class StageArtifactCache:
         entry = self.entry(source_sha256, stage_name, key)
         snapshot = entry / "snapshot"
         temporary = entry.with_name(entry.name + ".tmp")
+        _check_entry_paths(temporary, resolved_report_root, roots)
         if temporary.exists():
             shutil.rmtree(temporary)
         temporary.mkdir(parents=True, exist_ok=True)

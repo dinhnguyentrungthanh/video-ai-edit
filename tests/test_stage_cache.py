@@ -15,6 +15,7 @@ from biliflow.stage_cache import (
     BUILD_MANIFEST_NAME,
     CACHEABLE_STAGES,
     StageArtifactCache,
+    StageCachePathTooLong,
     build_code_manifest,
 )
 
@@ -170,6 +171,59 @@ class StageArtifactCacheTests(unittest.TestCase):
             result = cache.prune(max_age=timedelta(days=1))
             self.assertEqual(result["removed_entries"], 1)
             self.assertFalse(manifest.parent.exists())
+
+    def _adult_store_args(self, root: Path, sha: str) -> dict:
+        source = root / "input" / "movie.mp4"
+        source.write_bytes(b"video")
+        report = root / "reports" / "jobs" / "run-1"
+        artifact = report / "adult" / "scan.json"
+        (artifact.parent / "thumbnails").mkdir(parents=True)
+        (artifact.parent / "thumbnails" / "frame.jpg").write_bytes(b"jpeg")
+        artifact.write_text(json.dumps({"status": "COMPLETED", "input_sha256": sha}), encoding="utf-8")
+        return {"stage_name": "adult", "source_sha256": sha, "source_path": source, "report_root": report,
+                "commands": (("run", "--report-dir", str(artifact.parent)),), "artifact_paths": (artifact,)}
+
+    @staticmethod
+    def _cache_paths(root: Path) -> list[str]:
+        base = root / "cache" / "stage-results"
+        return sorted(path.relative_to(base).as_posix() for path in base.rglob("*")) if base.exists() else []
+
+    def test_store_refuses_an_entry_past_the_path_limit_before_writing_anything(self):
+        with TemporaryDirectory() as directory:
+            root = self._root(directory)
+            sha = "5" * 64
+            args = self._adult_store_args(root, sha)
+            cache = StageArtifactCache(root)
+            entry = cache.entry(sha, "adult", cache.key(**args))
+            # The longest paths store() writes are in the entry's .tmp folder.
+            folder = Path(os.path.abspath(entry.with_name(entry.name + ".tmp"))) / "snapshot" / "adult" / "thumbnails"
+            longest = {"MAX_DIRECTORY_PATH_CHARS": str(folder), "MAX_FILE_PATH_CHARS": str(folder / "frame.jpg")}
+            other = {"MAX_DIRECTORY_PATH_CHARS": "MAX_FILE_PATH_CHARS",
+                     "MAX_FILE_PATH_CHARS": "MAX_DIRECTORY_PATH_CHARS"}
+            for name, path in longest.items():
+                with (self.subTest(limit=name),
+                      mock.patch.object(stage_cache, "_long_paths_enabled", return_value=False),
+                      mock.patch.object(stage_cache, other[name], 10_000),
+                      mock.patch.object(stage_cache, name, len(path) - 1)):
+                    with self.assertRaises(StageCachePathTooLong) as raised:
+                        cache.store(**args)
+                    self.assertEqual(raised.exception.path, path)
+                    self.assertEqual(raised.exception.limit, len(path) - 1)
+                    self.assertEqual(self._cache_paths(root), [])
+            with (mock.patch.object(stage_cache, "_long_paths_enabled", return_value=False),
+                  mock.patch.object(stage_cache, "MAX_DIRECTORY_PATH_CHARS", len(longest["MAX_DIRECTORY_PATH_CHARS"])),
+                  mock.patch.object(stage_cache, "MAX_FILE_PATH_CHARS", len(longest["MAX_FILE_PATH_CHARS"]))):
+                self.assertIsNotNone(cache.store(**args))  # exactly at the limit
+            self.assertFalse(any(path.endswith(".tmp") for path in self._cache_paths(root)))
+
+    def test_windows_long_paths_lift_the_path_limit(self):
+        with TemporaryDirectory() as directory:
+            root = self._root(directory)
+            args = self._adult_store_args(root, "6" * 64)
+            with (mock.patch.object(stage_cache, "_long_paths_enabled", return_value=True),
+                  mock.patch.object(stage_cache, "MAX_DIRECTORY_PATH_CHARS", 10),
+                  mock.patch.object(stage_cache, "MAX_FILE_PATH_CHARS", 10)):
+                self.assertIsNotNone(StageArtifactCache(root).store(**args))
 
 
 class CacheKeyScopeTests(unittest.TestCase):

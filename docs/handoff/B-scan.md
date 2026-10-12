@@ -5,10 +5,11 @@
 - **Commit:**
   - a282e47: bước 1;
   - 9f3f7f0: code B1;
-  - commit chứa file này: cổng và bàn giao.
+  - 9b2d637: cổng và số đo;
+  - commit chứa file này: sửa lỗi đường dẫn dài.
 - **Cập nhật:** 2026-10-12.
 - **Chạy ở:** PC.
-- **Trạng thái:** bước 2 xong, chờ điều phối gộp ở G2 cùng E3. Chưa push, chưa merge.
+- **Trạng thái:** bước 2 xong, kèm phần sửa lỗi đường dẫn dài. Chờ điều phối gộp ở G2 cùng E3. Chưa push, chưa merge.
 
 ## Quyết định của người dùng (2026-10-12)
 
@@ -25,6 +26,13 @@
   - mục nào manifest thiếu `bytes` thì duyệt file của riêng mục đó;
   - không bao giờ gọi `prune` trên thư mục cài.
 - **Khóa cache:** chỉ đổi một lần, trong đợt này. Nó vào `main` ở G2, cùng E3.
+- **Sửa lỗi đường dẫn dài trong B1** (duyệt sau bước 2, cách 1):
+  - đường dẫn của mục cache (kể cả thư mục `.tmp`) vượt giới hạn thì bỏ qua lưu cache cho mục đó;
+  - ghi cảnh báo rõ vào log của stage, không im lặng;
+  - stage và job vẫn hoàn tất bình thường;
+  - không đổi khóa hay bố cục cache ngoài thay đổi B1 đã có;
+  - người dùng cho sửa `scheduler.py` cho việc này (đã báo trước).
+- **Lúc làm phần sửa này:** Control Center thật đang xuất video. Không chạy cổng quét, không đo, không dùng GPU, không chạy full suite; chỉ chạy test liên quan.
 
 ## Đã xong
 
@@ -86,7 +94,7 @@ Bằng chứng nằm ở `docs/evidence/perf-scan/`: `README.md` mô tả cách 
     | 300 MB, 7 manifest bỏ `bytes` | 138 / 103 | 7,59 | 5,17 |
 
   - Không có gì để xóa (trường hợp thường gặp): 3,5 s → 0,07 s (0,66 s lúc máy nguội).
-- **Số đo từng stage** (wall, giây). Cả hai bản đều tắt cache, xem phần "Phát hiện ngoài phạm vi". Mỗi ô ghi vòng 1 / vòng 2:
+- **Số đo từng stage** (wall, giây). Cả hai bản đều tắt cache, xem phần "Lỗi đường dẫn dài". Mỗi ô ghi vòng 1 / vòng 2:
 
   | Stage | 125 trước B1 | 125 B1 | 114 trước B1 | 114 B1 |
   |---|---|---|---|---|
@@ -109,20 +117,45 @@ Bằng chứng nằm ở `docs/evidence/perf-scan/`: `README.md` mô tả cách 
   - **Tổng khi cache bật:** khoảng 14–26 s mỗi job trên 230–295 s, tức khoảng **5–9%**. Bước 1 ước 12–14%, nhưng con số đó gồm cả mục 3 (chưa làm) và ước mục 1 quá cao.
 - **Đổi khóa cache:** sau G2, mọi stage quét lại một lần, vì cache cũ không còn trùng khóa.
 
-### Phát hiện ngoài phạm vi (chưa sửa)
+### Sửa lỗi đường dẫn dài (commit chứa file này)
 
-**Đường dẫn dài.** Lỗi này có từ trước B1; B1 không đổi đường dẫn nào.
+- **`stage_cache.py`:**
+  - `store()` gọi `_check_entry_paths()` trước khi ghi bất cứ thứ gì. Hàm này kiểm mọi thư mục và file sẽ ghi dưới thư mục `.tmp` của mục (dạng dài nhất của mục), cùng `manifest.json`;
+  - giới hạn: thư mục 247 ký tự, file 259 ký tự. Hai số này đo trên máy này với LongPathsEnabled=0: thư mục 248 ký tự lỗi WinError 206, file 260 ký tự lỗi;
+  - vượt giới hạn thì ném `StageCachePathTooLong` (lớp con của OSError, mang `path` và `limit`) và không tạo thư mục nào;
+  - bỏ qua phần kiểm khi tiến trình được dùng đường dẫn dài (`RtlAreLongPathsEnabled()`), khi chạy ngoài Windows, hoặc khi đường dẫn có tiền tố `\\?\`.
+- **`scheduler.py`:**
+  - bắt đúng `StageCachePathTooLong` quanh lệnh `store()`;
+  - ghi một dòng `WARNING: Stage <tên> finished but was not saved to the stage cache: …` cùng đường dẫn vào log của stage;
+  - thêm sự kiện `STAGE_CACHE_SKIPPED` mức `WARN`, payload `{stage, path_characters, limit}`;
+  - không chạy prune. Stage vẫn COMPLETED;
+  - lỗi khác của `store()` vẫn làm stage hỏng như trước.
+- **Khóa cache:**
+  - không đổi đầu vào hay bố cục: vẫn là thay đổi một lần của B1;
+  - `stage_cache.py` nằm trong khóa của mọi stage, nhưng B1 chưa vào `main`, nên so với `main` khóa vẫn chỉ đổi một lần;
+  - `scheduler.py` không nằm trong khóa của stage nào (đã kiểm bằng `stage_source_paths`).
+- **Test:**
+  - `test_stage_cache`:
+    - giới hạn đặt thấp hơn 1 ký tự so với đường dẫn dài nhất trong `.tmp`, cho thư mục và cho file: ném lỗi, đúng `path`, không có gì trong `cache\stage-results`;
+    - đúng bằng giới hạn: lưu được, không còn `.tmp`;
+    - long paths bật thì không giới hạn.
+  - `test_scheduler`:
+    - root tạm dài 140 ký tự: stage `adult` chạy tiến trình thật, rồi COMPLETED, job không FAILED;
+    - log có dòng WARNING, có một sự kiện `STAGE_CACHE_SKIPPED` mức `WARN`, không có STAGE_CACHE_STORED hay STAGE_FAILED;
+    - `cache\stage-results` trống;
+    - tắt phần kiểm (`_check_entry_paths` làm rỗng) thì test này hỏng: stage không COMPLETED.
+
+### Lỗi đường dẫn dài (phát hiện sau cổng, đã sửa ở trên)
+
+Lỗi này có từ trước B1; B1 không đổi đường dẫn nào. Phần dưới mô tả tình trạng trước khi sửa.
 
 - Máy đang để `LongPathsEnabled=0`; tôi chỉ đọc giá trị này, không đổi.
 - Đường dẫn dài nhất trong `cache\stage-results` ở thư mục cài là 253 ký tự. Lúc lưu, thư mục `.tmp` làm nó thành 257.
 - Nếu thư mục cài dài hơn `E:\DungChung\BiliFlow` (21 ký tự) khoảng 3 ký tự, `StageArtifactCache.store()` ném OSError.
 - Scheduler không bắt riêng lỗi này. Stage đã quét xong vẫn thành FAILED_RETRYABLE và job thành FAILED; chạy lại cũng hỏng như cũ.
 - Việc này liên quan C, vì bộ cài cho người dùng chọn thư mục.
-- Cách sửa cần người dùng duyệt. Có thể:
-  - bỏ qua cache (không báo lỗi) khi đường dẫn quá dài;
-  - dùng tiền tố `\\?\`;
-  - rút ngắn tên mục cache.
-- Nếu sửa trong `stage_cache.py` thì phải làm **trước G2**: file này nằm trong khóa của mọi stage, sửa sau G2 là đổi khóa lần hai.
+- Người dùng chọn bỏ qua cache kèm cảnh báo. Hai hướng khác (tiền tố `\\?\`, rút ngắn tên mục cache) không làm.
+- **Sau khi sửa:** ở thư mục cài dài, các stage chạy được nhưng không dùng cache cho mục quá dài. Mỗi lần như vậy log và sự kiện ghi rõ, và stage đó sẽ chạy lại thay vì lấy từ cache.
 
 ## Đang dở
 
@@ -130,17 +163,20 @@ Bằng chứng nằm ở `docs/evidence/perf-scan/`: `README.md` mô tả cách 
 
 ## Bước tiếp theo
 
-1. Người dùng quyết có sửa lỗi đường dẫn dài ngay trong B1 không (xem phần trên).
-2. Điều phối:
+1. Điều phối:
    - chạy full suite trên nhánh gộp;
    - gộp `perf/scan-b1` ở G2 cùng E3. Khóa cache đổi một lần, mọi stage quét lại một lần.
-3. Mục 3 (Florence và DINO chung một tiến trình) để sau. Chưa bắt đầu B2–B4.
+2. Mục 3 (Florence và DINO chung một tiến trình) để sau. Chưa bắt đầu B2–B4.
 
 ## Cách kiểm
 
 - **Test liên quan** (`.venv` của thư mục cài, `PYTHONPATH` = `src` của worktree):
   - lệnh: `python -m unittest tests.test_stage_cache tests.test_cache_dependencies tests.test_cli tests.test_run_script_and_version tests.test_batch_prefetch tests.test_gore_triage tests.test_routing_prewarm tests.test_scene_cards tests.test_shot_cuts tests.test_job_pipeline tests.test_scheduler tests.test_review_workflow tests.test_install_paths tests.test_performance_report tests.test_control_center`;
-  - kết quả: 426 test OK, bỏ qua 10 (2026-10-12, sau cổng; code không đổi kể từ 9f3f7f0).
+  - kết quả: 426 test OK, bỏ qua 10 (2026-10-12, sau cổng, trên 9f3f7f0).
+- **Sau phần sửa đường dẫn dài:**
+  - lệnh: `python -m unittest tests.test_stage_cache tests.test_scheduler tests.test_cache_dependencies tests.test_job_ocr_option tests.test_job_pipeline`;
+  - kết quả: 125 test OK;
+  - lúc đó Control Center thật đang xuất video, nên không chạy bộ 15 module ở trên hay full suite.
 - **Full suite:** điều phối chạy lúc gộp.
 - **`input\synthetic-test.mp4`:** worktree có clip lavfi 1 s này (gitignored) cho `test_job_pipeline`. Giữ lại cho full suite; xóa khi bỏ worktree.
 - **Chạy lại cổng:** làm theo `docs/evidence/perf-scan/README.md`. Script của cổng nằm trong scratchpad của session, không commit.
