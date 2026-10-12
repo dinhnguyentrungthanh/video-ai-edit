@@ -1,4 +1,10 @@
-## Faster export, session A phase 2 (2026-10-11 to 2026-10-12) — branch `perf/export-speed-p2` (from `05653c9`), not merged; after G1
+## G1 merge (2026-10-12) — branch `merge/g1`, not yet in `main`
+
+- Contains C (C2, C1, C6 core), E (E0–E2), the approved C0 text with `LICENSE`, and A (A0, A1a, A2, phase 2 steps 1–3). Details in `CHANGELOG.md`.
+- Gates: scan cache keys identical to `origin/main` (no rescan); full suite 3,111 tests OK, 28 skipped.
+- Next: in one window with no job on the Control Center, E's real measurement, then the main folder moves to `merge/g1` and the user restarts the Control Center. Push waits for the user. A3 (NVENC, temporary roots only) continues on `perf/export-a3`.
+
+## Faster export, session A phase 2 (2026-10-11 to 2026-10-12) — branch `perf/export-speed-p2` (from `05653c9`), merged in G1 (`merge/g1`, 2026-10-12)
 
 - Done in the order the user set, with a commit and handoff update after each step:
   1. gblur fix: each regional gblur runs at most as many threads as its chroma plane has rows. Thin regions now come out right and the same on every run; other regions are byte-identical.
@@ -6,7 +12,7 @@
   3. The export graph goes to FFmpeg through a file (`-/filter_complex`), so the 32,767-character command-line limit no longer caps cuts: byte-identical.
 - Each step was gated against the one before on frozen copies. A3 not started. Tests: full suite 2,684 tests in 2,207.7 s on 2026-10-12, OK: 0 failures, 0 errors, 26 skipped (environment: project FFmpeg absent in the worktree, Golden data, installed models, opt-in tests). Details in `docs/handoff/A-export.md`.
 
-## Faster export, perf plan session A (2026-10-11) — branch `perf/export-speed`, not merged; waits for G1
+## Faster export, perf plan session A (2026-10-11) — branch `perf/export-speed`, merged in G1 (`merge/g1`, 2026-10-12)
 
 - A0 measured each export step (blur filters about half of the render, post-export checks about 3 %); A1a runs waiting exports before waiting scans at the next stage boundary (one worker); A2 gates delogo, gblur and geq by the blur times: output byte-identical on four benches, FFmpeg render T74 631.7 → 330.5 s, T71 741.8 → 451.4 s. A3/A4 not started. Found: FFmpeg gblur is wrong on planes with fewer rows than filter threads (no past export affected; fixed on `perf/export-speed-p2`, above). Details in `docs/handoff/A-export.md`.
 

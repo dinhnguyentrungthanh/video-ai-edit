@@ -609,18 +609,18 @@ Mỗi phép đo lấy khóa GPU hoặc khóa render (mục 3.7). Session nào th
 |---|---|
 | Kế hoạch bản 3 vào `main` | [x] 2026-10-11 |
 | Repo chuyển sang Private | [ ] |
-| Phase 1 bắt đầu: A, E, C (cloud), B0, C-spike | [ ] |
+| Phase 1 bắt đầu: A, E, C (cloud), B0, C-spike | [x] 2026-10-12 (G1) |
 | B0 đo nền quét (`docs/handoff/B0-scan-baseline.md`) | [ ] |
 | C-spike thử Nuitka (`docs/handoff/C-spike-nuitka.md`) | [ ] |
-| C6-lõi thư viện kích hoạt + công cụ cấp key | [ ] |
-| C0: sửa `AGENTS.md` (route mới, quy tắc khóa bí mật, thư mục cài) được duyệt | [ ] |
-| E0 hợp đồng hồ sơ phần cứng được duyệt | [ ] |
-| E1–E2 nhận diện, bảng cấu hình, đo nhanh | [ ] |
-| A0 đo từng bước xuất | [ ] |
-| A1a ưu tiên bản xuất | [ ] |
-| A2 bộ lọc làm mờ (framemd5 + SHA-256 giống hệt) | [ ] |
-| C1 khóa phiên bản (chỉ đọc) · C2 `install_root()` | [ ] |
-| **Điểm gộp G1** | [ ] |
+| C6-lõi thư viện kích hoạt + công cụ cấp key | [x] 2026-10-12 (G1) |
+| C0: sửa `AGENTS.md` (route mới, quy tắc khóa bí mật, thư mục cài) được duyệt | [x] 2026-10-12 (G1) |
+| E0 hợp đồng hồ sơ phần cứng được duyệt | [x] 2026-10-12 (G1) |
+| E1–E2 nhận diện, bảng cấu hình, đo nhanh | [x] 2026-10-12 (G1); lần đo thật ở khung GPU 3 còn chờ |
+| A0 đo từng bước xuất | [x] 2026-10-12 (G1) |
+| A1a ưu tiên bản xuất | [x] 2026-10-12 (G1) |
+| A2 bộ lọc làm mờ (framemd5 + SHA-256 giống hệt) | [x] 2026-10-12 (G1) |
+| C1 khóa phiên bản (chỉ đọc) · C2 `install_root()` | [x] 2026-10-12 (G1) |
+| **Điểm gộp G1** | [~] 2026-10-12: gộp xong trên `merge/g1`, cổng đạt; chờ vào `main` (mục 14.7) |
 | Người dùng chọn cách xử lý C1 trên CPU | [ ] |
 | E3 + đóng băng hồ sơ theo job | [ ] |
 | A3 NVENC trong root tạm; người dùng duyệt; `AGENTS.md` cập nhật | [ ] |
@@ -953,6 +953,17 @@ Session cloud lập kế hoạch dừng vì hết credit. Một session **điề
 - Chuyển repo sang **Private** trước bản build đầu tiên.
 - Xác nhận **tên pháp lý** cho `LICENSE`.
 - Sau mỗi lần cập nhật bản đang chạy: chờ Control Center hết job, rồi **tự khởi động lại**.
+
+### 14.7 G1 (2026-10-12, session điều phối trên PC)
+
+- Đã gộp vào `merge/g1` (worktree `temp\wt-merge-g1`): C → E → văn bản C0 (`AGENTS.md`, `THIRD_PARTY_NOTICES.md`, `LICENSE` chủ sở hữu Endmin) → `perf/export-speed` → `perf/export-speed-p2`. Người dùng duyệt thêm ý 5 của E.
+- Cổng: khóa cache quét giống hệt `origin/main` (không phải quét lại); full suite 3.111 test đạt, 28 bỏ qua.
+- Người dùng quyết: làm A3 ngay; NVENC tự lỗi thì tự encode lại bằng x264 và ghi lý do vào manifest.
+- Còn chờ:
+  - một lần dừng Control Center (không có job) cho lần đo thật của E và cập nhật thư mục chính;
+  - trước khi push: giữ hay viết lại các commit của A có banner của bên build FFmpeg (điều phối đề xuất giữ, vì `THIRD_PARTY_NOTICES.md` đã ghi tên bên build);
+  - push khi người dùng đồng ý.
+- A3 đang làm trên `perf/export-a3`.
 
 ### 14.6 Cách session điều phối làm việc
 
