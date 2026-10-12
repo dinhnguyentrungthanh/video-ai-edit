@@ -1,10 +1,10 @@
 # G1 merge: installer core, hardware profile, faster export (2026-10-12, branch `merge/g1` from `origin/main` `00393ec`; not yet in `main`)
 
-- Merged with `--no-ff`, in this order: `feat/installer` (C2 `install_root()`, C1 model lock, C6 activation core), `feat/hardware-profile` (E0–E2), the approved C0 text (`AGENTS.md` blocks A1–A4 plus the hardware-profile entry, `THIRD_PARTY_NOTICES.md`, `LICENSE` with owner Endmin), `perf/export-speed` (A0, A1a, A2) and `perf/export-speed-p2` (gblur fix, feather mask made once, graph through a file). The user also approved E's point 5 of option D.
+- Merged with `--no-ff`, in this order: `feat/installer` (C2 `install_root()`, C1 model lock, C6 activation core), `feat/hardware-profile` (E0–E2), the approved C0 text (`AGENTS.md` blocks A1–A4 plus the hardware-profile entry, `THIRD_PARTY_NOTICES.md`, `LICENSE` with owner Endmin), `perf/export-speed` (A0, A1a, A2) `perf/export-speed-p2` (gblur fix, feather mask made once, graph through a file) and `perf/export-a3` (A3: exports choose NVENC p5 `-cq 25` by default, x264 fallback; the user's approval). E's record of the real measurement (2026-10-12 14:13, every gate passed) was merged too. The user also approved E's point 5 of option D.
 - One conflict, the Settings line of `dashboard_v2/app.js`: kept both E's hardware panel and A1a's queue label.
 - Scan cache keys unchanged: the `stage_source_paths` of the 10 cached stages and the SHA-256 of all 163 files are identical to `origin/main` `00393ec`, so the update causes no rescan.
-- Full suite (unittest discover, a 1 s synthetic clip in the worktree's `input\`, removed after): 3,111 tests in 2,212 s, OK, 28 skipped (environment).
-- Still open: E's real measurement in GPU slot 3 and the update of the main folder, both in one window when the Control Center has no job (the user stops and restarts it). No push yet.
+- Full suite (unittest discover, a 1 s synthetic clip in the worktree's `input\`, removed after): 3,111 tests in 2,212 s, OK, 28 skipped (environment); after A3 was added, 3,145 tests in 2,244 s, OK, 28 skipped.
+- Still open: the update of the main folder while the Control Center is off (the user restarts it). No push yet.
 
 # Faster export — perf plan session A, phase 2 (2026-10-11 to 2026-10-12, branch `perf/export-speed-p2`, merged in G1 (`merge/g1`, 2026-10-12))
 

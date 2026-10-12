@@ -3,12 +3,12 @@
 ## G1 merge — 2026-10-12, branch `merge/g1` (worktree `temp\wt-merge-g1`), not yet in `main`
 
 - **Request:** the PC coordinator session (plan section 14.6); the user approved gathering C and E first, then A, and the C0 text with `LICENSE` owner Endmin.
-- **Merges (`--no-ff`):** `feat/installer` → `feat/hardware-profile` → C0 text → `perf/export-speed` → `perf/export-speed-p2`. One conflict in `dashboard_v2/app.js` (Settings line), both changes kept.
-- **Gates:** scan cache keys identical to `origin/main` `00393ec` (10 stages, 163 files); full suite 3,111 tests OK, 28 skipped.
+- **Merges (`--no-ff`):** `feat/installer` → `feat/hardware-profile` → C0 text → `perf/export-speed` → `perf/export-speed-p2` → E's measurement record → `perf/export-a3` (A3, approved: NVENC p5 `-cq 25` by default, x264 fallback). One conflict in `dashboard_v2/app.js` (Settings line), both changes kept.
+- **Gates:** scan cache keys identical to `origin/main` `00393ec` (10 stages, 163 files); full suite 3,145 tests OK, 28 skipped (with A3).
 - **Next:**
-  1. one window with no job on the real Control Center: the user stops it; session E runs the real measurement into a temporary root; the coordinator moves the main folder to `merge/g1` (fast-forward); the user starts the Control Center;
+  1. E's real measurement passed (2026-10-12 14:13); the coordinator moves the main folder to `merge/g1` (fast-forward) while the Control Center is off; the user starts it;
   2. push `main` only when the user agrees; before that the user decides whether to keep A's commits that carry the FFmpeg builder's banner (`a90bbf4`, `db0a139`) or rewrite them (the coordinator suggests keeping them: `THIRD_PARTY_NOTICES.md` names the builder anyway);
-  3. A3 continues on `perf/export-a3` (NVENC only in temporary roots until the user approves the measurements).
+  3. next: B (scan speed) from the user's `performance_report` of two ad scans; B1 and E3 go together in G2 (one rescan).
 
 ## Faster export, session A phase 2 — 2026-10-11 to 2026-10-12, branch `perf/export-speed-p2` (worktree `temp\wt-export-speed`), merged in G1 (`merge/g1`, 2026-10-12)
 

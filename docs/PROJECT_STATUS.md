@@ -1,8 +1,8 @@
 ## G1 merge (2026-10-12) — branch `merge/g1`, not yet in `main`
 
-- Contains C (C2, C1, C6 core), E (E0–E2), the approved C0 text with `LICENSE`, and A (A0, A1a, A2, phase 2 steps 1–3). Details in `CHANGELOG.md`.
-- Gates: scan cache keys identical to `origin/main` (no rescan); full suite 3,111 tests OK, 28 skipped.
-- Next: in one window with no job on the Control Center, E's real measurement, then the main folder moves to `merge/g1` and the user restarts the Control Center. Push waits for the user. A3 (NVENC, temporary roots only) continues on `perf/export-a3`.
+- Contains C (C2, C1, C6 core), E (E0–E2), the approved C0 text with `LICENSE`, and A (A0, A1a, A2, phase 2 steps 1–3, A3 NVENC by default). Details in `CHANGELOG.md`.
+- Gates: scan cache keys identical to `origin/main` (no rescan); full suite 3,145 tests OK, 28 skipped (with A3).
+- E's real measurement passed (2026-10-12). Next: the main folder moves to `merge/g1` while the Control Center is off, and the user restarts it. Push waits for the user.
 
 ## Faster export, session A phase 2 (2026-10-11 to 2026-10-12) — branch `perf/export-speed-p2` (from `05653c9`), merged in G1 (`merge/g1`, 2026-10-12)
 

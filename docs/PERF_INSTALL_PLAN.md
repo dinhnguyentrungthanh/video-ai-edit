@@ -623,7 +623,7 @@ Mỗi phép đo lấy khóa GPU hoặc khóa render (mục 3.7). Session nào th
 | **Điểm gộp G1** | [~] 2026-10-12: gộp xong trên `merge/g1`, cổng đạt; chờ vào `main` (mục 14.7) |
 | Người dùng chọn cách xử lý C1 trên CPU | [ ] |
 | E3 + đóng băng hồ sơ theo job | [ ] |
-| A3 NVENC trong root tạm; người dùng duyệt; `AGENTS.md` cập nhật | [ ] |
+| A3 NVENC trong root tạm; người dùng duyệt; `AGENTS.md` cập nhật | [x] 2026-10-12 (p5 `-cq 25` mặc định, gộp ở G1) |
 | A4 (nếu làm) được duyệt; `AGENTS.md` cập nhật | [ ] |
 | **B1 đợt sửa khóa cache duy nhất** (người dùng duyệt) | [ ] |
 | **Điểm gộp G2** | [ ] |
@@ -957,13 +957,14 @@ Session cloud lập kế hoạch dừng vì hết credit. Một session **điề
 ### 14.7 G1 (2026-10-12, session điều phối trên PC)
 
 - Đã gộp vào `merge/g1` (worktree `temp\wt-merge-g1`): C → E → văn bản C0 (`AGENTS.md`, `THIRD_PARTY_NOTICES.md`, `LICENSE` chủ sở hữu Endmin) → `perf/export-speed` → `perf/export-speed-p2`. Người dùng duyệt thêm ý 5 của E.
-- Cổng: khóa cache quét giống hệt `origin/main` (không phải quét lại); full suite 3.111 test đạt, 28 bỏ qua.
+- Gộp thêm: bản ghi lần đo thật của E (đạt mọi cổng) và `perf/export-a3` (A3: NVENC p5 `-cq 25` mặc định, fallback x264, người dùng duyệt).
+- Cổng: khóa cache quét giống hệt `origin/main` (không phải quét lại); full suite 3.111 test đạt, sau khi thêm A3 là 3.145 test đạt, 28 bỏ qua.
 - Người dùng quyết: làm A3 ngay; NVENC tự lỗi thì tự encode lại bằng x264 và ghi lý do vào manifest.
 - Còn chờ:
-  - một lần dừng Control Center (không có job) cho lần đo thật của E và cập nhật thư mục chính;
+  - cập nhật thư mục chính khi Control Center tắt (lần đo thật của E đã xong);
   - trước khi push: giữ hay viết lại các commit của A có banner của bên build FFmpeg (điều phối đề xuất giữ, vì `THIRD_PARTY_NOTICES.md` đã ghi tên bên build);
   - push khi người dùng đồng ý.
-- A3 đang làm trên `perf/export-a3`.
+- Tiếp theo: B (quét nhanh hơn) từ `performance_report` của người dùng; B1 và E3 đi cùng ở G2.
 
 ### 14.6 Cách session điều phối làm việc
 
