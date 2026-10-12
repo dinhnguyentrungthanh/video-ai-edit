@@ -25,7 +25,7 @@ from biliflow.scheduler import (
     InputWatcher,
     JobScheduler,
 )
-from biliflow.final_renderer import render_progress_path
+from biliflow.final_renderer import render_graph_path, render_progress_path
 
 
 class SchedulerTests(unittest.TestCase):
@@ -120,6 +120,11 @@ class SchedulerTests(unittest.TestCase):
             progress = render_progress_path(root, output)
             progress.parent.mkdir(parents=True)
             progress.write_text("progress=continue\n", encoding="utf-8")
+            # A stop kills the render-final process before it removes its graph file.
+            graph = render_graph_path(root, output)
+            graph.write_text("[0:v]null[vout]", encoding="utf-8")
+            other_graph = render_graph_path(root, root / "output" / "other.mp4")
+            other_graph.write_text("[0:v]null[vout]", encoding="utf-8")
             outside = root / "work" / "keep.partial.mp4"
             outside.write_bytes(b"keep")
             try:
@@ -130,6 +135,8 @@ class SchedulerTests(unittest.TestCase):
                 scheduler._cleanup_interrupted_stage(job["id"], "render")
                 self.assertFalse(partial.exists())
                 self.assertFalse(progress.exists())
+                self.assertFalse(graph.exists())
+                self.assertTrue(other_graph.exists())
                 self.assertTrue(outside.exists())
             finally:
                 store.close()

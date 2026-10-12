@@ -43,6 +43,7 @@ from biliflow.job_store import IN_PROCESS_STATES, JobStore, now_iso, sha256_file
 from biliflow.final_renderer import (
     DEFAULT_MAX_OUTPUT_BYTES,
     DEFAULT_TARGET_OUTPUT_BYTES,
+    render_graph_path,
     render_progress_path,
 )
 from biliflow.probe import duration_seconds, probe_video
@@ -974,6 +975,8 @@ class JobScheduler:
         partial = output.with_name(output.stem + ".partial" + output.suffix)
         partial.unlink(missing_ok=True)
         render_progress_path(self.root, output).unlink(missing_ok=True)
+        # A stop kills the render-final process before it can remove its graph file.
+        render_graph_path(self.root, output).unlink(missing_ok=True)
 
     def _terminate_active(self, reason: str) -> None:
         with self._lock:

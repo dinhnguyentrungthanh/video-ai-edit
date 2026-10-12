@@ -1,6 +1,14 @@
+## Faster export, session A phase 2 (2026-10-11 to 2026-10-12) — branch `perf/export-speed-p2` (from `05653c9`), not merged; after G1
+
+- Done in the order the user set, with a commit and handoff update after each step:
+  1. gblur fix: each regional gblur runs at most as many threads as its chroma plane has rows. Thin regions now come out right and the same on every run; other regions are byte-identical.
+  2. The feather mask is made once: byte-identical output. Filter graph alone 21–41 % faster on the benches (L39 segment 84.7 → 49.6 s); render L39 segment 122.9 → 101.9 s.
+  3. The export graph goes to FFmpeg through a file (`-/filter_complex`), so the 32,767-character command-line limit no longer caps cuts: byte-identical.
+- Each step was gated against the one before on frozen copies. A3 not started. Tests: full suite 2,684 tests in 2,207.7 s on 2026-10-12, OK: 0 failures, 0 errors, 26 skipped (environment: project FFmpeg absent in the worktree, Golden data, installed models, opt-in tests). Details in `docs/handoff/A-export.md`.
+
 ## Faster export, perf plan session A (2026-10-11) — branch `perf/export-speed`, not merged; waits for G1
 
-- A0 measured each export step (blur filters about half of the render, post-export checks about 3 %); A1a runs waiting exports before waiting scans at the next stage boundary (one worker); A2 gates delogo, gblur and geq by the blur times: output byte-identical on four benches, FFmpeg render T74 631.7 → 330.5 s, T71 741.8 → 451.4 s. A3/A4 not started. Found: FFmpeg gblur is wrong on planes with fewer rows than filter threads (no past export affected; fix waits for the user). Details in `docs/handoff/A-export.md`.
+- A0 measured each export step (blur filters about half of the render, post-export checks about 3 %); A1a runs waiting exports before waiting scans at the next stage boundary (one worker); A2 gates delogo, gblur and geq by the blur times: output byte-identical on four benches, FFmpeg render T74 631.7 → 330.5 s, T71 741.8 → 451.4 s. A3/A4 not started. Found: FFmpeg gblur is wrong on planes with fewer rows than filter threads (no past export affected; fixed on `perf/export-speed-p2`, above). Details in `docs/handoff/A-export.md`.
 
 ## Disk cleanup of `temp` (2026-10-11)
 

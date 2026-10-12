@@ -71,9 +71,10 @@ def _gblur(sigma: float, height: int, enable: str) -> str:
     FFmpeg's gblur gives wrong, run-dependent pixels when a plane has fewer rows
     than its threads (docs/evidence/perf-export/gblur-threads.md). The branch is
     yuv420p and crop rounds an odd height down, so the chroma plane has
-    height // 2 rows. FFmpeg uses the smaller of this cap and its own thread count,
-    and every count up to the row count gives the same pixels: a region with enough
-    rows keeps its bytes, a thin one comes out right and the same on every machine.
+    height // 2 rows. FFmpeg uses the smaller of this cap and its own thread count.
+    A region with enough rows keeps its bytes. As measured on an AVX2 CPU with
+    regions at least 128 pixels wide, a thin one now comes out as with one thread,
+    the same on every run; the evidence file lists what was not measured.
     """
     return f"gblur=sigma={sigma:g}:threads={max(1, height // 2)}:{enable}"
 

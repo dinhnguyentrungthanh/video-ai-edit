@@ -1,6 +1,6 @@
 # Bàn giao A – Xuất video nhanh hơn
 - Nhánh: `perf/export-speed` (A0–A2, tách từ `origin/main` `7d8b8bc`, giữ nguyên ở `05653c9`) và `perf/export-speed-p2` (phase 2, tách từ `05653c9`; worktree `temp\wt-export-speed` đang ở nhánh này) · Commit cuối: xem `git log -1` trong worktree · Cập nhật: 2026-10-12
-- Chạy ở: PC · Trạng thái: xong A0, A1a, A2 trên `perf/export-speed` (`05653c9`, giữ nguyên cho G1). Phase 2 đang làm trên `perf/export-speed-p2`, nhánh này gộp sau G1: xong bước 1 (sửa gblur) và bước 2 (mặt nạ viền mềm tính một lần). Chưa push, chưa merge. Chưa làm A3/A4 (theo lệnh người dùng).
+- Chạy ở: PC · Trạng thái: xong A0, A1a, A2 trên `perf/export-speed` (`05653c9`, giữ nguyên cho G1). Phase 2 đang làm trên `perf/export-speed-p2`, nhánh này gộp sau G1: xong cả ba bước: 1 (sửa gblur), 2 (mặt nạ viền mềm tính một lần) và 3 (đồ thị bộ lọc qua file). Chưa push, chưa merge. Chưa làm A3/A4 (theo lệnh người dùng).
 
 ## Quyết định của người dùng (2026-10-11, sau khi A2 xong)
 - Duyệt sửa lỗi gblur.
@@ -178,16 +178,40 @@ Kết luận cho T71:
 - Lượt T71 đầu tiên (19:13:50) bị dừng lúc 19:36 vì người dùng cần máy. Khi đó framemd5 hai phía đã giống hệt và phía bước 1 đã render ra `437c60cc…`; bản render dở của phía bước 2 đã bị xóa.
 - Cổng T71 trong bảng là lượt chạy lại đủ hai phía (2026-10-12, 01:01:17–01:51:10), sau khi bản xuất thật của job 114 trên Control Center xong. Control Center không chạy gì khi đó: các job 115–124 đều tạm dừng. Phần mềm edit video của người dùng vẫn mở và dùng CPU, nên thời gian của lượt này không dùng được: render cùng các byte đó ở bước 1 mất 438,5 s, ở đây mất 1.000,6 s, và framemd5 của bước 2 còn chậm hơn bước 1. Lượt này chỉ chứng minh giữ nguyên byte.
 
+### Phase 2 · bước 3 – đồ thị bộ lọc truyền qua file
+- Lý do: trên dòng lệnh, một kế hoạch có nhiều lần cắt sẽ vượt giới hạn 32.767 ký tự của Windows (WinError 206). Đồ thị của A2 dài hơn khoảng 18 %, nên giới hạn này lùi từ khoảng 22 xuống khoảng 19 lần cắt với kế hoạch dạng T71.
+- `final_renderer.py`: bản xuất ghi đồ thị vào `<root>\temp\render-progress\<id>.filtergraph` (`render_graph_path`, cạnh file tiến độ) rồi đưa cho FFmpeg bằng `-/filter_complex <file>` (FFmpeg 7 trở lên; `-filter_complex_script` đã bị bỏ ở 9.0).
+  - File chứa đúng các byte UTF-8 của đồ thị. Đồ thị có ký tự NUL bị từ chối, vì FFmpeg sẽ cắt đồ thị ở đó.
+  - Thư mục của file phải nằm trong `temp` của root.
+  - File hay link còn sót ở đường dẫn đó bị xóa trước, rồi file mới được tạo riêng (`xb`). Không bao giờ ghi xuyên qua một link.
+  - File bị xóa khi FFmpeg xong, lỗi hay ném ngoại lệ. Nếu không xóa được, kết quả của FFmpeg vẫn được trả về như bình thường; lần render sau của cùng bản xuất sẽ thay file đó.
+- `scheduler.py`: dọn dẹp sau khi dừng cũng xóa file đồ thị, vì tiến trình render bị kill trước khi kịp xóa.
+- Test:
+  - `test_final_renderer`: đồ thị đến FFmpeg qua file trong `temp` và bị xóa sau đó; bị xóa cả khi FFmpeg lỗi; file cũ bị thay; link không bị ghi xuyên qua; thư mục dẫn ra ngoài `temp` bị từ chối trước khi FFmpeg chạy; NUL bị từ chối; xóa file thất bại không che kết quả render;
+  - `test_scheduler`: sau khi dừng, file đồ thị bị xóa, còn file đồ thị của bản xuất khác vẫn giữ;
+  - `test_render_graph_file` (FFmpeg thật): file cho cùng framemd5 với đồ thị trên dòng lệnh; một đồ thị dài hơn giới hạn dòng lệnh của Windows vẫn render được. Code cũ fail với WinError 206 trên đồ thị 46.001 ký tự.
+  - Các module liên quan (`test_blur_filter`, `test_final_renderer`, `test_scheduler`, `test_render_graph_file`, `test_review_workflow`): 219 test OK, không bỏ qua.
+- Harness: nhận cả hai cách truyền đồ thị (`-filter_complex` và `-/filter_complex`), đọc đồ thị của mỗi lượt render, ghi cách truyền (`graph_option`) và SHA-256 của nó. `gate` và `stability` kiểm rằng đồ thị FFmpeg nhận đúng là đồ thị đã đo (`render_graphs_match`).
+- `blur_filter.py`: docstring của `_gblur` giờ chỉ nói điều đã đo (CPU AVX2, vùng rộng từ 128 px). Code không đổi.
+- **Cổng** (2026-10-12): code bước 2 (`p2-step2\src`, chỉ chạy framemd5; SHA-256 mp4 của bước 2 đưa vào bằng `--baseline-mp4-sha256`) với bước 3 (`p2-step3\src`, render thật). Harness đông cứng `temp\perf-export\harness-p3`. Đồ thị không đổi, chỉ đổi cách FFmpeg nhận nó, nên một bản đủ thật (T74) là đủ:
+
+| Bản sao | Kết quả |
+|---|---|
+| clip tổng hợp 20 s | Đạt: bản render bước 3 nhận đồ thị qua `-/filter_complex`, đồ thị khớp, framemd5 giống hệt, mp4 `1aa9f941…` |
+| `T71-thin60` | Đạt: như trên, mp4 `821bec86…` |
+| T74 đủ | Đạt: như trên, 133.989 dòng framemd5 giống hệt, mp4 `3f2de702…` (= bản xuất thật của job 74). FFmpeg render 394,9 s |
+
 ## Đang dở
-- Bước 3 (đồ thị qua file): code (`final_renderer.py`, `scheduler.py`, harness) và test (`test_final_renderer`, `test_scheduler`, `test_render_graph_file`) nằm trong worktree, chưa commit; 89 test đạt. Còn: đông cứng `p2-step3` và `harness-p3`, chạy `run-step3.ps1`, commit.
-- Không stash hay xóa các thay đổi chưa commit: chúng là bước 3.
+- Không có. Phase 2 (bước 1–3) đã xong và commit trên `perf/export-speed-p2`. Chưa push, chưa merge.
 
 ## Bước tiếp theo
-1. Phase 2 trên `perf/export-speed-p2`: bước 3 (đồ thị truyền qua file `-/filter_complex`).
-2. G1 (mục 9.5): gộp A1a rồi A2 (`perf/export-speed`) theo thứ tự đã định. Chạy full suite trên bản gộp. Nhánh `-p2` gộp sau G1.
-3. A3 (encoder theo hồ sơ phần cứng): chưa làm, chờ người dùng.
+1. G1 (mục 9.5): gộp A1a rồi A2 (`perf/export-speed`) theo thứ tự đã định. Chạy full suite trên bản gộp. Nhánh `-p2` gộp sau G1: khi đó chạy full suite trên bản gộp có `-p2`.
+2. A3 (encoder theo hồ sơ phần cứng): chưa làm, chờ người dùng.
 
 ## Cách kiểm
+- **Full suite trên `perf/export-speed-p2`** (2026-10-12, code bước 3, có clip tổng hợp 1 s trong `input\` của worktree, đã xóa sau khi chạy): 2.684 test trong 2.207,7 s, OK: 0 fail, 0 lỗi, 26 bỏ qua (do môi trường, như lần trước).
+  - Lượt đầu (02:10) bị ngắt lúc 02:14 khi phiên làm việc kết thúc. Lượt đó có 1 lỗi ở `test_download_account_browser` (test mở Edge thật của phần tải video; nhánh này không sửa phần đó).
+  - Chạy riêng module đó: 65 test OK. Lượt full suite chạy lại (07:05, có giới hạn 70 phút) đạt như trên.
 - **Full suite trên nhánh** (2026-10-11, có clip tổng hợp 1 s trong `input\` của worktree, đã xóa sau khi chạy): 2.669 test trong 2.233,8 s, 26 bỏ qua (do môi trường), 3 fail.
   - Cả 3 fail đều là mã băm khóa cứng của trang dashboard cũ, mà A1a đã cố ý đổi. Fixture đã được cập nhật.
   - Chạy lại 4 module dùng fixture này: 73 test OK, 1 bỏ qua.
@@ -204,6 +228,8 @@ Kết luận cho T71:
   - Cổng giữ nguyên byte: `gate --baseline-src E:\DungChung\BiliFlow\temp\perf-export\a2-05653c9\src --candidate-src <bản bước 1>` với `--baseline-mp4-sha256` lấy từ bảng A2 (smoke `1aa9f94172e152b1a66bfd2e089e4ce1f4eb3a6fee5a0c93a626c8f9570f1e17`, L39 `a9da0a09da5666efb22f02524028041af8d00debcafcca65a48149df1a8f4355`, T74 `3f2de70275670aa8ef934bfc75dfee2d7a5e8db996ed37eca2de822e54c3ab43`, T71 `437c60cc…` như trên).
   - Bản đông cứng để cổng không đổi theo worktree: `temp\perf-export\a2-05653c9\src` (A2), `temp\perf-export\p2-step1\src` (bước 1).
 - Phase 2 bước 2: `temp\perf-export\harness-p2\scripts\benchmark-export-steps.ps1 -InstallRoot E:\DungChung\BiliFlow gate --name <tên> --baseline-src E:\DungChung\BiliFlow\temp\perf-export\p2-step1\src --candidate-src E:\DungChung\BiliFlow\temp\perf-export\p2-step2\src`, không có `--baseline-mp4-sha256`, nên cả hai phía render. Đã chạy cho `smoke-synth`, `T71-thin60`, `L39-1080-seg300`, `T74`, `T71`.
+- Phase 2 bước 3: `temp\perf-export\harness-p3\scripts\benchmark-export-steps.ps1 -InstallRoot E:\DungChung\BiliFlow gate --name <tên> --baseline-src E:\DungChung\BiliFlow\temp\perf-export\p2-step2\src --candidate-src E:\DungChung\BiliFlow\temp\perf-export\p2-step3\src --baseline-mp4-sha256 <SHA-256 của bước 2>`. Đã chạy cho `smoke-synth`, `T71-thin60`, `T74`. Ngoài mã thoát 0, kiểm `render_graph_option` của phía bước 3 là `-/filter_complex` và `render_graphs_match` là true.
+- Bản đông cứng: `temp\perf-export\p2-step2\src` (bước 2), `p2-step3\src` (bước 3); harness `harness-p2` (cổng bước 2) và `harness-p3` (cổng bước 3).
 
 ## Chờ người dùng
 - Điểm gộp G1.

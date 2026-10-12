@@ -47,7 +47,7 @@ Files:
 ## Phase 2 (branch `perf/export-speed-p2`)
 
 Each step is gated against the step before it, both as frozen copies of `src` in `<install>\temp\perf-export\`
-(`tracked: false`; `src_sha256` identifies them): `a2-05653c9` (`git archive 05653c9 src`), `p2-step1`, `p2-step2`.
+(`tracked: false`; `src_sha256` identifies them): `a2-05653c9` (`git archive 05653c9 src`), `p2-step1`, `p2-step2`, `p2-step3`.
 - Step 1, the gblur thread cap (`gblur-threads.md`):
   - `T71-thin60/<stamp>-stability.json`: `stability` runs one code twice (render and framemd5) and adds a framemd5 with
     one filter thread; `passed` only when both runs give the same framemd5 and mp4 SHA-256 and the framemd5 equals the
@@ -66,3 +66,9 @@ Each step is gated against the step before it, both as frozen copies of `src` in
   - `T71` ran while the user's video editor used the CPU (the Control Center ran nothing): its render of the same
     bytes took 1,000.6 s against 438.5 s in step 1's gate, and its step 2 framemd5 was slower than step 1's. It shows
     only that no byte changed.
+- Step 3, the graph through a file (frozen `p2-step3`, harness `harness-p3`):
+  - `<bench>/<stamp>-gate.json` stamped 01:55–01:56 on 2026-10-12 (`smoke-synth` 01:55:57, `T71-thin60` 01:56:05,
+    `T74` 01:56:26): step 2 code (baseline, framemd5 only; `--baseline-mp4-sha256` gives the step 2 mp4) against step 3.
+  - Each side's `graph_option` names how its graph reached FFmpeg. The candidate render's is `-/filter_complex`, and
+    `render_graphs_match` is true: the file FFmpeg read holds the graph measured. All three passed: framemd5 and mp4
+    SHA-256 are identical, and the graph text is unchanged (`graph_changed: false`).
