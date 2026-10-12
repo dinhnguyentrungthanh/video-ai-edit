@@ -984,7 +984,7 @@ powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File <thư mục 
      - Không có scheduler nào chạy. Stage chạy tay và bản xuất đã được mutex và file khóa che.
      - Lý do không mở: hai database dùng WAL (`job_store.py:189`, `download_store.py:134`), và một kết nối chỉ-đọc vẫn có thể tạo `-wal`/`-shm` trong `state\` thật.
      - Cách này cũng tránh trường hợp dòng IN_PROCESS còn sót của một Control Center bị sập chặn phép đo mãi.
-   - **`--wait-minutes N`** (0–60): kiểm lại mỗi 30 s và **không giữ khóa GPU hay khóa xuất nào** trong lúc chờ ("chờ, không chen ngang", `docs/PERF_INSTALL_PLAN.md:548`). Chỉ mutex riêng của bước 2 được giữ, để hai lần đo chạy tay không cùng chờ rồi cùng chạy; vì vậy trong lúc chờ, Control Center hiện "Đang đo (từ lần chạy trước)" và khóa "Đo lại". Ngân sách 10 phút tính từ lúc hết chờ. (Lệch so với câu "không giữ khóa nào" của bản E0 đã duyệt; xem mục 11.)
+   - **`--wait-minutes N`** (0–60): kiểm lại mỗi 30 s và **không giữ khóa GPU hay khóa xuất nào** trong lúc chờ ("chờ, không chen ngang", `docs/PERF_INSTALL_PLAN.md:548`). Chỉ mutex riêng của bước 2 được giữ, để hai lần đo chạy tay không cùng chờ rồi cùng chạy; vì vậy trong lúc chờ, Control Center hiện "Đang đo (từ lần chạy trước)" và khóa "Đo lại". Ngân sách 10 phút tính từ lúc hết chờ. (Lệch so với câu "không giữ khóa nào" của bản E0; người dùng duyệt ngày 2026-10-12, mục 11.)
 4. **Khóa theo thứ tự toàn cục:**
    - riêng → `Local\BiliFlowGpuInference` → `Local\BiliFlowFinalRender` → `<guard root>\state\final-render.lock`;
    - mỗi khóa thử tối đa 2 s; lấy đủ hoặc trả hết. `WAIT_ABANDONED` tính là lấy được, có ghi lại;
@@ -1070,7 +1070,12 @@ powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File <thư mục 
   - khóa 1 byte trên `state\final-render.lock` có sẵn: mở không `O_CREAT`, không ghi.
 
   Ngoài ra không gì khác.
-- **Cần bạn tạm dừng hàng đợi thật, hoặc tắt Control Center thật.** Agent không bao giờ POST `/api/scheduler`. Nếu hàng đợi chưa dừng, script thoát 75.
+- **Cần bạn tạm dừng hàng đợi thật, hoặc tắt Control Center thật.** Agent không bao giờ POST `/api/scheduler`. Nếu hàng đợi chưa dừng, script thoát 75. Người dùng chọn ngày 2026-10-12: tắt Control Center thật, rồi báo E; E chỉ chạy lệnh đo sau lời báo đó.
+- **Cổng của lần đo thật** (người dùng thêm ngày 2026-10-12):
+  - lệnh đo thoát 0 và `attempt.result` là `ok`;
+  - `resolve()` trên root tạm, với quan sát nhẹ thật của máy, cho `ready` ở dòng `nvidia-sm75-torch2.14.0+cu126`: RTX 2060 của PC **không bị `VRAM_TOO_SMALL` hay lời từ chối nào**;
+  - **ghi lại VRAM mà driver báo:** `vram_mib` của NVML (`memory.total` chia 1 MiB, làm tròn xuống) trong `fingerprint.gate_key.nvidia_gpus`, và `vram_mib` của `nvidia-smi` trong `detection.nvidia_smi.gpus`;
+  - ngưỡng `UNTESTED_MIN_VRAM_MIB = 6144` chỉ áp trên đường chưa qua cổng (mục 5.6), nên dòng 1 không bị nó chặn. Nhưng nếu driver báo dưới 6144 MiB, chính RTX 2060 sẽ bị `VRAM_TOO_SMALL` khi rơi vào đường đó (đổi bản torch hay driver chưa qua cổng). Khi đó E dừng và báo người dùng, không tự đổi ngưỡng.
 - `state\hardware-profile.json` thật chỉ được ghi khi **bạn** bấm "Đo lại" trên Control Center thật, sau khi gộp G1.
 - **Control Center thử:**
   - `python -m biliflow.control_entry --project-root <worktree>\temp\hw-cc-<stamp> --port 8798 --no-import-existing`, với `PYTHONPATH` là `src` của worktree, giống `scripts/Start-BiliFlow.ps1:152`. Không chạy qua `python -m biliflow … control-center`: `cli.py` import các module quét, mà các module đó import torch (`cli.py:17`, `:24`);
@@ -1364,12 +1369,21 @@ Lỗi FFmpeg và lỗi phép thử encoder không làm lần đo thất bại (m
 | Tham số giống hệt | Bảng 1 không đổi; để sau B1 và A1b |
 | Mục 11 | Các lệch đã ghi được duyệt: fp32 ngầm trên dòng lệnh, NVML quyết định và `nvidia-smi` chỉ để đối chiếu, máy chưa từng có CUDA chờ E4 trên thư mục cài, clip tổng hợp thay clip mẫu |
 
-**Cách hiểu của E, chờ người dùng xác nhận** (đã làm theo, đổi lại được dễ):
+**Cách hiểu của E về D.** Ý 1–4 được người dùng duyệt ngày 2026-10-12. Ý 5 không nằm trong bốn ý đã gửi duyệt; nó vẫn là cách hiểu của E (đã làm theo, đổi lại được dễ):
 1. D áp cho cả bản torch và driver chưa qua cổng trên card Turing, không chỉ đời card (mục 5.6).
 2. Thêm từ chối `VRAM_TOO_SMALL` khi VRAM nhỏ hơn 6144 MiB (mục 5.6).
 3. Khi công tắc có hiệu lực, cả ba họ Turing đều tắt TF32, để gần đường tham chiếu trên Turing, vốn không có TF32.
 4. Công tắc gắn với card lúc bật; đổi card thì phải bật lại.
 5. Ý 3 của D cũng áp cho lần đo thất bại vì chính lý do đó: card mà torch thấy nhưng không có mã, hay driver dưới mức tối thiểu đã biết, cho `ARCH_UNSUPPORTED` hay `DRIVER_TOO_OLD` thay cho `CUDA_UNAVAILABLE` (mục 5.6, 7.1 bước 4).
+
+**Người dùng duyệt ngày 2026-10-12** (sau khi E2 xong, qua session điều phối):
+1. ba chỗ E2 lệch bản E0 đã duyệt (mục 11, bảng "Bản E0 đã duyệt so với code E2");
+2. bốn cách hiểu 1–4 ở trên;
+3. hai câu về nhãn và lời từ chối: **giữ như đã làm**:
+   - card Turing chỉ khác bản torch hay driver cũng mang nhãn "Chưa qua cổng trên đời card này (sm_75)", vì mục 5.6 ghi "mọi lựa chọn trên đường này";
+   - lần đo thất bại với bản torch chưa có trong `CUDA_DRIVER_MIN` giữ `CUDA_UNAVAILABLE` ở bước 4 của mục 7.1; bước 8 thì từ chối `DRIVER_TOO_OLD` ("chưa biết driver tối thiểu").
+
+Người dùng thêm một cổng cho lần đo thật ở khung GPU 3: RTX 2060 của PC không bị `VRAM_TOO_SMALL` hay lời từ chối nào, và VRAM mà driver báo được ghi lại (mục 6.4).
 
 **Cập nhật theo kế hoạch mới trên `main`** (`7d8b8bc`, `2d8240f`, `34df52c`, đọc bằng `git show origin/main:docs/PERF_INSTALL_PLAN.md`, chưa merge):
 - nhận diện theo khả năng: `nvidia-smi --query-gpu=name,memory.total,driver_version,compute_cap` được ghi vào `detection.nvidia_smi` để đối chiếu với NVML (mục 3.2);
@@ -1410,7 +1424,7 @@ Các câu hỏi và phương án ban đầu được giữ dưới đây để t
 
 **Ghi nhận (không cần chọn):**
 - `hw:{id}` chỉ được ghi từ Đợt 2, theo đúng danh sách cấm sửa của bạn (`job_store.py`).
-- Các route mới vào danh sách "agent không bao giờ gọi" qua C0, trước khi G1 gộp chúng. Cùng mục đó: agent không bao giờ chạy `scripts/hardware-measure.ps1` hay `python -m biliflow.hardware_profile measure` với `-ProjectRoot` là thư mục cài. Code trong worktree đã tự từ chối điều này; code của chính thư mục cài thì cho phép, để bạn đo.
+- Các route mới vào danh sách "agent không bao giờ gọi" của `AGENTS.md`: session điều phối thêm chúng lúc gộp G1 (người dùng, 2026-10-12); E không sửa `AGENTS.md`. Cùng mục đó: agent không bao giờ chạy `scripts/hardware-measure.ps1` hay `python -m biliflow.hardware_profile measure` với `-ProjectRoot` là thư mục cài. Code trong worktree đã tự từ chối điều này; code của chính thư mục cài thì cho phép, để bạn đo.
 - Công tắc "Chỉ dùng CPU" được ghi ngay trong E2, và có hiệu lực cho job mới từ Đợt 2. Hộp xác nhận nói rõ điều đó.
 
 ## 11. Chỗ kế hoạch và code lệch nhau, và phát hiện cho session khác
@@ -1431,7 +1445,7 @@ Các câu hỏi và phương án ban đầu được giữ dưới đây để t
 | `SCAN_PERFORMANCE.md:93-95` "NVDEC chậm khi CPU rảnh" (`:206`) | Đoạn đó tả bản NVDEC cũ; số hiện tại ở `CLAUDE_SCAN_OPTIMIZATION_HANDOFF.md:446-457` | Kết luận không đổi |
 | "device và precision luôn trên dòng lệnh" (`:152`) | fp32 hôm nay là mặc định ngầm của CLI | Giữ ngầm để dòng lệnh giống từng byte; B1 quyết định |
 
-**Bản E0 đã duyệt so với code E2** (thêm khi xong E2, ngày 2026-10-12; **chờ người dùng duyệt** ở G1):
+**Bản E0 đã duyệt so với code E2** (thêm khi xong E2; **người dùng duyệt cả ba ngày 2026-10-12**, mục 10):
 
 | Bản E0 đã duyệt | Code E2 | Lý do |
 |---|---|---|

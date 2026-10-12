@@ -1,6 +1,6 @@
 # Bàn giao E – Hồ sơ phần cứng
-- Nhánh: `feat/hardware-profile` (từ `origin/main` `40a0125`, không theo dõi nhánh từ xa nào) · Commit cuối: xem `git log -1` · Cập nhật: 2026-10-12
-- Chạy ở: PC (`E:\DungChung\BiliFlow\temp\wt-hardware-profile`) · Trạng thái: **E0 đã duyệt, phương án D đã chọn, E1 xong (2026-10-11), E2 xong (2026-10-12) trừ lần đo thật ở khung GPU 3; chờ người dùng và G1**
+- Nhánh: `feat/hardware-profile` (từ `origin/main` `40a0125`, không theo dõi nhánh từ xa nào) · Commit cuối: code E2 `aa73419`, sau đó là commit tài liệu ghi các duyệt ngày 2026-10-12 (xem `git log -1`) · Cập nhật: 2026-10-12 07:15
+- Chạy ở: PC (`E:\DungChung\BiliFlow\temp\wt-hardware-profile`) · Trạng thái: **chờ người dùng**: E0–E2 xong và đã duyệt, trừ lần đo thật ở khung GPU 3 (chờ người dùng báo Control Center thật đã tắt); sau đó xong, chờ gộp G1
 
 ## Đã xong
 - **Chuẩn bị:**
@@ -93,15 +93,23 @@
     - hồ sơ của card Ampere trên máy RTX 2060: "Card đã đổi", nêu cả hai card;
     - không bấm "Đo lại" (lần đo thật chỉ ở khung GPU 3); không đụng `state\` thật.
 
+- **Người dùng duyệt ngày 2026-10-12** (ghi ở mục 10–11 của `docs/HARDWARE_PROFILE.md`):
+  1. ba chỗ E2 lệch bản E0 (mục 11);
+  2. bốn cách hiểu 1–4 của E về phương án D (mục 10). Ý 5 (lần đo thất bại vì card không có mã torch hay driver dưới mức tối thiểu cho `ARCH_UNSUPPORTED`/`DRIVER_TOO_OLD`) không nằm trong bốn ý đã gửi; vẫn là cách hiểu của E;
+  3. hai câu về nhãn và lời từ chối: giữ như đã làm.
+  - Người dùng thêm cổng cho lần đo thật: RTX 2060 không bị `VRAM_TOO_SMALL` hay lời từ chối nào; ghi lại VRAM mà driver báo (mục 6.4).
+  - `AGENTS.md`: session điều phối thêm các route `/api/hardware-profile*` và lệnh đo lúc gộp G1; E không sửa.
+
 ## Đang dở
-- **Lần đo thật ở khung GPU 3** (mục 6.4 của `docs/HARDWARE_PROFILE.md`): chờ người dùng chọn giờ và tự tạm dừng hàng đợi thật (hoặc tắt Control Center thật).
+- **Lần đo thật ở khung GPU 3** (mục 6.4 của `docs/HARDWARE_PROFILE.md`): chưa chạy. Chờ người dùng báo **Control Center thật đã tắt**.
 
 ## Bước tiếp theo
-1. **Lần đo thật** khi người dùng báo đã sẵn sàng:
+1. **Lần đo thật**, chỉ sau lời báo của người dùng:
    - chép `ffmpeg.exe` và `ffprobe.exe` của thư mục cài vào `<worktree>\tools\ffmpeg\bin` (đã gitignore);
    - chạy lệnh của mục 6.4 với `-ProjectRoot` là một root tạm trong `temp\` của worktree và `-GuardRoot E:\DungChung\BiliFlow`;
-   - báo cáo chỉ ghi tóm tắt hồ sơ (trạng thái, dòng, kết quả phép thử, thời gian); ghi vào file này và commit.
-2. **G1:** người dùng duyệt; C0 thêm route và lệnh đo vào `AGENTS.md` trước khi gộp.
+   - kiểm cổng của lần đo thật (mục "Cách kiểm" dưới đây);
+   - báo cáo chỉ ghi tóm tắt hồ sơ (trạng thái, dòng, kết quả phép thử, VRAM, thời gian); ghi vào file này và commit.
+2. **G1:** người dùng duyệt gộp; session điều phối thêm route và lệnh đo vào `AGENTS.md` lúc gộp.
 
 ## Cách kiểm
 - **Lệnh test:** `E:\DungChung\BiliFlow\.venv\Scripts\python.exe -m unittest discover -s tests -p "test_hardware_*.py" -v`, với `PYTHONPATH=<worktree>\src`.
@@ -112,21 +120,16 @@
   - import sạch: `control_center` không nạp `hardware_*` lúc import;
   - không có `f"hw:{job_id}"` trong `src`;
   - các route chỉ-PC bị từ chối khi gọi từ điện thoại.
+- **Cổng của lần đo thật** (người dùng thêm ngày 2026-10-12; mục 6.4):
+  - lệnh đo thoát 0, `attempt.result` là `ok`;
+  - `resolve()` trên root tạm với quan sát nhẹ thật cho `ready` ở dòng `nvidia-sm75-torch2.14.0+cu126`: RTX 2060 **không bị `VRAM_TOO_SMALL` hay lời từ chối nào**;
+  - ghi lại VRAM mà driver báo: `vram_mib` của NVML trong `fingerprint.gate_key.nvidia_gpus` và của `nvidia-smi` trong `detection.nvidia_smi.gpus`;
+  - ngưỡng 6144 MiB chỉ áp trên đường chưa qua cổng, nhưng nếu driver báo dưới 6144 MiB thì RTX 2060 sẽ bị từ chối khi đổi sang torch hay driver chưa qua cổng: khi đó dừng và báo người dùng, không tự đổi ngưỡng.
 
 ## Chờ người dùng
-- **Xác nhận bốn cách hiểu của E về phương án D** (mục 10 của `docs/HARDWARE_PROFILE.md`; đã làm theo, đổi lại được dễ):
-  1. D áp cho cả bản torch và driver chưa qua cổng trên card Turing;
-  2. thêm từ chối `VRAM_TOO_SMALL` khi VRAM nhỏ hơn 6144 MiB;
-  3. khi công tắc có hiệu lực, cả ba họ Turing đều tắt TF32;
-  4. công tắc gắn với card lúc bật.
-- **Hai câu nhỏ về nhãn và lời từ chối** (đã làm theo hợp đồng, đổi được):
-  - card Turing chỉ khác bản torch hay driver cũng mang nhãn "Chưa qua cổng trên đời card này (sm_75)", vì mục 5.6 ghi "mọi lựa chọn trên đường này";
-  - lần đo lỗi với bản torch chưa có trong `CUDA_DRIVER_MIN` giữ `cuda_unavailable` ở bước 4; bước 8 thì từ chối `driver_too_old` ("chưa biết driver tối thiểu").
-- **Duyệt ba chỗ lệch của E2 so với bản E0 đã duyệt** (mục 11 của `docs/HARDWARE_PROFILE.md`; đã làm theo, đổi lại được):
-  1. `--wait-minutes` giữ **mutex riêng** trong lúc chờ (bản E0: "không giữ khóa nào"); không giữ mutex GPU, mutex xuất hay file khóa. Cái giá: trong lúc chờ, Control Center hiện "Đang đo (từ lần chạy trước)" và khóa "Đo lại";
-  2. `.ps1` kiểm trước mọi tham số đường dẫn (lỗi tham số rỗng và dấu `\` cuối của PowerShell 5.1);
-  3. thêm `-LaunchedBy control-center` hoặc `script`, để điền `writer.launched_by`.
-- **Lần đo thật E2:** chọn giờ cho khung GPU 3 và tự tạm dừng hàng đợi thật, hoặc tắt Control Center thật (agent không bao giờ POST `/api/scheduler`).
+- **Lần đo thật E2:** người dùng tắt Control Center thật ở khung GPU 3 rồi báo E (agent không bao giờ POST `/api/scheduler` và không tự tắt Control Center).
+- **Không bắt buộc:** xác nhận ý 5 của E về D (mục 10 của `docs/HARDWARE_PROFILE.md`), vì nó không nằm trong bốn ý đã duyệt ngày 2026-10-12.
+- **G1:** duyệt gộp nhánh.
 - Trước Đợt 2 (không thuộc E0–E2): chạy lại cổng framemd5 cả phim L ở khung GPU 3 (câu hỏi 1, phương án b; người dùng đã cho phép đọc bản L cho lần chạy đó).
 
 ## Lưu ý cho người tiếp quản
@@ -135,7 +138,7 @@
   - thêm theo đề xuất:
     - `nvdec.py`, `final_renderer.py` và `resource_lock.py` (của A);
     - `job_purge.py` và `recycle_bin.py` (của C2; chỉ import);
-    - `AGENTS.md` (của C0);
+    - `AGENTS.md`: session điều phối thêm route `/api/hardware-profile*` và lệnh đo lúc gộp G1 (người dùng, 2026-10-12);
     - `dashboard_v2/index.html` và `serve.py`.
 - **`hw:{id}` chưa được ghi.** `JOB_SETTING_NAMES` (`job_store.py:148`) là tuple cố định, và `tests/test_job_purge.py:640-649` dò mọi `f"<name>:{job_id}"` trong `src`. Không bao giờ né test đó.
 - **Worktree không có** `.venv`, `tools`, `state`, `models`.
@@ -151,7 +154,7 @@
 - **Control Center thử:**
   - lệnh: `python -m biliflow.control_entry --project-root <worktree>\temp\hw-cc-* --port 8798 --no-import-existing`, giống `Start-BiliFlow.ps1`. Không chạy qua `cli.py`, vì như vậy sẽ kéo torch vào;
   - dừng bằng PID đang nghe ở cổng 8798, **không** bằng `Stop-BiliFlow.ps1` (script đó dừng bản thật).
-- **Cho C0, trước G1:**
+- **Cho session điều phối, lúc gộp G1** (người dùng giao ngày 2026-10-12; E không sửa `AGENTS.md`):
   - đưa các route `/api/hardware-profile*` vào danh sách "agent không bao giờ gọi";
   - ghi rõ: agent không bao giờ chạy `scripts/hardware-measure.ps1` hay `python -m biliflow.hardware_profile measure` với `-ProjectRoot` là thư mục cài.
 - **Phát hiện cho session khác** (chi tiết ở mục 11 của `docs/HARDWARE_PROFILE.md`):
