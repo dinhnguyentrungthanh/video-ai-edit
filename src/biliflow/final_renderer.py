@@ -15,6 +15,18 @@ from biliflow.blur_filter import (
     blur_parameters,
     regional_blur_filters,
 )
+from biliflow.export_encoder import (
+    H264_NVENC,
+    LIBX264,
+    STOP_GRACE_SECONDS,
+    VALIDATION_METHOD,
+    choose_video_encoder,
+    error_fallback,
+    failed_by_itself,
+    size_fallback,
+    video_arguments,
+    video_description,
+)
 from biliflow.probe import duration_seconds, probe_video
 from biliflow.resource_lock import project_resource_lock
 from biliflow.storage import require_capacity
@@ -142,6 +154,41 @@ def _remove_render_graph(path: Path) -> None:
         path.unlink(missing_ok=True)
     except OSError:
         pass
+
+
+def _render_command(
+    *, ffmpeg_path: Path, progress_path: Path, source: Path, graph_path: Path,
+    audio_bitrate: int | None, video: list[str], partial: Path,
+) -> list[str]:
+    """The export's FFmpeg command; ``video`` holds the encoder arguments (export_encoder)."""
+    command = [
+        str(ffmpeg_path), "-hide_banner", "-loglevel", "error",
+        "-stats_period", "1", "-progress", str(progress_path), "-nostats",
+        "-i", str(source),
+        "-/filter_complex", str(graph_path), "-map", "[vout]",
+    ]
+    if audio_bitrate is not None:
+        command += ["-map", "[aout]"]
+    command += ["-map_metadata", "0", *video, "-pix_fmt", "yuv420p"]
+    if audio_bitrate is not None:
+        command += ["-c:a", "aac", "-b:a", str(audio_bitrate)]
+    return command + ["-movflags", "+faststart", "-max_muxing_queue_size", "2048", str(partial)]
+
+
+def _run_render(
+    root: Path, graph_path: Path, graph: str, progress_path: Path, command: list[str],
+) -> tuple[subprocess.CompletedProcess, float]:
+    """One FFmpeg render: (its result, its seconds). The graph file lives only while it runs."""
+    progress_path.unlink(missing_ok=True)
+    # The graph goes through a file (FFmpeg 7+): on the command line, a plan with
+    # many cuts would pass Windows' limit of 32,767 characters.
+    _write_render_graph(root, graph_path, graph)
+    started = time.perf_counter()
+    try:
+        result = subprocess.run(command, capture_output=True, text=True)
+    finally:
+        _remove_render_graph(graph_path)
+    return result, time.perf_counter() - started
 
 
 def read_render_progress(
@@ -351,11 +398,19 @@ def _frame_size(video_stream: dict) -> tuple[int, int] | None:
     return (width, height) if width > 0 and height > 0 else None
 
 
+def _chroma_rows_divisor(video_stream: dict) -> int:
+    """Rows of a picture per row of its chroma planes: 4 for a yuv410p source, 2 for the usual 4:2:0."""
+    return 4 if video_stream.get("pix_fmt") == "yuv410p" else 2
+
+
 def build_final_filter_graph(
     *, operations: list[dict], duration: float, has_audio: bool,
-    frame_size: tuple[int, int] | None = None,
+    frame_size: tuple[int, int] | None = None, chroma_rows_divisor: int = 2,
 ) -> tuple[str, float]:
-    """frame_size (source width, height) lets the cover method read picture on every side of a region."""
+    """frame_size (source width, height) lets the cover method read picture on every side of a region.
+
+    chroma_rows_divisor caps each regional gblur's threads at its chroma rows (4 for yuv410p).
+    """
     cuts = _merge_cuts(operations, duration)
     segments = _kept_segments(cuts, duration)
     blurs = _prune_redundant_blurs([
@@ -408,6 +463,7 @@ def build_final_filter_graph(
                     prefix=f"v{index}region{blur_index}", region=region,
                     sigma=sigma, feather=feather, feather_mode=feather_mode,
                     enable=enable, method=blur_method(blur), frame_size=frame_size,
+                    chroma_rows_divisor=chroma_rows_divisor,
                 ))
                 current = output
             else:
@@ -586,7 +642,9 @@ def _render_final_output_unlocked(
         duration=duration,
         has_audio=audio_stream is not None,
         frame_size=_frame_size(video_stream),
+        chroma_rows_divisor=_chroma_rows_divisor(video_stream),
     )
+    choice = choose_video_encoder(project_root=root, ffmpeg_path=ffmpeg_path, plan=plan)
     audio_bitrate = 384_000 if audio_stream is not None else 0
     overhead_fraction = 0.03
     video_maxrate = None
@@ -617,48 +675,41 @@ def _render_final_output_unlocked(
         raise FileExistsError(f"Partial output already exists: {partial}")
     progress_path = render_progress_path(root, output_path)
     progress_path.parent.mkdir(parents=True, exist_ok=True)
-    progress_path.unlink(missing_ok=True)
-    # The graph goes through a file (FFmpeg 7+): on the command line, a plan with
-    # many cuts would pass Windows' limit of 32,767 characters.
     graph_path = render_graph_path(root, output_path)
-    _write_render_graph(root, graph_path, graph)
-    command = [
-        str(ffmpeg_path), "-hide_banner", "-loglevel", "error",
-        "-stats_period", "1", "-progress", str(progress_path), "-nostats",
-        "-i", str(source),
-        "-/filter_complex", str(graph_path), "-map", "[vout]",
-    ]
-    if audio_stream is not None:
-        command += ["-map", "[aout]"]
-    command += [
-        "-map_metadata", "0", "-c:v", "libx264", "-preset", "veryfast", "-crf", "20",
-    ]
-    if size_limited:
-        assert video_maxrate is not None and video_target_bitrate is not None
-        command += [
-            "-maxrate", str(video_maxrate), "-bufsize", str(video_maxrate * 2),
-            "-b:v", str(video_target_bitrate),
-        ]
-    command += ["-pix_fmt", "yuv420p"]
-    if audio_stream is not None:
-        command += ["-c:a", "aac", "-b:a", str(audio_bitrate)]
-    command += ["-movflags", "+faststart", "-max_muxing_queue_size", "2048", str(partial)]
-    started = time.perf_counter()
-    try:
-        result = subprocess.run(command, capture_output=True, text=True)
-    finally:
-        _remove_render_graph(graph_path)
-    elapsed = time.perf_counter() - started
-    if result.returncode:
-        partial.unlink(missing_ok=True)
-        raise RuntimeError(result.stderr.strip() or "Final FFmpeg render failed")
-    size = partial.stat().st_size
-    if max_output_bytes is not None and size > max_output_bytes:
-        partial.unlink(missing_ok=True)
-        raise RuntimeError(
-            f"Rendered output exceeded the configured hard size limit "
-            f"({max_output_bytes} bytes): {size} bytes"
+    encoder = choice.encoder
+    fallback = None
+    elapsed = 0.0
+    while True:
+        arguments = video_arguments(encoder, maxrate=video_maxrate, target_bitrate=video_target_bitrate)
+        command = _render_command(
+            ffmpeg_path=ffmpeg_path, progress_path=progress_path, source=source,
+            graph_path=graph_path, audio_bitrate=audio_bitrate if audio_stream is not None else None,
+            video=arguments, partial=partial,
         )
+        result, seconds = _run_render(root, graph_path, graph, progress_path, command)
+        elapsed += seconds
+        if result.returncode:
+            partial.unlink(missing_ok=True)
+            if encoder != H264_NVENC or not failed_by_itself(result.returncode, result.stderr):
+                raise RuntimeError(result.stderr.strip() or "Final FFmpeg render failed")
+            # Perf plan A3: NVENC failed by itself (GPU busy, out of memory, an
+            # encoder error): encode again with x264, after the stop grace.
+            fallback = error_fallback(result.returncode, result.stderr, seconds)
+            encoder = LIBX264
+            time.sleep(STOP_GRACE_SECONDS)
+            continue
+        size = partial.stat().st_size
+        if max_output_bytes is None or size <= max_output_bytes:
+            break
+        partial.unlink(missing_ok=True)
+        if encoder != H264_NVENC:
+            raise RuntimeError(
+                f"Rendered output exceeded the configured hard size limit "
+                f"({max_output_bytes} bytes): {size} bytes"
+            )
+        # Perf plan A3: an NVENC export over the size limit is encoded again with x264.
+        fallback = size_fallback(size, seconds)
+        encoder = LIBX264
     output_probe = probe_video(ffprobe_path, partial)
     actual_duration = duration_seconds(output_probe)
     if abs(actual_duration - expected_duration) > 0.25:
@@ -723,10 +774,12 @@ def _render_final_output_unlocked(
             "audio_streams": sum(item.get("codec_type") == "audio" for item in output_streams),
         },
         "encoding": {
-            "video": (
-                "libx264 CRF 20 with VBV size guard"
-                if size_limited else "libx264 CRF 20 without output size cap"
-            ),
+            "video": video_description(encoder, size_limited=size_limited),
+            "encoder": encoder,
+            "video_arguments": arguments,
+            "encoder_choice": choice.record(),
+            "fallback": fallback,
+            "validation_method": VALIDATION_METHOD,
             "video_target_bitrate": video_target_bitrate,
             "video_maxrate": video_maxrate,
             "audio": f"AAC {audio_bitrate} bps" if audio_stream is not None else None,
@@ -734,7 +787,7 @@ def _render_final_output_unlocked(
             "full_decode_validation_seconds": round(decode_elapsed, 3),
             "full_decode_validation_passed": True,
             "video_seconds_per_processing_second": round(expected_duration / elapsed, 3),
-            "gpu_used": False,
+            "gpu_used": encoder == H264_NVENC,
         },
         "operations": plan.get("approved_operations", []),
     }

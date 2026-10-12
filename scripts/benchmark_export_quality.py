@@ -1,0 +1,203 @@
+"""Export encoder quality, size, speed and GPU memory: x264 against NVENC (perf plan A3).
+
+Run as ``scripts/benchmark-export-steps.ps1 ... quality --name N [--src DIR]
+[--preset p5 ...] [--cq 23 ...] [--vmaf] [--keep-outputs]``: the wrapper holds the
+shared GPU slot and the final-render slot, and this holds <install>/state/final-render.lock.
+In the bench root N (made by ``prepare``), with the code in DIR:
+
+1. the export as it runs today: the real render_final_output, x264 (no render_settings);
+2. the real render_final_output asking for ``"auto"``: the encoder it chose and why
+   (the bench root's hardware profile or one trial encode), as its manifest records;
+3. for each preset and -cq: the very FFmpeg command of (1) with export_encoder's NVENC
+   arguments in place of x264's;
+4. for every output: its size, its FFmpeg time, the GPU memory nvidia-smi reports
+   (before, and the peak while it encodes) and SSIM (with --vmaf also VMAF) against the
+   export graph's own frames, made again from the source in the same FFmpeg run.
+
+Writes results/<stamp>-quality.json: numbers and encoder arguments only, no command
+lines or paths. NVENC runs only here, in a bench root under <install>/temp.
+"""
+from __future__ import annotations
+
+import argparse
+import importlib
+import json
+import os
+import re
+import shutil
+import subprocess
+import threading
+from pathlib import Path
+from typing import Any
+
+import benchmark_export_steps as steps
+
+SSIM_SUMMARY = re.compile(r"SSIM Y:([0-9.]+) .*?All:([0-9.]+)")
+VRAM_INTERVAL_SECONDS = 0.5
+
+
+class GpuMemory:
+    """The used memory (MiB) of GPU 0 before a block and at its peak, read with nvidia-smi."""
+
+    def __init__(self) -> None:
+        self.tool = shutil.which("nvidia-smi")
+        self.before: int | None = None
+        self.peak: int | None = None
+        self._stop = threading.Event()
+        self._thread: threading.Thread | None = None
+
+    def read(self) -> int | None:
+        if self.tool is None:
+            return None
+        try:
+            result = subprocess.run(
+                [self.tool, "--query-gpu=memory.used", "--format=csv,noheader,nounits", "-i", "0"],
+                capture_output=True, text=True, timeout=10,
+            )
+            return int(result.stdout.strip()) if result.returncode == 0 else None
+        except (OSError, ValueError, subprocess.TimeoutExpired):
+            return None
+
+    def _watch(self) -> None:
+        while not self._stop.wait(VRAM_INTERVAL_SECONDS):
+            value = self.read()
+            if value is not None:
+                self.peak = value if self.peak is None else max(self.peak, value)
+
+    def __enter__(self) -> "GpuMemory":
+        self.before = self.read()
+        self.peak = self.before
+        self._thread = threading.Thread(target=self._watch, daemon=True)
+        self._thread.start()
+        return self
+
+    def __exit__(self, *exc: Any) -> None:
+        self._stop.set()
+        if self._thread is not None:
+            self._thread.join()
+
+    def record(self) -> dict:
+        added = None if self.before is None or self.peak is None else self.peak - self.before
+        return {"vram_before_mib": self.before, "vram_peak_mib": self.peak, "vram_added_mib": added}
+
+
+def _encoder_command(command: list[str], arguments: list[str], output: Path) -> list[str]:
+    """The export command with other video encoder arguments (between -map_metadata 0 and -pix_fmt)."""
+    start = command.index("-map_metadata") + 2
+    end = command.index("-pix_fmt")
+    return command[:start] + list(arguments) + command[end:-1] + [str(output)]
+
+
+def _option(command: list[str], name: str) -> int | None:
+    return int(command[command.index(name) + 1]) if name in command else None
+
+
+def _quality(ffmpeg: Path, source: Path, encoded: Path, graph: str, results: Path, tag: str, vmaf: bool) -> dict:
+    """SSIM (and VMAF) of ``encoded`` against the export graph's frames, made again from ``source``."""
+    lines = [graph]
+    if "[aout]" in graph:
+        lines.append("[aout]anullsink")
+    lines += ["[1:v:0]setpts=PTS-STARTPTS,format=yuv420p[dist]", "[vout]setpts=PTS-STARTPTS,format=yuv420p[ref]"]
+    log = f"{tag}.vmaf.json"  # relative: FFmpeg runs in results/ (a drive colon would need escaping)
+    if vmaf:
+        lines += ["[dist]split[d1][d2]", "[ref]split[r1][r2]", "[d1][r1]ssim[s]",
+                  f"[d2][r2]libvmaf=n_threads={os.cpu_count() or 1}:log_fmt=json:log_path={log}[m]"]
+        maps = ["-map", "[s]", "-map", "[m]"]
+    else:
+        lines.append("[dist][ref]ssim[s]")
+        maps = ["-map", "[s]"]
+    graph_file = results / f"{tag}.quality-graph.txt"
+    graph_file.write_bytes(";".join(lines).encode("utf-8"))
+    command = [str(ffmpeg), "-hide_banner", "-nostats", "-loglevel", "info", "-i", str(source),
+               "-i", str(encoded), "-/filter_complex", str(graph_file), *maps, "-f", "null", "-"]
+    try:
+        seconds, result = steps._run_timed(command, cwd=results)
+    finally:
+        graph_file.unlink(missing_ok=True)
+    match = SSIM_SUMMARY.search(result.stderr)
+    if match is None:
+        raise RuntimeError("FFmpeg printed no SSIM summary")
+    facts = {"ssim_y": float(match.group(1)), "ssim_all": float(match.group(2)), "quality_seconds": round(seconds, 3)}
+    if vmaf:
+        log_path = results / log
+        pooled = json.loads(log_path.read_text(encoding="utf-8"))["pooled_metrics"]["vmaf"]
+        log_path.unlink()
+        facts.update({"vmaf_mean": pooled["mean"], "vmaf_min": pooled["min"],
+                      "vmaf_harmonic_mean": pooled["harmonic_mean"]})
+    return facts
+
+
+def _render_row(label: str, render: dict, memory: GpuMemory) -> dict:
+    ffmpeg_seconds = sum(event["seconds"] for event in render["events"] if event["step"] == "ffmpeg_render")
+    encoding = render.get("encoding") or {}
+    return {
+        "label": label, "encoder": encoding.get("encoder"), "video_arguments": encoding.get("video_arguments"),
+        "encoder_choice": encoding.get("encoder_choice"), "fallback": encoding.get("fallback"),
+        "bytes": render["output_bytes"], "ffmpeg_seconds": round(ffmpeg_seconds, 3),
+        "video_seconds_per_second": round(render["output_duration_seconds"] / ffmpeg_seconds, 3),
+        **memory.record(),
+    }
+
+
+def command_quality(args: argparse.Namespace) -> int:
+    install_root = args.install_root.resolve(strict=True)
+    bench = steps._bench_dir(install_root, args.name)
+    prepared = steps._read_json(bench / "prepared.json")
+    source = bench / prepared["copy"]["file"]
+    ffmpeg, ffprobe = steps._tools(install_root)
+    renderer = steps._import_biliflow(args.src)
+    encoder = importlib.import_module("biliflow.export_encoder")
+    tag = steps._stamp()
+    results = bench / "results"
+    results.mkdir(exist_ok=True)
+    rows: list[dict] = []
+    outputs: list[tuple[dict, Path]] = []
+    with steps._install_render_lock(install_root):
+        with GpuMemory() as memory:
+            x264 = steps._render_once(renderer, bench, ffmpeg, ffprobe, f"{tag}-x264")
+        rows.append(_render_row("x264 (today's export)", x264, memory))
+        outputs.append((rows[-1], x264["output_path"]))
+        with GpuMemory() as memory:
+            auto = steps._render_once(renderer, bench, ffmpeg, ffprobe, f"{tag}-auto",
+                                      render_settings={"video_encoder": "auto"})
+        rows.append(_render_row('render_settings "auto"', auto, memory))
+        outputs.append((rows[-1], auto["output_path"]))
+        maxrate, target = _option(x264["command"], "-maxrate"), _option(x264["command"], "-b:v")
+        base = steps._without_progress(steps._with_graph(x264["command"], x264["graph"], bench))
+        for preset in args.preset:
+            for cq in args.cq:
+                arguments = encoder.video_arguments(
+                    encoder.H264_NVENC, maxrate=maxrate, target_bitrate=target, cq=cq, preset=preset,
+                )
+                output = results / f"{tag}-nvenc-{preset}-cq{cq}.mp4"
+                with GpuMemory() as memory:
+                    seconds, _ = steps._run_timed(_encoder_command(base, arguments, output))
+                row = {
+                    "label": f"h264_nvenc {preset} cq {cq}", "encoder": encoder.H264_NVENC,
+                    "video_arguments": arguments, "bytes": output.stat().st_size,
+                    "ffmpeg_seconds": round(seconds, 3),
+                    "video_seconds_per_second": round(x264["output_duration_seconds"] / seconds, 3),
+                    **memory.record(),
+                }
+                rows.append(row)
+                outputs.append((row, output))
+        for index, (row, path) in enumerate(outputs):
+            row.update(_quality(ffmpeg, source, path, x264["graph"], results, f"{tag}-q{index}", args.vmaf))
+            print(json.dumps({key: row.get(key) for key in ("label", "bytes", "ffmpeg_seconds", "ssim_all",
+                                                             "vmaf_mean", "vram_added_mib")}), flush=True)
+    if not args.keep_outputs:
+        for _, path in outputs:
+            path.unlink(missing_ok=True)
+            path.with_suffix(path.suffix + ".manifest.json").unlink(missing_ok=True)
+    report = {
+        "schema_version": 1, "name": args.name, "tag": tag, "finished_at": steps._now(),
+        "machine": steps._machine(ffmpeg), "code": steps._git_state(args.src.resolve()),
+        "origin": prepared.get("origin"),
+        "copy": {key: value for key, value in prepared["copy"].items() if key != "file"},
+        "size_policy": prepared.get("size_policy"), "vmaf": args.vmaf,
+        "rows": rows,
+    }
+    path = results / f"{tag}-quality.json"
+    steps._write_json(path, report)
+    print(f"results: {path}", flush=True)
+    return 0

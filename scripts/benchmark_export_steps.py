@@ -38,6 +38,11 @@ final-render slot; measure and gate also hold <install>/state/final-render.lock.
            filter thread (FFmpeg's gblur is wrong with more threads than a plane
            has rows; docs/evidence/perf-export/gblur-threads.md), and each render
            handed FFmpeg the very graph of its framemd5.
+  quality  --name N [--src DIR] [--preset p5 ...] [--cq 23 ...] [--vmaf]
+           Perf plan A3: the export with x264, the export asking for "auto", and
+           the x264 command with NVENC arguments for each preset and -cq: size,
+           time, GPU memory, SSIM (and VMAF) against the graph's own frames
+           (scripts/benchmark_export_quality.py). NVENC runs only in the bench root.
 """
 from __future__ import annotations
 
@@ -426,7 +431,12 @@ class RenderProbe:
                 return original_run(command, *args, **kwargs)
             finally:
                 elapsed = time.perf_counter() - started
-                kind = "ffmpeg_decode_validation" if graph is None else "ffmpeg_render"
+                kind = (
+                    "ffmpeg_render" if graph is not None
+                    # perf plan A3: the one-second NVENC trial of an "auto" export
+                    else "ffmpeg_encoder_trial" if "lavfi" in command
+                    else "ffmpeg_decode_validation"
+                )
                 if graph is not None:
                     probe.render_command = list(command)
                     probe.render_graph = graph
@@ -458,9 +468,15 @@ class RenderProbe:
             renderer.probe_video = original_probe
 
 
-def _render_once(renderer, bench: Path, ffmpeg: Path, ffprobe: Path, tag: str) -> dict:
-    """One real render_final_output in the bench root; returns timings and the manifest facts."""
+def _render_once(renderer, bench: Path, ffmpeg: Path, ffprobe: Path, tag: str,
+                 render_settings: dict | None = None) -> dict:
+    """One real render_final_output in the bench root; returns timings and the manifest facts.
+
+    ``render_settings`` goes into the edit plan (perf plan A3: {"video_encoder": "auto"}).
+    """
     plan = _read_json(bench / "work" / "plan.template.json")
+    if render_settings is not None:
+        plan["render_settings"] = render_settings
     plan_path = bench / "work" / f"plan-{tag}.json"
     output_path = bench / "output" / f"render-{tag}.mp4"
     for stale in (plan_path, output_path, output_path.with_suffix(".mp4.manifest.json")):
@@ -492,14 +508,25 @@ def _render_once(renderer, bench: Path, ffmpeg: Path, ffprobe: Path, tag: str) -
         "manifest_elapsed_seconds": manifest["encoding"]["elapsed_seconds"],
         "manifest_decode_validation_seconds": manifest["encoding"]["full_decode_validation_seconds"],
         "manifest_video_seconds_per_processing_second": manifest["encoding"]["video_seconds_per_processing_second"],
+        # Which encoder wrote the mp4 and why (perf plan A3; absent before it).
+        "encoding": _encoding_facts(manifest["encoding"]),
         "output_path": output_path,
     }
+
+
+def _encoding_facts(encoding: dict) -> dict:
+    """ENCODING_FACTS of a manifest; a fallback without FFmpeg's own words (they may hold paths)."""
+    facts = {key: encoding[key] for key in ENCODING_FACTS if key in encoding}
+    if isinstance(facts.get("fallback"), dict):
+        facts["fallback"] = {key: value for key, value in facts["fallback"].items() if key != "message"}
+    return facts
 
 
 # --------------------------------------------------------------------------- command variants
 
 # The render's graph option: on the command line, or (since perf phase 2 step 3) a file FFmpeg reads.
 GRAPH_OPTIONS = ("-filter_complex", "-/filter_complex")
+ENCODING_FACTS = ("encoder", "encoder_choice", "fallback", "validation_method", "gpu_used", "video_arguments")
 
 
 def _graph_option(command: list[str]) -> int | None:
@@ -910,6 +937,11 @@ def command_stability(args: argparse.Namespace) -> int:
 
 # --------------------------------------------------------------------------- main
 
+def _command_quality(args: argparse.Namespace) -> int:
+    """x264 against NVENC: SSIM/VMAF, size, time and GPU memory (benchmark_export_quality.py)."""
+    return importlib.import_module("benchmark_export_quality").command_quality(args)
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--install-root", type=Path, default=CHECKOUT)
@@ -954,10 +986,19 @@ def main(argv: list[str] | None = None) -> int:
     stability.add_argument("--runs", type=int, default=2)
     stability.add_argument("--keep-outputs", action="store_true")
 
+    quality = sub.add_parser("quality")
+    quality.add_argument("--name", required=True)
+    quality.add_argument("--src", type=Path, default=CHECKOUT / "src")
+    quality.add_argument("--preset", nargs="+", default=["p5"])
+    quality.add_argument("--cq", type=int, nargs="+", default=[23])
+    quality.add_argument("--vmaf", action="store_true")
+    quality.add_argument("--keep-outputs", action="store_true")
+
     args = parser.parse_args(argv)
     handlers = {
         "prepare": command_prepare, "measure": command_measure,
         "gate": command_gate, "_gate-side": command_gate_side, "stability": command_stability,
+        "quality": _command_quality,
     }
     return handlers[args.command](args)
 
