@@ -1,6 +1,16 @@
 # Bàn giao A – Xuất video nhanh hơn
-- Nhánh: `perf/export-speed` (worktree `temp\wt-export-speed`, tách từ `origin/main` `7d8b8bc`) · Commit cuối: xem `git log -1` của nhánh · Cập nhật: 2026-10-11
-- Chạy ở: PC · Trạng thái: xong A0, A1a, A2; chờ điểm gộp G1. Chưa push, chưa merge. Chưa làm A3/A4 (theo lệnh người dùng).
+- Nhánh: `perf/export-speed` (A0–A2, tách từ `origin/main` `7d8b8bc`, giữ nguyên ở `05653c9`) và `perf/export-speed-p2` (phase 2, tách từ `05653c9`; worktree `temp\wt-export-speed` đang ở nhánh này) · Commit cuối: xem `git log -1` trong worktree · Cập nhật: 2026-10-12
+- Chạy ở: PC · Trạng thái: xong A0, A1a, A2 trên `perf/export-speed` (`05653c9`, giữ nguyên cho G1). Phase 2 đang làm trên `perf/export-speed-p2`, nhánh này gộp sau G1: xong cả ba bước: 1 (sửa gblur), 2 (mặt nạ viền mềm tính một lần) và 3 (đồ thị bộ lọc qua file). Chưa push, chưa merge. Chưa làm A3/A4 (theo lệnh người dùng).
+
+## Quyết định của người dùng (2026-10-11, sau khi A2 xong)
+- Duyệt sửa lỗi gblur.
+- Không squash commit `wip:` (`db0a139`).
+- Giữ `perf/export-speed` nguyên cho G1.
+- Phase 2 làm trên nhánh mới `perf/export-speed-p2`, tách từ `05653c9`, theo thứ tự:
+  1. sửa gblur. Cổng: vùng đang đúng giữ nguyên byte, vùng đang sai được sửa, chạy 2 lần cùng hash;
+  2. mặt nạ viền mềm tính một lần. Cổng: giống hệt từng byte;
+  3. đồ thị bộ lọc truyền qua file.
+- Chưa làm A3. Commit và cập nhật bàn giao sau mỗi bước. Nhánh `-p2` gộp sau G1. Chưa push hay merge.
 
 ## Đã xong
 
@@ -116,23 +126,92 @@ Kết luận cho T71:
   1. **Độ dài dòng lệnh.** Windows giới hạn một dòng lệnh ở 32.767 ký tự, và đồ thị được truyền thẳng trên dòng lệnh. Rủi ro này có từ trước A2.
      - Một plan kiểu T71 (hai vùng che suốt phim có feather) vượt giới hạn từ khoảng 19 lần cắt sau A2, so với khoảng 22 lần trước A2.
      - Plan thật dài nhất hiện nay chỉ khoảng 10 % giới hạn.
-     - Đề xuất truyền đồ thị qua file (`-/filter_complex <file>`) khi làm A3, vì A3 cũng sửa lệnh FFmpeg. Chưa sửa.
+     - Đề xuất truyền đồ thị qua file (`-/filter_complex <file>`) khi làm A3, vì A3 cũng sửa lệnh FFmpeg. Người dùng đã chọn làm việc này ở phase 2 bước 3.
   2. **Harness: `gate --framemd5-only` báo "passed".** Đã sửa: giờ ghi `passed: null` và thoát mã 2.
   3. **Harness bỏ qua chính sách dung lượng của job.** Đã sửa: `prepare` ghi `size_policy` và mọi lượt render dùng nó. Các bản cũ dùng mặc định, cũng là chính sách mà job 71 và 74 đã dùng khi xuất.
   4. **Số A0 đo lúc máy bận.** Đã ghi rõ ở trên và trong README bằng chứng.
   5. **README ghi sai code mà file A0 của T71 đã chạy.** Đã sửa.
 - Tên miền của bên build FFmpeg (có trong banner phiên bản) đã được bỏ khỏi kết quả. Harness giờ chỉ ghi số phiên bản.
 
+### Phase 2 · bước 1 – sửa lỗi gblur (nhánh `perf/export-speed-p2`)
+- `blur_filter.py`: mỗi gblur của một vùng mờ mang `threads=max(1, chiều cao // 2)`, tức số dòng của mặt phẳng màu với nguồn 4:2:0 (crop làm tròn chiều cao lẻ xuống). FFmpeg dùng số nhỏ hơn giữa giới hạn này và số luồng của nó. Giới hạn này làm mọi việc của gblur đều có dòng, nên bỏ được lỗi tranh chấp trên mọi CPU.
+  - Đã đo trên máy này (AVX2, 13 luồng), với vùng rộng từ 128 px: vùng cao từ 26 dòng không đổi gì, giữ nguyên byte; vùng thấp hơn giờ ra như khi chạy 1 luồng, giống nhau ở mọi lần chạy.
+  - Chưa đo: CPU khác (AVX-512, chỉ SSE), vùng rộng từ 16 px trở xuống, máy có trên 26 luồng (ở đó vùng từ 26 dòng cũng đổi, từ sai thành đúng).
+  - Chưa phủ: nguồn yuv410p (4:1:0, ví dụ file SVQ1 hay Indeo cũ). Không gì đổi nhánh sang 4:2:0 trước gblur, nên mặt phẳng màu có `chiều cao // 4` dòng và nguồn đó vẫn sai như trước khi sửa (không tệ hơn). Cách sửa đề xuất ở mục Chờ người dùng.
+  - gblur toàn khung giữ mặc định (khung có hàng trăm dòng).
+- Test:
+  - `tests.test_blur_filter`: số `threads` theo chiều cao (1 đến 301 dòng, cả hai cách làm mờ, có và không có feather);
+  - `ThinRegionBlurTests` (FFmpeg thật): vùng 8, 15 và 24 dòng, hai cách, feather 0 và 4: hai lần chạy mặc định đều bằng bản 1 luồng; vùng 64 dòng: đồ thị có giới hạn và không giới hạn ra cùng framemd5;
+  - trên code cũ: 55 fail; sau khi sửa: `test_blur_filter` và `test_final_renderer` 34 test OK.
+- Harness: `prepare --ops-file` (danh sách thao tác viết tay), `_gate-side --filter-threads`, lệnh mới `stability` (chạy một bộ code nhiều lần, cộng một framemd5 với 1 luồng bộ lọc; chỉ đạt khi mọi lần cùng framemd5, cùng SHA-256 mp4 và bằng bản 1 luồng).
+- **Cổng** (kết quả trong `docs/evidence/perf-export/<bản>/`). Code A2 là bản đông cứng `git archive 05653c9 src`, code bước 1 là bản đông cứng của worktree (cả hai ở `temp\perf-export\`):
+
+| Bản sao | Cổng | Kết quả |
+|---|---|---|
+| `T71-thin60`: 60 s đầu job 71, 8 vùng viết tay cao 8, 14, 15 và 24 dòng (gblur và che, feather 0/2/3/4, `all_edges` và `vertical_only`, suốt và ngắn) + 1 lần cắt | `stability`, code A2 | Hỏng, đúng như dự đoán: hai lần chạy khác nhau cả framemd5 lẫn mp4, và không lần nào bằng bản 1 luồng |
+| `T71-thin60` | `stability`, code bước 1 | Đạt: hai lần chạy cùng framemd5 `3546c609…`, bằng bản 1 luồng; hai mp4 giống hệt (`821bec86…`). Bản 1 luồng của code A2 cũng là `3546c609…`: bản sửa cho đúng điểm ảnh của 1 luồng |
+| clip tổng hợp 20 s | `gate` A2 → bước 1 | Giữ nguyên byte: framemd5 giống hệt, mp4 `1aa9f941…` như A2 |
+| L39 1080p 300 s | `gate` A2 → bước 1 | Giữ nguyên byte: framemd5 giống hệt, mp4 `a9da0a09…` như A2 |
+| T74 đủ | `gate` A2 → bước 1 | Giữ nguyên byte: 133.989 dòng framemd5 giống hệt, mp4 `3f2de702…` (= bản xuất thật của job 74) |
+| T71 đủ | `gate` A2 → bước 1 | Giữ nguyên byte: 125.645 dòng framemd5 giống hệt, mp4 `437c60cc…` (= bản xuất thật của job 71) |
+
+- Các cổng `gate` dùng `--baseline-mp4-sha256` (SHA-256 của bản render A2 đã có), nên phía A2 chỉ chạy framemd5. Cổng bước 1 chạy lúc các agent nghiên cứu của session cũng dùng CPU, nên thời gian của chúng không dùng để so.
+
+### Phase 2 · bước 2 – mặt nạ viền mềm tính một lần
+- `blur_filter.py`: mặt nạ viền mềm chỉ phụ thuộc kích thước vùng (`X`, `Y`, `W`, `H`), vậy mà geq tính lại nó ở mọi khung trong thời gian làm mờ. Giờ nhánh mặt nạ chỉ lấy khung đầu của nhánh (`trim=end_frame=1`; geq không mang `enable`, không có `setpts`), và `alphamerge` lặp khung đó cho mọi khung sau.
+  - Tùy chọn lặp (`eof_action=repeat:repeatlast=1:shortest=0`, hằng `MASK_REPEAT_ALPHAMERGE`) là mặc định của FFmpeg. Code ghi rõ chúng để nếu FFmpeg đổi mặc định thì mặt nạ cũng không mất.
+- Test (`tests.test_blur_filter`):
+  - chuỗi lọc chính xác; một kiểm tra rằng biểu thức mặt nạ chỉ đọc `X`, `Y`, `W`, `H`;
+  - `OneTimeMaskEquivalenceTests` (FFmpeg thật), so với mặt nạ tính mỗi khung: 5 ca tổng hợp (cửa sổ muộn, hai khoảng, có cắt, vùng mỏng). framemd5 và SHA-256 mp4 x264 giống hệt;
+  - một ca đối chứng âm: mặt nạ không được lặp thì khung ra khác.
+- **Cổng**: code bước 1 (baseline, `temp\perf-export\p2-step1\src`) với bước 2 (`p2-step2\src`). Cả hai phía đều render, nên mỗi cổng cũng là một cặp đo thời gian. Harness đông cứng ở `temp\perf-export\harness-p2`, để các sửa đổi harness của bước 3 trong worktree không chạm tới các cổng này. Kết quả trong `docs/evidence/perf-export/<bản>/`:
+
+| Bản sao | framemd5: chỉ bộ lọc, không mã hóa (bước 1 → bước 2) | FFmpeg render (bước 1 → bước 2) | Kết quả |
+|---|---|---|---|
+| clip tổng hợp 20 s | 3,99 → 2,39 s | 4,49 → 4,08 s | giống hệt; mp4 `1aa9f941…` |
+| `T71-thin60` | 7,32 → 4,45 s | 11,81 → 10,57 s | giống hệt; mp4 `821bec86…` |
+| L39 1080p 300 s | 84,68 → 49,58 s | 122,87 → 101,92 s | giống hệt; mp4 `a9da0a09…` |
+| T74 đủ | 147,37 → 116,61 s | 441,88 → 450,33 s | giống hệt 133.989 dòng; mp4 `3f2de702…` |
+| T71 đủ | 390,12 → 582,24 s (không dùng để so, xem dưới) | 1.000,57 → 895,54 s (không dùng để so) | giống hệt 125.645 dòng; mp4 `437c60cc…` (= bản xuất thật của job 71) |
+
+- Các cổng bước 2 chạy lúc máy không rảnh: cổng A2 render T74 trong 330,5 s, ở đây cùng các byte đó mất 441,9 s. Vì vậy chỉ so hai phía của cùng một cổng. Ngay cả vậy vẫn có nhiễu: render T74 của bước 2 chậm hơn 2 %, nằm trong nhiễu, vì T74 chỉ có hai vùng ngắn và thời gian render do x264 quyết định.
+- Lượt T71 đầu tiên (19:13:50) bị dừng lúc 19:36 vì người dùng cần máy. Khi đó framemd5 hai phía đã giống hệt và phía bước 1 đã render ra `437c60cc…`; bản render dở của phía bước 2 đã bị xóa.
+- Cổng T71 trong bảng là lượt chạy lại đủ hai phía (2026-10-12, 01:01:17–01:51:10), sau khi bản xuất thật của job 114 trên Control Center xong. Control Center không chạy gì khi đó: các job 115–124 đều tạm dừng. Phần mềm edit video của người dùng vẫn mở và dùng CPU, nên thời gian của lượt này không dùng được: render cùng các byte đó ở bước 1 mất 438,5 s, ở đây mất 1.000,6 s, và framemd5 của bước 2 còn chậm hơn bước 1. Lượt này chỉ chứng minh giữ nguyên byte.
+
+### Phase 2 · bước 3 – đồ thị bộ lọc truyền qua file
+- Lý do: trên dòng lệnh, một kế hoạch có nhiều lần cắt sẽ vượt giới hạn 32.767 ký tự của Windows (WinError 206). Đồ thị của A2 dài hơn khoảng 18 %, nên giới hạn này lùi từ khoảng 22 xuống khoảng 19 lần cắt với kế hoạch dạng T71.
+- `final_renderer.py`: bản xuất ghi đồ thị vào `<root>\temp\render-progress\<id>.filtergraph` (`render_graph_path`, cạnh file tiến độ) rồi đưa cho FFmpeg bằng `-/filter_complex <file>` (FFmpeg 7 trở lên; `-filter_complex_script` đã bị bỏ ở 9.0).
+  - File chứa đúng các byte UTF-8 của đồ thị. Đồ thị có ký tự NUL bị từ chối, vì FFmpeg sẽ cắt đồ thị ở đó.
+  - Thư mục của file phải nằm trong `temp` của root.
+  - File hay link còn sót ở đường dẫn đó bị xóa trước, rồi file mới được tạo riêng (`xb`). Không bao giờ ghi xuyên qua một link.
+  - File bị xóa khi FFmpeg xong, lỗi hay ném ngoại lệ. Nếu không xóa được, kết quả của FFmpeg vẫn được trả về như bình thường; lần render sau của cùng bản xuất sẽ thay file đó.
+- `scheduler.py`: dọn dẹp sau khi dừng cũng xóa file đồ thị, vì tiến trình render bị kill trước khi kịp xóa.
+- Test:
+  - `test_final_renderer`: đồ thị đến FFmpeg qua file trong `temp` và bị xóa sau đó; bị xóa cả khi FFmpeg lỗi; file cũ bị thay; link không bị ghi xuyên qua; thư mục dẫn ra ngoài `temp` bị từ chối trước khi FFmpeg chạy; NUL bị từ chối; xóa file thất bại không che kết quả render;
+  - `test_scheduler`: sau khi dừng, file đồ thị bị xóa, còn file đồ thị của bản xuất khác vẫn giữ;
+  - `test_render_graph_file` (FFmpeg thật): file cho cùng framemd5 với đồ thị trên dòng lệnh; một đồ thị dài hơn giới hạn dòng lệnh của Windows vẫn render được. Code cũ fail với WinError 206 trên đồ thị 46.001 ký tự.
+  - Các module liên quan (`test_blur_filter`, `test_final_renderer`, `test_scheduler`, `test_render_graph_file`, `test_review_workflow`): 219 test OK, không bỏ qua.
+- Harness: nhận cả hai cách truyền đồ thị (`-filter_complex` và `-/filter_complex`), đọc đồ thị của mỗi lượt render, ghi cách truyền (`graph_option`) và SHA-256 của nó. `gate` và `stability` kiểm rằng đồ thị FFmpeg nhận đúng là đồ thị đã đo (`render_graphs_match`).
+- `blur_filter.py`: docstring của `_gblur` giờ chỉ nói điều đã đo (CPU AVX2, vùng rộng từ 128 px). Code không đổi.
+- **Cổng** (2026-10-12): code bước 2 (`p2-step2\src`, chỉ chạy framemd5; SHA-256 mp4 của bước 2 đưa vào bằng `--baseline-mp4-sha256`) với bước 3 (`p2-step3\src`, render thật). Harness đông cứng `temp\perf-export\harness-p3`. Đồ thị không đổi, chỉ đổi cách FFmpeg nhận nó, nên một bản đủ thật (T74) là đủ:
+
+| Bản sao | Kết quả |
+|---|---|
+| clip tổng hợp 20 s | Đạt: bản render bước 3 nhận đồ thị qua `-/filter_complex`, đồ thị khớp, framemd5 giống hệt, mp4 `1aa9f941…` |
+| `T71-thin60` | Đạt: như trên, mp4 `821bec86…` |
+| T74 đủ | Đạt: như trên, 133.989 dòng framemd5 giống hệt, mp4 `3f2de702…` (= bản xuất thật của job 74). FFmpeg render 394,9 s |
+
 ## Đang dở
-- (trống)
+- Không có. Phase 2 (bước 1–3) đã xong và commit trên `perf/export-speed-p2`. Chưa push, chưa merge.
 
 ## Bước tiếp theo
-1. G1 (mục 9.5): gộp A1a rồi A2 theo thứ tự đã định. Chạy full suite trên bản gộp.
-2. Sau G1 (cần người dùng chọn):
-   - A3, encoder theo hồ sơ phần cứng; nên kèm việc truyền đồ thị qua file;
-   - một bước làm nhanh tiếp cho vùng mờ suốt phim: tính mặt nạ feather (`geq`) một lần thay vì mỗi khung. Theo A0, feather chiếm khoảng 2/3 chi phí bộ lọc. Bước này cần cổng giống hệt như A2.
+1. G1 (mục 9.5): gộp A1a rồi A2 (`perf/export-speed`) theo thứ tự đã định. Chạy full suite trên bản gộp. Nhánh `-p2` gộp sau G1: khi đó chạy full suite trên bản gộp có `-p2`.
+2. A3 (encoder theo hồ sơ phần cứng): chưa làm, chờ người dùng.
 
 ## Cách kiểm
+- **Full suite trên `perf/export-speed-p2`** (2026-10-12, code bước 3, có clip tổng hợp 1 s trong `input\` của worktree, đã xóa sau khi chạy): 2.684 test trong 2.207,7 s, OK: 0 fail, 0 lỗi, 26 bỏ qua (do môi trường, như lần trước).
+  - Lượt đầu (02:10) bị ngắt lúc 02:14 khi phiên làm việc kết thúc. Lượt đó có 1 lỗi ở `test_download_account_browser` (test mở Edge thật của phần tải video; nhánh này không sửa phần đó).
+  - Chạy riêng module đó: 65 test OK. Lượt full suite chạy lại (07:05, có giới hạn 70 phút) đạt như trên.
 - **Full suite trên nhánh** (2026-10-11, có clip tổng hợp 1 s trong `input\` của worktree, đã xóa sau khi chạy): 2.669 test trong 2.233,8 s, 26 bỏ qua (do môi trường), 3 fail.
   - Cả 3 fail đều là mã băm khóa cứng của trang dashboard cũ, mà A1a đã cố ý đổi. Fixture đã được cập nhật.
   - Chạy lại 4 module dùng fixture này: 73 test OK, 1 bỏ qua.
@@ -144,16 +223,23 @@ Kết luận cho T71:
   - Mã thoát 0 chỉ khi framemd5 của `[vout]`/`[aout]` và SHA-256 mp4 x264 giống hệt; với `--baseline-twice` thì hai lượt baseline cũng phải giống nhau.
   - `--framemd5-only` không bao giờ được tính là qua cổng: khớp thì thoát 2.
   - Bốn lượt đã chạy dùng script `run-gates.ps1` trong scratchpad của session. Lệnh tương đương: `gate --name smoke-synth --baseline-twice`, `gate --name L39-1080-seg300 --baseline-twice`, `gate --name T74`, `gate --name T71 --baseline-mp4-sha256 437c60cc8dda369ef1baf1bc9222e8953cdf975cab72506df19e97994c3a83a5`.
+- Phase 2 bước 1:
+  - Bản vùng mỏng: `... prepare --name T71-thin60 --job 71 --segment 0 60 --ops-file docs\evidence\perf-export\T71-thin60\thin-regions.ops.json`, rồi `... stability --name T71-thin60 --src <src>`. Mã thoát 0 chỉ khi đạt.
+  - Cổng giữ nguyên byte: `gate --baseline-src E:\DungChung\BiliFlow\temp\perf-export\a2-05653c9\src --candidate-src <bản bước 1>` với `--baseline-mp4-sha256` lấy từ bảng A2 (smoke `1aa9f94172e152b1a66bfd2e089e4ce1f4eb3a6fee5a0c93a626c8f9570f1e17`, L39 `a9da0a09da5666efb22f02524028041af8d00debcafcca65a48149df1a8f4355`, T74 `3f2de70275670aa8ef934bfc75dfee2d7a5e8db996ed37eca2de822e54c3ab43`, T71 `437c60cc…` như trên).
+  - Bản đông cứng để cổng không đổi theo worktree: `temp\perf-export\a2-05653c9\src` (A2), `temp\perf-export\p2-step1\src` (bước 1).
+- Phase 2 bước 2: `temp\perf-export\harness-p2\scripts\benchmark-export-steps.ps1 -InstallRoot E:\DungChung\BiliFlow gate --name <tên> --baseline-src E:\DungChung\BiliFlow\temp\perf-export\p2-step1\src --candidate-src E:\DungChung\BiliFlow\temp\perf-export\p2-step2\src`, không có `--baseline-mp4-sha256`, nên cả hai phía render. Đã chạy cho `smoke-synth`, `T71-thin60`, `L39-1080-seg300`, `T74`, `T71`.
+- Phase 2 bước 3: `temp\perf-export\harness-p3\scripts\benchmark-export-steps.ps1 -InstallRoot E:\DungChung\BiliFlow gate --name <tên> --baseline-src E:\DungChung\BiliFlow\temp\perf-export\p2-step2\src --candidate-src E:\DungChung\BiliFlow\temp\perf-export\p2-step3\src --baseline-mp4-sha256 <SHA-256 của bước 2>`. Đã chạy cho `smoke-synth`, `T71-thin60`, `T74`. Ngoài mã thoát 0, kiểm `render_graph_option` của phía bước 3 là `-/filter_complex` và `render_graphs_match` là true.
+- Bản đông cứng: `temp\perf-export\p2-step2\src` (bước 2), `p2-step3\src` (bước 3); harness `harness-p2` (cổng bước 2) và `harness-p3` (cổng bước 3).
 
 ## Chờ người dùng
 - Điểm gộp G1.
-- Chọn việc sau G1: A3, mặt nạ feather tính một lần, truyền đồ thị qua file.
-- **Lỗi có từ trước trong FFmpeg gblur, tìm thấy khi tự kiểm tra harness** (chi tiết và số đo trong `docs/evidence/perf-export/gblur-threads.md`):
+- A3 (người dùng đã dặn chưa làm).
+- **Lỗi có từ trước trong FFmpeg gblur, tìm thấy khi tự kiểm tra harness** (chi tiết và số đo trong `docs/evidence/perf-export/gblur-threads.md`). Người dùng đã duyệt sửa ngày 2026-10-11; đã sửa ở phase 2 bước 1 (ở trên).
   - Khi một mặt phẳng ảnh có ít dòng hơn số luồng bộ lọc, gblur cho điểm ảnh sai, lệch tới 171–178/255, ở mọi khung, và kết quả đổi giữa các lần chạy. Máy này có 13 luồng: vùng yuv420p thấp dưới 26 dòng bị sai màu, dưới 13 dòng sai cả độ sáng.
   - Không do A2, vì code cũ cũng vậy.
-  - 22 bản xuất đã có không bị: vùng thấp nhất là 30 dòng. Nhưng trên máy có từ 16 luồng trở lên, vùng 30 dòng sẽ bị sai màu. Việc này liên quan tới bộ cài cho máy khác.
-  - Cách sửa đề xuất: đặt `threads` của gblur trong từng vùng tối đa bằng số dòng của mặt phẳng màu. Vùng đang đúng giữ nguyên byte, vùng đang sai thì được sửa.
-  - Việc này đổi đầu ra (ở chỗ đang sai), nên cần người dùng quyết và cần cổng riêng. Chưa làm.
+  - 22 bản xuất đã có không bị: vùng thấp nhất là 30 dòng. Nhưng trên máy có từ 16 luồng trở lên, vùng 30 dòng sẽ bị sai màu nếu chạy code chưa sửa (`perf/export-speed`, `main`).
+  - Còn hở (review 2026-10-11, LOW): nguồn yuv410p chưa được phủ. Đề xuất: khi nguồn dò ra là yuv410p thì giới hạn `chiều cao // 4`; với nguồn 4:2:0 đồ thị giữ nguyên nên không đổi byte nào. Chưa làm, chờ người dùng quyết.
+- **Tên miền của bên build FFmpeg trong lịch sử commit.** Banner phiên bản (có tên miền của bên build, không phải nguồn phim) nằm trong 3 file JSON đo A0 ở commit `a90bbf4` và `db0a139`; commit `05653c9` đã bỏ nó khỏi file. Người dùng đã quyết không squash `db0a139`, nên nếu gộp và push như hiện tại thì tên miền này lên lịch sử của repo công khai. Muốn lịch sử sạch thì phải viết lại lịch sử, việc này cần người dùng yêu cầu rõ. Người dùng chọn: giữ như vậy, hay viết lại lịch sử trước khi push.
 
 ## Lưu ý cho người tiếp quản
 - Không sửa: `cli.py`, `__main__.py`, `__init__.py`, `run.ps1`, `env.ps1`, `stage_cache.py`, `cache_dependencies.py`, `pyproject.toml`, `config/*`, `models\`. Các file nhánh này đã sửa nằm ngoài dấu vân tay cache quét: đã kiểm bằng `stage_source_paths` cho cả 10 stage có cache.
@@ -161,7 +247,7 @@ Kết luận cho T71:
 - Kế hoạch ghi "dùng `priority` có sẵn". Ở đây `priority` vẫn là khóa sắp xếp đầu tiên, còn "lệnh xuất trước" được tính lúc chọn, không ghi vào cột. Lý do: lệnh xuất bị tạm dừng, thử lại hay hủy thì tự về đúng loại, không cần sửa cột.
 - Lỗi có từ trước, không do A1a (theo đọc code, chưa tái hiện): nếu Hủy rơi vào khoảng vài mili giây giữa `claim_queued` và lúc `_execute` ghi stage RUNNING, một lệnh xuất đã hủy vẫn có thể chạy xong. A1a không đổi khoảng này. Chưa sửa.
 - Thư mục `temp\perf-export\` (bản sao video, kết quả thô, baseline `baseline-40a0125\src`) là dữ liệu tạm cục bộ, khoảng 0,9 GB. Xóa được sau G1. Bằng chứng cần giữ đã chép vào `docs/evidence/perf-export/`.
-- Commit `db0a139` mang tiền tố `wip:` vì được commit trước khi có kết quả cổng video thật. Không sửa lịch sử: commit sau ghi kết quả cổng. Lúc gộp có thể squash nếu người dùng muốn.
-- Ba file JSON trong commit `a90bbf4` còn banner FFmpeg có tên miền của bên build (không phải nguồn phim). Commit sau đã bỏ nó khỏi file hiện tại. Nếu muốn lịch sử cũng sạch trước khi push, hãy squash lúc gộp G1.
+- Commit `db0a139` mang tiền tố `wip:` vì được commit trước khi có kết quả cổng video thật. Không sửa lịch sử: commit sau ghi kết quả cổng. Người dùng đã quyết không squash commit này (2026-10-11).
+- Banner FFmpeg có tên miền của bên build nằm trong lịch sử (`a90bbf4`, `db0a139`), xem mục Chờ người dùng. Không tự squash hay viết lại lịch sử.
 - x264 cho kết quả tất định trên máy này ở chế độ dung lượng mặc định (VBV): mỗi bản render lại đều trùng byte với bản xuất thật của job 71 và 74, và baseline chạy 2 lần cũng trùng. Trên máy khác, hoặc với số luồng khác, SHA-256 có thể khác. Khi đó framemd5 vẫn là bằng chứng chính.
-- Cổng byte chỉ dùng được khi mọi vùng mờ cao ít nhất 2 × số luồng bộ lọc (26 dòng trên máy này). Nếu không, lỗi gblur ở trên làm chính code cũ cho ra kết quả khác nhau giữa các lần chạy. Các vùng của 4 bản đã cổng đều cao từ 34 dòng, và `--baseline-twice` cho thấy kết quả ổn định. Bản tự kiểm tra 320×180 (vùng 8 và 15 dòng) đã fail đúng vì lỗi này, rồi được xóa.
+- Với code chưa sửa gblur (A2 và trước), cổng byte chỉ dùng được khi mọi vùng mờ cao ít nhất 2 × số luồng bộ lọc (26 dòng trên máy này). Nếu không, chính code đó cho ra kết quả khác nhau giữa các lần chạy. Các vùng của 4 bản đã cổng ở A2 đều cao từ 30 dòng, và `--baseline-twice` cho thấy kết quả ổn định. Bản tự kiểm tra 320×180 (vùng 8 và 15 dòng) đã fail đúng vì lỗi này, rồi được xóa. Từ bước 1 của phase 2, code đã sửa ổn định cả với vùng mỏng (`T71-thin60`).

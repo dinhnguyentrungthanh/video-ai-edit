@@ -11,6 +11,7 @@ from unittest.mock import patch
 from biliflow.blur_filter import (
     COVER_METHOD,
     GBLUR,
+    MASK_REPEAT_ALPHAMERGE,
     blur_method,
     cover_sigma,
     regional_blur_filters,
@@ -40,15 +41,30 @@ class BlurFilterGraphTests(unittest.TestCase):
             ),
             [
                 "[in]split[pbase][pcrop]",
-                "[pcrop]crop=60:20:40:30,gblur=sigma=28:enable=1[pblurred]",
+                "[pcrop]crop=60:20:40:30,gblur=sigma=28:threads=10:enable=1[pblurred]",
                 "[pbase][pblurred]overlay=40:30:enable=1[out]",
             ],
         )
 
+    def test_gblur_never_runs_more_threads_than_its_chroma_plane_has_rows(self):
+        # FFmpeg's gblur gives wrong, run-dependent pixels when a plane has fewer rows
+        # than its threads (docs/evidence/perf-export/gblur-threads.md). The branch is
+        # yuv420p and crop rounds an odd height down: the chroma plane has height // 2 rows.
+        for height, threads in ((1, 1), (2, 1), (7, 3), (8, 4), (15, 7), (25, 12), (26, 13), (64, 32), (301, 150)):
+            region = {"x": 0, "y": 0, "width": 40, "height": height}
+            for method in (GBLUR, COVER_METHOD):
+                for feather in (0, 3):
+                    with self.subTest(height=height, method=method, feather=feather):
+                        chains = ";".join(regional_blur_filters(
+                            input_label="in", output_label="out", prefix="p", region=region, sigma=28,
+                            feather=feather, enable="enable=1", method=method, frame_size=(320, 320),
+                        ))
+                        self.assertEqual(re.findall(r"gblur=sigma=28:threads=(\d+):enable=1", chains), [str(threads)])
+
     def test_cover_reads_a_margin_of_picture_and_crops_back_to_the_region(self):
         self.assertEqual(cover(LOGO)[1], (
             "[pcrop]crop=76:36:32:22,delogo=x=8:y=8:w=60:h=20:enable=1,crop=60:20:8:8,"
-            "gblur=sigma=28:enable=1[pblurred]"
+            "gblur=sigma=28:threads=10:enable=1[pblurred]"
         ))
 
     def test_cover_keeps_one_pixel_inside_where_the_region_touches_the_frame_edge(self):
@@ -69,18 +85,43 @@ class BlurFilterGraphTests(unittest.TestCase):
             "[in]split[pbase][pcrop]",
             "[pcrop]crop=76:36:32:22,delogo=x=8:y=8:w=60:h=20:enable=1,crop=60:20:8:8,"
             "split[pclean][pblursource]",
-            "[pblursource]gblur=sigma=28:enable=1,split[pcoloursource][pmasksource]",
+            "[pblursource]gblur=sigma=28:threads=10:enable=1,split[pcoloursource][pmasksource]",
             "[pcoloursource]format=yuv420p[pcolour]",
-            "[pmasksource]format=gray,"
-            "geq=lum='255*min(1\\,min(min(X\\,W-1-X)\\,min(Y\\,H-1-Y))/4)':enable=1[pmask]",
-            "[pcolour][pmask]alphamerge[psoft]",
+            "[pmasksource]trim=end_frame=1,format=gray,"
+            "geq=lum='255*min(1\\,min(min(X\\,W-1-X)\\,min(Y\\,H-1-Y))/4)'[pmask]",
+            "[pcolour][pmask]alphamerge=eof_action=repeat:repeatlast=1:shortest=0[psoft]",
             "[pclean][psoft]overlay=0:0[ppatch]",
             "[pbase][ppatch]overlay=40:30:enable=1[out]",
         ])
 
+    def test_the_feather_mask_is_made_once_from_the_branch_first_frame(self):
+        # The mask depends only on the region's size: geq runs on one frame, never gated
+        # (that frame may fall outside the blur times), and alphamerge repeats it.
+        for method in (GBLUR, COVER_METHOD):
+            for mode, distance in (("all_edges", "min(min(X\\,W-1-X)\\,min(Y\\,H-1-Y))"),
+                                   ("vertical_only", "min(Y\\,H-1-Y)")):
+                with self.subTest(method=method, mode=mode):
+                    chains = regional_blur_filters(
+                        input_label="in", output_label="out", prefix="p", region=LOGO, sigma=28,
+                        feather=3, enable="enable='between(t,2,3)'", feather_mode=mode, method=method,
+                        frame_size=FRAME,
+                    )
+                    self.assertIn(
+                        f"[pmasksource]trim=end_frame=1,format=gray,geq=lum='255*min(1\\,{distance}/3)'[pmask]",
+                        chains,
+                    )
+                    self.assertIn(
+                        "[pcolour][pmask]alphamerge=eof_action=repeat:repeatlast=1:shortest=0[psoft]", chains,
+                    )
+                    # Made once, the mask may only read the pixel's place and the size: no time
+                    # (T, N) and no input pixel (p, lum, cb, cr...).
+                    expression = re.search(r"geq=lum='([^']*)'", ";".join(chains)).group(1)
+                    self.assertLessEqual(set(re.findall(r"[A-Za-z_]+", expression)), {"min", "X", "Y", "W", "H"})
+
     def test_only_the_per_frame_filters_of_the_branch_carry_enable(self):
-        # FFmpeg refuses enable on crop, split and format (no timeline support).
-        gated = {"delogo", "gblur", "geq"}
+        # FFmpeg refuses enable on crop, split and format (no timeline support); the
+        # one-frame mask (trim, geq) is made once and never gated.
+        gated = {"delogo", "gblur"}
         for method in (GBLUR, COVER_METHOD):
             for feather in (0, 3):
                 with self.subTest(method=method, feather=feather):
@@ -163,7 +204,7 @@ UNGATED_ENABLE = re.compile(r":enable='[^']*'")
 GATED_FILTERS = (
     re.compile(r"delogo=x=\d+:y=\d+:w=\d+:h=\d+:enable"),
     re.compile(r"geq=lum='[^']*':enable"),
-    re.compile(r"(?:,|blursource\])gblur=sigma=[\d.]+:enable"),
+    re.compile(r"(?:,|blursource\])gblur=sigma=[\d.]+(?::threads=\d+)?:enable"),
 )
 
 
@@ -185,37 +226,11 @@ def box(x, y, width, height):
     return {"x": x, "y": y, "width": width, "height": height}
 
 
-@unittest.skipUnless(FFMPEG.exists(), "project FFmpeg is required")
-class BlurGatingEquivalenceTests(unittest.TestCase):
-    """Perf plan A2 gate on synthetic clips: gating the branch filters changes no output byte.
-
-    framemd5 of [vout] and [aout] and the SHA-256 of the x264 mp4 (the export's
-    encoder options) must be identical with and without enable on delogo, gblur and geq.
-    """
+class SyntheticClipCase(unittest.TestCase):
+    """A 6 s testsrc2 clip with audio, and the export graph's framemd5 and x264 mp4 SHA-256."""
 
     SIZE = (320, 180)
     SECONDS = 6.0
-    # Regions are 64 rows high: FFmpeg's gblur gives wrong, run-dependent pixels when a plane
-    # has fewer rows than its threads (yuv420p chroma: half the region), so shorter regions would
-    # make both graphs unstable on machines with many CPUs (docs/evidence/perf-export/gblur-threads.md).
-    CASES = {
-        # Range ends on frame times (25 fps): between() includes both ends.
-        "cover_feather": [blur(1.0, 2.0, box(100, 50, 80, 64), method=COVER_METHOD, feather=4, sigma=28)],
-        "gblur_two_ranges_at_the_frame_edge": [
-            blur(0.5, 1.02, box(0, 0, 60, 64)), blur(4.0, 4.4, box(0, 0, 60, 64)),
-        ],
-        "gblur_feather_vertical_only": [blur(3.0, 5.0, box(200, 100, 100, 64), feather=3, mode="vertical_only")],
-        "cover_whole_clip": [blur(0.0, 6.0, box(40, 110, 150, 64), method=COVER_METHOD, sigma=28)],
-        "cut_and_blurs_across_it": [
-            {"id": "cut", "type": "cut", "start_seconds": 2.2, "end_seconds": 2.6},
-            blur(0.0, 6.0, box(10, 10, 120, 64), method=COVER_METHOD, feather=2),
-            blur(2.0, 3.0, box(150, 80, 60, 64)),
-        ],
-        "full_frame_and_cover_at_the_end": [
-            {**blur(5.0, 5.5, "FULL_FRAME"), "region_source_pixels": "FULL_FRAME"},
-            blur(5.2, 6.0, box(60, 60, 100, 64), method=COVER_METHOD, feather=2, sigma=30),
-        ],
-    }
     ENCODE = [
         "-map_metadata", "0", "-c:v", "libx264", "-preset", "veryfast", "-crf", "20",
         "-maxrate", "4000000", "-bufsize", "8000000", "-b:v", "1000000", "-pix_fmt", "yuv420p",
@@ -240,13 +255,11 @@ class BlurGatingEquivalenceTests(unittest.TestCase):
     def tearDownClass(cls):
         cls.directory.cleanup()
 
-    def graphs(self, operations):
-        arguments = {"operations": operations, "duration": self.SECONDS, "has_audio": True,
-                     "frame_size": self.SIZE}
-        gated, _ = build_final_filter_graph(**arguments)
-        with patch("biliflow.final_renderer.regional_blur_filters", ungated_regional_blur_filters):
-            ungated, _ = build_final_filter_graph(**arguments)
-        return ungated, gated
+    def export_graph(self, operations):
+        graph, _ = build_final_filter_graph(
+            operations=operations, duration=self.SECONDS, has_audio=True, frame_size=self.SIZE,
+        )
+        return graph
 
     def ffmpeg(self, graph, output_arguments):
         return subprocess.run(
@@ -263,6 +276,43 @@ class BlurGatingEquivalenceTests(unittest.TestCase):
         self.ffmpeg(graph, [*self.ENCODE, "-y", str(output)])
         return hashlib.sha256(output.read_bytes()).hexdigest()
 
+
+@unittest.skipUnless(FFMPEG.exists(), "project FFmpeg is required")
+class BlurGatingEquivalenceTests(SyntheticClipCase):
+    """Perf plan A2 gate on synthetic clips: gating the branch filters changes no output byte.
+
+    framemd5 of [vout] and [aout] and the SHA-256 of the x264 mp4 (the export's
+    encoder options) must be identical with and without enable on delogo and gblur.
+    """
+
+    # Regions are 64 rows high: FFmpeg's gblur gives wrong, run-dependent pixels when a plane
+    # has fewer rows than its threads (yuv420p chroma: half the region), so shorter regions would
+    # make both graphs unstable on machines with many CPUs (docs/evidence/perf-export/gblur-threads.md).
+    CASES = {
+        # Range ends on frame times (25 fps): between() includes both ends.
+        "cover_feather": [blur(1.0, 2.0, box(100, 50, 80, 64), method=COVER_METHOD, feather=4, sigma=28)],
+        "gblur_two_ranges_at_the_frame_edge": [
+            blur(0.5, 1.02, box(0, 0, 60, 64)), blur(4.0, 4.4, box(0, 0, 60, 64)),
+        ],
+        "gblur_feather_vertical_only": [blur(3.0, 5.0, box(200, 100, 100, 64), feather=3, mode="vertical_only")],
+        "cover_whole_clip": [blur(0.0, 6.0, box(40, 110, 150, 64), method=COVER_METHOD, sigma=28)],
+        "cut_and_blurs_across_it": [
+            {"id": "cut", "type": "cut", "start_seconds": 2.2, "end_seconds": 2.6},
+            blur(0.0, 6.0, box(10, 10, 120, 64), method=COVER_METHOD, feather=2),
+            blur(2.0, 3.0, box(150, 80, 60, 64)),
+        ],
+        "full_frame_and_cover_at_the_end": [
+            {**blur(5.0, 5.5, "FULL_FRAME"), "region_source_pixels": "FULL_FRAME"},
+            blur(5.2, 6.0, box(60, 60, 100, 64), method=COVER_METHOD, feather=2, sigma=30),
+        ],
+    }
+
+    def graphs(self, operations):
+        gated = self.export_graph(operations)
+        with patch("biliflow.final_renderer.regional_blur_filters", ungated_regional_blur_filters):
+            ungated = self.export_graph(operations)
+        return ungated, gated
+
     def test_gating_changes_the_graph_but_no_frame_and_no_byte_of_the_mp4(self):
         for name, operations in self.CASES.items():
             with self.subTest(case=name):
@@ -275,6 +325,117 @@ class BlurGatingEquivalenceTests(unittest.TestCase):
                 self.assertEqual(self.framemd5(ungated), frames)
                 self.assertEqual(self.mp4_sha256(ungated, f"{name}-ungated"),
                                  self.mp4_sha256(gated, f"{name}-gated"))
+
+
+# The one-frame feather mask; removing the trim gives the mask of every frame (before phase 2 step 2).
+ONE_TIME_MASK = re.compile(r"trim=end_frame=1,(?=format=gray,geq=)")
+
+
+@unittest.skipUnless(FFMPEG.exists(), "project FFmpeg is required")
+class OneTimeMaskEquivalenceTests(SyntheticClipCase):
+    """Phase 2 step 2 on synthetic clips: the feather mask made once changes no output byte."""
+
+    CASES = {
+        # The mask frame is the segment's first frame, outside these blur times.
+        "gblur_vertical_only_late": [blur(3.0, 5.0, box(200, 100, 100, 64), feather=3, mode="vertical_only")],
+        "cover_two_ranges": [
+            blur(0.5, 1.0, box(100, 50, 80, 64), method=COVER_METHOD, feather=4),
+            blur(4.0, 4.6, box(100, 50, 80, 64), method=COVER_METHOD, feather=4),
+        ],
+        "cover_whole_clip": [blur(0.0, 6.0, box(40, 110, 150, 64), method=COVER_METHOD, feather=4)],
+        # Each kept segment makes its own mask from its own first frame.
+        "cut_then_feather_in_both_segments": [
+            {"id": "cut", "type": "cut", "start_seconds": 2.2, "end_seconds": 2.6},
+            blur(1.0, 6.0, box(10, 10, 120, 64), method=COVER_METHOD, feather=2),
+            blur(3.0, 4.0, box(150, 80, 60, 64), feather=3),
+        ],
+        "thin_gblur_feather": [blur(1.0, 5.0, box(100, 40, 128, 14), feather=4)],
+    }
+
+    def test_the_mask_made_once_changes_the_graph_but_no_frame_and_no_byte_of_the_mp4(self):
+        for name, operations in self.CASES.items():
+            with self.subTest(case=name):
+                once = self.export_graph(operations)
+                every_frame = ONE_TIME_MASK.sub("", once)
+                self.assertNotEqual(once, every_frame)
+                self.assertNotIn("trim=end_frame=1", every_frame)
+                frames = self.framemd5(once)
+                self.assertGreater(frames.count(b"\n0,"), 100)
+                self.assertEqual(self.framemd5(every_frame), frames)
+                self.assertEqual(self.mp4_sha256(every_frame, f"{name}-every-frame"),
+                                 self.mp4_sha256(once, f"{name}-once"))
+
+    def test_a_mask_that_is_not_repeated_changes_the_frames(self):
+        # Control: if alphamerge stopped repeating the one mask frame, later frames would lose
+        # their soft edge, and the comparison above would see it.
+        once = self.export_graph(self.CASES["cover_whole_clip"])
+        unrepeated = once.replace(MASK_REPEAT_ALPHAMERGE, "alphamerge=eof_action=pass")
+        self.assertNotEqual(once, unrepeated)
+        self.assertNotEqual(self.framemd5(unrepeated), self.framemd5(once))
+
+
+UNCAPPED_THREADS = re.compile(r":threads=\d+")
+
+
+@unittest.skipUnless(FFMPEG.exists(), "project FFmpeg is required")
+class ThinRegionBlurTests(unittest.TestCase):
+    """The gblur thread cap: thin regions come out right and the same on every run; others keep their bytes."""
+
+    SIZE = (320, 180)
+
+    @classmethod
+    def setUpClass(cls):
+        cls.directory = TemporaryDirectory()
+        cls.source = Path(cls.directory.name) / "source.mp4"
+        width, height = cls.SIZE
+        subprocess.run(
+            [str(FFMPEG), "-hide_banner", "-loglevel", "error",
+             "-f", "lavfi", "-i", f"testsrc2=s={width}x{height}:r=25:d=2",
+             "-c:v", "libx264", "-preset", "veryfast", "-crf", "18", "-pix_fmt", "yuv420p", str(cls.source)],
+            capture_output=True, timeout=120, check=True,
+        )
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.directory.cleanup()
+
+    def graph(self, height, method, feather):
+        region = {"x": 96, "y": 60, "width": 128, "height": height}
+        return ";".join(regional_blur_filters(
+            input_label="0:v", output_label="out", prefix="p", region=region, sigma=28, feather=feather,
+            enable="enable='between(t,0.2,1.6)'", method=method, frame_size=self.SIZE,
+        ))
+
+    def framemd5(self, graph, *options):
+        return subprocess.run(
+            [str(FFMPEG), "-hide_banner", "-loglevel", "error", *options, "-i", str(self.source),
+             "-filter_complex", graph, "-map", "[out]", "-pix_fmt", "yuv420p", "-f", "framemd5", "-"],
+            capture_output=True, timeout=120, check=True,
+        ).stdout
+
+    def test_thin_regions_match_the_one_thread_result_on_every_run(self):
+        # Fewer chroma rows (height // 2) than this PC's filter threads before the cap.
+        for height in (8, 15, 24):
+            for method in (GBLUR, COVER_METHOD):
+                for feather in (0, 4):
+                    with self.subTest(height=height, method=method, feather=feather):
+                        graph = self.graph(height, method, feather)
+                        reference = self.framemd5(graph, "-filter_complex_threads", "1")
+                        self.assertGreater(reference.count(b"\n0,"), 40)
+                        self.assertEqual(self.framemd5(graph), reference)
+                        self.assertEqual(self.framemd5(graph), reference)
+
+    def test_regions_with_enough_rows_keep_their_bytes(self):
+        height = 64  # 32 chroma rows: the cap changes nothing up to 32 filter threads
+        if (os.cpu_count() or 1) + 1 > height // 2:
+            self.skipTest("more filter threads than the region's chroma rows: the uncapped graph is unreliable")
+        for method in (GBLUR, COVER_METHOD):
+            for feather in (0, 4):
+                with self.subTest(method=method, feather=feather):
+                    capped = self.graph(height, method, feather)
+                    uncapped = UNCAPPED_THREADS.sub("", capped)
+                    self.assertNotEqual(capped, uncapped)
+                    self.assertEqual(self.framemd5(capped), self.framemd5(uncapped))
 
 
 if __name__ == "__main__":

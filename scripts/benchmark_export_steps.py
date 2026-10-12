@@ -8,7 +8,7 @@ by id: no titles, file names or paths. Run it through
 scripts/benchmark-export-steps.ps1, which holds the shared GPU slot and the
 final-render slot; measure and gate also hold <install>/state/final-render.lock.
 
-  prepare  --name N --job J [--segment START SECONDS] [--ops-from-job M]
+  prepare  --name N --job J [--segment START SECONDS] [--ops-from-job M | --ops-file F]
            [--synthetic WxH:SECONDS:FPS]
            Copy job J's source (or cut a segment of it, or make a synthetic clip)
            into the bench root and write work/plan.template.json from job J's
@@ -26,8 +26,18 @@ final-render slot; measure and gate also hold <install>/state/final-render.lock.
            For both code trees: framemd5 of [vout] (and [aout]) of the export
            filter graph, then the real render_final_output mp4. Exit 0 only when
            both framemd5 files and both mp4 SHA-256 are identical (and, with
-           --baseline-twice, the two baseline runs too). --framemd5-only skips
-           the mp4: a match exits 2 and records "passed": null, never a pass.
+           --baseline-twice, the two baseline runs too), and each render handed
+           FFmpeg the very graph of its framemd5 (on the command line or, since
+           perf phase 2 step 3, in a file; "graph_option" says which).
+           --framemd5-only skips the mp4: a match exits 2 and records
+           "passed": null, never a pass. The framemd5 reads its graph from
+           results/<tag>.graph.txt (-/filter_complex), so any length works.
+  stability --name N [--src DIR] [--runs 2]
+           One code tree run several times: exit 0 only when every run gives the
+           same framemd5 and mp4 SHA-256, the framemd5 equals a run with one
+           filter thread (FFmpeg's gblur is wrong with more threads than a plane
+           has rows; docs/evidence/perf-export/gblur-threads.md), and each render
+           handed FFmpeg the very graph of its framemd5.
 """
 from __future__ import annotations
 
@@ -317,7 +327,9 @@ def command_prepare(args: argparse.Namespace) -> int:
     cover_sigma = importlib.import_module("biliflow.blur_filter").cover_sigma
     for folder in ("input", "work", "output", "state", "results"):
         (bench / folder).mkdir(parents=True)
-    if args.ops_from_job is None:
+    if args.ops_from_job is not None and args.ops_file is not None:
+        raise SystemExit("Give --ops-from-job or --ops-file, not both")
+    if args.ops_from_job is None and args.ops_file is None:
         source, operations, job_facts = _job_operations(install_root, args.job)
     else:
         source, operations, job_facts = _job_row(install_root, args.job)[0], [], None
@@ -347,7 +359,11 @@ def command_prepare(args: argparse.Namespace) -> int:
         shutil.copyfile(source, copy)
     facts = _stream_facts(_probe(ffprobe, copy))
     duration = facts["duration_seconds"]
-    if args.ops_from_job is not None:
+    if args.ops_file is not None:
+        # Hand-written operations, in source pixels and on the copy's clock.
+        operations = _read_json(args.ops_file)
+        origin["ops_file"] = args.ops_file.name
+    elif args.ops_from_job is not None:
         template_source, template_operations, template_facts = _job_operations(install_root, args.ops_from_job)
         template_width = _stream_facts(_probe(ffprobe, template_source))["width"]
         operations = _fit_operations(
@@ -388,6 +404,7 @@ class RenderProbe:
         self.renderer = renderer
         self.events: list[dict] = []
         self.render_command: list[str] | None = None
+        self.render_graph: str | None = None
 
     @contextlib.contextmanager
     def installed(self) -> Iterator["RenderProbe"]:
@@ -402,14 +419,17 @@ class RenderProbe:
             # and this script's own commands pass through here too.
             if Path(str(command[0])).stem.lower() != "ffmpeg":
                 return original_run(command, *args, **kwargs)
+            # Read before FFmpeg runs: the renderer removes its graph file right after.
+            graph = _graph_text(command) if _graph_option(command) is not None else None
             started = time.perf_counter()
             try:
                 return original_run(command, *args, **kwargs)
             finally:
                 elapsed = time.perf_counter() - started
-                kind = "ffmpeg_decode_validation" if "-filter_complex" not in command else "ffmpeg_render"
-                if kind == "ffmpeg_render":
+                kind = "ffmpeg_decode_validation" if graph is None else "ffmpeg_render"
+                if graph is not None:
                     probe.render_command = list(command)
+                    probe.render_graph = graph
                 probe.events.append({"step": kind, "seconds": round(elapsed, 3)})
 
         def sha(path):
@@ -460,9 +480,13 @@ def _render_once(renderer, bench: Path, ffmpeg: Path, ffprobe: Path, tag: str) -
         {**event, "step": next(sha_labels) if event["step"] == "sha256" else event["step"]}
         for event in probe.events
     ]
+    graph = probe.render_graph
     return {
         "tag": tag, "total_seconds": round(total, 3), "events": named,
-        "command": probe.render_command,
+        "command": probe.render_command, "graph": graph,
+        # How the renderer handed FFmpeg its graph, and the SHA-256 of the text FFmpeg got.
+        "graph_option": probe.render_command[_graph_option(probe.render_command)],
+        "graph_sha256": hashlib.sha256(graph.encode("utf-8")).hexdigest(),
         "output_sha256": manifest["output"]["sha256"], "output_bytes": manifest["output"]["bytes"],
         "output_duration_seconds": manifest["output"]["duration_seconds"],
         "manifest_elapsed_seconds": manifest["encoding"]["elapsed_seconds"],
@@ -474,8 +498,30 @@ def _render_once(renderer, bench: Path, ffmpeg: Path, ffprobe: Path, tag: str) -
 
 # --------------------------------------------------------------------------- command variants
 
-def _graph_index(command: list[str]) -> int:
-    return command.index("-filter_complex") + 1
+# The render's graph option: on the command line, or (since perf phase 2 step 3) a file FFmpeg reads.
+GRAPH_OPTIONS = ("-filter_complex", "-/filter_complex")
+
+
+def _graph_option(command: list[str]) -> int | None:
+    """Index of the graph option, matching whole items only (never -filter_complex_threads)."""
+    return next((index for index, part in enumerate(command[:-1]) if part in GRAPH_OPTIONS), None)
+
+
+def _graph_text(command: list[str]) -> str:
+    """The graph a command hands FFmpeg; a graph file is read now, while it exists."""
+    index = _graph_option(command)
+    if index is None:
+        raise ValueError("The command has no filter graph")
+    value = command[index + 1]
+    return value if command[index] == "-filter_complex" else Path(value).read_bytes().decode("utf-8")
+
+
+def _graph_file(bench: Path, graph: str) -> Path:
+    """A bench copy of a graph for -/filter_complex (the renderer's own file is gone after its render)."""
+    data = graph.encode("utf-8")
+    path = bench / "work" / f"graph-{hashlib.sha256(data).hexdigest()[:16]}.txt"
+    path.write_bytes(data)
+    return path
 
 
 def _null_command(command: list[str]) -> list[str]:
@@ -484,9 +530,11 @@ def _null_command(command: list[str]) -> list[str]:
     return command[:cut] + ["-f", "null", "-"]
 
 
-def _with_graph(command: list[str], graph: str) -> list[str]:
+def _with_graph(command: list[str], graph: str, bench: Path) -> list[str]:
+    """The command reading ``graph`` from a bench file: any length, the same parse as on the command line."""
     copy = list(command)
-    copy[_graph_index(copy)] = graph
+    index = _graph_option(copy)
+    copy[index:index + 2] = ["-/filter_complex", str(_graph_file(bench, graph))]
     return copy
 
 
@@ -554,18 +602,19 @@ def command_measure(args: argparse.Namespace) -> int:
     }
     tag = _stamp()
     with _install_render_lock(install_root):
-        command = None
         render_output = None
         if "render" in steps:
             print("render ...", flush=True)
             render = _render_once(renderer, bench, ffmpeg, ffprobe, f"measure-{tag}")
             render_output = render.pop("output_path")
-            command = render["command"]
-            results["steps"]["render"] = {key: value for key, value in render.items() if key != "command"}
+            render_command, render_graph = render.pop("command"), render.pop("graph")
+            results["steps"]["render"] = render
             print(json.dumps(results["steps"]["render"], indent=2), flush=True)
-        if command is None:
-            command = _recorded_command(renderer, bench, ffmpeg, ffprobe, tag)
-        results["render_command_shape"] = _command_shape(command, bench)
+        else:
+            render_command, render_graph = _recorded_command(renderer, bench, ffmpeg, ffprobe, tag)
+        results["render_command_shape"] = _command_shape(render_command, bench, render_graph)
+        # The other steps replay the render's command with the graph in a bench file.
+        command = _with_graph(render_command, render_graph, bench)
         if "filters_null" in steps:
             print("filters_null ...", flush=True)
             seconds, _ = _run_timed(_without_progress(_null_command(command)))
@@ -576,7 +625,7 @@ def command_measure(args: argparse.Namespace) -> int:
             duration = float(plan["source"]["duration_seconds"])
             graph = _graph(renderer, plan, _variant_operations("no_blur", plan["approved_operations"], duration),
                            frame_size, has_audio)
-            seconds, _ = _run_timed(_without_progress(_with_output(_with_graph(command, graph), output)))
+            seconds, _ = _run_timed(_without_progress(_with_output(_with_graph(command, graph, bench), output)))
             results["steps"]["encode_only"] = {"seconds": round(seconds, 3), "output_bytes": output.stat().st_size}
             output.unlink()
         if "decode_source" in steps:
@@ -617,7 +666,7 @@ def command_measure(args: argparse.Namespace) -> int:
                 print(f"variant {variant} ...", flush=True)
                 operations = _variant_operations(variant, plan["approved_operations"], duration)
                 graph = _graph(renderer, plan, operations, frame_size, has_audio)
-                seconds, _ = _run_timed(_without_progress(_null_command(_with_graph(command, graph))))
+                seconds, _ = _run_timed(_without_progress(_null_command(_with_graph(command, graph, bench))))
                 variants[variant] = {"seconds": round(seconds, 3),
                                      "blur_operations": sum(item["type"] == "blur" for item in operations)}
             results["steps"]["variants"] = variants
@@ -640,14 +689,15 @@ class _StopBeforeFfmpeg(Exception):
     pass
 
 
-def _recorded_command(renderer, bench: Path, ffmpeg: Path, ffprobe: Path, tag: str) -> list[str]:
-    """The exact render command render_final_output would run, without running it."""
+def _recorded_command(renderer, bench: Path, ffmpeg: Path, ffprobe: Path, tag: str) -> tuple[list[str], str]:
+    """The exact render command render_final_output would run, and its graph, without running it."""
     probe = RenderProbe(renderer)
     original = renderer.subprocess.run
 
     def stop(command, *args, **kwargs):
-        if "-filter_complex" in command:
+        if _graph_option(command) is not None:
             probe.render_command = list(command)
+            probe.render_graph = _graph_text(command)
             raise _StopBeforeFfmpeg()
         return original(command, *args, **kwargs)
 
@@ -668,15 +718,16 @@ def _recorded_command(renderer, bench: Path, ffmpeg: Path, ffprobe: Path, tag: s
         plan_path.unlink(missing_ok=True)
     if probe.render_command is None:
         raise RuntimeError("render_final_output did not reach its FFmpeg render")
-    return probe.render_command
+    return probe.render_command, probe.render_graph
 
 
-def _command_shape(command: list[str], bench: Path) -> list[str]:
-    """The render command with bench paths shortened and the graph replaced by its length."""
+def _command_shape(command: list[str], bench: Path, graph: str) -> list[str]:
+    """The render command with bench paths shortened and the graph (inline or its file) replaced by its length."""
     shape = []
     for index, part in enumerate(command):
-        if index and command[index - 1] == "-filter_complex":
-            shape.append(f"<graph {len(part)} chars, {part.count(';') + 1} chains>")
+        if index and command[index - 1] in GRAPH_OPTIONS:
+            kind = "graph" if command[index - 1] == "-filter_complex" else "graph file"
+            shape.append(f"<{kind} {len(graph)} chars, {graph.count(';') + 1} chains>")
         elif str(bench) in part:
             shape.append("<bench>/" + Path(part).relative_to(bench).as_posix())
         elif index == 0:
@@ -700,24 +751,32 @@ def command_gate_side(args: argparse.Namespace) -> int:
     has_audio = prepared["copy"]["audio_codec"] is not None
     graph = _graph(renderer, plan, plan["approved_operations"], tuple(prepared["graph_frame_size"]), has_audio)
     framemd5 = bench / "results" / f"{args.tag}.framemd5"
-    command = [str(ffmpeg), "-hide_banner", "-loglevel", "error", "-i", plan["source"]["path"],
-               "-filter_complex", graph, "-map", "[vout]"]
+    # FFmpeg reads the graph from this file: the same parse as on the command line, at any length.
+    graph_file = bench / "results" / f"{args.tag}.graph.txt"
+    graph_file.write_bytes(graph.encode("utf-8"))
+    # A fixed filter thread count gives the reference of `stability` (one thread: gblur is right).
+    threads = ["-filter_complex_threads", str(args.filter_threads)] if args.filter_threads else []
+    command = [str(ffmpeg), "-hide_banner", "-loglevel", "error", *threads, "-i", plan["source"]["path"],
+               "-/filter_complex", str(graph_file), "-map", "[vout]"]
     if has_audio:
         command += ["-map", "[aout]"]
     # -pix_fmt as in the export, so [vout] negotiates the same pixel format.
     seconds, _ = _run_timed(command + ["-pix_fmt", "yuv420p", "-f", "framemd5", "-y", str(framemd5)])
     result: dict[str, Any] = {
         "tag": args.tag, "code": _git_state(src), "graph_chars": len(graph),
+        "filter_threads": args.filter_threads,
         "graph_sha256": hashlib.sha256(graph.encode("utf-8")).hexdigest(),
         "framemd5_seconds": round(seconds, 3), "framemd5_sha256": _sha256(framemd5),
         "framemd5_frames": sum(1 for line in framemd5.read_text(encoding="utf-8").splitlines()
                                if line and not line.startswith("#")),
     }
-    (bench / "results" / f"{args.tag}.graph.txt").write_text(graph, encoding="utf-8")
     if not args.framemd5_only:
         render = _render_once(renderer, bench, ffmpeg, ffprobe, args.tag)
         output = render.pop("output_path")
         render.pop("command")
+        render.pop("graph")
+        # The render's FFmpeg got the very graph of the framemd5 (inline or from its file).
+        render["graph_matches"] = render["graph_sha256"] == result["graph_sha256"]
         result["render"] = render
         if not args.keep_outputs:
             output.unlink(missing_ok=True)
@@ -778,21 +837,75 @@ def command_gate(args: argparse.Namespace) -> int:
             summary["baseline_repeat_mp4_identical"] = (
                 results["baseline-repeat"]["render"]["output_sha256"] == baseline["render"]["output_sha256"])
             repeats_identical = repeats_identical and summary["baseline_repeat_mp4_identical"]
+    # Every side that rendered handed FFmpeg the graph of its framemd5 (a given baseline hash did not render).
+    summary["render_graph_option"] = {
+        label: (side.get("render") or {}).get("graph_option") for label, side in results.items()}
+    graphs_match = all((side.get("render") or {}).get("graph_matches", True) for side in results.values())
+    summary["render_graphs_match"] = graphs_match
     # Only a full gate passes; a framemd5-only check that matched is reported as such (exit 2).
-    checks_identical = framemd5_identical and repeats_identical and mp4_identical is not False
+    checks_identical = framemd5_identical and repeats_identical and mp4_identical is not False and graphs_match
     summary["passed"] = checks_identical if not args.framemd5_only else None
     summary["framemd5_check_passed"] = checks_identical
     path = bench / "results" / f"{tag}-gate.json"
     _write_json(path, summary)
     print(json.dumps({key: summary[key] for key in (
-        "scope", "graph_changed", "framemd5_identical", "mp4_sha256_identical", "passed")}, indent=2))
+        "scope", "graph_changed", "framemd5_identical", "mp4_sha256_identical", "render_graphs_match",
+        "passed")}, indent=2))
     for label, side in results.items():
         print(label, "framemd5_seconds", side["framemd5_seconds"],
-              "render_ffmpeg_seconds", (side.get("render") or {}).get("manifest_elapsed_seconds"))
+              "render_ffmpeg_seconds", (side.get("render") or {}).get("manifest_elapsed_seconds"),
+              "graph_option", summary["render_graph_option"][label])
     print(f"results: {path}")
     if not checks_identical:
         return 1
     return 2 if args.framemd5_only else 0
+
+
+def command_stability(args: argparse.Namespace) -> int:
+    """One code tree, several runs: same framemd5 and mp4 SHA-256 each run, and the one-thread framemd5."""
+    if args.runs < 2:
+        raise SystemExit("stability needs at least 2 runs")
+    install_root = args.install_root.resolve(strict=True)
+    bench = _bench_dir(install_root, args.name)
+    prepared = _read_json(bench / "prepared.json")
+    src = args.src.resolve(strict=True)
+    _import_biliflow(src)  # the lock helper
+    tag = _stamp()
+    labels = [f"run{index}" for index in range(1, args.runs + 1)]
+    with _install_render_lock(install_root):
+        for label, extra in [*((label, []) for label in labels),
+                             ("one-thread", ["--framemd5-only", "--filter-threads", "1"])]:
+            print(f"stability side {label} ...", flush=True)
+            child = [sys.executable, str(Path(__file__).resolve()), "--install-root", str(install_root),
+                     "_gate-side", "--name", args.name, "--src", str(src), "--tag", f"{tag}-{label}", *extra]
+            if args.keep_outputs:
+                child.append("--keep-outputs")
+            subprocess.run(child, check=True)
+    sides = {label: _read_json(bench / "results" / f"{tag}-{label}.gate-side.json") for label in [*labels, "one-thread"]}
+
+    def framemd5(label: str) -> bytes:
+        return (bench / "results" / f"{tag}-{label}.framemd5").read_bytes()
+
+    runs_framemd5_identical = all(framemd5(label) == framemd5(labels[0]) for label in labels)
+    runs_mp4_identical = len({sides[label]["render"]["output_sha256"] for label in labels}) == 1
+    matches_one_thread = framemd5(labels[0]) == framemd5("one-thread")
+    graphs_match = all(sides[label]["render"]["graph_matches"] for label in labels)
+    summary = {
+        "schema_version": 1, "name": args.name, "tag": tag, "finished_at": _now(), "scope": "stability",
+        "machine": _machine(_tools(install_root)[0]), "origin": prepared["origin"], "copy": prepared["copy"],
+        "operations": prepared["operations"], "size_policy": prepared.get("size_policy"), "runs": args.runs,
+        "runs_framemd5_identical": runs_framemd5_identical, "runs_mp4_sha256_identical": runs_mp4_identical,
+        "matches_one_thread_framemd5": matches_one_thread, "render_graphs_match": graphs_match,
+        "passed": runs_framemd5_identical and runs_mp4_identical and matches_one_thread and graphs_match,
+        "sides": sides,
+    }
+    path = bench / "results" / f"{tag}-stability.json"
+    _write_json(path, summary)
+    print(json.dumps({key: summary[key] for key in (
+        "runs_framemd5_identical", "runs_mp4_sha256_identical", "matches_one_thread_framemd5",
+        "render_graphs_match", "passed")}, indent=2))
+    print(f"results: {path}")
+    return 0 if summary["passed"] else 1
 
 
 # --------------------------------------------------------------------------- main
@@ -807,6 +920,7 @@ def main(argv: list[str] | None = None) -> int:
     prepare.add_argument("--job", type=int, required=True)
     prepare.add_argument("--segment", type=float, nargs=2, metavar=("START", "SECONDS"))
     prepare.add_argument("--ops-from-job", type=int)
+    prepare.add_argument("--ops-file", type=Path, help="JSON list of operations (source pixels, the copy's clock)")
     prepare.add_argument("--synthetic", metavar="WxH:SECONDS:FPS")
     prepare.add_argument("--src", type=Path, default=CHECKOUT / "src")
 
@@ -832,11 +946,18 @@ def main(argv: list[str] | None = None) -> int:
     side.add_argument("--tag", required=True)
     side.add_argument("--framemd5-only", action="store_true")
     side.add_argument("--keep-outputs", action="store_true")
+    side.add_argument("--filter-threads", type=int)
+
+    stability = sub.add_parser("stability")
+    stability.add_argument("--name", required=True)
+    stability.add_argument("--src", type=Path, default=CHECKOUT / "src")
+    stability.add_argument("--runs", type=int, default=2)
+    stability.add_argument("--keep-outputs", action="store_true")
 
     args = parser.parse_args(argv)
     handlers = {
         "prepare": command_prepare, "measure": command_measure,
-        "gate": command_gate, "_gate-side": command_gate_side,
+        "gate": command_gate, "_gate-side": command_gate_side, "stability": command_stability,
     }
     return handlers[args.command](args)
 

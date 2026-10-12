@@ -1,5 +1,6 @@
 import hashlib
 import json
+import os
 import subprocess
 import unittest
 from pathlib import Path
@@ -18,6 +19,7 @@ from biliflow.final_renderer import (
     normalize_output_size_policy,
     read_render_progress,
     render_final_output,
+    render_graph_path,
     render_progress_path,
 )
 
@@ -167,7 +169,7 @@ class FinalRendererTests(unittest.TestCase):
         enable = "enable='between(t,2.000000,8.000000)'"
         self.assertIn(
             f"crop=554:124:369:195,delogo=x=8:y=8:w=538:h=108:{enable},crop=538:108:8:8,"
-            f"gblur=sigma=65:{enable}",
+            f"gblur=sigma=65:threads=54:{enable}",
             graph,
         )
         self.assertEqual(graph.count("delogo="), 1)
@@ -324,6 +326,9 @@ class RenderCompletionTests(unittest.TestCase):
         self.during_render = lambda: None
         self.commands = []
         self.audio = False
+        self.render_fails = False
+        self.graph_seen = None
+        self.graph_path = render_graph_path(self.root, self.output)
 
     def write_plan(self):
         """An approved edit plan of the source, which lasts ``self.duration`` seconds."""
@@ -335,7 +340,11 @@ class RenderCompletionTests(unittest.TestCase):
 
     def fake_run(self, command, **kwargs):
         self.commands.append(command)
-        if "-filter_complex" in command:
+        if "-/filter_complex" in command:
+            # What FFmpeg would read from the graph file while it parses its options.
+            self.graph_seen = Path(command[command.index("-/filter_complex") + 1]).read_bytes()
+            if self.render_fails:
+                return subprocess.CompletedProcess(command, 1, stdout="", stderr="render failed")
             Path(command[-1]).write_bytes(b"rendered video " * 64)
             self.during_render()
         return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
@@ -360,8 +369,94 @@ class RenderCompletionTests(unittest.TestCase):
         self.render(**limits)
         self.output.unlink()
         self.manifest_path.unlink()
-        command = next(item for item in self.commands if "-filter_complex" in item)
+        command = next(item for item in self.commands if "-/filter_complex" in item)
         return {name: int(command[command.index(name) + 1]) for name in ("-maxrate", "-bufsize", "-b:v")}
+
+    def expected_graph(self) -> bytes:
+        graph, _ = build_final_filter_graph(operations=[], duration=self.duration, has_audio=self.audio)
+        return graph.encode("utf-8")
+
+    def test_the_graph_reaches_ffmpeg_in_a_file_under_temp_that_is_removed_after(self):
+        # Perf phase 2 step 3: on the command line, a plan with many cuts passed Windows'
+        # 32,767-character limit and the render could not even start.
+        self.render()
+        command = next(item for item in self.commands if "-/filter_complex" in item)
+        self.assertNotIn("-filter_complex", command)
+        self.assertEqual(command[command.index("-/filter_complex") + 1], str(self.graph_path))
+        self.assertIn(self.root / "temp", self.graph_path.parents)
+        self.assertEqual(self.graph_seen, self.expected_graph())
+        self.assertFalse(self.graph_path.exists())
+
+    def test_the_graph_file_is_removed_when_ffmpeg_fails(self):
+        self.render_fails = True
+        with self.assertRaisesRegex(RuntimeError, "render failed"):
+            self.render()
+        self.assertEqual(self.graph_seen, self.expected_graph())
+        self.assertFalse(self.graph_path.exists())
+        self.assertFalse(self.partial.exists())
+
+    def test_a_file_left_at_the_graph_path_is_replaced(self):
+        self.graph_path.parent.mkdir(parents=True)
+        self.graph_path.write_bytes(b"[0:v]negate[vout]")
+        self.render()
+        self.assertEqual(self.graph_seen, self.expected_graph())
+        self.assertFalse(self.graph_path.exists())
+
+    def test_a_link_at_the_graph_path_is_never_written_through(self):
+        target = self.root / "input" / "keep.txt"
+        target.write_bytes(b"keep")
+        self.graph_path.parent.mkdir(parents=True)
+        try:
+            self.graph_path.symlink_to(target)
+        except OSError as error:
+            self.skipTest(f"cannot create a symbolic link here: {error}")
+        self.render()
+        self.assertEqual(target.read_bytes(), b"keep")
+        self.assertEqual(self.graph_seen, self.expected_graph())
+        self.assertFalse(os.path.lexists(self.graph_path))
+
+    def test_a_graph_folder_that_leads_out_of_temp_is_refused_before_ffmpeg_runs(self):
+        # temp\render-progress turned into a junction to input\: the graph would land there.
+        try:
+            import _winapi
+        except ImportError:
+            self.skipTest("directory junctions are Windows only")
+        self.graph_path.parent.parent.mkdir()
+        _winapi.CreateJunction(str(self.root / "input"), str(self.graph_path.parent))
+        before = sorted(path.name for path in (self.root / "input").iterdir())
+        with self.assertRaisesRegex(ValueError, "Render graph folder"):
+            self.render()
+        self.assertFalse(any("-/filter_complex" in item for item in self.commands))
+        self.assertEqual(sorted(path.name for path in (self.root / "input").iterdir()), before)
+
+    def test_a_graph_file_that_cannot_be_removed_never_hides_the_render_result(self):
+        # A scanner may hold the new file for a moment after FFmpeg has read it.
+        original = Path.unlink
+
+        def unlink(path, missing_ok=False):
+            if path.suffix == ".filtergraph" and path.exists():
+                raise PermissionError(32, "The file is in use", str(path))
+            return original(path, missing_ok=missing_ok)
+
+        with patch.object(Path, "unlink", unlink):
+            self.assertEqual(self.render()["status"], "COMPLETED")
+            # Left behind, it is replaced by the next render of this output.
+            self.assertEqual(self.graph_path.read_bytes(), self.expected_graph())
+            for path in (self.graph_path, self.output, self.manifest_path):
+                original(path)
+            self.write_plan()
+            self.render_fails = True
+            with self.assertRaisesRegex(RuntimeError, "render failed"):
+                self.render()
+        self.assertTrue(self.graph_path.exists())
+
+    def test_a_graph_with_a_nul_is_refused_before_ffmpeg_runs(self):
+        # FFmpeg would silently stop reading the file at the NUL.
+        with patch("biliflow.final_renderer.build_final_filter_graph", return_value=("[0:v]null\x00[vout]", 10.0)):
+            with self.assertRaisesRegex(ValueError, "NUL"):
+                self.render()
+        self.assertFalse(any("-/filter_complex" in item for item in self.commands))
+        self.assertFalse(self.graph_path.exists())
 
     def test_a_short_output_stays_within_the_encoder_limits(self):
         # FFmpeg takes -maxrate and -bufsize as 32-bit numbers: the size budget of
@@ -442,6 +537,7 @@ class RenderCompletionTests(unittest.TestCase):
         self.assertFalse(self.output.exists())
         self.assertFalse(self.partial.exists())
         self.assertFalse(self.manifest_path.exists())
+        self.assertFalse(self.graph_path.exists())
 
 
 if __name__ == "__main__":

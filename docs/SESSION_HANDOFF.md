@@ -1,5 +1,31 @@
 # BiliFlow session handoff
 
+## Faster export, session A phase 2 — 2026-10-11 to 2026-10-12, branch `perf/export-speed-p2` (worktree `temp\wt-export-speed`), not merged
+
+- **Request:** the user's phase 2 decision, recorded verbatim with its date in `docs/handoff/A-export.md`:
+  - approve the gblur fix; do not squash the `wip:` commit; keep `perf/export-speed` unchanged for G1;
+  - on the new branch `perf/export-speed-p2`, in order: (1) gblur fix, (2) feather mask made once, (3) graph through a file;
+  - no A3; commit and update the handoff after each step; the branch merges after G1; no push or merge.
+- **Commits:** `6732b9f` step 1, `c647104` step 2, then the step 3 commit.
+- **Gates:** each step against the one before, on frozen copies under `temp\perf-export\` (`a2-05653c9`, `p2-step1`, `p2-step2`, `p2-step3`):
+  - step 1: on 8 thin regions, A2 gave different results on two runs; the fixed code gave the one-thread result twice. Byte-identical on four benches;
+  - step 2: byte-identical on five benches, both sides rendering;
+  - step 3: byte-identical on three benches, with the render reading its graph from the file.
+- **Timings:** step 2's filter graph alone, L39 segment 84.7 → 49.6 s and T74 147.4 → 116.6 s; L39 render 122.9 → 101.9 s.
+  - The PC was in use for other work during the step 2 gates, so only the two sides of one gate compare.
+  - T71's step 2 run shared the CPU with the user's video editor and proves only that the bytes are unchanged.
+- **Interruptions:** at the user's request, the step 2 T71 gate was stopped (2026-10-11 19:36). It ran again after job 114's real export finished: a read-only wait on the database, then 2 quiet minutes. The real Control Center was only read (`mode=ro`).
+- **Tests:** the focused modules 219 OK; full suite 2,684 tests in 2,207.7 s on 2026-10-12, OK: 0 failures, 0 errors, 26 skipped (environment: project FFmpeg absent in the worktree, Golden data, installed models, opt-in tests).
+- **Waiting for the user:**
+  - G1 and A3;
+  - yuv410p sources are not covered by the gblur cap (LOW; proposal in the handoff);
+  - the FFmpeg build vendor's domain in the history of `a90bbf4` and `db0a139`.
+- **Not touched:**
+  - the scan stage-cache fingerprinted files;
+  - no write to the real `input\`, `output\`, `reports\`, `archive\` or database;
+  - no Control Center route called.
+- **Local only:** `temp\perf-export\` (bench copies, frozen trees, raw results) can be deleted after the merge.
+
 ## Faster export, session A (A0, A1a, A2) — 2026-10-11, branch `perf/export-speed` (worktree `temp\wt-export-speed`), not merged
 
 - **Request:** the user's Phase 1 prompt for session A (`docs/PERF_INSTALL_PLAN.md` §12.1): A0 → A1a → A2, not A3/A4; commit in the worktree after each step; no push or merge; report and wait for G1.

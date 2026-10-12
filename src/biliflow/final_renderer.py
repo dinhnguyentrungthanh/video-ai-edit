@@ -115,6 +115,35 @@ def render_progress_path(project_root: Path, output_path: Path) -> Path:
     return root / "temp" / "render-progress" / f"{identity}.progress"
 
 
+def render_graph_path(project_root: Path, output_path: Path) -> Path:
+    """Return the file that hands FFmpeg the filter graph of one output's render."""
+    return render_progress_path(project_root, output_path).with_suffix(".filtergraph")
+
+
+def _write_render_graph(root: Path, path: Path, graph: str) -> None:
+    """Write the graph for ``-/filter_complex``: its exact UTF-8 bytes, in a new file.
+
+    FFmpeg reads the file as is: a NUL would silently end the graph there. A file
+    or a link left at the path is removed first and never written through.
+    """
+    if "\x00" in graph:
+        raise ValueError("The filter graph contains a NUL character")
+    _inside((root / "temp").resolve(strict=True), path.parent, "Render graph folder")
+    path.unlink(missing_ok=True)
+    with path.open("xb") as handle:
+        handle.write(graph.encode("utf-8"))
+
+
+def _remove_render_graph(path: Path) -> None:
+    # FFmpeg reads the file once, while it parses its options. A scanner briefly
+    # holding the new file must not hide FFmpeg's own result: a file left here is
+    # replaced by the next render of this output, or removed after a stop.
+    try:
+        path.unlink(missing_ok=True)
+    except OSError:
+        pass
+
+
 def read_render_progress(
     path: Path, *, expected_duration_seconds: float,
 ) -> dict | None:
@@ -589,11 +618,15 @@ def _render_final_output_unlocked(
     progress_path = render_progress_path(root, output_path)
     progress_path.parent.mkdir(parents=True, exist_ok=True)
     progress_path.unlink(missing_ok=True)
+    # The graph goes through a file (FFmpeg 7+): on the command line, a plan with
+    # many cuts would pass Windows' limit of 32,767 characters.
+    graph_path = render_graph_path(root, output_path)
+    _write_render_graph(root, graph_path, graph)
     command = [
         str(ffmpeg_path), "-hide_banner", "-loglevel", "error",
         "-stats_period", "1", "-progress", str(progress_path), "-nostats",
         "-i", str(source),
-        "-filter_complex", graph, "-map", "[vout]",
+        "-/filter_complex", str(graph_path), "-map", "[vout]",
     ]
     if audio_stream is not None:
         command += ["-map", "[aout]"]
@@ -611,7 +644,10 @@ def _render_final_output_unlocked(
         command += ["-c:a", "aac", "-b:a", str(audio_bitrate)]
     command += ["-movflags", "+faststart", "-max_muxing_queue_size", "2048", str(partial)]
     started = time.perf_counter()
-    result = subprocess.run(command, capture_output=True, text=True)
+    try:
+        result = subprocess.run(command, capture_output=True, text=True)
+    finally:
+        _remove_render_graph(graph_path)
     elapsed = time.perf_counter() - started
     if result.returncode:
         partial.unlink(missing_ok=True)
