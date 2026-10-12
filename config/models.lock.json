@@ -1,0 +1,381 @@
+{
+  "generated_at": "2026-10-11T08:10:19+00:00",
+  "generator": "scripts/models_lock.py",
+  "models": {
+    "easyocr": {
+      "download_key": "easyocr",
+      "files": [
+        {
+          "archive_member": "craft_mlt_25k.pth",
+          "bytes": 83152330,
+          "md5_upstream": "2f8227d2def4037cdb3b34389dcf9ec1",
+          "name": "craft_mlt_25k.pth",
+          "sha256": "4a5efbfb48b4081100544e75e1e2b57f8de3d84f213004b14b85fd4b3748db17",
+          "url": "https://github.com/JaidedAI/EasyOCR/releases/download/pre-v1.1.6/craft_mlt_25k.zip"
+        },
+        {
+          "archive_member": "latin_g2.pth",
+          "bytes": 15406141,
+          "md5_upstream": "469869130aad1a34e8f9086f4262bc59",
+          "name": "latin_g2.pth",
+          "sha256": "aaa95be1c4a9cb3496879bed7c520886ce1164f89e026f0c54488394e74e8c55",
+          "url": "https://github.com/JaidedAI/EasyOCR/releases/download/v1.3/latin_g2.zip"
+        }
+      ],
+      "license_spdx": "Apache-2.0",
+      "manifest_sha256": "c4f7ff4a8bf7037f32e80b6e2b113496d80bd979daa87049d9f31d2dedc449c3",
+      "manifest_text": "{\n  \"engine\": \"EasyOCR\",\n  \"engine_version\": \"1.7.2\",\n  \"revision\": \"easyocr-1.7.2-checksum-pinned\",\n  \"approval_status\": \"APPROVED\",\n  \"license_spdx\": \"Apache-2.0\",\n  \"commercial_use_allowed\": true,\n  \"usage_cost\": \"free\",\n  \"local_inference_only\": true,\n  \"external_media_upload\": false,\n  \"source_url\": \"https://github.com/JaidedAI/EasyOCR\",\n  \"training_data_review_status\": \"DOCUMENTED_BY_UPSTREAM\",\n  \"languages\": [\"vi\", \"en\"],\n  \"downloaded_at\": \"2026-09-20\",\n  \"files\": [\n    {\n      \"name\": \"craft_mlt_25k.pth\",\n      \"size_bytes\": 83152330,\n      \"sha256\": \"4A5EFBFB48B4081100544E75E1E2B57F8DE3D84F213004B14B85FD4B3748DB17\"\n    },\n    {\n      \"name\": \"latin_g2.pth\",\n      \"size_bytes\": 15406141,\n      \"sha256\": \"AAA95BE1C4A9CB3496879BED7C520886CE1164F89E026F0C54488394E74E8C55\"\n    }\n  ]\n}\n",
+      "problems": [],
+      "revision": "easyocr-1.7.2-checksum-pinned",
+      "source": "easyocr-release"
+    },
+    "florence_2_base": {
+      "download_key": "florence-logo",
+      "files": [
+        {
+          "bytes": 2430,
+          "name": "config.json",
+          "sha256": "c666d0fe0172d46e115e8fba6cd93cd83714575b33a73005cab8d24ce2a3aa8f"
+        },
+        {
+          "bytes": 15119,
+          "name": "configuration_florence2.py",
+          "sha256": "de2e45a975b3582de05d2f4d963a3e9f9a3d20dccf78d28e0052932a0be93bdf"
+        },
+        {
+          "bytes": 1141,
+          "name": "LICENSE",
+          "sha256": "c2cfccb812fe482101a8f04597dfc5a9991a6b2748266c47ac91b6a5aae15383"
+        },
+        {
+          "bytes": 463221266,
+          "name": "model.safetensors",
+          "sha256": "03075d2d2d2bbd3e180b9ba0afae4aa8563226e2d32911656966e05b2f2ee060"
+        },
+        {
+          "bytes": 127455,
+          "name": "modeling_florence2.py",
+          "sha256": "5162bf465e61b6e29cc113a467630ec3cb56ed8e4d46eb6207157f10fb9b8a24"
+        },
+        {
+          "bytes": 806,
+          "name": "preprocessor_config.json",
+          "sha256": "2f5921bbc53c7cc04251e1027b45b1cec726276be6db23d1bb40641bfbe2cf29"
+        },
+        {
+          "bytes": 48676,
+          "name": "processing_florence2.py",
+          "sha256": "f146023a507c009f425a49ee39aa037f4f25c64e14336e3e4f3f1d7377a68e98"
+        },
+        {
+          "bytes": 14805,
+          "name": "README.md",
+          "sha256": "e49de5527bd39688745ce20388bf3f31fdb891abc0e6950a3f64630114769d17"
+        },
+        {
+          "bytes": 1355863,
+          "name": "tokenizer.json",
+          "sha256": "847bbeab6174d66a88898f729d52fa8d355fafe1bea101cf960dd404581df70e"
+        },
+        {
+          "bytes": 34,
+          "name": "tokenizer_config.json",
+          "sha256": "79ffcf43af8ebda99d165f61d243180da2e2639952e41e71e11611c18770489c"
+        },
+        {
+          "bytes": 1099884,
+          "name": "vocab.json",
+          "sha256": "394fdc63c71aabe0a9b97117f5d62fb5fcc4d59b2b3ea929a3929e6a53217b3c"
+        }
+      ],
+      "license_spdx": "MIT",
+      "manifest_sha256": "cc65929b02823c52b9ccec41b436c01e5d6b29471218125d08a82dffb78dcdd9",
+      "manifest_text": "{\r\n  \"model\": \"florence-logo\",\r\n  \"repo_id\": \"microsoft/Florence-2-base\",\r\n  \"revision\": \"5ca5edf5bd017b9919c05d08aebef5e4c7ac3bac\",\r\n  \"backend\": \"transformers_florence2_region_proposer\",\r\n  \"approval_status\": \"APPROVED\",\r\n  \"license_spdx\": \"MIT\",\r\n  \"commercial_use_allowed\": true,\r\n  \"usage_cost\": \"free\",\r\n  \"local_inference_only\": true,\r\n  \"external_media_upload\": false,\r\n  \"source_url\": \"https://huggingface.co/microsoft/Florence-2-base\",\r\n  \"training_data_review_status\": \"DOCUMENTED_BY_UPSTREAM_MODEL_CARD\",\r\n  \"target_labels\": [\r\n    \"logo\",\r\n    \"watermark\",\r\n    \"promotional_text\"\r\n  ],\r\n  \"downloaded_at\": \"2026-09-23T08:28:12.289447+00:00\",\r\n  \"files\": [\r\n    {\r\n      \"name\": \"config.json\",\r\n      \"bytes\": 2430,\r\n      \"sha256\": \"c666d0fe0172d46e115e8fba6cd93cd83714575b33a73005cab8d24ce2a3aa8f\"\r\n    },\r\n    {\r\n      \"name\": \"configuration_florence2.py\",\r\n      \"bytes\": 15119,\r\n      \"sha256\": \"de2e45a975b3582de05d2f4d963a3e9f9a3d20dccf78d28e0052932a0be93bdf\"\r\n    },\r\n    {\r\n      \"name\": \"LICENSE\",\r\n      \"bytes\": 1141,\r\n      \"sha256\": \"c2cfccb812fe482101a8f04597dfc5a9991a6b2748266c47ac91b6a5aae15383\"\r\n    },\r\n    {\r\n      \"name\": \"model.safetensors\",\r\n      \"bytes\": 463221266,\r\n      \"sha256\": \"03075d2d2d2bbd3e180b9ba0afae4aa8563226e2d32911656966e05b2f2ee060\"\r\n    },\r\n    {\r\n      \"name\": \"modeling_florence2.py\",\r\n      \"bytes\": 127455,\r\n      \"sha256\": \"5162bf465e61b6e29cc113a467630ec3cb56ed8e4d46eb6207157f10fb9b8a24\"\r\n    },\r\n    {\r\n      \"name\": \"preprocessor_config.json\",\r\n      \"bytes\": 806,\r\n      \"sha256\": \"2f5921bbc53c7cc04251e1027b45b1cec726276be6db23d1bb40641bfbe2cf29\"\r\n    },\r\n    {\r\n      \"name\": \"processing_florence2.py\",\r\n      \"bytes\": 48676,\r\n      \"sha256\": \"f146023a507c009f425a49ee39aa037f4f25c64e14336e3e4f3f1d7377a68e98\"\r\n    },\r\n    {\r\n      \"name\": \"README.md\",\r\n      \"bytes\": 14805,\r\n      \"sha256\": \"e49de5527bd39688745ce20388bf3f31fdb891abc0e6950a3f64630114769d17\"\r\n    },\r\n    {\r\n      \"name\": \"tokenizer.json\",\r\n      \"bytes\": 1355863,\r\n      \"sha256\": \"847bbeab6174d66a88898f729d52fa8d355fafe1bea101cf960dd404581df70e\"\r\n    },\r\n    {\r\n      \"name\": \"tokenizer_config.json\",\r\n      \"bytes\": 34,\r\n      \"sha256\": \"79ffcf43af8ebda99d165f61d243180da2e2639952e41e71e11611c18770489c\"\r\n    },\r\n    {\r\n      \"name\": \"vocab.json\",\r\n      \"bytes\": 1099884,\r\n      \"sha256\": \"394fdc63c71aabe0a9b97117f5d62fb5fcc4d59b2b3ea929a3929e6a53217b3c\"\r\n    }\r\n  ]\r\n}",
+      "problems": [],
+      "repo_id": "microsoft/Florence-2-base",
+      "revision": "5ca5edf5bd017b9919c05d08aebef5e4c7ac3bac",
+      "source": "huggingface"
+    },
+    "grounding_dino_tiny": {
+      "download_key": "grounding-dino-tiny",
+      "files": [
+        {
+          "bytes": 1644,
+          "name": "config.json",
+          "sha256": "eec82c5ab66e16df12a9a212e68ac011779927c2536cf9078658e35d85f0c67a"
+        },
+        {
+          "bytes": 689359096,
+          "name": "model.safetensors",
+          "sha256": "1a2412ef99bd74bcd3c2a246fa1e48581f8889a1300c9051974741314fc042f3"
+        },
+        {
+          "bytes": 457,
+          "name": "preprocessor_config.json",
+          "sha256": "8454179ba95e2ad22947835aad7b45862a601fc0055ab88bf1ee70892d3aea60"
+        },
+        {
+          "bytes": 2580,
+          "name": "README.md",
+          "sha256": "cf46f74c7b6850f1d5cbe406028324d8798148726016d46a69a365b4a2d3e89f"
+        },
+        {
+          "bytes": 125,
+          "name": "special_tokens_map.json",
+          "sha256": "b6d346be366a7d1d48332dbc9fdf3bf8960b5d879522b7799ddba59e76237ee3"
+        },
+        {
+          "bytes": 711396,
+          "name": "tokenizer.json",
+          "sha256": "d241a60d5e8f04cc1b2b3e9ef7a4921b27bf526d9f6050ab90f9267a1f9e5c66"
+        },
+        {
+          "bytes": 1237,
+          "name": "tokenizer_config.json",
+          "sha256": "d40ab645b68211910b9170d22433d43186a6ec8ee6fd10ba170524b25bf4fb56"
+        },
+        {
+          "bytes": 231508,
+          "name": "vocab.txt",
+          "sha256": "07eced375cec144d27c900241f3e339478dec958f92fddbc551f295c992038a3"
+        }
+      ],
+      "license_spdx": "Apache-2.0",
+      "manifest_sha256": "a90ed568cb14dd35090381961b286d921499311ffb8c9a09369ed75885f66f9e",
+      "manifest_text": "{\r\n  \"model\": \"grounding-dino-tiny\",\r\n  \"repo_id\": \"IDEA-Research/grounding-dino-tiny\",\r\n  \"revision\": \"a2bb814dd30d776dcf7e30523b00659f4f141c71\",\r\n  \"backend\": \"transformers_grounding_dino\",\r\n  \"approval_status\": \"APPROVED\",\r\n  \"license_spdx\": \"Apache-2.0\",\r\n  \"commercial_use_allowed\": true,\r\n  \"usage_cost\": \"free\",\r\n  \"local_inference_only\": true,\r\n  \"external_media_upload\": false,\r\n  \"source_url\": \"https://huggingface.co/IDEA-Research/grounding-dino-tiny\",\r\n  \"training_data_review_status\": \"DOCUMENTED_BY_UPSTREAM_MODEL_CARD\",\r\n  \"target_labels\": [\r\n    \"logo\",\r\n    \"watermark\",\r\n    \"banner\",\r\n    \"promotional_badge\",\r\n    \"qr_code\"\r\n  ],\r\n  \"downloaded_at\": \"2026-09-26T01:41:34.853175+00:00\",\r\n  \"files\": [\r\n    {\r\n      \"name\": \"config.json\",\r\n      \"bytes\": 1644,\r\n      \"sha256\": \"eec82c5ab66e16df12a9a212e68ac011779927c2536cf9078658e35d85f0c67a\"\r\n    },\r\n    {\r\n      \"name\": \"model.safetensors\",\r\n      \"bytes\": 689359096,\r\n      \"sha256\": \"1a2412ef99bd74bcd3c2a246fa1e48581f8889a1300c9051974741314fc042f3\"\r\n    },\r\n    {\r\n      \"name\": \"preprocessor_config.json\",\r\n      \"bytes\": 457,\r\n      \"sha256\": \"8454179ba95e2ad22947835aad7b45862a601fc0055ab88bf1ee70892d3aea60\"\r\n    },\r\n    {\r\n      \"name\": \"README.md\",\r\n      \"bytes\": 2580,\r\n      \"sha256\": \"cf46f74c7b6850f1d5cbe406028324d8798148726016d46a69a365b4a2d3e89f\"\r\n    },\r\n    {\r\n      \"name\": \"special_tokens_map.json\",\r\n      \"bytes\": 125,\r\n      \"sha256\": \"b6d346be366a7d1d48332dbc9fdf3bf8960b5d879522b7799ddba59e76237ee3\"\r\n    },\r\n    {\r\n      \"name\": \"tokenizer.json\",\r\n      \"bytes\": 711396,\r\n      \"sha256\": \"d241a60d5e8f04cc1b2b3e9ef7a4921b27bf526d9f6050ab90f9267a1f9e5c66\"\r\n    },\r\n    {\r\n      \"name\": \"tokenizer_config.json\",\r\n      \"bytes\": 1237,\r\n      \"sha256\": \"d40ab645b68211910b9170d22433d43186a6ec8ee6fd10ba170524b25bf4fb56\"\r\n    },\r\n    {\r\n      \"name\": \"vocab.txt\",\r\n      \"bytes\": 231508,\r\n      \"sha256\": \"07eced375cec144d27c900241f3e339478dec958f92fddbc551f295c992038a3\"\r\n    }\r\n  ]\r\n}",
+      "problems": [],
+      "repo_id": "IDEA-Research/grounding-dino-tiny",
+      "revision": "a2bb814dd30d776dcf7e30523b00659f4f141c71",
+      "source": "huggingface"
+    },
+    "image_safety_classifier_m": {
+      "download_key": "safety",
+      "files": [
+        {
+          "bytes": 918,
+          "name": "config.json",
+          "sha256": "a38a4b0643301071e388878e90f5df4a47e8c3732c224104b6bc6c428b325446"
+        },
+        {
+          "bytes": 45249904,
+          "name": "model.safetensors",
+          "sha256": "d42733d1d8a0f3ef7fd61847b2be9ae4d79375720b816d0ab47e606b33019e89"
+        }
+      ],
+      "license_spdx": "MIT",
+      "manifest_sha256": "255359108e606441937bcdb9f6e307d6e841d24c362d9200108687516f6ba88b",
+      "manifest_text": "{\r\n  \"model\": \"safety\",\r\n  \"repo_id\": \"OwenElliott/image-safety-classifier-m\",\r\n  \"revision\": \"a5ce9eec1ac11773ca9ff44f45b1bb6591631562\",\r\n  \"backend\": \"timm\",\n  \"approval_status\": \"APPROVED\",\n  \"license_spdx\": \"MIT\",\n  \"commercial_use_allowed\": true,\n  \"usage_cost\": \"free\",\n  \"local_inference_only\": true,\n  \"external_media_upload\": false,\n  \"source_url\": \"https://huggingface.co/OwenElliott/image-safety-classifier-m\",\n  \"training_data_review_status\": \"UPSTREAM_REPORTS_PROPRIETARY_WEB_DATA\",\n  \"target_labels\": [\r\n    \"NSFL\",\r\n    \"NSFW\"\r\n  ],\r\n  \"downloaded_at\": \"2026-09-20T08:02:03.504804+00:00\",\r\n  \"files\": [\r\n    {\r\n      \"name\": \"config.json\",\r\n      \"bytes\": 918,\r\n      \"sha256\": \"a38a4b0643301071e388878e90f5df4a47e8c3732c224104b6bc6c428b325446\"\r\n    },\r\n    {\r\n      \"name\": \"model.safetensors\",\r\n      \"bytes\": 45249904,\r\n      \"sha256\": \"d42733d1d8a0f3ef7fd61847b2be9ae4d79375720b816d0ab47e606b33019e89\"\r\n    }\r\n  ]\r\n}\n",
+      "problems": [],
+      "repo_id": "OwenElliott/image-safety-classifier-m",
+      "revision": "a5ce9eec1ac11773ca9ff44f45b1bb6591631562",
+      "source": "huggingface"
+    },
+    "multilingual_minilm_text_semantics": {
+      "download_key": "text-semantics",
+      "files": [
+        {
+          "bytes": 1032,
+          "name": "config.json",
+          "sha256": "79862295be1538a947e0f56d495ef8d658c3eaebcfb42c7ad96229d195ca745d"
+        },
+        {
+          "bytes": 427997022,
+          "name": "model.safetensors",
+          "sha256": "91b323ccf247ec1e3b5925d566230bae7c52de8147e6062b42e250089a3fc80b"
+        },
+        {
+          "bytes": 5069051,
+          "name": "sentencepiece.bpe.model",
+          "sha256": "cfc8146abe2a0488e9e2a0c56de7952f7c11ab059eca145a0a727afce0db2865"
+        },
+        {
+          "bytes": 280,
+          "name": "special_tokens_map.json",
+          "sha256": "06e405a36dfe4b9604f484f6a1e619af1a7f7d09e34a8555eb0b77b66318067f"
+        },
+        {
+          "bytes": 17082758,
+          "name": "tokenizer.json",
+          "sha256": "098c131bb4423163db239755e309facaa6850059f850f9f3d88a78344a4b631c"
+        },
+        {
+          "bytes": 565,
+          "name": "tokenizer_config.json",
+          "sha256": "86139ce1f39e814bcdb99a6fe30c0c4983911508aad07417e616d994fb74eb25"
+        }
+      ],
+      "license_spdx": "MIT",
+      "manifest_sha256": "5d7c8883485527b97d2e652f754775c87e99cf61790a47982215fef522b9a5a8",
+      "manifest_text": "{\r\n  \"model\": \"text-semantics\",\r\n  \"repo_id\": \"MoritzLaurer/multilingual-MiniLMv2-L6-mnli-xnli\",\r\n  \"revision\": \"0a71e92a985b6e1ad1828cf67ce9c459639c1dca\",\r\n  \"backend\": \"transformers_zero_shot\",\n  \"approval_status\": \"APPROVED\",\n  \"license_spdx\": \"MIT\",\n  \"commercial_use_allowed\": true,\n  \"usage_cost\": \"free\",\n  \"local_inference_only\": true,\n  \"external_media_upload\": false,\n  \"source_url\": \"https://huggingface.co/MoritzLaurer/multilingual-MiniLMv2-L6-mnli-xnli\",\n  \"training_data_review_status\": \"DOCUMENTED_MIXED_UPSTREAM_DATASETS\",\n  \"target_labels\": [\r\n    \"advertisement\",\r\n    \"subtitle\",\r\n    \"credits\",\r\n    \"scene_text\",\r\n    \"other\"\r\n  ],\r\n  \"downloaded_at\": \"2026-09-23T00:18:27.478488+00:00\",\r\n  \"files\": [\r\n    {\r\n      \"name\": \"config.json\",\r\n      \"bytes\": 1032,\r\n      \"sha256\": \"79862295be1538a947e0f56d495ef8d658c3eaebcfb42c7ad96229d195ca745d\"\r\n    },\r\n    {\r\n      \"name\": \"model.safetensors\",\r\n      \"bytes\": 427997022,\r\n      \"sha256\": \"91b323ccf247ec1e3b5925d566230bae7c52de8147e6062b42e250089a3fc80b\"\r\n    },\r\n    {\r\n      \"name\": \"sentencepiece.bpe.model\",\r\n      \"bytes\": 5069051,\r\n      \"sha256\": \"cfc8146abe2a0488e9e2a0c56de7952f7c11ab059eca145a0a727afce0db2865\"\r\n    },\r\n    {\r\n      \"name\": \"special_tokens_map.json\",\r\n      \"bytes\": 280,\r\n      \"sha256\": \"06e405a36dfe4b9604f484f6a1e619af1a7f7d09e34a8555eb0b77b66318067f\"\r\n    },\r\n    {\r\n      \"name\": \"tokenizer.json\",\r\n      \"bytes\": 17082758,\r\n      \"sha256\": \"098c131bb4423163db239755e309facaa6850059f850f9f3d88a78344a4b631c\"\r\n    },\r\n    {\r\n      \"name\": \"tokenizer_config.json\",\r\n      \"bytes\": 565,\r\n      \"sha256\": \"86139ce1f39e814bcdb99a6fe30c0c4983911508aad07417e616d994fb74eb25\"\r\n    }\r\n  ]\r\n}\n",
+      "problems": [],
+      "repo_id": "MoritzLaurer/multilingual-MiniLMv2-L6-mnli-xnli",
+      "revision": "0a71e92a985b6e1ad1828cf67ce9c459639c1dca",
+      "source": "huggingface"
+    },
+    "nsfw_detection_2_nano": {
+      "download_key": "nsfw-nano",
+      "files": [
+        {
+          "bytes": 1577,
+          "name": "config.json",
+          "sha256": "29983c0fe447a47372b5a931eaeae085002855b98a32f9ecffd5572dd03d818f"
+        },
+        {
+          "bytes": 16270500,
+          "name": "model.safetensors",
+          "sha256": "011ef883033b5908994a06d3b6dcfbf55498206afc1cb55849f918588c7dfcba"
+        },
+        {
+          "bytes": 495,
+          "name": "preprocessor_config.json",
+          "sha256": "f678895d3b0b6d95f32b0ab9d683c127c69b5f45939f82932cb90eb58bffa51e"
+        }
+      ],
+      "license_spdx": "Apache-2.0",
+      "manifest_sha256": "1d32d385d2a1dd9cf0479df0361d7e2bf7024002e7b58b6f6caf8b4378d4d2dc",
+      "manifest_text": "{\r\n  \"model\": \"nsfw-nano\",\r\n  \"repo_id\": \"viddexa/nsfw-detection-2-nano\",\r\n  \"revision\": \"12e57200346246b37382f746e4d94d10b014f6a1\",\r\n  \"backend\": \"transformers\",\n  \"approval_status\": \"APPROVED\",\n  \"license_spdx\": \"Apache-2.0\",\n  \"commercial_use_allowed\": true,\n  \"usage_cost\": \"free\",\n  \"local_inference_only\": true,\n  \"external_media_upload\": false,\n  \"source_url\": \"https://huggingface.co/viddexa/nsfw-detection-2-nano\",\n  \"training_data_review_status\": \"UPSTREAM_DETAILS_LIMITED\",\n  \"target_labels\": [\r\n    \"hentai\",\r\n    \"porn\",\r\n    \"sexy\"\r\n  ],\r\n  \"downloaded_at\": \"2026-09-20T07:38:38.426221+00:00\",\r\n  \"files\": [\r\n    {\r\n      \"name\": \"config.json\",\r\n      \"bytes\": 1577,\r\n      \"sha256\": \"29983c0fe447a47372b5a931eaeae085002855b98a32f9ecffd5572dd03d818f\"\r\n    },\r\n    {\r\n      \"name\": \"model.safetensors\",\r\n      \"bytes\": 16270500,\r\n      \"sha256\": \"011ef883033b5908994a06d3b6dcfbf55498206afc1cb55849f918588c7dfcba\"\r\n    },\r\n    {\r\n      \"name\": \"preprocessor_config.json\",\r\n      \"bytes\": 495,\r\n      \"sha256\": \"f678895d3b0b6d95f32b0ab9d683c127c69b5f45939f82932cb90eb58bffa51e\"\r\n    }\r\n  ]\r\n}\n",
+      "problems": [],
+      "repo_id": "viddexa/nsfw-detection-2-nano",
+      "revision": "12e57200346246b37382f746e4d94d10b014f6a1",
+      "source": "huggingface"
+    },
+    "qwen2_vl_2b_instruct": {
+      "download_key": "qwen2-vl-2b",
+      "files": [
+        {
+          "bytes": 1050,
+          "name": "chat_template.json",
+          "sha256": "ad60d90252ed0b0705ba14e2d0ad0fec0beac1ea955642b54059b36052d8bc96"
+        },
+        {
+          "bytes": 1196,
+          "name": "config.json",
+          "sha256": "422adefa19e62dd175961cec85bc0400344fe5bf9b22bd1182e05aaae78556e0"
+        },
+        {
+          "bytes": 272,
+          "name": "generation_config.json",
+          "sha256": "d2864bf1edea5863d331edfff48106b586a366f5a2c41aa77731fadc53aa25d2"
+        },
+        {
+          "bytes": 11343,
+          "name": "LICENSE",
+          "sha256": "832dd9e00a68dd83b3c3fb9f5588dad7dcf337a0db50f7d9483f310cd292e92e"
+        },
+        {
+          "bytes": 1671839,
+          "name": "merges.txt",
+          "sha256": "599bab54075088774b1733fde865d5bd747cbcc7a547c5bc12610e874e26f5e3"
+        },
+        {
+          "bytes": 3988609112,
+          "name": "model-00001-of-00002.safetensors",
+          "sha256": "994ac2b03f97de8bc647d0fe5eba2e4b632b3e28dc03574c29bdfc36cf47e1b9"
+        },
+        {
+          "bytes": 429441656,
+          "name": "model-00002-of-00002.safetensors",
+          "sha256": "92540d8353c8d226a589a3b179bdb33851c970ee2cc2ac7ba035f79425e7b833"
+        },
+        {
+          "bytes": 56411,
+          "name": "model.safetensors.index.json",
+          "sha256": "260ab9fa1418d6d6ab79daa1d9da2c47264f3b72edb4630fc799077ac67d27c6"
+        },
+        {
+          "bytes": 347,
+          "name": "preprocessor_config.json",
+          "sha256": "b5eaad0c2815f07631535dcc58f3c462b0d73693638ad21d19f3c50820eae1cc"
+        },
+        {
+          "bytes": 17392,
+          "name": "README.md",
+          "sha256": "74fbe869df708593087ae2ee66a6605d33fc2025937644721dc1360963d037f4"
+        },
+        {
+          "bytes": 7029741,
+          "name": "tokenizer.json",
+          "sha256": "cb63a0a23eef3d5b01063a9880a1925a65aaf4d1591d519910ee3527852950a0"
+        },
+        {
+          "bytes": 4190,
+          "name": "tokenizer_config.json",
+          "sha256": "ff5c4fd898fe8c39591eb70e5d39d2782802d4204d6ae9ba1223252f354842a0"
+        },
+        {
+          "bytes": 2776833,
+          "name": "vocab.json",
+          "sha256": "ca10d7e9fb3ed18575dd1e277a2579c16d108e32f27439684afa0e10b1440910"
+        }
+      ],
+      "license_spdx": "Apache-2.0",
+      "manifest_sha256": "98550049129a3fbceee687bcaecd2ccf66704a4a312b998b0735a6b60abf4e83",
+      "manifest_text": "{\r\n  \"model\": \"qwen2-vl-2b-local-content-confirmer\",\n  \"repo_id\": \"Qwen/Qwen2-VL-2B-Instruct\",\r\n  \"revision\": \"895c3a49bc3fa70a340399125c650a463535e71c\",\r\n  \"backend\": \"transformers_qwen2_vl_confirmation\",\r\n  \"tasks\": [\n    \"violence_confirmation\",\n    \"visual_logo_confirmation\"\n  ],\n  \"approval_status\": \"APPROVED\",\r\n  \"license_spdx\": \"Apache-2.0\",\r\n  \"commercial_use_allowed\": true,\r\n  \"usage_cost\": \"free\",\r\n  \"local_inference_only\": true,\r\n  \"external_media_upload\": false,\r\n  \"source_url\": \"https://huggingface.co/Qwen/Qwen2-VL-2B-Instruct\",\r\n  \"training_data_review_status\": \"DOCUMENTED_BY_UPSTREAM_MODEL_CARD\",\r\n  \"downloaded_at\": \"2026-09-23T09:57:28.8823097+07:00\",\r\n  \"files\": [\r\n    {\r\n      \"name\": \"chat_template.json\",\r\n      \"bytes\": 1050,\r\n      \"sha256\": \"ad60d90252ed0b0705ba14e2d0ad0fec0beac1ea955642b54059b36052d8bc96\"\r\n    },\r\n    {\r\n      \"name\": \"config.json\",\r\n      \"bytes\": 1196,\r\n      \"sha256\": \"422adefa19e62dd175961cec85bc0400344fe5bf9b22bd1182e05aaae78556e0\"\r\n    },\r\n    {\r\n      \"name\": \"generation_config.json\",\r\n      \"bytes\": 272,\r\n      \"sha256\": \"d2864bf1edea5863d331edfff48106b586a366f5a2c41aa77731fadc53aa25d2\"\r\n    },\r\n    {\r\n      \"name\": \"LICENSE\",\r\n      \"bytes\": 11343,\r\n      \"sha256\": \"832dd9e00a68dd83b3c3fb9f5588dad7dcf337a0db50f7d9483f310cd292e92e\"\r\n    },\r\n    {\r\n      \"name\": \"merges.txt\",\r\n      \"bytes\": 1671839,\r\n      \"sha256\": \"599bab54075088774b1733fde865d5bd747cbcc7a547c5bc12610e874e26f5e3\"\r\n    },\r\n    {\r\n      \"name\": \"model-00001-of-00002.safetensors\",\r\n      \"bytes\": 3988609112,\r\n      \"sha256\": \"994ac2b03f97de8bc647d0fe5eba2e4b632b3e28dc03574c29bdfc36cf47e1b9\"\r\n    },\r\n    {\r\n      \"name\": \"model-00002-of-00002.safetensors\",\r\n      \"bytes\": 429441656,\r\n      \"sha256\": \"92540d8353c8d226a589a3b179bdb33851c970ee2cc2ac7ba035f79425e7b833\"\r\n    },\r\n    {\r\n      \"name\": \"model.safetensors.index.json\",\r\n      \"bytes\": 56411,\r\n      \"sha256\": \"260ab9fa1418d6d6ab79daa1d9da2c47264f3b72edb4630fc799077ac67d27c6\"\r\n    },\r\n    {\r\n      \"name\": \"preprocessor_config.json\",\r\n      \"bytes\": 347,\r\n      \"sha256\": \"b5eaad0c2815f07631535dcc58f3c462b0d73693638ad21d19f3c50820eae1cc\"\r\n    },\r\n    {\r\n      \"name\": \"README.md\",\r\n      \"bytes\": 17392,\r\n      \"sha256\": \"74fbe869df708593087ae2ee66a6605d33fc2025937644721dc1360963d037f4\"\r\n    },\r\n    {\r\n      \"name\": \"tokenizer_config.json\",\r\n      \"bytes\": 4190,\r\n      \"sha256\": \"ff5c4fd898fe8c39591eb70e5d39d2782802d4204d6ae9ba1223252f354842a0\"\r\n    },\r\n    {\r\n      \"name\": \"tokenizer.json\",\r\n      \"bytes\": 7029741,\r\n      \"sha256\": \"cb63a0a23eef3d5b01063a9880a1925a65aaf4d1591d519910ee3527852950a0\"\r\n    },\r\n    {\r\n      \"name\": \"vocab.json\",\r\n      \"bytes\": 2776833,\r\n      \"sha256\": \"ca10d7e9fb3ed18575dd1e277a2579c16d108e32f27439684afa0e10b1440910\"\r\n    }\r\n  ]\r\n}\r\n",
+      "problems": [],
+      "repo_id": "Qwen/Qwen2-VL-2B-Instruct",
+      "revision": "895c3a49bc3fa70a340399125c650a463535e71c",
+      "source": "huggingface"
+    },
+    "vit_base_violence_detection": {
+      "download_key": "violence-vit",
+      "files": [
+        {
+          "bytes": 523,
+          "name": "config.json",
+          "sha256": "03652439b83bb9626e74675127b66e0278da16d74660e581a3be48663f75c626"
+        },
+        {
+          "bytes": 343214896,
+          "name": "model.safetensors",
+          "sha256": "9eec3237288742eb4267cb2cbbbdacba5bee889be4673215bfe40e1dbd5621a5"
+        },
+        {
+          "bytes": 580,
+          "name": "preprocessor_config.json",
+          "sha256": "5e6895a8a80efa00a98656b6c24d202d7582614ceea87aa122f861120dc833c0"
+        },
+        {
+          "bytes": 1736,
+          "name": "README.md",
+          "sha256": "eec62e115b63cf716cdd6c6cda33580b6afe476f5e24a55185e754a832f87076"
+        }
+      ],
+      "license_spdx": "Apache-2.0",
+      "manifest_sha256": "6981a7643fe10791fb1a39d1811321c0d9c99381a0aac61cd5eec4f7d4b07ab4",
+      "manifest_text": "{\n  \"model\": \"violence-vit-frame-window\",\n  \"repo_id\": \"jaranohaal/vit-base-violence-detection\",\n  \"revision\": \"31931091dfd4ea08a30c42be0db8e1488263cbd5\",\n  \"backend\": \"timm_frame_video\",\n  \"architecture\": \"vit_base_patch16_224\",\n  \"target_labels\": [\n    \"violence\"\n  ],\n  \"label_names\": [\n    \"non_violence\",\n    \"violence\"\n  ],\n  \"positive_index\": 1,\n  \"aggregation\": \"top_k_mean\",\n  \"aggregation_top_k\": 5,\n  \"approval_status\": \"APPROVED\",\n  \"license_spdx\": \"Apache-2.0\",\n  \"commercial_use_allowed\": true,\n  \"usage_cost\": \"free\",\n  \"local_inference_only\": true,\n  \"external_media_upload\": false,\n  \"source_url\": \"https://huggingface.co/jaranohaal/vit-base-violence-detection\",\n  \"training_data_review_status\": \"UPSTREAM_REPORTS_REAL_LIFE_VIOLENCE_SITUATIONS\",\n  \"downloaded_at\": \"2026-09-23T08:00:00+07:00\",\n  \"files\": [\n    {\n      \"name\": \"config.json\",\n      \"bytes\": 523,\n      \"sha256\": \"03652439b83bb9626e74675127b66e0278da16d74660e581a3be48663f75c626\"\n    },\n    {\n      \"name\": \"model.safetensors\",\n      \"bytes\": 343214896,\n      \"sha256\": \"9eec3237288742eb4267cb2cbbbdacba5bee889be4673215bfe40e1dbd5621a5\"\n    },\n    {\n      \"name\": \"preprocessor_config.json\",\n      \"bytes\": 580,\n      \"sha256\": \"5e6895a8a80efa00a98656b6c24d202d7582614ceea87aa122f861120dc833c0\"\n    },\n    {\n      \"name\": \"README.md\",\n      \"bytes\": 1736,\n      \"sha256\": \"eec62e115b63cf716cdd6c6cda33580b6afe476f5e24a55185e754a832f87076\"\n    }\n  ]\n}\n",
+      "problems": [],
+      "repo_id": "jaranohaal/vit-base-violence-detection",
+      "revision": "31931091dfd4ea08a30c42be0db8e1488263cbd5",
+      "source": "huggingface"
+    },
+    "wd_vit_tagger_v3": {
+      "download_key": "anime-gore-tagger",
+      "files": [
+        {
+          "bytes": 684,
+          "name": "config.json",
+          "sha256": "038b25b517e0511475195bd1a45a19710929a3f2afa8f96d002ee28e1115dc1f"
+        },
+        {
+          "bytes": 378417260,
+          "name": "model.safetensors",
+          "sha256": "ee78db0cd9f1c7e01578cc89661a10c73675d60c30e235e505c391f57ea4d4e5"
+        },
+        {
+          "bytes": 308468,
+          "name": "selected_tags.csv",
+          "sha256": "298633d94d0031d2081c0893f29c82eab7f0df00b08483ba8f29d1e979441217"
+        }
+      ],
+      "license_spdx": "Apache-2.0",
+      "manifest_sha256": "4a3b06eae250b0602db37dcae366909e31b42d154392b3f7660f70b10b21858c",
+      "manifest_text": "{\r\n  \"model\": \"anime-gore-tagger\",\r\n  \"repo_id\": \"SmilingWolf/wd-vit-tagger-v3\",\r\n  \"revision\": \"7f6b584d0bd3f55c4531f14ba3d4761b2bccdc0f\",\r\n  \"backend\": \"timm_multilabel\",\n  \"approval_status\": \"APPROVED\",\n  \"license_spdx\": \"Apache-2.0\",\n  \"commercial_use_allowed\": true,\n  \"usage_cost\": \"free\",\n  \"local_inference_only\": true,\n  \"external_media_upload\": false,\n  \"source_url\": \"https://huggingface.co/SmilingWolf/wd-vit-tagger-v3\",\n  \"training_data_review_status\": \"UPSTREAM_REPORTS_DANBOORU\",\n  \"target_labels\": [\r\n    \"blood\",\n    \"blood_on_face\",\n    \"blood_on_clothes\",\n    \"blood_on_hands\",\n    \"blood_splatter\",\n    \"blood_on_weapon\",\n    \"blood_from_mouth\",\n    \"guro\",\n    \"corpse\",\n    \"blood_stain\",\n    \"blood_from_eyes\",\n    \"pink_blood\",\n    \"severed_head\",\n    \"blood_on_knife\",\n    \"blood_in_hair\",\n    \"blood_on_arm\",\n    \"pool_of_blood\",\n    \"severed_limb\",\n    \"decapitation\",\n    \"blood_on_leg\",\n    \"blood_on_bandages\",\n    \"blood_on_ground\",\n    \"injury\"\n  ],\r\n  \"downloaded_at\": \"2026-09-20T08:05:46.151646+00:00\",\r\n  \"files\": [\r\n    {\r\n      \"name\": \"config.json\",\r\n      \"bytes\": 684,\r\n      \"sha256\": \"038b25b517e0511475195bd1a45a19710929a3f2afa8f96d002ee28e1115dc1f\"\r\n    },\r\n    {\r\n      \"name\": \"model.safetensors\",\r\n      \"bytes\": 378417260,\r\n      \"sha256\": \"ee78db0cd9f1c7e01578cc89661a10c73675d60c30e235e505c391f57ea4d4e5\"\r\n    },\r\n    {\r\n      \"name\": \"selected_tags.csv\",\r\n      \"bytes\": 308468,\r\n      \"sha256\": \"298633d94d0031d2081c0893f29c82eab7f0df00b08483ba8f29d1e979441217\"\r\n    }\r\n  ]\r\n}\n",
+      "problems": [],
+      "repo_id": "SmilingWolf/wd-vit-tagger-v3",
+      "revision": "7f6b584d0bd3f55c4531f14ba3d4761b2bccdc0f",
+      "source": "huggingface"
+    }
+  },
+  "not_locked": [],
+  "version": 1
+}

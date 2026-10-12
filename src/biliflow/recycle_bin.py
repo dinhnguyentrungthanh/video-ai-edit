@@ -21,8 +21,9 @@ purpose: if a check above is bypassed, Windows asks instead of deleting
 silently, and the timeout covers a dialog nobody answers. After the move the
 ``$I`` record (and its ``$R`` twin) is looked up to verify where the file went.
 
-Standard library only. ``ctypes`` and ``winreg`` are imported inside the
-functions that need them; nothing runs at import time. Tests patch the small
+Standard library only (plus ``install_paths``, which finds the install folder
+by its marker file). ``ctypes`` and ``winreg`` are imported inside the
+functions that need them; nothing else runs at import time. Tests patch the small
 ``_`` helpers (``_shell_delete`` above all) so they never reach the real bin.
 """
 
@@ -39,6 +40,8 @@ import unicodedata
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable
+
+from biliflow.install_paths import install_root
 
 
 FO_DELETE = 3
@@ -57,7 +60,7 @@ BITBUCKET_KEY = r"Software\Microsoft\Windows\CurrentVersion\Explorer\BitBucket"
 POLICIES_EXPLORER_KEY = r"Software\Microsoft\Windows\CurrentVersion\Policies\Explorer"
 CAPACITY_MARGIN_BYTES = 64 * 1048576
 DEFAULT_TIMEOUT_SECONDS = 60.0
-INSTALL_ROOT = Path(__file__).resolve().parents[2]
+INSTALL_ROOT = install_root()
 TEST_RECYCLE_ROOT = INSTALL_ROOT / "temp" / "recycle-bin-test"
 TEST_RECYCLE_ENV = "BILIFLOW_TEST_RECYCLE_BIN"
 COINIT_APARTMENTTHREADED = 0x2

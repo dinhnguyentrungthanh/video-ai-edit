@@ -16,6 +16,9 @@ import sys
 from pathlib import Path
 from typing import Any, Callable
 
+from biliflow.install_paths import install_root
+
+
 POLICY_RELATIVE = Path("config") / "download_tools.json"
 _LICENSE_SPLIT = re.compile(r"\s+(?:AND|OR|WITH)\s+")
 _HASH_CHUNK = 1024 * 1024
@@ -177,7 +180,7 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="python -m biliflow.download_tools")
     sub = parser.add_subparsers(dest="command", required=True)
     audit = sub.add_parser("audit", help="Kiểm tra phiên bản, giấy phép và SHA-256 của công cụ tải")
-    audit.add_argument("--project-root", type=Path, default=Path(__file__).resolve().parents[2])
+    audit.add_argument("--project-root", type=Path, default=install_root())
     audit.add_argument("--tools-root", type=Path, default=None,
                        help="Thư mục cài chứa tools\\ (mặc định: project root)")
     args = parser.parse_args(argv)
