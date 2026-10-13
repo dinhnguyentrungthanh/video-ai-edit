@@ -1,5 +1,6 @@
 # Bàn giao T – tải phim hàng loạt bị lỗi mạng
-- Nhánh: fix/download-network-retry (từ origin/main 9ae104c) · Worktree: `temp\wt-download-retry` · Cập nhật: 2026-10-13
+- Nhánh: fix/download-network-retry (từ origin/main 9ae104c) · Commit code: 5e882af · Worktree: `temp\wt-download-retry` ·
+  Cập nhật: 2026-10-13
 - Chạy ở: PC · Trạng thái: bước 2 xong, chờ điều phối chạy full suite và gộp (không push, không merge)
 
 ## Đã xong
@@ -29,7 +30,15 @@
     - `discover -p "test_download_*.py"`: 1179 test, các lỗi đều đã xử lý:
       - `test_download_api` do snapshot có thêm `auto_retries`: đã sửa test.
       - `test_download_account_api` lỗi một lần vì máy bận; chạy lại riêng thì OK.
-      - 3 module E2E cần TEMP/TMP = `E:\DungChung\BiliFlow\temp`; chạy lại với biến đó, kết quả ở mục "Cách kiểm".
+      - 3 module E2E cần TEMP/TMP = `E:\DungChung\BiliFlow\temp`. Chạy lại với biến đó thì lộ ra 2 chỗ cần sửa:
+        - `GatedReply` (`account_e2e_fixtures.py`) không có `stall`/`drop`: `FixtureServer._send` nay đọc hai trường
+          đó bằng `getattr`;
+        - danh sách route cố định: thêm route mới vào `EXPECTED_POST_ROUTES` (`test_download_account_e2e_flows.py`),
+          vào `PHONE_POSTS_LITERAL` và hash endpoint (`test_dashboard_v2_review.py`, 92 endpoint).
+        Sau khi sửa: 11/12 test E2E qua trong lượt chạy đó, còn `RouteInventoryTest` và `test_dashboard_v2_review` qua
+        khi chạy lại.
+    - Thử đột biến, cả 6 đều làm test hỏng: bỏ đánh thức lượt chờ; bỏ giãn nhịp ở dispatch; coi 500 là tạm thời; bỏ
+      giãn nhịp lúc lấy lại nguồn; bỏ Retry-After; không thử lại ở bước tải.
     - `test_dashboard_v2_downloads`, `_contract`, `_phone_hardening`, `_phone`, `_frontend`, `_route`: OK.
     - `node dashboard_v2/verify-download.cjs`: 23/23.
 
