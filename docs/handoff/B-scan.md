@@ -224,7 +224,11 @@ Lỗi này có từ trước B1; B1 không đổi đường dẫn nào. Phần d
 # Đợt OCR (stage text)
 
 - **Nhánh:** `perf/scan-ocr`, tách từ `origin/main` 9ae104c (B1 đã gộp và push). Worktree: `temp\wt-scan-speed`.
-- **Trạng thái:** bước 1 (đo, chưa sửa code) **xong** ngày 2026-10-13. Danh sách đã trình, **đang chờ người dùng duyệt**; chưa sửa code.
+- **Trạng thái (2026-10-13):**
+  - bước 1 (đo) xong;
+  - người dùng đã duyệt danh sách;
+  - mục 1 (gpupre) đã làm và qua cổng (`5072564`);
+  - mục 3 đang đo bằng bản thử.
   - Bước 1 từng tạm dừng theo yêu cầu người dùng ngày 2026-10-12, khoảng 23:05, vì máy có ứng dụng khác làm nhiễu số đo.
   - Người dùng cho đo tiếp ngày 2026-10-13. Phần đo lại chạy từ 06:57 đến 08:11.
 
@@ -329,8 +333,47 @@ Mỗi lần chạy stage text, tính bằng giây. Job 125 (L, 889 khung), job 1
   - bỏ qua khung trùng: không có khung nào giống hệt khung trước;
   - bỏ làm nóng routing: chỉ dời việc sang stage visual_logo.
 
+**Người dùng duyệt (2026-10-13):**
+- (0) merge `origin/main` vào nhánh;
+- (1) làm mục 1;
+- (2) bỏ mục 2;
+- (3) đo thử mục 3 bằng bản thử, không đưa vào nhánh. Chỉ trình nếu nhanh thêm ít nhất 5 % **và** kết quả giống hệt trên cả 3 bản.
+
+## Bước 2: mục 1 (gpupre), đã làm
+
+- **Merge:** `d5413af`, merge `origin/main` 6df5c63 vào nhánh, không rebase. Các commit mới là bản sửa lỗi tải và tài liệu; không đụng tới phần quét.
+- **Code (`5072564`):**
+  - `src/biliflow/ocr_detect_gpu.py` mới: `craft_input` dựng tensor 1×3×H32×W32 float32 trên GPU. `gpu_textbox` bọc `get_textbox` CRAFT của EasyOCR.
+  - `ocr_precision.with_detect_precision(reader, "fp16")` gắn `gpu_textbox` cho bản sao của reader, chỉ khi `reader.get_textbox` đúng là hàm CRAFT của EasyOCR. Reader của nơi gọi không đổi. Đường fp32 (chế độ thường) vẫn là EasyOCR nguyên bản.
+  - **Đường quay về `get_textbox` gốc:** thiết bị không phải CUDA; khung không phải uint8 RGB hoặc khung rỗng; khung mà EasyOCR sẽ resize (`mag_ratio`, `canvas_size`); `optimal_num_chars`.
+- **Test:** `tests/test_ocr_detect_gpu.py` có 6 test, kiểm trên CPU và cả CUDA:
+  - input giống từng bit với `resize_aspect_ratio` + `normalizeMeanVariance`;
+  - hộp chữ và polygon float giống `test_net` trên cùng thiết bị;
+  - 8 trường hợp quay về;
+  - cách gắn vào reader.
+  - Kiểm đột biến: 3/3 đột biến bị bắt (mean float64, bỏ kiểm số kênh, ratio lệch 0,01 %).
+  - Test liên quan đạt: 63 OK, bỏ qua 4. Full suite để điều phối chạy.
+- **Khóa cache:** đã kiểm bằng `stage_source_paths`. `ocr_detect_gpu.py` và `ocr_precision.py` chỉ nằm trong khóa của stage text; 9 stage khác không đổi.
+- **Cổng: đạt.** Bằng chứng ở `docs/evidence/perf-scan/ocr/20261013-gate.json` và `README.md`.
+  - Quét quảng cáo đầy đủ qua scheduler, cùng thiết lập như cổng B1, trên 3 bản:
+    - job 125 (L);
+    - job 114 (L);
+    - đoạn 5 phút của job 38 (H, 1080p, từ giây 450; đoạn có nhiều vết chữ nhất trong report thật).
+  - 9 lượt quét. Mọi cặp base↔gpupre, base↔base và gpupre↔gpupre đều có 4 report (`text-scan.json`, `scan.json`, `scan-florence.json`, `review-queue.json`) chỉ khác ở các trường thời gian và hiệu năng của B1. Ảnh xem trước giống từng byte: 84, 84 và 32 ảnh.
+  - Mọi lượt có `contaminated false`: Control Center thật không chạy stage nào, kể cả xuất.
+- **Tốc độ (job 125, mỗi bản 3 lượt):**
+  - stage text: trung vị 92,0 s → 79,9 s (−13 %);
+  - cả quét quảng cáo: 203,8 s → 190,4 s (−7 %).
+  - Lượt gpupre đầu tiên của 125 và của 114 có bước ngữ nghĩa mất 19,4 và 15,8 s. Ở các lượt lặp và trong report thật, bước này chỉ 3,5–7,5 s, nên được tính là nhiễu.
+
 ## Đang dở
 
-- **Chờ người dùng duyệt danh sách trên.** Bước 2 chỉ làm các mục được duyệt.
-- **Cổng kiểm tra:** `text-scan.json` và `review-queue.json` giống hệt bản trước, trừ các trường thời gian và hiệu năng đã liệt kê ở B1.
-- **Root tạm `temp\b-ocr`:** giữ lại để làm cổng kiểm tra, xóa khi xong đợt.
+- **Mục 3 (bản thử):** nhánh `exp/ocr-overlap`, commit `a84e42a` trên `5072564`. **Không merge vào `perf/scan-ocr`.**
+  - Cách làm: một luồng phụ chạy detect các khung kế tiếp theo đúng thứ tự, trong lúc luồng chính nhận dạng chữ (recognize) theo cửa sổ.
+  - Test OCR liên quan đạt.
+  - Việc tiếp theo: đo xen kẽ `g` (5072564) với `ov` (a84e42a) bằng `temp\b-ocr\harness\ocr_probe.py`, trên 125, 114 và 38c; so kết quả giống hệt.
+  - Chỉ trình người dùng nếu nhanh thêm ít nhất 5 % và giống hệt trên cả 3 bản; nếu không thì ghi lại và bỏ.
+- **Root tạm `temp\b-ocr`:** có junction `.venv` trỏ tới `.venv` của bản cài.
+  - Chỉ xóa bằng `ocr_gate.py cleanup` trong scratchpad. Lệnh này gỡ junction trước rồi mới xóa thư mục.
+  - Lệnh cleanup của `ocr_probe.py` đã bị khóa.
+  - Xóa khi xong đợt.
