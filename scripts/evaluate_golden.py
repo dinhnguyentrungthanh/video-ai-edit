@@ -256,14 +256,28 @@ def run_command(args) -> None:
 
 
 def run_clips(args, manifest: dict) -> None:
-    """One isolated trial per scored clip (SHA-256 checked by the harness), then score.
+    """One whole-film trial per film source (v2 keeps jobs 37 and 38 whole), one isolated trial per
+    scored clip (SHA-256 checked by the harness), then score.
 
-    The trials run in a throw-away root (scripts/golden_trial_root.py) whose own input holds a copy of
-    the clips: the localize_logo stage reads only videos inside its root's input, and clips never go in
-    the real one. Each trial's folders are moved into this root's reports and scored from there.
+    The clip trials run in a throw-away root (scripts/golden_trial_root.py) whose own input holds a copy
+    of the clips: the localize_logo stage reads only videos inside its root's input, and clips never go
+    in the real one. Each trial's folders are moved into this root's reports and scored from there.
     """
     import golden_trial_root
+    from biliflow.golden_set import is_clip, source_file
     queues, trials = [], []
+    for key, source in manifest["sources"].items():
+        if is_clip(source):
+            continue
+        print(f"verifying {key} SHA-256...", flush=True)
+        source_file(ROOT, manifest, key, full_hash=True)
+        argv = film_trial_argv(int(source["job_id"]), list(ALL_GROUPS))
+        print("RUN " + " ".join(argv[2:]), flush=True)
+        summary = _run_trial(argv)
+        trials.append(ROOT / "reports/benchmarks" / summary["trial"])
+        queues.append(ROOT / "reports/jobs" / summary["trial"] / "review-queue.json")
+        print(f"DONE {key}: {summary['total_wall_seconds']:.0f}s, original data preserved="
+              f"{summary['preserved_original_data']}", flush=True)
     trial_root = golden_trial_root.create(ROOT, GOLDEN_ROOT, str(manifest["golden_set"]))
     print(f"trial root: {trial_root}", flush=True)
     try:

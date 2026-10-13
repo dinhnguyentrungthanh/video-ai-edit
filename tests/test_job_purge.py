@@ -272,6 +272,17 @@ class GoldenProtectionTests(PurgeFixture):
         self.assertIsNone(job_purge.protected_reason(self.root, origin))
         self.assertEqual(job_purge.protected_reason(self.root, clip_twin), job_purge.REASON_GOLDEN)
 
+    def test_the_hybrid_v2_locks_its_kept_films_but_not_the_film_it_clipped(self):
+        clipped, kept, clip_twin = self.make_job("alpha"), self.make_job("beta"), self.make_job("gamma")
+        self.write_golden("v2", {
+            "j39-00816": {"kind": "clip", "sha256": clip_twin["source_sha256"], "path": "media/j39-00816.mp4",
+                          "origin": {"job_id": clipped["id"], "sha256": clipped["source_sha256"],
+                                     "origin_seconds": 816.0}},
+            "j38": {"job_id": kept["id"], "sha256": kept["source_sha256"], "path": "input/beta.mp4"}})
+        self.assertIsNone(job_purge.protected_reason(self.root, clipped))
+        self.assertEqual(job_purge.protected_reason(self.root, kept), job_purge.REASON_GOLDEN)
+        self.assertEqual(job_purge.protected_reason(self.root, clip_twin), job_purge.REASON_GOLDEN)
+
     def test_retired_sets_lock_nothing(self):
         job = self.make_job("alpha")
         path = self.root / "annotations" / "golden-retired" / "v1" / "segments.json"

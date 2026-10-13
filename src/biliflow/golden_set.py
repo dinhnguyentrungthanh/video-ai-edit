@@ -10,10 +10,12 @@ manifest, labels, history, backups and lock. A later set (v1.1) only adds
 segments: it pins the manifest it extends and copies its sources verbatim, and
 ``load_golden_sets`` combines sets read-only at scoring time.
 
-v2 (docs/handoff/G-golden-clips.md) stands alone: its sources are stream-copied
-clips (``kind: "clip"``) of the v1 and v1.1 segments, stored in the set's own
-``media`` folder; times are relative to each clip and ``origin`` records where
-the clip starts in its original film. It is never scored together with v1/v1.1.
+v2 (docs/handoff/G-golden-clips.md) stands alone and holds the v1 and v1.1
+segments: those of job 39 (live action) on stream-copied clips (``kind: "clip"``)
+in the set's own ``media`` folder, with times relative to each clip and
+``origin`` recording where the clip starts in its film; those of jobs 37 and 38
+(animation) on their original films, as in v1.1 (by job id and SHA-256). It is
+never scored together with v1/v1.1.
 """
 from __future__ import annotations
 
@@ -31,7 +33,7 @@ SCHEMA_VERSION = 1
 GOLDEN_SET = "v1"
 KNOWN_SETS = ("v1", "v1.1", "v2")
 SET_PARENT = {"v1": None, "v1.1": "v1", "v2": None}  # the set whose manifest a later set extends (pinned by SHA-256)
-CLIP_SETS = ("v2",)  # sets whose sources are clips; never scored together with another set
+CLIP_SETS = ("v2",)  # sets that may hold clips (beside whole films); never scored together with another set
 CLIP_KIND = "clip"
 CLIP_FIELDS = ("path", "sha256", "size_bytes", "duration_seconds", "width", "height", "fps", "content_style")
 # Fields that identify a source file; a source shared by several sets must agree on all of them.
@@ -153,8 +155,12 @@ def validate_manifest(manifest: dict[str, Any]) -> dict[str, Any]:
         raise ValueError(f"Manifest Golden Set {name} thiếu SHA-256 của manifest {parent} mà nó mở rộng")
     sources = manifest.get("sources") or {}
     clips = [key for key, source in sources.items() if is_clip(source)]
-    if name in CLIP_SETS and len(clips) != len(sources):
-        raise ValueError(f"Mọi nguồn của Golden Set {name} phải là clip")
+    if name in CLIP_SETS:  # clips of some films, whole films of the others (by job id and SHA-256)
+        films = [key for key in sources if key not in clips and (
+            not isinstance(sources[key].get("job_id"), int) or
+            not re.fullmatch(r"[0-9a-f]{64}", str(sources[key].get("sha256") or "")))]
+        if films:
+            raise ValueError(f"Phim gốc trong Golden Set {name} cần job id và SHA-256 ({', '.join(films)})")
     if name not in CLIP_SETS and clips:
         raise ValueError(f"Golden Set {name} không nhận nguồn clip ({', '.join(clips)})")
     for key in clips:

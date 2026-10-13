@@ -913,7 +913,7 @@ def clip_manifest(**source_changes):
 
 
 class ClipSetTest(unittest.TestCase):
-    """Golden Set v2: clip sources only, never mixed with v1/v1.1."""
+    """Golden Set v2: clips of job 39 and whole films of jobs 37 and 38, never mixed with v1/v1.1."""
 
     def test_a_clip_manifest_is_valid(self):
         validate_manifest(clip_manifest())
@@ -924,12 +924,19 @@ class ClipSetTest(unittest.TestCase):
             with self.subTest(changes=changes), self.assertRaises(ValueError):
                 validate_manifest(clip_manifest(**changes))
 
-    def test_clips_only_in_a_clip_set_and_a_clip_set_only_of_clips(self):
+    def test_clips_only_in_a_clip_set_whose_films_name_their_job(self):
         mixed = clip_manifest()
         mixed["golden_set"] = "v1"
         with self.assertRaises(ValueError):
             validate_manifest(mixed)
-        film = manifest()
+        hybrid = clip_manifest()
+        hybrid["sources"]["j38"] = {"job_id": 38, "path": "input/h.mp4", "sha256": "c" * 64, "size_bytes": 9,
+                                    "duration_seconds": 6800.0, "width": 1920, "height": 1080, "fps": 23.976,
+                                    "content_style": "animation"}
+        hybrid["segments"].append({"id": "C20A", "source": "j38", "start_seconds": 0.0, "end_seconds": 300.0,
+                                   "split": "dev"})
+        validate_manifest(hybrid)
+        film = manifest()  # a film without a job id
         film["golden_set"] = "v2"
         with self.assertRaises(ValueError):
             validate_manifest(film)

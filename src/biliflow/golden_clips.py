@@ -356,25 +356,35 @@ def clip_source(clip: dict[str, Any], origin_source: dict[str, Any], info: dict[
 
 def build_v2(parts: dict[str, dict[str, Any]], clips: list[dict[str, Any]], infos: dict[str, dict[str, Any]],
              periods: tuple[Fraction, ...], approximate: Iterable[str], created_at: str | None = None,
-             ) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
+             films: dict[str, str] | None = None) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
     """(manifest, labels, first history entry) of v2 from the v1/v1.1 ``parts`` of load_golden_sets.
 
-    Segment and label ids, regions, actions and statuses are kept; only times move into clip time.
+    Segment and label ids, regions, actions and statuses are kept. Segments on a clip move into clip
+    time; segments of a source in ``films`` (v1/v1.1 key -> v2 key) stay on that whole film, whose
+    manifest entry is copied unchanged, and their labels are copied as they are.
     """
     from biliflow.golden_scoring import labels_fingerprint
-    created_at = created_at or now_iso()
+    created_at, films = created_at or now_iso(), films or {}
     clip_of_segment = {w["segment_id"]: clip for clip in clips for w in clip["windows"] if w["segment_id"]}
     sources: dict[str, Any] = {}
     for clip in clips:
         origin_source = next(part["manifest"]["sources"][clip["source"]] for part in parts.values()
                              if clip["source"] in part["manifest"]["sources"])
         sources[clip["key"]] = clip_source(clip, origin_source, infos[clip["key"]])
+    for old, new in films.items():
+        sources[new] = dict(next(part["manifest"]["sources"][old] for part in parts.values()
+                                 if old in part["manifest"]["sources"]))
     segments, events, statuses, resolutions, decisions = [], [], {}, {}, {}
     retired, reopened, owner = [], [], {}
     for name, part in parts.items():
         labels = part["labels"]
-        offset_of = {}
+        offset_of = {}  # segments on clips only; a film keeps its times
         for segment in part["manifest"]["segments"]:
+            if segment["source"] in films:
+                segments.append({"id": segment["id"], "source": films[segment["source"]],
+                                 "start_seconds": segment["start_seconds"], "end_seconds": segment["end_seconds"],
+                                 "split": segment["split"], "purpose": segment.get("purpose", ""), "from_set": name})
+                continue
             clip = clip_of_segment[segment["id"]]
             offset_of[segment["id"]] = (clip["origin_seconds"], sources[clip["key"]]["duration_seconds"])
             segments.append({"id": segment["id"], "source": clip["key"],
@@ -383,7 +393,8 @@ def build_v2(parts: dict[str, dict[str, Any]], clips: list[dict[str, Any]], info
                              "split": segment["split"], "purpose": segment.get("purpose", ""), "from_set": name,
                              "origin_start_seconds": segment["start_seconds"],
                              "origin_end_seconds": segment["end_seconds"]})
-        events += [shift_event(e, *offset_of[e["segment_id"]]) for e in labels["events"]]
+        events += [shift_event(e, *offset_of[e["segment_id"]]) if e["segment_id"] in offset_of else dict(e)
+                   for e in labels["events"]]
         statuses.update(labels["segments"])
         for key, value in (labels.get("suggestion_resolutions") or {}).items():
             moved = dict(value)
@@ -412,7 +423,7 @@ def build_v2(parts: dict[str, dict[str, Any]], clips: list[dict[str, Any]], info
     history = {"at": created_at, "actor": "migration", "action": "migrate_from_" + "_".join(parts), "revision": 0,
                "before": manifest["derived_from"],
                "after": {"manifest_sha256": labels["manifest_sha256"], "events": len(events),
-                         "segments": len(segments), "clips": len(sources)}}
+                         "segments": len(segments), "clips": len(clips), "films": len(films)}}
     return manifest, labels, history
 
 
@@ -446,10 +457,12 @@ def _put_unique(target: dict[str, Any], key: str, value: Any, what: str) -> None
 
 def migrate_suggestions(payloads: dict[str, dict[str, Any]], offsets: dict[str, Fraction],
                         manifest_sha256: str) -> dict[str, Any]:
-    """The labeling page's suggestions of v1/v1.1 in clip time (ids kept), pinned to the v2 manifest."""
+    """The labeling page's suggestions of v1/v1.1 (ids kept), pinned to the v2 manifest: those of a segment
+    on a clip move into clip time, those of a segment on a whole film (no offset) stay as they are."""
     rows, inputs = [], []
     for name, payload in payloads.items():
-        moved = [shift_suggestion(s, offsets[s["segment_id"]]) for s in payload["suggestions"]]
+        moved = [shift_suggestion(s, offsets[s["segment_id"]]) if s["segment_id"] in offsets else dict(s)
+                 for s in payload["suggestions"]]
         rows += moved
         inputs.append({"origin": f"migrated:{name}", "manifest_sha256": payload.get("manifest_sha256"),
                        "suggestions": len(moved)})

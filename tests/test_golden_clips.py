@@ -241,6 +241,26 @@ class MigrationTest(unittest.TestCase):
         problems = self.score_both(tamper)
         self.assertTrue(any("gs-S2-0001" in p for p in problems), problems)
 
+    def test_a_kept_film_keeps_its_entry_times_and_labels_and_scores_the_same(self):
+        manifest, labels, history = gc.build_v2(self.parts, [], {}, PERIODS, (), created_at="t", films={"film": "j39"})
+        validate_manifest(manifest)
+        self.assertEqual(manifest["sources"], {"j39": self.manifest["sources"]["film"]})
+        self.assertEqual([(s["id"], s["source"], s["start_seconds"], s["end_seconds"]) for s in manifest["segments"]],
+                         [("S1", "j39", 0.0, 100.0), ("S2", "j39", 500.0, 600.0)])
+        self.assertEqual(labels["events"], self.parts["v1"]["labels"]["events"] + self.parts["v1.1"]["labels"]["events"])
+        self.assertEqual(labels["suggestion_resolutions"]["sug-1"]["suggestion"]["start_seconds"], 520.0)
+        self.assertEqual((history["after"]["clips"], history["after"]["films"]), (0, 1))
+        folder = self.root / "staging/v2"
+        write_json_atomic(folder / "segments.json", manifest)
+        write_json_atomic(folder / "events.json", labels)
+        v2_manifest, v2_labels, v2_parts = load_golden_sets(self.root / "staging", ["v2"])
+        film_card, _ = score_sets(self.manifest, self.labels, self.parts, {"film": self.queue("a" * 64)})
+        v2_card, _ = score_sets(v2_manifest, v2_labels, v2_parts, {"j39": self.queue("a" * 64)})
+        self.assertEqual(gc.compare_shifted_cards(film_card, v2_card, {"S1": Fraction(0), "S2": Fraction(0)}), [])
+        moved = gc.migrate_suggestions({"v1.1": {"suggestions": [{"id": "s", "segment_id": "S2", "start_seconds": 520.0}]}},
+                                       {}, "m")
+        self.assertEqual(moved["suggestions"][0]["start_seconds"], 520.0)
+
 
 class WatermarkDecisionMergeTest(unittest.TestCase):
     BOX = {"x": 1, "y": 2, "width": 30, "height": 10}

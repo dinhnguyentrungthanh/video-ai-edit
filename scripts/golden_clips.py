@@ -1,14 +1,20 @@
-"""Golden Set v2 (docs/handoff/G-golden-clips.md): clips of the labelled segments. Nothing here deletes.
+"""Golden Set v2 (docs/handoff/G-golden-clips.md): the v1 + v1.1 segments of job 39 (L) on clips, those of
+jobs 37 and 38 (H) on their original films (the user's choice of 2026-10-13: H clips are off the sampling
+grid and lose whole-film context). Only drop-clips and migrate --replace delete, after their checks.
 
-  plan        Show the clips of v1 + v1.1 and of the unscored benchmark window, with their grid offsets.
+  plan        Show the clips of job 39 and of the unscored benchmark window, with their grid offsets.
   cut         Re-hash the films once, then stream-copy each clip into <staging>/v2/media (an existing
               clip is kept after its SHA-256 check, never overwritten) and record <staging>/v2/clips.json.
   verify      Gate (a): decode every clip and the same span of its film (from the keyframe before the
               clip); every frame must be bit-identical at clip pts + origin pts.
+  drop-clips  With --confirm, delete the staging clips that are no longer planned (after their SHA-256
+              check) and their records; without it only prints them.
   migrate     Write <staging>/v2/segments.json, events.json and label-history.jsonl from v1 + v1.1
-              (only read) and the clips; the labeling page's old suggestions move into clip time.
+              (only read), the clips and the kept films; the labeling page's old suggestions of clip
+              segments move into clip time. --replace rewrites an earlier migration's files, only while
+              nobody has labelled v2 yet and after a verified backup zip in annotations/.
   gate-score  Gate (b1): score v1 + v1.1 with the film queues of a scorecard and v2 with the same
-              queues moved into clip time; every metric, label and item must be identical.
+              queues (moved into clip time for clips); every metric, label and item must be identical.
   gate-diff   Gate (b2): one code version on the films (v1 + v1.1 scorecard) and on the clips (v2
               scorecard); lists every label and item count that changed, for the user to approve.
   activate    For the user only: rename <staging>/v2 to annotations/golden/v2 and move v1 and v1.1 to
@@ -35,13 +41,15 @@ if str(CODE / "src") not in sys.path:
 
 from biliflow import golden_clips as gc  # noqa: E402
 from biliflow.golden_set import (  # noqa: E402
-    file_sha256, load_golden_sets, read_json, source_file, validate_event, write_json_atomic,
+    file_sha256, is_clip, load_golden_sets, read_json, source_file, validate_event, write_json_atomic,
 )
 
 SOURCE_SETS = ("v1", "v1.1")
 # Unscored benchmark window (the user's choice, 2026-10-13): job 39, 5400-5550 s, used by older
 # live-safety and exact-speedup excerpts.
 BENCH_WINDOWS = ((39, 5400.0, 5550.0),)
+# Jobs whose segments go on clips; the other Golden films stay whole v2 sources (keys j<job>).
+CLIP_JOBS = (39,)
 EVIDENCE = "golden-v2"
 
 
@@ -68,19 +76,25 @@ def _windows(manifest: dict) -> list[dict]:
     by_job = {source["job_id"]: key for key, source in manifest["sources"].items()}
     rows += [{"source": by_job[job], "job_id": job, "start": start, "end": end, "segment_id": None, "scored": False}
              for job, start, end in BENCH_WINDOWS]
-    return rows
+    return [row for row in rows if row["job_id"] in CLIP_JOBS]
+
+
+def _kept_films(manifest: dict) -> dict[str, str]:
+    """v1/v1.1 source key -> v2 key of every Golden film that stays whole."""
+    return {key: f"j{source['job_id']}" for key, source in manifest["sources"].items()
+            if source["job_id"] not in CLIP_JOBS}
 
 
 def _plan(p, full_hash: bool = False) -> tuple[list[dict], dict, dict]:
     manifest, _, _ = _films(p)
     periods = gc.sampling_periods(read_json(p["profiles"]))
     films, indexes = {}, {}
-    for key in manifest["sources"]:
+    for key in [k for k, source in manifest["sources"].items() if source["job_id"] in CLIP_JOBS]:
         if full_hash:
             print(f"verifying the SHA-256 of {key}...", flush=True)
         films[key] = source_file(p["root"], manifest, key, full_hash=full_hash)
         indexes[key] = gc.probe_keyframes(p["ffprobe"], films[key])
-    durations = {key: source["duration_seconds"] for key, source in manifest["sources"].items()}
+    durations = {key: manifest["sources"][key]["duration_seconds"] for key in films}
     return gc.plan_clips(_windows(manifest), indexes, durations, periods), films, indexes
 
 
@@ -155,6 +169,32 @@ def _cut_clips(p) -> tuple[list[dict], dict]:
     return clips, record["clips"]
 
 
+def cmd_drop_clips(args) -> int:
+    """Delete the staging clips that are no longer planned (the user's choice: H stays on its films)."""
+    p = paths(args)
+    record = read_json(p["clips"])
+    planned = {row["key"] for row in record["plan"]}
+    dropped = [key for key in record["clips"] if key not in planned]
+    for key in dropped:
+        info = record["clips"][key]
+        path = p["set"] / info["path"]
+        if path.parent != p["set"] / "media" or path.name != f"{key}.mp4":
+            raise SystemExit(f"{path} is not a staging clip")
+        if path.exists() and file_sha256(path) != info["sha256"]:
+            raise SystemExit(f"{path} differs from its record; not touching it")
+        print(f"{'DELETE' if args.confirm else 'would delete'} {path} ({info['size_bytes'] / 1e6:.0f} MB)", flush=True)
+    if not args.confirm or not dropped:
+        return 0
+    for key in dropped:
+        info = record["clips"].pop(key)
+        (p["set"] / info["path"]).unlink(missing_ok=True)
+        record.setdefault("dropped", []).append({"key": key, "sha256": info["sha256"], "size_bytes": info["size_bytes"],
+                                                 "dropped_at": gc.now_iso()})
+        write_json_atomic(p["clips"], record)
+    print(f"dropped {len(dropped)} clips; {len(record['clips'])} left", flush=True)
+    return 0
+
+
 def _write_evidence(p, name: str, full: dict, summary: dict) -> None:
     for folder, payload in ((p["evidence"], full), (p["docs_evidence"], summary)):
         folder.mkdir(parents=True, exist_ok=True)
@@ -166,7 +206,7 @@ def cmd_verify(args) -> int:
     p = paths(args)
     clips, infos = _cut_clips(p)
     manifest, _, _ = _films(p)
-    films = {key: source_file(p["root"], manifest, key) for key in manifest["sources"]}
+    films = {key: source_file(p["root"], manifest, key) for key in {clip["source"] for clip in clips}}
     indexes = {key: gc.probe_keyframes(p["ffprobe"], path) for key, path in films.items()}
 
     def check(clip: dict) -> tuple[str, dict]:
@@ -207,24 +247,53 @@ def _tree_hashes(folder: Path) -> dict[str, str]:
     return {path.relative_to(folder).as_posix(): file_sha256(path) for path in sorted(folder.rglob("*")) if path.is_file()}
 
 
+def _backup_unlabelled(p, files: list[Path]) -> None:
+    """Before --replace: only an untouched migration (revision 0, one history line) is replaced, after a
+    dated backup zip in annotations/ that is read back and checked file by file."""
+    labels = read_json(p["set"] / "events.json") if (p["set"] / "events.json").exists() else {}
+    history_path = p["set"] / "label-history.jsonl"
+    history = history_path.read_text(encoding="utf-8").splitlines() if history_path.exists() else []
+    if labels.get("revision", 0) != 0 or len(history) > 1 or \
+            any(json.loads(line).get("actor") != "migration" for line in history):
+        raise SystemExit("v2 has labels or history beyond the migration; not replacing them")
+    extra = [path for path in (p["clips"],) if path.exists()]
+    target = p["root"] / "annotations" / f"golden-v2-staging-backup-{_stamp()}.zip"
+    names = {}
+    with zipfile.ZipFile(target, "x", zipfile.ZIP_DEFLATED) as archive:
+        for path in [*files, *extra]:
+            name = path.relative_to(p["root"]).as_posix()
+            archive.write(path, name)
+            names[name] = file_sha256(path)
+    with zipfile.ZipFile(target) as archive:
+        for name, digest in names.items():
+            if hashlib.sha256(archive.read(name)).hexdigest() != digest:
+                raise SystemExit(f"backup {target} does not hold {name} intact")
+    print(f"backup {target} ({len(names)} files, checked)", flush=True)
+
+
 def cmd_migrate(args) -> int:
     p = paths(args)
     clips, infos = _cut_clips(p)
     targets = [p["set"] / name for name in ("segments.json", "events.json", "label-history.jsonl")]
     suggestions_target = p["root"] / "reports/benchmarks/golden-v2/prefill/suggestions.json"
-    if any(path.exists() for path in [*targets, suggestions_target]):
-        raise SystemExit("v2 labels or suggestions exist already; not overwriting them")
+    existing = [path for path in [*targets, suggestions_target] if path.exists()]
+    if existing and not args.replace:
+        raise SystemExit("v2 labels or suggestions exist already; not overwriting them (--replace)")
+    if existing:
+        _backup_unlabelled(p, existing)
     before = _tree_hashes(p["golden"])
-    _, _, parts = _films(p)
+    films_manifest, _, parts = _films(p)
     periods = gc.sampling_periods(read_json(p["profiles"]))
-    manifest, labels, history = gc.build_v2(parts, clips, infos, periods, _approximate(p, parts))
+    manifest, labels, history = gc.build_v2(parts, clips, infos, periods, _approximate(p, parts),
+                                            films=_kept_films(films_manifest))
     for event in labels["events"]:
         validate_event(event, manifest)  # raises on any label the shift broke
     write_json_atomic(targets[0], manifest)
     write_json_atomic(targets[1], labels)
     targets[2].write_text(json.dumps(history, ensure_ascii=False) + "\n", encoding="utf-8")
     load_golden_sets(p["staging"], ["v2"])  # the written set loads like any other
-    offsets = {s["id"]: next(c["origin_seconds"] for c in clips if c["key"] == s["source"]) for s in manifest["segments"]}
+    offsets = {s["id"]: next(c["origin_seconds"] for c in clips if c["key"] == s["source"])
+               for s in manifest["segments"] if is_clip(manifest["sources"][s["source"]])}
     payloads = {}
     for name, part in parts.items():
         path = p["root"] / f"reports/benchmarks/golden-{name}/prefill/suggestions.json"
@@ -233,7 +302,8 @@ def cmd_migrate(args) -> int:
     write_json_atomic(suggestions_target, gc.migrate_suggestions(payloads, offsets, labels["manifest_sha256"]))
     if _tree_hashes(p["golden"]) != before:
         raise SystemExit("annotations/golden changed during the migration; check it before going on")
-    print(f"v2: {len(manifest['sources'])} clips, {len(manifest['segments'])} segments, {len(labels['events'])} labels "
+    print(f"v2: {len(clips)} clips, {len(manifest['sources']) - len(clips)} films, {len(manifest['segments'])} segments, "
+          f"{len(labels['events'])} labels "
           f"in {p['set']}; manifest {labels['manifest_sha256'][:12]}", flush=True)
     return 0
 
@@ -257,6 +327,10 @@ def cmd_gate_score(args) -> int:
     clip_queues, offsets = {}, {}
     for key, source in clip_manifest["sources"].items():
         if source.get("scored") is False:
+            continue
+        if not is_clip(source):  # a kept film scores its own queue unchanged
+            clip_queues[key] = film_queues[by_sha[source["sha256"]]]
+            offsets.update({s["id"]: Fraction(0) for s in clip_manifest["segments"] if s["source"] == key})
             continue
         origin = source["origin"]
         offset = origin["origin_pts"] * Fraction(origin["time_base"])
@@ -360,7 +434,10 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_parser("cut")
     verify = sub.add_parser("verify")
     verify.add_argument("--workers", type=int, default=2)
-    sub.add_parser("migrate")
+    drop = sub.add_parser("drop-clips")
+    drop.add_argument("--confirm", action="store_true", help="really delete the unplanned staging clips")
+    migrate = sub.add_parser("migrate")
+    migrate.add_argument("--replace", action="store_true", help="rewrite an unlabelled earlier migration")
     gate = sub.add_parser("gate-score")
     gate.add_argument("--scorecard", required=True, help="scorecard.json of v1 + v1.1 whose film queues are reused")
     diff = sub.add_parser("gate-diff")
@@ -369,7 +446,8 @@ def main(argv: list[str] | None = None) -> int:
     activate = sub.add_parser("activate")
     activate.add_argument("--confirm", action="store_true", help="really move the folders (the user's call)")
     args = parser.parse_args(argv)
-    return {"plan": cmd_plan, "cut": cmd_cut, "verify": cmd_verify, "migrate": cmd_migrate,
+    return {"plan": cmd_plan, "cut": cmd_cut, "verify": cmd_verify, "drop-clips": cmd_drop_clips,
+            "migrate": cmd_migrate,
             "gate-score": cmd_gate_score, "gate-diff": cmd_gate_diff,
             "activate": cmd_activate}[args.command](args)
 
