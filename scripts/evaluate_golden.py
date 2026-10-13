@@ -260,7 +260,7 @@ def run_clips(args, manifest: dict) -> None:
 
     The trials run in a throw-away root (scripts/golden_trial_root.py) whose own input holds a copy of
     the clips: the localize_logo stage reads only videos inside its root's input, and clips never go in
-    the real one. Its reports folder is a junction to this root's, so the queues are read from here.
+    the real one. Each trial's folders are moved into this root's reports and scored from there.
     """
     import golden_trial_root
     queues, trials = [], []
@@ -270,11 +270,13 @@ def run_clips(args, manifest: dict) -> None:
         for argv in clip_trial_argv(manifest, trial_root, trial_root / "input" / "golden"):
             print("RUN " + " ".join(argv[2:]), flush=True)
             summary = _run_trial(argv)
+            golden_trial_root.harvest(trial_root, ROOT)
             trials.append(ROOT / "reports/benchmarks" / summary["trial"])
             queues.append(ROOT / "reports/jobs" / summary["trial"] / "review-queue.json")
             print(f"DONE {argv[argv.index('--golden-clip') + 1]}: {summary['total_wall_seconds']:.0f}s, "
                   f"original data preserved={summary['preserved_original_data']}", flush=True)
     finally:
+        golden_trial_root.harvest(trial_root, ROOT)  # a failed trial's logs too
         golden_trial_root.remove(trial_root, ROOT)
     args.queue, args.trial = [str(q) for q in queues], [str(t) for t in trials]
     score_command(args)

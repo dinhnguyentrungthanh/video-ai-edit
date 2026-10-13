@@ -5,8 +5,11 @@ go in the real input (the watcher would make jobs of them). A trial root under <
   - a copy of the clip set in its own input/golden/<set> (clips and label files, SHA-256 checked);
   - copies of scripts, config and the files the stages read, and a read-only snapshot of the state
     they read (brand and studio-logo memory, the job database), so nothing writes to the real state;
-  - junctions to the install's code, models, tools, runtime, caches and reports, so the stages run the
-    same code on the same models and write their reports where whole-film trials write theirs.
+  - junctions to the install's code, models, tools, runtime and caches, so the stages run the same code
+    on the same models;
+  - its own reports folder (the scheduler keeps artifacts inside its root): harvest() moves each
+    trial's folders into the install's reports/benchmarks and reports/jobs, where whole-film trials
+    keep theirs.
 remove() takes the junctions down first (os.rmdir removes a junction, never its target) and deletes
 nothing while any link is left. Windows only (junctions).
 """
@@ -21,12 +24,13 @@ from pathlib import Path
 from urllib.parse import quote
 
 PREFIX = "golden-trial-root-"
-LINKS = ("src", "models", "tools", "runtime", "cache", "reports", ".venv")
+LINKS = ("src", "models", "tools", "runtime", "cache", ".venv")
 COPIES = ("scripts", "config", "pyproject.toml", "requirements.lock.txt",
           "annotations/text_semantics_seed_v1.json", "annotations/review-regression-v1.json",
           "state/brand-memory.json", "state/studio-logo-memory.json", "state/studio-logo-frames")
 DATABASE = "state/control-center.sqlite3"
-EMPTY = ("input", "work", "previews", "logs", "temp", "output")
+EMPTY = ("input", "work", "previews", "logs", "temp", "output", "reports/benchmarks", "reports/jobs")
+HARVESTED = ("reports/benchmarks", "reports/jobs")
 IGNORED = shutil.ignore_patterns("__pycache__", "*.pyc")
 
 
@@ -92,12 +96,28 @@ def create(install: Path, golden_root: Path, set_name: str) -> Path:
         if (install / DATABASE).is_file():
             _snapshot(install / DATABASE, root / DATABASE)
         for name in EMPTY:
-            (root / name).mkdir(exist_ok=True)
+            (root / name).mkdir(parents=True, exist_ok=True)
         _copy_set(Path(golden_root), set_name, root / "input" / "golden" / set_name)
     except BaseException:
         remove(root, install)
         raise
     return root
+
+
+def harvest(root: Path, install: Path) -> list[Path]:
+    """Move every trial folder of the trial root's reports into the install's (same volume: a rename)."""
+    install = Path(install).resolve(strict=True)
+    _check_place(install, Path(root))
+    moved = []
+    for name in HARVESTED:
+        for folder in sorted((Path(root) / name).iterdir()):
+            target = install / name / folder.name
+            if target.exists() or _is_link(folder):
+                raise RuntimeError(f"cannot move {folder} to {target}")
+            target.parent.mkdir(parents=True, exist_ok=True)
+            folder.rename(target)
+            moved.append(target)
+    return moved
 
 
 def _left_links(folder: Path) -> list[Path]:

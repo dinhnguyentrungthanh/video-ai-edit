@@ -61,6 +61,23 @@ class TrialRootTest(unittest.TestCase):
         self.assertEqual((self.install / "models/m.bin").read_bytes(), b"model")
         self.assertTrue((self.golden / "v2/media/c.mp4").exists())
 
+    def test_trial_folders_move_to_the_install_reports(self):
+        root = gtr.create(self.install, self.golden, "v2")
+        try:
+            self.assertFalse(gtr._is_link(root / "reports"))  # the scheduler keeps artifacts inside its root
+            (root / "reports/jobs/trial-a").mkdir()
+            (root / "reports/jobs/trial-a/review-queue.json").write_text("{}", encoding="utf-8")
+            (root / "reports/benchmarks/trial-a").mkdir()
+            moved = gtr.harvest(root, self.install)
+            self.assertEqual(sorted(p.relative_to(self.install.resolve()).as_posix() for p in moved),
+                             ["reports/benchmarks/trial-a", "reports/jobs/trial-a"])
+            self.assertTrue((self.install / "reports/jobs/trial-a/review-queue.json").exists())
+            (root / "reports/jobs/trial-a").mkdir()
+            with self.assertRaises(RuntimeError):  # never over an existing folder
+                gtr.harvest(root, self.install)
+        finally:
+            gtr.remove(root, self.install)
+
     def test_removal_refuses_another_folder_and_a_left_link(self):
         with self.assertRaises(ValueError):
             gtr.remove(self.install / "reports", self.install)
