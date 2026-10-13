@@ -479,11 +479,14 @@ BASELINE_R469 = ROOT / "reports/benchmarks/golden-baseline-v1-r469-20260930-2358
 BASELINE_QUEUES = {"troy": "troy-allgroups-full-fast-20260930-162534",
                    "conan20": "conan20-allgroups-full-fast-20260930-073627",
                    "conan21": "conan21-allgroups-full-golden-20260930-222720"}
+# v1 stays readable after the Golden v2 activation moves it to golden-retired (docs/handoff/G-golden-clips.md).
+V1_DIR = next((folder for folder in (ROOT / "annotations/golden/v1", ROOT / "annotations/golden-retired/v1")
+               if (folder / "events.json").exists()), ROOT / "annotations/golden/v1")
 
 
 def _baseline_available() -> bool:
     try:
-        labels = json.loads((ROOT / "annotations/golden/v1/events.json").read_text(encoding="utf-8"))
+        labels = json.loads((V1_DIR / "events.json").read_text(encoding="utf-8"))
         return (BASELINE_R469 / "scorecard.json").exists() and labels.get("revision") == 469 and all(
             (ROOT / "reports/jobs" / job / "review-queue.json").exists() for job in BASELINE_QUEUES.values())
     except (OSError, ValueError):
@@ -503,7 +506,7 @@ class V1BaselineR469Test(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp:  # labels are read from a copy; annotations/ is never opened
             (Path(temp) / "v1").mkdir()
             for name in ("segments.json", "events.json"):
-                shutil.copy2(ROOT / "annotations/golden/v1" / name, Path(temp) / "v1" / name)
+                shutil.copy2(V1_DIR / name, Path(temp) / "v1" / name)
             manifest_doc, labels, parts = load_golden_sets(Path(temp), ["v1"])
         queues = {key: read_json(ROOT / "reports/jobs" / job / "review-queue.json") for key, job in BASELINE_QUEUES.items()}
         prefill = ROOT / "reports/benchmarks/golden-v1/prefill/suggestions.json"

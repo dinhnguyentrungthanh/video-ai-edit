@@ -684,5 +684,79 @@ class ModuleContractTests(unittest.TestCase):
         self.assertEqual(found, set(JOB_SETTING_NAMES))
 
 
+class HybridGoldenV2ActivationTests(PurgeFixture):
+    """The hybrid Golden v2 as migrate writes it (docs/handoff/G-golden-clips.md): clips of the live-action
+    film, the animation films whole. Before activation every Golden job is locked; after it (v2 in golden/,
+    v1 and v1.1 in golden-retired/) only the clipped film is free, and the clip sources read cleanly."""
+
+    CAREFUL = {"careful": {"animation_sample_fps": 2.0, "adult_sample_fps": 2.0, "gore_sample_fps": 2.0,
+                           "violence_sample_fps": 8.0, "text_sample_every": 3.0, "logo_sample_every": 2.0,
+                           "logo_boundary_sample_every": 0.25}}
+
+    def film(self, job, style):
+        return {"job_id": job["id"], "path": Path(job["source_path"]).relative_to(self.root).as_posix(),
+                "sha256": job["source_sha256"], "size_bytes": job["source_size_bytes"], "duration_seconds": 1000.0,
+                "width": 1920, "height": 1080, "fps": 25.0, "content_style": style}
+
+    def write_set(self, folder, manifest, events=()):
+        from biliflow.golden_set import canonical_sha256, write_json_atomic
+        write_json_atomic(folder / "segments.json", manifest)
+        write_json_atomic(folder / "events.json", {
+            "schema_version": 1, "golden_set": manifest["golden_set"], "manifest_sha256": canonical_sha256(manifest),
+            "revision": 1, "segments": {s["id"]: {"status": "complete", "completed_at": "t"} for s in manifest["segments"]},
+            "events": list(events)})
+
+    def test_only_the_clipped_film_is_unlocked_and_clips_read_cleanly(self):
+        from fractions import Fraction
+        from biliflow import golden_clips as gc
+        from biliflow.golden_set import canonical_sha256, load_golden_sets, validate_manifest
+        live, anim_a, anim_b = self.make_job("live"), self.make_job("anim-a"), self.make_job("anim-b")
+        jobs = (live, anim_a, anim_b)
+        v1 = {"schema_version": 1, "golden_set": "v1",
+              "sources": {"l": self.film(live, "live_action"), "a": self.film(anim_a, "animation")},
+              "segments": [{"id": "L1", "source": "l", "start_seconds": 0.0, "end_seconds": 100.0, "split": "dev"},
+                           {"id": "A1", "source": "a", "start_seconds": 200.0, "end_seconds": 300.0, "split": "dev"}]}
+        v11 = {"schema_version": 1, "golden_set": "v1.1", "extends": "v1", "extends_manifest_sha256": canonical_sha256(v1),
+               "sources": dict(v1["sources"], b=self.film(anim_b, "animation")),
+               "segments": [{"id": "L2", "source": "l", "start_seconds": 500.0, "end_seconds": 600.0,
+                             "split": "holdout"},
+                            {"id": "B1", "source": "b", "start_seconds": 0.0, "end_seconds": 100.0, "split": "dev"}]}
+        golden = self.root / "annotations" / "golden"
+        self.write_set(golden / "v1", v1)
+        self.write_set(golden / "v1.1", v11)
+        manifest, _, parts = load_golden_sets(golden, ["v1", "v1.1"])
+        index = gc.VideoIndex(Fraction(1, 25000), [second * 25000 for second in range(1000)])
+        windows = [{"source": "l", "job_id": live["id"], "start": s["start_seconds"], "end": s["end_seconds"],
+                    "segment_id": s["id"], "scored": True} for s in manifest["segments"] if s["source"] == "l"]
+        clips = gc.plan_clips(windows, {"l": index}, {"l": 1000.0}, gc.sampling_periods(self.CAREFUL))
+        infos = {c["key"]: {"path": f"media/{c['key']}.mp4", "sha256": hashlib.sha256(c["key"].encode()).hexdigest(),
+                            "size_bytes": 5, "duration_seconds": float((c["end_seconds"] or 1000) - c["origin_seconds"]),
+                            "width": 1920, "height": 1080, "fps": 25.0} for c in clips}
+        v2, labels, _ = gc.build_v2(parts, clips, infos, gc.sampling_periods(self.CAREFUL), (), created_at="t",
+                                    films={"a": f"j{anim_a['id']}", "b": f"j{anim_b['id']}"})
+        validate_manifest(v2)
+        self.assertEqual(sorted(k for k, s in v2["sources"].items() if s.get("kind") == "clip"),
+                         sorted(c["key"] for c in clips))
+        staging = self.root / "annotations" / "golden-v2-staging" / "v2"
+        self.write_set(staging, v2)
+        # Staged, not active: v1 and v1.1 still lock all three films.
+        for job in jobs:
+            self.assertEqual(job_purge.protected_reason(self.root, job), job_purge.REASON_GOLDEN)
+        # Activation: v2 into golden/, v1 and v1.1 into golden-retired/.
+        retired = self.root / "annotations" / "golden-retired"
+        retired.mkdir()
+        for name in ("v1", "v1.1"):
+            (golden / name).rename(retired / name)
+        staging.rename(golden / "v2")
+        job_purge.clear_caches()
+        self.assertIsNone(job_purge.protected_reason(self.root, live))  # not REASON_GOLDEN_UNREADABLE either
+        for job in (anim_a, anim_b):
+            self.assertEqual(job_purge.protected_reason(self.root, job), job_purge.REASON_GOLDEN)
+        clip_twin = self.store.upsert_job(job_key="clip-twin", source_path=self.root / "input" / "twin.mp4",
+                                          source_sha256=infos[clips[0]["key"]]["sha256"], source_size_bytes=5,
+                                          source_mtime_ns=1, content_style="live_action", state="COMPLETED")
+        self.assertEqual(job_purge.protected_reason(self.root, clip_twin), job_purge.REASON_GOLDEN)
+
+
 if __name__ == "__main__":
     unittest.main()
