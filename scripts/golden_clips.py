@@ -248,7 +248,8 @@ def cmd_gate_score(args) -> int:
         if file_sha256(path) != row["sha256"]:
             raise SystemExit(f"{path} changed since the scorecard was made")
         film_queues[key] = read_json(path)
-        provenance[key] = row["path"]
+        # Job id and queue hash only: the public evidence never names a film or its files.
+        provenance[f"job {film_manifest['sources'][key]['job_id']}"] = {"queue_sha256": row["sha256"]}
     film_card, _ = score_sets(film_manifest, film_labels, film_parts, film_queues, None, _approximate(p, film_parts))
     by_sha = {source["sha256"]: key for key, source in film_manifest["sources"].items()}
     clip_queues, offsets = {}, {}
@@ -268,7 +269,8 @@ def cmd_gate_score(args) -> int:
                "scored_segments": sum(1 for s in film_card["segments"] if s["scored_groups"]),
                "metrics_all": {group: film_card["metrics"][group]["all"] for group in film_card["metrics"]},
                "problems": problems[:200], "problem_count": len(problems)}
-    _write_evidence(p, f"gate-b1-{_stamp()}.json", dict(summary, film_card=film_card, clip_card=clip_card), summary)
+    full = dict(summary, scorecard=str(Path(args.scorecard)), film_card=film_card, clip_card=clip_card)
+    _write_evidence(p, f"gate-b1-{_stamp()}.json", full, summary)
     print(f"labels {summary['labels']}, items {summary['items']}, problems {len(problems)}", flush=True)
     for problem in problems[:20]:
         print("  " + problem, flush=True)

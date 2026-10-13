@@ -242,6 +242,25 @@ class MigrationTest(unittest.TestCase):
         self.assertTrue(any("gs-S2-0001" in p for p in problems), problems)
 
 
+class WatermarkDecisionMergeTest(unittest.TestCase):
+    BOX = {"x": 1, "y": 2, "width": 30, "height": 10}
+
+    def test_the_same_answer_in_two_sets_becomes_one_entry_keeping_both_records(self):
+        first = {"decision": "confirmed", "at": "2026-09-30", "region_source_pixels": self.BOX, "events": ["a"]}
+        second = {"decision": "confirmed", "at": "2026-10-01", "region_source_pixels": self.BOX, "events": ["b"]}
+        merged = gc._merge_decision(gc._merge_decision(None, first, "v1", "v1"), second, "v1.1", "v1")
+        self.assertEqual((merged["decision"], merged["at"], merged["events"]), ("confirmed", "2026-09-30", ["a", "b"]))
+        self.assertEqual(merged["sets"], {"v1": first, "v1.1": second})
+        declined = gc._merge_decision({"decision": "declined", "at": "2"}, {"decision": "declined", "at": "1"},
+                                      "v1.1", "v1")
+        self.assertNotIn("events", declined)
+
+    def test_different_answers_are_refused(self):
+        with self.assertRaises(ValueError):
+            gc._merge_decision({"decision": "confirmed", "region_source_pixels": self.BOX},
+                               {"decision": "declined"}, "v1.1", "v1")
+
+
 class ClipSourceTest(unittest.TestCase):
     def test_a_clip_path_resolves_in_its_set_folder_only(self):
         with tempfile.TemporaryDirectory() as folder:
@@ -254,6 +273,34 @@ class ClipSourceTest(unittest.TestCase):
             self.assertEqual(source_file(root, manifest, "c", set_dir=set_dir), (set_dir / "media/c.mp4").resolve())
             with self.assertRaises(ValueError):
                 source_file(root, manifest, "c")  # a clip needs its set folder
+
+
+class WindowSourceTest(unittest.TestCase):
+    def _set(self, root: Path, name: str, sources: dict) -> None:
+        (root / "annotations/golden" / name).mkdir(parents=True)
+        write_json_atomic(root / "annotations/golden" / name / "segments.json", {"sources": sources})
+
+    def test_a_covering_clip_wins_and_a_film_is_the_fallback(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            origin = {"job_id": 38, "origin_pts": 90000 * 1200, "end_pts": 90000 * 1500, "time_base": "1/90000"}
+            self._set(root, "v2", {"c": {"kind": "clip", "path": "media/c.mp4", "origin": origin}})
+            self._set(root, "v1", {"f": {"job_id": 38, "path": "input/film.mkv"}})
+            self.assertEqual(gc.window_source(root, 38, 1250.0, 150.0),
+                             (root / "annotations/golden/v2/media/c.mp4", 50.0))
+            self.assertEqual(gc.window_source(root, 38, 1400.0, 150.0), (root / "input/film.mkv", 1400.0))
+            self.assertEqual(gc.film_source(root, 38), root / "input/film.mkv")
+            with self.assertRaises(ValueError):
+                gc.window_source(root, 37, 0.0, 10.0)
+
+    def test_without_a_film_set_a_full_film_run_stops(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            origin = {"job_id": 39, "origin_pts": 0, "end_pts": None, "time_base": "1/25000"}
+            self._set(root, "v2", {"c": {"kind": "clip", "path": "media/c.mp4", "origin": origin}})
+            self.assertEqual(gc.window_source(root, 39, 9000.0, 150.0)[1], 9000.0)
+            with self.assertRaises(SystemExit):
+                gc.film_source(root, 39)
 
 
 if __name__ == "__main__":

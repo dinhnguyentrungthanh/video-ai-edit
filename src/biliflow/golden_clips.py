@@ -250,6 +250,43 @@ def verify_clip(ffmpeg: Path, source: Path, clip_path: Path, index: VideoIndex, 
     return compare_frames(clip, film, origin_pts, end_pts)
 
 
+def window_source(root: Path, job_id: int, start: float, duration: float,
+                  golden_root: Path | None = None) -> tuple[Path, float]:
+    """(file, start within it) of a window of a Golden film, for benchmark excerpts.
+
+    An active clip set (v2) that covers the whole window wins (scored or benchmark clip);
+    otherwise a film source of that job in an active set (v1/v1.1 before v2 is activated).
+    """
+    from biliflow.golden_set import is_clip, read_json
+    golden_root = Path(golden_root or Path(root) / "annotations/golden")
+    film = None
+    for path in sorted(golden_root.glob("*/segments.json")):
+        for source in read_json(path)["sources"].values():
+            origin = source.get("origin") or {}
+            if is_clip(source) and origin.get("job_id") == job_id:
+                begin = Fraction(origin["origin_pts"]) * Fraction(origin["time_base"])
+                end = None if origin.get("end_pts") is None else Fraction(origin["end_pts"]) * Fraction(origin["time_base"])
+                if begin <= Fraction(str(start)) and (end is None or Fraction(str(start)) + Fraction(str(duration)) <= end):
+                    return path.parent / source["path"], float(Fraction(str(start)) - begin)
+            elif not is_clip(source) and source.get("job_id") == job_id and film is None:
+                film = Path(root) / source["path"]
+    if film is None:
+        raise ValueError(f"Không có clip hay phim vàng nào của job {job_id} chứa {start}+{duration} s")
+    return film, float(start)
+
+
+def film_source(root: Path, job_id: int, golden_root: Path | None = None) -> Path:
+    """The whole original film of a Golden job, while a film set (v1/v1.1) is still active."""
+    from biliflow.golden_set import is_clip, read_json
+    golden_root = Path(golden_root or Path(root) / "annotations/golden")
+    for path in sorted(golden_root.glob("*/segments.json")):
+        for source in read_json(path)["sources"].values():
+            if not is_clip(source) and source.get("job_id") == job_id:
+                return Path(root) / source["path"]
+    raise SystemExit(f"Cần phim gốc của job {job_id} cho lượt cả phim, nhưng bộ vàng đang hoạt động chỉ còn clip "
+                     "(Golden v2); lượt cả phim cũ chỉ còn là bằng chứng lịch sử")
+
+
 # --- shifting into clip time -----------------------------------------------------------------
 
 def shifted(value: Any, offset: Fraction) -> float:
@@ -333,7 +370,7 @@ def build_v2(parts: dict[str, dict[str, Any]], clips: list[dict[str, Any]], info
                              if clip["source"] in part["manifest"]["sources"])
         sources[clip["key"]] = clip_source(clip, origin_source, infos[clip["key"]])
     segments, events, statuses, resolutions, decisions = [], [], {}, {}, {}
-    retired, reopened = [], []
+    retired, reopened, owner = [], [], {}
     for name, part in parts.items():
         labels = part["labels"]
         offset_of = {}
@@ -354,7 +391,7 @@ def build_v2(parts: dict[str, dict[str, Any]], clips: list[dict[str, Any]], info
                 moved["suggestion"] = shift_suggestion(value["suggestion"], offset_of[value["segment_id"]][0])
             _put_unique(resolutions, key, moved, "suggestion_resolutions")
         for key, value in (labels.get("watermark_decisions") or {}).items():
-            _put_unique(decisions, key, value, "watermark_decisions")
+            decisions[key] = _merge_decision(decisions.get(key), value, name, owner.setdefault(key, name))
         retired += [x for x in labels.get("retired_event_ids") or () if x not in retired]
         reopened += [x for x in labels.get("reopened_suggestions") or () if x not in reopened]
     manifest = {"schema_version": SCHEMA_VERSION, "golden_set": "v2", "created_at": created_at,
@@ -377,6 +414,28 @@ def build_v2(parts: dict[str, dict[str, Any]], clips: list[dict[str, Any]], info
                "after": {"manifest_sha256": labels["manifest_sha256"], "events": len(events),
                          "segments": len(segments), "clips": len(sources)}}
     return manifest, labels, history
+
+
+def _merge_decision(earlier: dict[str, Any] | None, value: dict[str, Any], name: str,
+                    first: str) -> dict[str, Any]:
+    """One film-long watermark answered in two sets (each set asked it for its own segments).
+
+    The same answer on the same box becomes one entry listing both sets' labels, with both
+    original records kept under ``sets``; different answers are refused.
+    """
+    if earlier is None:
+        return value
+    if (earlier.get("decision"), earlier.get("region_source_pixels")) != \
+            (value.get("decision"), value.get("region_source_pixels")):
+        raise ValueError(f"watermark_decisions: hai bộ trả lời khác nhau cho cùng watermark ({name})")
+    originals = dict(earlier.get("sets") or {first: earlier}, **{name: value})
+    merged = {key: item for key, item in earlier.items() if key not in ("sets", "events", "at")}
+    merged["at"] = min(str(record.get("at") or "") for record in originals.values())
+    events = [event for record in originals.values() for event in record.get("events") or ()]
+    if events:
+        merged["events"] = events
+    merged["sets"] = originals
+    return merged
 
 
 def _put_unique(target: dict[str, Any], key: str, value: Any, what: str) -> None:

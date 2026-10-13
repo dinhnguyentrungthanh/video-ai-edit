@@ -31,24 +31,28 @@ OUT = ROOT / "reports/benchmarks/anime-safety-h"
 FFMPEG = ROOT / "tools/ffmpeg/bin/ffmpeg.exe"
 FFPROBE = ROOT / "tools/ffmpeg/bin/ffprobe.exe"
 MODEL = ROOT / "models/wd_vit_tagger_v3"
-EXCERPTS = (("conan20-3300", "conan20", 3300.0, 150.0), ("conan21-0000", "conan21", 0.0, 150.0))
+EXCERPTS = (("conan20-3300", 38, 3300.0, 150.0), ("conan21-0000", 37, 0.0, 150.0))  # (name, job, start, duration)
 IGNORED = {"metrics", "runtime", "created_at"}
 
 
 def _manifest() -> dict:
-    return json.loads((ROOT / "annotations/golden/v1/segments.json").read_text(encoding="utf-8"))
+    path = ROOT / "annotations/golden/v1/segments.json"
+    if not path.exists():
+        raise SystemExit("Full-film runs need Golden v1 and its films; once Golden v2 (clips) is active they are "
+                         "historical evidence only")
+    return json.loads(path.read_text(encoding="utf-8"))
 
 
 def excerpts(args=None) -> list[Path]:
-    manifest = _manifest()
+    from biliflow.golden_clips import window_source
     paths = []
-    for name, source, start, duration in EXCERPTS:
+    for name, job_id, start, duration in EXCERPTS:
         target = OUT / "excerpts" / f"{name}.mp4"
         if not target.exists():
             target.parent.mkdir(parents=True, exist_ok=True)
-            subprocess.run([str(FFMPEG), "-hide_banner", "-loglevel", "error", "-ss", str(start), "-t", str(duration),
-                            "-i", str(ROOT / manifest["sources"][source]["path"]), "-map", "0:v:0", "-c", "copy",
-                            "-an", str(target)], check=True)
+            video, offset = window_source(ROOT, job_id, start, duration)
+            subprocess.run([str(FFMPEG), "-hide_banner", "-loglevel", "error", "-ss", str(offset), "-t", str(duration),
+                            "-i", str(video), "-map", "0:v:0", "-c", "copy", "-an", str(target)], check=True)
         paths.append(target)
         print(f"excerpt {target.name}: {target.stat().st_size / 1e6:.1f} MB", flush=True)
     return paths

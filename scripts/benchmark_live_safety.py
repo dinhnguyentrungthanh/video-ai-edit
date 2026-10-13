@@ -30,9 +30,10 @@ EXCERPTS = (("troy-0400", 400.0, 150.0), ("troy-5400", 5400.0, 150.0))
 IGNORED = {"metrics", "runtime", "created_at"}
 
 
-def _source() -> Path:
-    manifest = json.loads((ROOT / "annotations/golden/v1/segments.json").read_text(encoding="utf-8"))
-    return ROOT / manifest["sources"]["troy"]["path"]
+def _source(start: float, duration: float) -> tuple[Path, float]:
+    """The file and start of a window of job 39: its Golden v2 clip once active, else the film."""
+    from biliflow.golden_clips import window_source
+    return window_source(ROOT, 39, start, duration)
 
 
 def excerpts() -> list[Path]:
@@ -41,8 +42,9 @@ def excerpts() -> list[Path]:
         target = OUT / "excerpts" / f"{name}.mp4"
         if not target.exists():
             target.parent.mkdir(parents=True, exist_ok=True)
-            subprocess.run([str(FFMPEG), "-hide_banner", "-loglevel", "error", "-ss", str(start), "-t", str(duration),
-                            "-i", str(_source()), "-map", "0:v:0", "-c", "copy", "-an", str(target)], check=True)
+            source, offset = _source(start, duration)
+            subprocess.run([str(FFMPEG), "-hide_banner", "-loglevel", "error", "-ss", str(offset), "-t", str(duration),
+                            "-i", str(source), "-map", "0:v:0", "-c", "copy", "-an", str(target)], check=True)
         paths.append(target)
     return paths
 
@@ -198,7 +200,8 @@ def full(args) -> None:
     summary = json.loads(summary_path.read_text(encoding="utf-8")) if summary_path.exists() else {**code, "runs": {}}
     if {k: summary.get(k) for k in code} != code:
         raise SystemExit("Code changed since this full run started; start a new full run instead of resuming")
-    source = _source()
+    from biliflow.golden_clips import film_source
+    source = film_source(ROOT, 39)  # the whole film: refused once Golden v2 (clips only) is active
 
     def save():
         summary_path.write_text(json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8")
