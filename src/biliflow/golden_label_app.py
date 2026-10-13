@@ -70,7 +70,8 @@ class GoldenLabelApp:
         self.store = LabelStore(labels_dir, self.manifest, self.suggestions)
         self.set_name = str(self.manifest["golden_set"])  # validated by LabelStore: one of KNOWN_SETS
         self.watermarks = watermark_candidates(self.manifest, self.suggestions)
-        self.sources = {key: source_file(self.root, self.manifest, key) for key in self.manifest["sources"]}
+        self.sources = {key: source_file(self.root, self.manifest, key, set_dir=labels_dir)
+                        for key in self.manifest["sources"]}
         self.frames_dir = frames_dir
         self.ffmpeg = ffmpeg
         self.host, self.port = host, port

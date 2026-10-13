@@ -55,7 +55,7 @@ class SetOptionTest(unittest.TestCase):
         args = golden_prefill.parse_args(["manifest", "--set", "v1.1", "--output", "x.json"])
         self.assertEqual((args.set, args.output), ("v1.1", "x.json"))
         with patch("sys.stderr"), self.assertRaises(SystemExit):
-            golden_prefill.parse_args(["--set", "v2", "collect"])
+            golden_prefill.parse_args(["--set", "v3", "collect"])
 
     def test_use_set_switches_every_path(self):
         golden_prefill.use_set("v1.1")

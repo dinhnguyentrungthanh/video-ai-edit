@@ -252,15 +252,16 @@ def _dense_suggestions(manifest: dict) -> list[dict]:
 
 
 def collect(args) -> None:
-    from biliflow.golden_set import (GOLDEN_V1_SOURCES, canonical_sha256, carry_forward_resolved, file_sha256,
-                                     merge_suggestions, now_iso, queue_suggestions, read_json, write_json_atomic)
+    from biliflow.golden_set import (canonical_sha256, carry_forward_resolved, file_sha256, merge_suggestions,
+                                     now_iso, queue_suggestions, read_json, write_json_atomic)
     manifest = _read_manifest()
-    jobs = _jobs()
     inputs, rows = [], []
     queues = []
-    for key, spec in GOLDEN_V1_SOURCES.items():
-        for revision in jobs[spec["job_id"]]["revisions"]:
-            queues.append((f"job{spec['job_id']}-r{revision['revision']}", ROOT / revision["queue_path"]))
+    job_ids = list(dict.fromkeys(s["job_id"] for s in manifest["sources"].values() if isinstance(s.get("job_id"), int)))
+    jobs = _jobs() if job_ids else {}  # clip sources (v2) have no production job or queue
+    for job_id in job_ids:
+        for revision in jobs[job_id]["revisions"]:
+            queues.append((f"job{job_id}-r{revision['revision']}", ROOT / revision["queue_path"]))
     queues += _latest_benchmark_queues(manifest)
     for origin, path in queues:
         if not path.exists():
@@ -301,7 +302,7 @@ def dense(args) -> None:
     env = dict(os.environ, BILIFLOW_BENCHMARK_CACHE=str(cache))
     for segment in chosen:
         source = manifest["sources"][segment["source"]]
-        path = source_file(ROOT, manifest, segment["source"])
+        path = source_file(ROOT, manifest, segment["source"], set_dir=GOLDEN_DIR)
         base = PREFILL / "dense" / segment["id"]
         span = ["--start-seconds", str(segment["start_seconds"]),
                 "--duration-seconds", str(round(segment["end_seconds"] - segment["start_seconds"], 3))]

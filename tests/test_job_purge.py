@@ -264,6 +264,30 @@ class GoldenProtectionTests(PurgeFixture):
                     reason, job_purge.REASON_GOLDEN_UNREADABLE.format(path="annotations/golden/v9/segments.json"),
                 )
 
+    def test_a_clip_source_locks_only_its_own_sha256_never_its_origin_job(self):
+        origin, clip_twin = self.make_job("alpha"), self.make_job("beta")
+        self.write_golden("v2", {"j39-00816": {
+            "kind": "clip", "sha256": clip_twin["source_sha256"], "path": "media/j39-00816.mp4",
+            "origin": {"job_id": origin["id"], "sha256": origin["source_sha256"], "origin_seconds": 816.0}}})
+        self.assertIsNone(job_purge.protected_reason(self.root, origin))
+        self.assertEqual(job_purge.protected_reason(self.root, clip_twin), job_purge.REASON_GOLDEN)
+
+    def test_retired_sets_lock_nothing(self):
+        job = self.make_job("alpha")
+        path = self.root / "annotations" / "golden-retired" / "v1" / "segments.json"
+        path.parent.mkdir(parents=True)
+        path.write_text(json.dumps({"sources": {"a": {"job_id": job["id"], "sha256": "0" * 64}}}), encoding="utf-8")
+        self.assertIsNone(job_purge.protected_reason(self.root, job))
+
+    def test_a_clip_source_with_a_job_id_or_without_sha256_locks_every_delete(self):
+        job = self.make_job("alpha")
+        for source in ({"kind": "clip", "job_id": 1, "sha256": "0" * 64}, {"kind": "clip", "sha256": ""}):
+            with self.subTest(source=source):
+                path = self.write_golden("v2", {"c": source})
+                os.utime(path, ns=(path.stat().st_mtime_ns + 10**9,) * 2)
+                self.assertEqual(job_purge.protected_reason(self.root, job),
+                                 job_purge.REASON_GOLDEN_UNREADABLE.format(path="annotations/golden/v2/segments.json"))
+
     def test_the_index_follows_a_changed_file(self):
         job = self.make_job("alpha")
         path = self.write_golden("v1", {"a": {"job_id": 999, "sha256": "0" * 64, "path": "input/x.mp4"}})

@@ -9,6 +9,11 @@ Each set lives in its own directory (``annotations/golden/<set>``) with its own
 manifest, labels, history, backups and lock. A later set (v1.1) only adds
 segments: it pins the manifest it extends and copies its sources verbatim, and
 ``load_golden_sets`` combines sets read-only at scoring time.
+
+v2 (docs/handoff/G-golden-clips.md) stands alone: its sources are stream-copied
+clips (``kind: "clip"``) of the v1 and v1.1 segments, stored in the set's own
+``media`` folder; times are relative to each clip and ``origin`` records where
+the clip starts in its original film. It is never scored together with v1/v1.1.
 """
 from __future__ import annotations
 
@@ -24,8 +29,11 @@ from typing import Any, Iterable
 
 SCHEMA_VERSION = 1
 GOLDEN_SET = "v1"
-KNOWN_SETS = ("v1", "v1.1")
-SET_PARENT = {"v1": None, "v1.1": "v1"}  # the set whose manifest a later set extends (pinned by SHA-256)
+KNOWN_SETS = ("v1", "v1.1", "v2")
+SET_PARENT = {"v1": None, "v1.1": "v1", "v2": None}  # the set whose manifest a later set extends (pinned by SHA-256)
+CLIP_SETS = ("v2",)  # sets whose sources are clips; never scored together with another set
+CLIP_KIND = "clip"
+CLIP_FIELDS = ("path", "sha256", "size_bytes", "duration_seconds", "width", "height", "fps", "content_style")
 # Fields that identify a source file; a source shared by several sets must agree on all of them.
 SOURCE_IDENTITY_FIELDS = ("sha256", "size_bytes", "duration_seconds", "width", "height", "fps", "content_style")
 CATEGORIES = ("visual_logo", "text", "adult", "gore", "violence")
@@ -144,11 +152,20 @@ def validate_manifest(manifest: dict[str, Any]) -> dict[str, Any]:
     if parent and not re.fullmatch(r"[0-9a-f]{64}", str(manifest.get("extends_manifest_sha256") or "")):
         raise ValueError(f"Manifest Golden Set {name} thiếu SHA-256 của manifest {parent} mà nó mở rộng")
     sources = manifest.get("sources") or {}
+    clips = [key for key, source in sources.items() if is_clip(source)]
+    if name in CLIP_SETS and len(clips) != len(sources):
+        raise ValueError(f"Mọi nguồn của Golden Set {name} phải là clip")
+    if name not in CLIP_SETS and clips:
+        raise ValueError(f"Golden Set {name} không nhận nguồn clip ({', '.join(clips)})")
+    for key in clips:
+        _validate_clip(key, sources[key])
     seen: set[str] = set()
     for segment in manifest.get("segments") or []:
         source = sources.get(segment.get("source"))
         if source is None:
             raise ValueError(f"Đoạn {segment.get('id')} trỏ tới nguồn không có trong manifest")
+        if source.get("scored") is False:
+            raise ValueError(f"Đoạn {segment.get('id')} nằm trên clip không chấm điểm {segment['source']}")
         if segment["id"] in seen:
             raise ValueError(f"Trùng ID đoạn {segment['id']}")
         seen.add(segment["id"])
@@ -159,6 +176,26 @@ def validate_manifest(manifest: dict[str, Any]) -> dict[str, Any]:
     if not seen:
         raise ValueError("Manifest không có đoạn nào")
     return manifest
+
+
+def is_clip(source: dict[str, Any]) -> bool:
+    return isinstance(source, dict) and source.get("kind") == CLIP_KIND
+
+
+def _validate_clip(key: str, source: dict[str, Any]) -> None:
+    missing = [field for field in CLIP_FIELDS if source.get(field) in (None, "")]
+    if missing:
+        raise ValueError(f"Clip {key} thiếu {', '.join(missing)}")
+    path = Path(str(source["path"]))
+    if path.is_absolute() or ".." in path.parts or path.parts[:1] != ("media",):
+        raise ValueError(f"Clip {key} phải nằm trong thư mục media của bộ nhãn")
+    if source.get("job_id") is not None:
+        raise ValueError(f"Clip {key} không thuộc job nào; job gốc chỉ ghi trong origin")
+    origin = source.get("origin")
+    if not isinstance(origin, dict) or not isinstance(origin.get("job_id"), int) or \
+            not re.fullmatch(r"[0-9a-f]{64}", str(origin.get("sha256") or "")) or \
+            not isinstance(origin.get("origin_seconds"), (int, float)):
+        raise ValueError(f"Clip {key} thiếu origin (job gốc, SHA-256 phim gốc, giây bắt đầu)")
 
 
 def segments_by_id(manifest: dict[str, Any]) -> dict[str, dict[str, Any]]:
@@ -173,10 +210,23 @@ def file_sha256(path: Path, chunk_bytes: int = 8 * 1024 * 1024) -> str:
     return digest.hexdigest()
 
 
-def source_file(root: Path, manifest: dict[str, Any], key: str, full_hash: bool = False) -> Path:
-    """Path of a manifest source after checking its size (and SHA-256 when ``full_hash``)."""
+def source_file(root: Path, manifest: dict[str, Any], key: str, full_hash: bool = False,
+                set_dir: Path | None = None) -> Path:
+    """Path of a manifest source after checking its size (and SHA-256 when ``full_hash``).
+
+    A clip's path is relative to its set directory (``set_dir``), so the set can move as a
+    whole without changing its manifest; every other source is relative to ``root``.
+    """
     source = manifest["sources"][key]
-    path = (root / source["path"]).resolve(strict=True)
+    if is_clip(source):
+        if set_dir is None:
+            raise ValueError(f"Nguồn {key} là clip; cần thư mục của bộ nhãn để tìm file")
+        base = Path(set_dir).resolve()
+        path = (base / source["path"]).resolve(strict=True)
+        if not path.is_relative_to(base / "media"):
+            raise ValueError(f"Clip {key} nằm ngoài thư mục media của bộ nhãn")
+    else:
+        path = (root / source["path"]).resolve(strict=True)
     if not path.is_relative_to(root.resolve()):
         raise ValueError(f"Nguồn {key} nằm ngoài thư mục BiliFlow")
     if path.stat().st_size != source["size_bytes"]:
@@ -319,6 +369,8 @@ def load_golden_sets(root: Path, names: Iterable[str], labels_paths: dict[str, P
                          f"chỉ nhận {', '.join(KNOWN_SETS)}")
     if len(set(chosen)) != len(chosen):
         raise ValueError("Một bộ nhãn được chọn hai lần")
+    if len(chosen) > 1 and set(chosen) & set(CLIP_SETS):
+        raise ValueError(f"Bộ {', '.join(sorted(set(chosen) & set(CLIP_SETS)))} dùng clip; không chấm chung với bộ khác")
     extra = sorted(set(overrides) - set(chosen))
     if extra:
         raise ValueError(f"Có tệp nhãn cho bộ không được chọn: {', '.join(extra)}")

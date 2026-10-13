@@ -267,6 +267,12 @@ class ServerSetRoutingTest(unittest.TestCase):
         with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
             self.server.main(list(argv))
 
+    def test_v2_is_the_default_once_it_is_in_place(self):
+        for name in ("v1", "v2"):
+            write_json_atomic(self.root / "annotations/golden" / name / "segments.json", small_manifest(name))
+        self.run_server("--no-browser")
+        self.assertEqual(self.calls[-1]["labels_dir"], self.root / "annotations/golden/v2")
+
     def test_set_selects_every_path(self):
         for name in ("v1", "v1.1"):
             write_json_atomic(self.root / "annotations/golden" / name / "segments.json", small_manifest(name))

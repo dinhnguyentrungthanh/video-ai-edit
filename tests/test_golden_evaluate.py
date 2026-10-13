@@ -131,5 +131,28 @@ class EvaluateGoldenTest(unittest.TestCase):
                          (["advertising"], {"adult": 1, "gore": 1}))
 
 
+class ClipSetRunTest(unittest.TestCase):
+    """A clip set (v2) runs one harness trial per scored clip; its coarse boxes come from its manifest."""
+
+    def test_one_trial_per_scored_clip(self):
+        manifest = {"golden_set": "v2", "sources": {"j39-00816": {"kind": "clip", "scored": True},
+                                                     "j39-05400": {"kind": "clip", "scored": False}}}
+        with patch.object(evaluate_golden, "GOLDEN_ROOT", Path("G")), patch.object(evaluate_golden, "ROOT", Path("R")):
+            runs = evaluate_golden.clip_trial_argv(manifest)
+        self.assertEqual(len(runs), 1)
+        argv = runs[0]
+        self.assertEqual([argv[argv.index(flag) + 1] for flag in ("--golden-clip", "--golden-set", "--golden-root",
+                                                                  "--root", "--label")],
+                         ["j39-00816", "v2", "G", "R", "golden"])
+        self.assertIn("--fast-scan", argv)
+        self.assertEqual(argv[argv.index("--detectors") + 1:], list(evaluate_golden.ALL_GROUPS))
+
+    def test_approximate_suggestions_of_a_clip_set_come_from_its_manifest(self):
+        with tempfile.TemporaryDirectory() as folder, patch.object(evaluate_golden, "BENCHMARKS", Path(folder)):
+            found = evaluate_golden._approximate_suggestions(
+                {"v2": {"manifest": {"approximate_suggestions": ["sug-a", "sug-b"]}}})
+        self.assertEqual(found, {"sug-a", "sug-b"})
+
+
 if __name__ == "__main__":
     unittest.main()

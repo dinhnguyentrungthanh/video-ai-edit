@@ -8,8 +8,11 @@
   run      Isolated full-film trials through scripts/benchmark_full_advertising.py
            (all detector groups on every film unless --troy-detectors narrows Troy,
            fast_scan as in production), after re-hashing each source once; then score.
+           A clip set (v2) runs one trial per scored clip instead (--golden-clip).
   compare  Label-level differences between two scorecards. --gate detector|speed
            exits with code 1 when a pre-registered gate (§7) is violated.
+--root uses another BiliFlow folder's sources, reports and stages (e.g. the install folder from a
+worktree); --golden-root another folder of Golden Set directories (e.g. the v2 staging folder).
 Outputs go to reports/benchmarks/golden-<timestamp>/: scorecard.json (all chosen sets, with a
 "sets" block), scorecard-<set>.json per set (same pin and fingerprint as a card of that set
 alone, so gate on these), scorecard.md and frames/.
@@ -24,14 +27,30 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[1]
+CODE = Path(__file__).resolve().parents[1]  # this checkout: the harness and the biliflow package it imports
+ROOT = CODE  # the BiliFlow folder of sources, reports and stages (--root)
 GOLDEN_ROOT = ROOT / "annotations/golden"
 BENCHMARKS = ROOT / "reports/benchmarks"
 FFMPEG = ROOT / "tools/ffmpeg/bin/ffmpeg.exe"
-HARNESS = ROOT / "scripts/benchmark_full_advertising.py"
+HARNESS = CODE / "scripts/benchmark_full_advertising.py"
 MAX_FALSE_POSITIVE_FRAMES = 60
 RUNS = (("troy", 39), ("conan20", 38), ("conan21", 37))
 ALL_GROUPS = ("advertising", "adult", "gore", "violence")
+
+
+def use_root(root: Path | None, golden_root: Path | None = None) -> None:
+    """Point the data paths at another BiliFlow folder and/or another folder of Golden Sets."""
+    global ROOT, GOLDEN_ROOT, BENCHMARKS, FFMPEG
+    if root is not None:
+        ROOT = Path(root).resolve()
+        BENCHMARKS = ROOT / "reports/benchmarks"
+        FFMPEG = ROOT / "tools/ffmpeg/bin/ffmpeg.exe"
+    GOLDEN_ROOT = Path(golden_root).resolve() if golden_root is not None else ROOT / "annotations/golden"
+
+
+def _set_dir(manifest: dict) -> Path:
+    """Directory of a single set's manifest (clip paths are relative to it)."""
+    return GOLDEN_ROOT / str(manifest["golden_set"])
 
 
 def _set_names(args) -> list[str]:
@@ -110,7 +129,8 @@ def _frames(card: dict, manifest: dict, out: Path) -> dict[str, str]:
         draw = f"drawbox=x={region['x']}:y={region['y']}:w={region['width']}:h={region['height']}:color=red:t=6," \
             if region else ""
         subprocess.run([str(FFMPEG), "-hide_banner", "-loglevel", "error", "-y", "-ss", f"{seconds:.3f}",
-                        "-i", str(source_file(ROOT, manifest, source)), "-frames:v", "1",
+                        "-i", str(source_file(ROOT, manifest, source, set_dir=_set_dir(manifest))),
+                        "-frames:v", "1",
                         "-vf", draw + "scale=640:-2", "-q:v", "4", str(target)], check=True,
                        creationflags=subprocess.CREATE_NO_WINDOW)
         frames[key] = target.relative_to(out).as_posix()
@@ -138,10 +158,11 @@ def _write(combined: dict, cards: dict[str, dict], frames: bool, manifest: dict,
     return out
 
 
-def _approximate_suggestions(names: list[str]) -> set[str]:
-    """Dense logo windows (coarse routing boxes) from each set's prefill suggestions."""
+def _approximate_suggestions(parts: dict[str, dict]) -> set[str]:
+    """Dense logo windows (coarse routing boxes): listed in a v2 manifest, or from each set's prefill suggestions."""
     approximate: set[str] = set()
-    for name in names:
+    for name, part in parts.items():
+        approximate |= set(part["manifest"].get("approximate_suggestions") or ())
         path = BENCHMARKS / f"golden-{name}/prefill/suggestions.json"
         if path.exists():
             approximate |= {s["id"] for s in json.loads(path.read_text(encoding="utf-8"))["suggestions"]
@@ -154,7 +175,7 @@ def score_command(args) -> Path:
     manifest, labels, parts = _load(args)
     queues, provenance = _queues([Path(p) for p in args.queue], manifest)
     combined, cards = score_sets(manifest, labels, parts, queues, _timing([Path(t) for t in args.trial or []]),
-                                 _approximate_suggestions(list(parts)))
+                                 _approximate_suggestions(parts))
     paths = {name: str(part["labels_path"].resolve()) if part["labels_path"] else None for name, part in parts.items()}
     for name, card in cards.items():
         card["queues"] = {key: value for key, value in provenance.items() if key in parts[name]["manifest"]["sources"]}
@@ -186,9 +207,20 @@ def troy_detector_scope(requested: list[str] | None, manifest: dict, labels: dic
     return detectors, unscored
 
 
+def clip_trial_argv(manifest: dict) -> list[list[str]]:
+    """Harness argv of every scored clip of a clip set (one trial per clip, all detector groups)."""
+    from biliflow.golden_set import is_clip
+    return [[sys.executable, str(HARNESS), "run", "--label", "golden", "--golden-clip", key,
+             "--golden-set", str(manifest["golden_set"]), "--golden-root", str(GOLDEN_ROOT), "--root", str(ROOT),
+             "--fast-scan", "--detectors", *ALL_GROUPS]
+            for key, source in manifest["sources"].items() if is_clip(source) and source.get("scored") is not False]
+
+
 def run_command(args) -> None:
-    from biliflow.golden_set import source_file
+    from biliflow.golden_set import is_clip, source_file
     manifest, labels, _ = _load(args)  # fail before an hour of trials if labels are unusable
+    if any(is_clip(source) for source in manifest["sources"].values()):
+        return run_clips(args, manifest)
     jobs = dict(RUNS)
     unknown = [key for key in manifest["sources"] if key not in jobs]
     if unknown:
@@ -218,10 +250,26 @@ def run_command(args) -> None:
     score_command(args)
 
 
+def run_clips(args, manifest: dict) -> None:
+    """One isolated trial per scored clip (SHA-256 checked by the harness), then score."""
+    queues, trials = [], []
+    for argv in clip_trial_argv(manifest):
+        print("RUN " + " ".join(argv[2:]), flush=True)
+        summary = _run_trial(argv)
+        trials.append(ROOT / "reports/benchmarks" / summary["trial"])
+        queues.append(ROOT / "reports/jobs" / summary["trial"] / "review-queue.json")
+        print(f"DONE {argv[argv.index('--golden-clip') + 1]}: {summary['total_wall_seconds']:.0f}s, "
+              f"original data preserved={summary['preserved_original_data']}", flush=True)
+    args.queue, args.trial = [str(q) for q in queues], [str(t) for t in trials]
+    score_command(args)
+
+
 def _run_trial(argv: list[str]) -> dict:
     """Stream the harness output (progress, errors) and return its final JSON summary line."""
     lines: list[str] = []
-    env = dict(os.environ, PYTHONIOENCODING="utf-8")
+    # The harness imports this checkout's biliflow package; the stages it starts use their own root's.
+    env = dict(os.environ, PYTHONIOENCODING="utf-8",
+               PYTHONPATH=os.pathsep.join(filter(None, [str(CODE / "src"), os.environ.get("PYTHONPATH")])))
     with subprocess.Popen(argv, cwd=ROOT, env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                           text=True, encoding="utf-8", errors="replace") as process:
         for line in process.stdout:
@@ -276,11 +324,16 @@ def main() -> int:
     r.add_argument("--no-frames", action="store_true")
     r.add_argument("--set", action="append", choices=KNOWN_SETS, help=set_help)
     r.add_argument("--labels", action="append", help=labels_help)
+    for command in (s, r):
+        command.add_argument("--root", help="BiliFlow folder of sources, reports and stages (default: this checkout)")
+        command.add_argument("--golden-root", help="folder of Golden Set directories (default <root>/annotations/golden)")
     c = sub.add_parser("compare")
     c.add_argument("--baseline", required=True)
     c.add_argument("--candidate", required=True)
     c.add_argument("--gate", choices=("detector", "speed"))
     args = parser.parse_args()
+    if args.command in ("score", "run"):
+        use_root(Path(args.root) if args.root else None, Path(args.golden_root) if args.golden_root else None)
     if args.command == "score":
         score_command(args)
     elif args.command == "run":

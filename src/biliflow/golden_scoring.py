@@ -482,6 +482,9 @@ SET_LIMITS = {
           "detector từng báo, T3 là đối chứng.",
     "v1.1": "Golden Set v1.1: vẫn 3 nguồn đó (không thêm nguồn mới), đoạn chọn theo chỗ detector từng báo hoặc "
             "bỏ sót; không có thêm logo hãng phim; nhãn bạo lực phụ thuộc quy ước bạo lực người dùng chọn.",
+    "v2": "Golden Set v2: 19 đoạn của v1 + v1.1 (job 39 L, job 38 và 37 H) dưới dạng clip cắt không mã hóa lại; "
+          "không có ngữ cảnh cả phim (watermark suốt phim, cửa sổ 30 s đầu/cuối phim, trần mỗi phim); "
+          "clip H không bắt đầu ở giây 0 lấy mẫu lệch lưới dưới một chu kỳ.",
 }
 
 
