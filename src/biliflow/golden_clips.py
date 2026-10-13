@@ -276,7 +276,7 @@ def window_source(root: Path, job_id: int, start: float, duration: float,
 
 
 def film_source(root: Path, job_id: int, golden_root: Path | None = None) -> Path:
-    """The whole original film of a Golden job, while a film set (v1/v1.1) is still active."""
+    """The whole original film of a Golden job, while an active set keeps it (v1/v1.1, or a film source of v2)."""
     from biliflow.golden_set import is_clip, read_json
     golden_root = Path(golden_root or Path(root) / "annotations/golden")
     for path in sorted(golden_root.glob("*/segments.json")):
@@ -284,7 +284,7 @@ def film_source(root: Path, job_id: int, golden_root: Path | None = None) -> Pat
             if not is_clip(source) and source.get("job_id") == job_id:
                 return Path(root) / source["path"]
     raise SystemExit(f"Cần phim gốc của job {job_id} cho lượt cả phim, nhưng bộ vàng đang hoạt động chỉ còn clip "
-                     "(Golden v2); lượt cả phim cũ chỉ còn là bằng chứng lịch sử")
+                     "của job này (Golden v2); lượt cả phim cũ của nó chỉ còn là bằng chứng lịch sử")
 
 
 # --- shifting into clip time -----------------------------------------------------------------

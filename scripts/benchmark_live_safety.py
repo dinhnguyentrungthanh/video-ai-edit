@@ -201,7 +201,7 @@ def full(args) -> None:
     if {k: summary.get(k) for k in code} != code:
         raise SystemExit("Code changed since this full run started; start a new full run instead of resuming")
     from biliflow.golden_clips import film_source
-    source = film_source(ROOT, 39)  # the whole film: refused once Golden v2 (clips only) is active
+    source = film_source(ROOT, 39)  # the whole film: refused once Golden v2 is active (job 39 has only clips there)
 
     def save():
         summary_path.write_text(json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8")
