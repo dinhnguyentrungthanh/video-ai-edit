@@ -1,6 +1,6 @@
 # Bàn giao G – Phim vàng thành clip (Golden v2)
 - Nhánh: `feat/golden-clips` (từ `origin/main` ed39653) · Cập nhật: 2026-10-13
-- Chạy ở: PC (worktree `temp\wt-golden-clips`) · Trạng thái: **Bước 2: cổng a và b1 đạt; đang chạy lượt cả phim cuối và b2**
+- Chạy ở: PC (worktree `temp\wt-golden-clips`) · Trạng thái: **v2 lai dựng xong trong staging; chờ người dùng duyệt mốc chuẩn v2 và văn bản AGENTS.md**
 
 ## Đã xong
 - Bước 0: sao lưu `annotations\golden` thành `annotations\golden-backup-20261013.zip` (22 file, 283 685 byte,
@@ -9,62 +9,61 @@
   không đổi trong lúc nén.
 - Bước 1: thiết kế bên dưới; người dùng duyệt ngày 13/10 (trả lời mục 9: có cả 5; AGENTS.md mục 7 duyệt, sửa
   một chỗ "plus one unscored benchmark clip of job 39").
-- Bước 2 (commit 7490ec5 → hiện tại, chưa push, chưa gộp):
-  - Code: `golden_set.py` (bộ v2 kiểu clip, `source_file(set_dir=…)`, không chấm chung v2 với bộ khác),
-    `golden_clips.py` (lập kế hoạch, cắt, cổng khung, dời giờ, chuyển nhãn, `window_source`, `run_differences`),
-    `job_purge._read_golden` (nguồn clip chỉ khóa SHA-256 của nó), `evaluate_golden.py` (`--root`,
-    `--golden-root`, chạy từng clip), `benchmark_full_advertising.py` (`--golden-clip`, `--root`), trang gán
-    nhãn (mặc định v2 khi đã có), `golden_prefill.py`, 3 benchmark cũ lấy trích đoạn từ clip (khóa theo số job),
-    script `scripts/golden_clips.py` (plan, cut, verify, migrate, gate-score, gate-diff, activate).
-  - Dữ liệu (chưa kích hoạt): `annotations\golden-v2-staging\v2\` có 18 clip trong `media\` (3,20 GB; 17 clip
-    chấm điểm + 1 clip phụ 150 s của job 39 ở 5400 s, `scored: false`), `segments.json` (19 đoạn, manifest
-    `3800ae1323aa…`), `events.json` (55 nhãn), `label-history.jsonl`, `clips.json`. Gợi ý cũ đã dời giờ:
-    `reports\benchmarks\golden-v2\prefill\suggestions.json`. v1 và v1.1 không đổi một byte (so cây SHA-256
-    trước và sau).
-  - Cổng (a) **đạt**: 18 clip, mọi khung giải mã giống hệt phim gốc (0 thiếu, 0 lệch; 3 clip L dư 2 khung
-    sau điểm kết, cũng khớp gốc). Bằng chứng `docs/evidence/golden-v2/gate-a-20261013-125726.json`.
-  - Cổng (b1) **đạt**: queue cả phim của bảng điểm 01/10 dời sang giờ clip cho điểm giống hệt (55 nhãn, 398
-    mục, 0 khác). Bằng chứng `docs/evidence/golden-v2/gate-b1-20261013-124448.json`.
-  - AGENTS.md: văn bản mục 7 đã duyệt (ngày kích hoạt để trống, điền lúc kích hoạt).
-  - Thử trích đoạn: cửa sổ 3300 s của job 38 cắt từ clip và từ phim gốc cho 3597 khung giống hệt.
+- Bước 2, v2 toàn clip (commit 7490ec5 → f4419df): cắt 18 clip, cổng (a) **đạt** (mọi khung giải mã giống hệt
+  phim gốc; `gate-a-20261013-125726.json`), cổng (b1) **đạt** (`gate-b1-20261013-124448.json`, rồi với thẻ cả phim
+  mới `gate-b1-20261013-151956.json`), lượt cả phim cuối trên ed39653 (job 39 2354 s, job 38 732 s, job 37
+  756 s; thẻ `reports\benchmarks\golden-20261013-140309`; `final-film-20261013-140309.json`), b2 trên 17 clip
+  (thẻ `reports\benchmarks\golden-20261013-151925`; `gate-b2-20261013-151956.json`): **15/55 nhãn khác** vì
+  watermark cả phim (C20C, C21C, C21D, T3), clip H lệch lưới lấy mẫu (11 nhãn gore/violence) và trần ứng viên
+  logo tính theo từng video. Lượt clip chạy trong root tạm `temp\golden-trial-root-*` (`scripts/golden_trial_root.py`:
+  marker, `src` và `scripts` chép, `models`/`tools`/`runtime` hard-link, `.venv` junction; dọn sau mỗi lượt), vì
+  `localize_logo` chỉ đọc video trong `input\` của root và clip không bao giờ vào `input\` thật.
+- Người dùng chọn **phương án lai** (13/10): v2 = clip của job 39 (L) + phim gốc của job 37 và 38 (H).
+  Commit 7ab541b → c5f1484:
+  - Code: bộ v2 nhận cả phim gốc (job id + SHA-256 bắt buộc); `build_v2(films=…)` giữ giờ và nhãn của phim;
+    `golden_clips.py` `CLIP_JOBS = (39,)`, `drop-clips`, `migrate --replace` (chỉ khi v2 chưa ai gán nhãn, sau zip
+    sao lưu đã kiểm); `gate-score` chấm phim bằng queue của chính nó; `evaluate_golden` chạy cả phim cho nguồn phim
+    rồi tới clip; `benchmark_animation_safety` lấy phim H từ bộ đang hoạt động.
+  - Staging `annotations\golden-v2-staging\v2\`: 8 clip L (1,88 GB, gồm clip phụ `j39-05400` không chấm điểm),
+    nguồn phim `j38`, `j37` (đường dẫn, SHA-256 như v1.1), 19 đoạn, 55 nhãn, manifest `3083a06f5b01`. 27 nhãn H
+    giống hệt v1/v1.1. 10 clip H đã xóa khỏi staging (1,32 GB; ghi trong `clips.json` mục `dropped`). Sao lưu trước
+    khi thay: `annotations\golden-v2-staging-backup-20261013-153825.zip` (5 file, đã đọc lại để kiểm).
+  - Cổng b1 lai **đạt**: 55 nhãn, 386 mục, 0 khác (`gate-b1-20261013-153841.json`).
+  - Mốc chuẩn v2 (đề xuất): nhãn L từ lượt clip, nhãn H từ lượt cả phim cuối, tất cả trên ed39653; thẻ
+    `reports\benchmarks\golden-v2-baseline-20261013-153857`. So với thẻ cả phim: **chỉ gs-T3-0001 khác** (caught 1,0
+    → partial 0,08; watermark cả phim). Quảng cáo: recall 1,0 → 0,947, tải duyệt 216,7 → 359,8 mục/giờ (trần
+    ứng viên tính riêng cho mỗi clip L); violence T7: 2 mục đúng gộp thành 1 (nhãn vẫn caught); adult, gore giống
+    hệt (`gate-b2-20261013-153913.json`).
+  - Dung lượng: ba phim 12,09 GB (job 39 7,61; job 38 2,26; job 37 2,22). Xóa phim job 39 và giữ 8 clip L tiết kiệm
+    **5,73 GB**; phim H (4,48 GB) ở lại.
+- AGENTS.md: văn bản mục 7 cũ đã commit (df203ee); bản sửa cho v2 lai đang chờ người dùng duyệt (chưa commit).
 
 ## Đang dở
-- Lượt cả phim cuối xong (code ed39653; job 39 2354 s, job 38 732 s, job 37 756 s; thẻ
-  `reports\benchmarks\golden-20261013-140309`; bằng chứng `docs/evidence/golden-v2/final-film-20261013-140309.json`).
-- b1 chạy lại với thẻ này: **đạt** (55 nhãn, 386 mục, 0 khác).
-- b2 xong (17 clip, 2830 s, cùng code; lượt clip chạy trong root tạm `temp\golden-trial-root-*`, đã dọn; thẻ
-  `reports\benchmarks\golden-20261013-151925`; bằng chứng `gate-b2-20261013-151956.json`): **15/55 nhãn khác**,
-  chờ người dùng duyệt. Ba nguyên nhân:
-  - watermark cả phim (4 nhãn quảng cáo C20C, C21C, C21D, T3: caught → partial);
-  - clip H lệch lưới lấy mẫu (11 nhãn gore/violence trên j38-03263, j38-04483, j37-02106; 2 missed);
-  - trần ứng viên logo tính theo từng video (mỗi clip có trần riêng: tải duyệt quảng cáo 217 → 460 mục/giờ).
-  Clip đúng lưới (mọi clip L, j38-00000, j37-00000): adult/gore/violence giống hệt cả phim.
+- (không có)
 
 ## Bước tiếp theo
-1. Xong lượt cả phim: chạy b2 (lệnh ở "Cách kiểm"), rồi `golden_clips.py gate-diff` và gate-score lại với thẻ
-   cả phim mới.
-2. Trình người dùng bảng khác biệt từng nhãn (b2). Người dùng chấp nhận thì thẻ clip là mốc chuẩn v2.
-3. Ghi kết quả vào QUALITY_PLAN, CHANGELOG, file này. Không push, không gộp: điều phối gộp.
-4. Kích hoạt (chỉ khi code đã vào main, Control Center khởi động lại và người dùng bảo):
+1. Người dùng duyệt mốc chuẩn v2 và văn bản AGENTS.md sửa; commit văn bản đó.
+2. Ghi kết quả vào QUALITY_PLAN, CHANGELOG, file này. Không push, không gộp: điều phối gộp.
+3. Kích hoạt (chỉ khi code đã vào main, Control Center khởi động lại và người dùng bảo):
    `golden_clips.py --root <install> activate` (in trước), rồi `--confirm`; điền ngày vào AGENTS.md; kiểm bằng
-   GET chỉ đọc rằng job 37–39 hết `protected`.
+   GET chỉ đọc rằng job 39 hết `protected`, còn job 37 và 38 vẫn `protected`.
 
 ## Cách kiểm
 - Test: `$env:PYTHONPATH="src"; $env:BILIFLOW_FFMPEG="E:\DungChung\BiliFlow\tools\ffmpeg\bin\ffmpeg.exe";
   .\.venv\Scripts\python.exe -m unittest tests.test_golden_clips tests.test_golden_set tests.test_golden_scoring
-  tests.test_golden_evaluate tests.test_golden_prefill tests.test_golden_label_app tests.test_job_purge
-  tests.test_job_delete tests.test_source_cleanup tests.test_job_delete_http tests.test_source_cleanup_http
-  tests.test_review_diff` (316 test qua lúc commit f2f5017; bộ đủ để điều phối chạy).
-- Cổng a: `python scripts/golden_clips.py --root E:\DungChung\BiliFlow verify --workers 2` (CPU, khoảng 30 phút).
+  tests.test_golden_evaluate tests.test_golden_prefill tests.test_golden_label_app tests.test_golden_trial_root
+  tests.test_job_purge tests.test_job_delete tests.test_source_cleanup tests.test_job_delete_http
+  tests.test_source_cleanup_http tests.test_review_diff` (326 test qua lúc commit 7ab541b; bộ đủ để điều phối chạy).
+- Cổng a: `python scripts/golden_clips.py --root E:\DungChung\BiliFlow verify --workers 2` (CPU; giờ chỉ 8 clip L).
 - Cổng b1: `golden_clips.py --root … gate-score --scorecard <scorecard.json v1+v1.1>`.
-- Lượt cả phim / b2 (GPU, chỉ khi Control Center thật không chạy job nào): chạy từ worktree với
-  `PYTHONPATH=<worktree>\src` (venv cài editable thư mục chính) và không `-I`:
-  `python scripts/evaluate_golden.py run --root E:\DungChung\BiliFlow` (cả phim) và thêm
-  `--golden-root E:\DungChung\BiliFlow\annotations\golden-v2-staging` (b2, 17 clip).
-- b2: `golden_clips.py --root … gate-diff --film-scorecard <cả phim> --clip-scorecard <clip>`.
+- Lượt chạy v2 (GPU, chỉ khi Control Center thật không chạy job nào): từ worktree với `PYTHONPATH=<worktree>\src`
+  (venv cài editable thư mục chính) và không `-I`: `python scripts/evaluate_golden.py run --root
+  E:\DungChung\BiliFlow --golden-root E:\DungChung\BiliFlow\annotations\golden-v2-staging` (2 lượt cả phim H rồi 7
+  lượt clip L). Sau kích hoạt bỏ `--golden-root`.
+- So hai thẻ: `golden_clips.py --root … gate-diff --film-scorecard <v1+v1.1> --clip-scorecard <v2>`.
 
 ## Chờ người dùng
-- Duyệt bảng khác biệt b2 (sau khi chạy xong).
+- Duyệt mốc chuẩn v2 (`golden-v2-baseline-20261013-153857`) và văn bản AGENTS.md sửa.
 - Sau khi điều phối gộp và Control Center khởi động lại: bảo kích hoạt.
 
 ## Lưu ý cho người tiếp quản
@@ -78,6 +77,7 @@
 - Cho điều phối khi gộp:
   - bộ cài (C): `annotations\golden*` và clip không bao giờ vào payload (mục 8);
   - lối tắt `.cmd` mở trang gán nhãn v1.1 sẽ hết dùng được sau khi kích hoạt (trang mặc định mở v2);
+  - sau kích hoạt job 37 và 38 vẫn bị khóa (nguồn phim của v2); chỉ job 39 hết khóa.
   - sau kích hoạt, lượt cả phim (`benchmark_*` chế độ `full`, `evaluate_golden.py run` không clip) dừng với
     thông báo: phim gốc chỉ còn là bằng chứng lịch sử.
 
