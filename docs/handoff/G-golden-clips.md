@@ -1,7 +1,7 @@
 # Bàn giao G – Phim vàng thành clip (Golden v2)
 - Nhánh: `feat/golden-clips` (từ `origin/main` ed39653) · Cập nhật: 2026-10-13
-- Chạy ở: PC (worktree `temp\wt-golden-clips`) · Trạng thái: **xong, người dùng duyệt 13/10; chờ điều phối gộp.
-  CHƯA kích hoạt** (chờ gộp, khởi động lại Control Center, rồi người dùng bảo)
+- Chạy ở: PC (worktree `temp\wt-golden-clips`) · Trạng thái: **ĐÃ KÍCH HOẠT 13/10** (code ở main 0a47f54,
+  Control Center tắt lúc kích hoạt). Còn: điều phối gộp commit ghi ngày; người dùng tự xóa hoặc lưu trữ phim job 39
 
 ## Đã xong
 - Bước 0: sao lưu `annotations\golden` thành `annotations\golden-backup-20261013.zip` (22 file, 283 685 byte,
@@ -36,7 +36,8 @@
     adult, gore giống hệt (`gate-b2-20261013-153913.json`).
   - Dung lượng: ba phim 12,09 GB (job 39 7,61; job 38 2,26; job 37 2,22). Xóa phim job 39 và giữ 8 clip L tiết kiệm
     **5,73 GB**; phim H (4,48 GB) ở lại.
-- AGENTS.md mục Golden set: văn bản lai người dùng duyệt 13/10, commit 5b287ee (giữ `<activation date>`).
+- AGENTS.md mục Golden set: văn bản lai người dùng duyệt 13/10, commit 5b287ee; ngày kích hoạt 2026-10-13 điền
+  lúc kích hoạt.
 - Test (commit bcfeaf5): `HybridGoldenV2ActivationTests` dựng v2 lai từ fixture v1/v1.1 bằng `build_v2`. Khi v2 còn
   ở staging, mọi job vẫn khóa. Sau khi đổi tên như lúc kích hoạt: job được cắt clip hết khóa, hai job phim vẫn
   khóa, file clip vẫn khóa theo SHA-256, và manifest có nguồn clip không bị đọc thành "không đọc được".
@@ -47,18 +48,32 @@
   37, 38, 39 đều khóa; với danh sách file như sau kích hoạt (chỉ `v2\segments.json`): job 39 hết khóa, 37 và 38
   vẫn khóa, không có file "không đọc được". `golden_clips.py activate` chạy thử (in trước) liệt kê đúng 3 phép đổi
   tên, không lỗi.
+- **Kích hoạt 13/10** (code v2 ở main 0a47f54; người dùng duyệt đúng 3 phép đổi tên trước khi chạy `--confirm`):
+  - trước khi chạy: không tiến trình nào nghe cổng 8765, 8766 hay 8767 (Control Center và trang gán nhãn tắt);
+  - đã đổi tên `golden-v2-staging\v2` → `golden\v2`, `golden\v1` → `golden-retired\v1`, `golden\v1.1` →
+    `golden-retired\v1.1`. `golden\` giờ chỉ có `v2`; `golden-v2-staging\` còn lại rỗng;
+  - sao lưu `annotations\golden-backup-20261013-activate.zip`: 26 file (mọi file trừ 8 clip `.mp4`), 327 610 byte,
+    SHA-256 `1087665b99e18581690cd43852e3dafc0063d96bc313385073d519278d593adf`. Script đọc lại và so từng file
+    trước khi đổi tên; tôi so lại lần nữa với ảnh chụp riêng: khớp;
+  - so SHA-256 từng file trước và sau đổi tên (ảnh chụp riêng, ngoài kiểm tra của script): v2 12 file, v1 12 file,
+    v1.1 10 file, cả 3 giống hệt;
+  - kiểm thay cho GET (code thư mục chính `job_purge.golden_index`, DB `mode=ro`): chỉ đọc
+    `annotations/golden/v2/segments.json`, không có file "không đọc được"; khóa job 37, 38 (job id) và 10 SHA-256;
+    job 39 **hết khóa**, job 37 và 38 **vẫn khóa**; trong 51 job chỉ 37 và 38 bị khóa;
+  - AGENTS.md: điền ngày 2026-10-13.
 
 ## Đang dở
 - (không có)
 
 ## Bước tiếp theo
-1. Điều phối gộp nhánh (không push từ phiên này). Ghi chú cho bộ cài ở mục "Lưu ý".
-2. Người dùng khởi động lại Control Center trên code đã gộp, rồi bảo kích hoạt.
-3. Kích hoạt theo mục "Các bước kích hoạt" bên dưới.
+1. Điều phối gộp commit ghi ngày (không push từ phiên này). Ghi chú cho bộ cài ở mục "Lưu ý".
+2. Khi người dùng bật lại Control Center: có thể kiểm thêm bằng GET ở bước 5 dưới đây.
+3. Người dùng tự xóa hoặc lưu trữ phim job 39. Agent không làm.
 
-## Các bước kích hoạt (CHƯA làm; chỉ khi người dùng bảo)
-Điều kiện: code của nhánh này đã ở thư mục chính, Control Center thật đã khởi động lại trên code đó, người dùng
-đã bảo kích hoạt. Code cũ đọc nguồn clip thành "không đọc được" và khóa mọi lệnh xóa, nên không kích hoạt trước.
+## Các bước kích hoạt (ĐÃ LÀM 13/10, bước 1–4; bước 5 làm khi Control Center bật lại)
+Điều kiện: code của nhánh này đã ở thư mục chính; Control Center thật tắt, hoặc đã khởi động lại trên code đó;
+người dùng đã bảo kích hoạt. Code cũ đọc nguồn clip thành "không đọc được" và khóa mọi lệnh xóa, nên không kích
+hoạt trước.
 1. Kiểm Control Center thật rảnh (DB `mode=ro`, không job nào đang chạy hay xuất). Tắt trang gán nhãn nếu đang mở
    (`scripts\golden-label-stop.ps1`).
 2. In trước, không đổi gì (từ thư mục chính):
@@ -88,17 +103,19 @@ Hoàn tác (chỉ khi người dùng bảo): đổi tên ngược 3 thư mục; 
   tests.test_golden_evaluate tests.test_golden_prefill tests.test_golden_label_app tests.test_golden_trial_root
   tests.test_job_purge tests.test_job_delete tests.test_source_cleanup tests.test_job_delete_http
   tests.test_source_cleanup_http tests.test_control_center tests.test_review_diff` (382 OK, 1 bỏ qua ở bcfeaf5).
-- Cổng a: `python scripts/golden_clips.py --root E:\DungChung\BiliFlow verify --workers 2` (CPU; 8 clip L).
-- Cổng b1: `golden_clips.py --root … gate-score --scorecard <scorecard.json v1+v1.1>`.
+- Sau kích hoạt, mọi lệnh `golden_clips.py` đọc bộ v2 thêm `--staging E:\DungChung\BiliFlow\annotations\golden`
+  (mặc định vẫn là thư mục staging, giờ đã rỗng).
+- Cổng a: `python scripts/golden_clips.py --root E:\DungChung\BiliFlow --staging … verify --workers 2` (CPU; 8
+  clip L; đọc phim gốc job 39, nên chỉ chạy được khi phim còn).
+- Cổng b1: `golden_clips.py --root … --staging … gate-score --scorecard <scorecard.json v1+v1.1>`.
 - Lượt chạy v2 (GPU, chỉ khi Control Center thật không chạy job nào): từ worktree với `PYTHONPATH=<worktree>\src`
   (venv cài editable thư mục chính) và không `-I`: `python scripts/evaluate_golden.py run --root
-  E:\DungChung\BiliFlow --golden-root E:\DungChung\BiliFlow\annotations\golden-v2-staging` (2 lượt cả phim H rồi 7
-  lượt clip L). Sau kích hoạt bỏ `--golden-root`.
+  E:\DungChung\BiliFlow` (2 lượt cả phim H rồi 7 lượt clip L). Trước kích hoạt cần thêm `--golden-root
+  E:\DungChung\BiliFlow\annotations\golden-v2-staging`; nay không cần.
 - So hai thẻ: `golden_clips.py --root … gate-diff --film-scorecard <v1+v1.1> --clip-scorecard <v2>`.
 
 ## Chờ người dùng
-- Sau khi điều phối gộp và Control Center khởi động lại: bảo kích hoạt.
-- Xóa hoặc lưu trữ phim job 39 (tự làm, sau kích hoạt).
+- Xóa hoặc lưu trữ phim job 39 (tự làm trong Control Center).
 
 ## Lưu ý cho người tiếp quản
 - `annotations\` bị gitignore: nhãn ở đó là bản duy nhất. Không xóa, không ghi đè nhãn, `events.json` hay `label-history.jsonl`.
