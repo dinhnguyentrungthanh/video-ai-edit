@@ -67,6 +67,8 @@ PHONE_POSTS_LITERAL = (
     r"/api/downloads/\d+/(?:rename|choose|stop|resume|cancel|retry|remove)",
     r"/api/downloads/settings",
     r"/api/downloads/cleanup-temp",
+    # "Thử lại các lượt lỗi mạng" (docs/VIDEO_DOWNLOAD_PLAN.md 4.15): the per-task Thử lại / Tiếp tục for many.
+    r"/api/downloads/retry-network",
     # Source accounts M4 (docs/SOURCE_ACCOUNTS_PLAN.md 9.14): choosing episodes and an episode group's actions.
     r"/api/downloads/\d+/episodes/(?:draft|confirm)",
     r"/api/downloads/groups/\d+/(?:stop|resume|cancel|retry|remove)",
@@ -83,7 +85,9 @@ PHONE_POSTS_LITERAL = (
 # Source accounts M5 (docs/SOURCE_ACCOUNTS_PLAN.md 9.17) added the episode, group and account endpoints on purpose
 # (87 endpoints, 771b4282…). Session E2 added the 4 Cài đặt → Phần cứng endpoints (91; docs/HARDWARE_PROFILE.md 6.1):
 # hardwareProfile, hardwareRemeasure, hardwareCpuOnly and hardwareUntestedFast, all PC only (PHONE_POSTS_LITERAL unchanged).
-ENDPOINTS_SHA256 = "c3fef73b5e5c610de96e1113b3a8448454812a4b8e588c76a84486f5b014f1a2"
+# Session T added downloadRetryNetwork, "Thử lại các lượt lỗi mạng" (92, from c3fef73b…; docs/VIDEO_DOWNLOAD_PLAN.md
+# 4.15), also on the phone like the per-task Thử lại.
+ENDPOINTS_SHA256 = "939e32ba2df94996e7699eebf453b09d21610fba9e32b09a2010d08b2ddabdfe"
 
 
 def node(script: str) -> str:

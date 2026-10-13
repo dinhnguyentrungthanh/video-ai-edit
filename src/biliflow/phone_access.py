@@ -170,6 +170,7 @@ PHONE_ALLOWED_POSTS = tuple(re.compile(pattern) for pattern in (
     r"/api/downloads/\d+/(?:rename|choose|stop|resume|cancel|retry|remove)",
     r"/api/downloads/settings",
     r"/api/downloads/cleanup-temp",
+    r"/api/downloads/retry-network",  # "Thử lại các lượt lỗi mạng": the per-task Thử lại / Tiếp tục for many
     # Source accounts (docs/SOURCE_ACCOUNTS_PLAN.md 9.14): choosing episodes and driving an episode group are
     # download actions like the ones above; signing in to a source is not (PC_ONLY_PATTERNS).
     r"/api/downloads/\d+/episodes/(?:draft|confirm)",

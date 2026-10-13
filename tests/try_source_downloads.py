@@ -41,6 +41,7 @@ from biliflow.download_api import DownloadService, public_url  # noqa: E402
 from biliflow.download_http import HttpError, SafeHttp, default_connector  # noqa: E402
 from biliflow.download_links import LinkRejected, check_link, default_resolver  # noqa: E402
 from biliflow.download_media_file import SNIFF_BYTES  # noqa: E402
+from biliflow.download_retry import NetworkPolicy  # noqa: E402
 from biliflow.download_runner import ProcessControl, mask_line  # noqa: E402
 from biliflow.download_source_steps import describe_source  # noqa: E402
 from biliflow.download_source_types import ResolveContext, SourceDeclined, SourceError  # noqa: E402
@@ -190,8 +191,10 @@ def build_center(root: Path, port: int, http: SafeHttp) -> ControlCenter:
     center = ControlCenter(root, host="127.0.0.1", port=port, stable_seconds=5.0, import_existing=False)
     center.downloads.stop()  # its own worker never started; ours replaces it on the same database
     store = DownloadStore(root / "state" / "downloads.sqlite3")
+    # The Control Center's own retries and per-host pacing (download_retry), as in DownloadService.
     worker = DownloadWorker(root, store, ffmpeg=FFMPEG, ffprobe=FFPROBE, resolver=demo_resolver, http=http,
-                            transfers=SourceTransfers(http, ffmpeg=FFMPEG, ffprobe=FFPROBE))
+                            transfers=SourceTransfers(http, ffmpeg=FFMPEG, ffprobe=FFPROBE),
+                            network_policy=NetworkPolicy())
     center.downloads = DownloadService(root, cleanable=center.cleanable_sources,
                                        bin_reader=recycle_bin.volume_bin_info, store=store, worker=worker)
     return center

@@ -21,7 +21,7 @@ NODE = shutil.which("node")
 CORE_SETS = ("STATES", "STOPPABLE", "RESUMABLE", "CANCELLABLE", "RETRYABLE", "RENAMABLE", "FINAL", "RUNNING", "KEEPS_PART")
 # The gates' own tests (M6): every top-level test('…') a gate file declares must run and pass, by name and in order,
 # and their number is pinned here, so a lost test cannot hide behind an added one (update the number with the change).
-DOWNLOAD_GATE_TESTS = 22
+DOWNLOAD_GATE_TESTS = 23
 ACCOUNT_GATE_TESTS = 55
 GATE_TEST = re.compile(r"^test\('((?:[^'\\\n]|\\.)*)'", re.MULTILINE)
 # download-fake-accounts.cjs (the M5 browser checks' server) in memory: a series page split into a group, then the

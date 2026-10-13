@@ -341,6 +341,43 @@ M3 (2026-10-08) thêm provider của nguồn tài khoản (`download_account_sou
 
 M4 (2026-10-08) nối nguồn tài khoản vào hàng đợi và API, chưa có giao diện (M5). Control Center tạo manager của đúng root và tài khoản Windows (`download_account_api.py`), dọn lượt đăng nhập bị ngắt và hồ sơ trình duyệt tạm lúc khởi động, không tự mở cửa sổ. Hai trạng thái mới: WAITING_LOGIN (chờ đăng nhập, không giữ slot, giữ phần đã tải; chỉ phiên mới hơn của đúng nguồn và tài khoản Windows đánh thức) và EXPANDED (trang phim nhiều tập đã tách thành nhóm tập). Trang phim nhiều tập chờ chọn với danh sách công khai được lưu; "Tải N tập" tạo nhóm và các tập trong một transaction, chống tạo trùng bằng khóa yêu cầu, tạo tác vụ dần khi danh sách còn chỗ dưới 100, đặt tên `NNN - <phim> - <mã tập>` (`download_groups.py`, `download_account_tasks.py`, `download_episode_names.py`). Route đăng nhập/hủy/ngắt kết nối chỉ trên PC; route chọn tập và điều khiển nhóm dùng được trên điện thoại. Chi tiết và hợp đồng API cho M5 ở mục 9.14 của `docs/SOURCE_ACCOUNTS_PLAN.md`.
 
+### 4.15 Tự thử lại lỗi mạng và giãn nhịp theo host (2026-10-13, session T)
+
+Sự kiện 2026-10-11: 14 lượt tải liên tiếp của cùng một trang (host1, provider `embedded-media`, slots = 3) hỏng NETWORK ở bước thăm dò. Có 13 lượt RemoteDisconnected từ host2 (host của trình phát) và 1 lượt quá thời gian chờ. Các lượt dán thưa hơn lúc sau đều xong.
+
+Nguyên nhân:
+- Ba Edge ẩn nạp cùng một trang một lúc. Mọi yêu cầu đi qua `SafeHttp`, mỗi yêu cầu một kết nối mới, nên host2 nhận một đợt kết nối dồn dập.
+- Không tầng nào thử lại lỗi mạng ở bước thăm dò: lỗi thành FAILED ngay. Ở bước tải, lỗi thành INTERRUPTED và chờ người dùng.
+
+Người dùng duyệt thiết kế ngày 2026-10-13, cả 4 khuyến nghị (`download_retry.py`):
+
+1. **Tự thử lại.**
+   - Lỗi tạm thời: NETWORK (RemoteDisconnected, reset, timeout, ngắt giữa chừng), DNS_FAILED, HTTP 429/502/503/504; SERVER_BUSY không có status cũng tính (lượt chạy khác của nguồn tài khoản).
+   - Lượt chuyển sang `WAITING_RETRY`: không giữ slot, không luồng, không trình duyệt, giữ phần đã tải.
+   - Lịch chờ: 20 s, 60 s, 180 s, mỗi lần nhân ngẫu nhiên 0,8–1,2. `Retry-After` của 429/503 (số giây hoặc ngày giờ HTTP) được tôn trọng: chờ max(lịch, Retry-After). Máy chủ hẹn quá 15 phút thì không tự thử lại; lượt kết thúc như cũ, lý do ghi "Máy chủ hẹn thử lại sau khoảng N phút…".
+   - Hết giờ chờ, lượt về cuối hàng đợi. Thăm dò thì làm lại từ đầu; tải thì như Tiếp tục (giữ phần đã tải, cùng attempt; yt-dlp dùng `--continue`).
+   - Mỗi bước (thăm dò, tải) tối đa 3 lần; qua bước khác thì đếm lại. Lần lỗi thứ tư kết thúc như cũ (thăm dò FAILED, tải INTERRUPTED; yt-dlp tải FAILED) kèm "Đã tự thử lại 3 lần."
+   - Không thử lại: 404/410/451, 401/403/407, đăng nhập (vẫn WAITING_LOGIN), TLS, luật mạng, DRM, file bị xóa, hết đĩa, SOURCE_CHANGED, PLAYER_CHANGED, HTTP 500/501, lỗi nội bộ.
+   - Cột mới `retry_count`, `retry_at` (ISO có múi giờ), `retry_phase` (PROBING/DOWNLOADING), thêm bằng `ALTER TABLE ADD COLUMN`. Sự kiện `AUTO_RETRY_SCHEDULED` (WARNING) và `AUTO_RETRY` (INFO).
+   - Dừng và Hủy làm được trong lúc chờ. Dừng xóa `retry_at`. Tiếp tục và Thử lại của người dùng đếm lại từ đầu.
+   - Control Center khởi động lại: lượt WAITING_RETRY vẫn chờ tới `retry_at` (không thành INTERRUPTED).
+   - Nguồn tài khoản: WAITING_RETRY giữ link như INTERRUPTED (`KEEPS_TICKET`). Trong nhóm tập, lượt chờ tính vào "chờ tải".
+2. **Giãn nhịp theo host.**
+   - Mỗi host của link dán chỉ có một lượt tìm nguồn một lúc; lượt sau bắt đầu ít nhất 5 s sau khi lượt trước xong (`HostPacer`).
+   - "Tìm nguồn" gồm PROBING (provider và yt-dlp) và lần lấy lại nguồn của provider ngay trước khi tải.
+   - Lượt chờ thăm dò mà host đang bận không lấy slot: lượt của host khác hoặc lượt đã thăm dò xong chạy trước. Lần lấy lại nguồn trước khi tải chờ ngay trong luồng (Dừng/Hủy cắt được) và được ưu tiên hơn lượt thăm dò mới.
+   - Truyền file (HTTP, HLS, yt-dlp tải) vẫn theo slots như cũ.
+3. **Nút "Thử lại N lượt lỗi mạng"** (`POST /api/downloads/retry-network`, dùng được trên điện thoại như Thử lại từng lượt).
+   - Lượt FAILED với NETWORK, DNS_FAILED hoặc SERVER_BUSY được Thử lại (attempt + 1, tải từ đầu). Lượt INTERRUPTED với các mã đó được Tiếp tục (giữ phần đã tải).
+   - Lượt không làm được (nhóm đã hủy, tập đã có lượt khác) được bỏ qua và báo lý do.
+   - Nút chỉ hiện khi snapshot có `network_failures` > 0.
+
+Giao diện: nhãn "Chờ thử lại (lần n/3)" màu vàng, kèm "Tự thử lại sau N giây/phút". Snapshot thêm `settings.auto_retries` và `network_failures`; mỗi lượt thêm `retry_count`, `retry_at`, `retry_phase`.
+
+`DownloadWorker(network_policy=None)` giữ hành vi cũ (lỗi kết thúc ngay, không giãn nhịp), nên test cũ không đổi. Control Center (`DownloadService`) và Control Center thử (`tests/try_source_downloads.py`) dùng `NetworkPolicy()`.
+
+Test (`tests/test_download_retry.py`) dùng fixture server (ngắt kết nối không trả lời, trả lời chậm quá thời gian chờ, 429/503 có Retry-After, 404/401/403/500, cắt giữa file) và fake yt-dlp (timeout, 404, tải bị cắt, DNS lỗi). Đồng hồ của store là đồng hồ giả, nên lịch chờ được kiểm đúng từng giây.
+
 ## 5. API
 
 Mọi POST dùng `X-BiliFlow-Token` và kiểm tra Host như các route hiện có (trên điện thoại thêm cookie mã truy cập, Origin cùng nguồn và danh sách route cho phép).
@@ -355,6 +392,7 @@ Mọi POST dùng `X-BiliFlow-Token` và kiểm tra Host như các route hiện c
 | `POST /api/downloads/<id>/(stop\|resume\|cancel\|retry\|remove)` | `remove` chỉ cho lượt đã kết thúc; xóa dòng và file tạm của lượt, không đụng file trong `input` |
 | `POST /api/downloads/settings` | `{slots: 1..3}`; hạ số slot không ngắt lượt đang chạy |
 | `POST /api/downloads/cleanup-temp` | `{confirm: true, ids?}`: dọn file tạm của lượt STOPPED, FAILED, INTERRUPTED (sau xác nhận ở UI). Có `ids` (các lượt hộp xác nhận đã liệt kê, lấy từ `temp.ids` của snapshot) thì chỉ dọn các lượt đó; lượt dừng hay lỗi trong lúc hộp đang mở giữ phần đã tải |
+| `POST /api/downloads/retry-network` | "Thử lại các lượt lỗi mạng" (mục 4.15): FAILED vì mạng → Thử lại, INTERRUPTED vì mạng → Tiếp tục; trả `{retried, resumed, skipped}` |
 | `GET /api/storage-summary` | mục "Dung lượng", chỉ đọc, tính nền và cache 5 phút |
 
 Điện thoại:

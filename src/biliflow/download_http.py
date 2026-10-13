@@ -26,6 +26,8 @@ import ssl
 import threading
 import zlib
 from dataclasses import dataclass
+from datetime import datetime, timezone
+from email.utils import parsedate_to_datetime
 from typing import Any, Callable, Iterator, Mapping, Protocol, TypeVar
 from urllib.parse import quote, urljoin, urlsplit, urlunsplit
 
@@ -51,6 +53,9 @@ _REDIRECTS = frozenset({301, 302, 303, 307, 308})
 _DECODERS = {"gzip": 16 + zlib.MAX_WBITS, "deflate": zlib.MAX_WBITS, "x-gzip": 16 + zlib.MAX_WBITS}
 # Percent-encodes only what HTTP cannot carry (non-ASCII, spaces); "%" stays, so an encoded link is unchanged.
 _PATH_SAFE = "!#$%&'()*+,/:;=?@[]~"
+# The answers whose Retry-After the downloader honours (download_retry); a delay-seconds value has at most 10 digits.
+RETRY_AFTER_STATUSES = frozenset({429, 503})
+MAX_RETRY_AFTER_DIGITS = 10
 
 Connector = Callable[[str, int, float], socket.socket]
 T = TypeVar("T")
@@ -68,14 +73,17 @@ class Interruptible(Protocol):
 
 
 class HttpError(Exception):
-    """A request that failed. ``retryable``: a network error, 429 or 5xx; ``status`` when the server answered."""
+    """A request that failed. ``retryable``: a network error, 429 or 5xx; ``status`` when the server answered;
+    ``retry_after``: the seconds a 429 or 503 answer asked to wait (its Retry-After), else None."""
 
-    def __init__(self, code: str, message: str, *, status: int | None = None, retryable: bool = False):
+    def __init__(self, code: str, message: str, *, status: int | None = None, retryable: bool = False,
+                 retry_after: float | None = None):
         super().__init__(message)
         self.code = code
         self.message = message
         self.status = status
         self.retryable = retryable
+        self.retry_after = retry_after
 
 
 class Cancelled(HttpError):
@@ -176,7 +184,24 @@ class Target:
     addresses: tuple[str, ...]  # every one checked public; tried in this order
 
 
-def _status_error(status: int, host: str) -> HttpError:
+def parse_retry_after(value: str | None, now: datetime) -> float | None:
+    """Seconds from ``now`` that a Retry-After value asks for: delay-seconds or an HTTP date (a past date is 0);
+    None when it is missing or not one of the two forms."""
+    text = (value or "").strip()
+    if not text:
+        return None
+    if text.isascii() and text.isdigit():
+        return float(int(text)) if len(text) <= MAX_RETRY_AFTER_DIGITS else None
+    try:
+        when = parsedate_to_datetime(text)
+    except (TypeError, ValueError, IndexError, OverflowError):
+        return None
+    if when.tzinfo is None:
+        when = when.replace(tzinfo=timezone.utc)
+    return max(0.0, (when - now).total_seconds())
+
+
+def _status_error(status: int, host: str, retry_after: str | None = None) -> HttpError:
     if status in (401, 407):
         return HttpError("LOGIN_REQUIRED", f"{host} đòi đăng nhập (HTTP {status}); BiliFlow không dùng tài khoản "
                          "hay cookie nên không tải.", status=status)
@@ -187,7 +212,9 @@ def _status_error(status: int, host: str) -> HttpError:
     if status == 451:
         return HttpError("UNAVAILABLE", f"{host} chặn nội dung này (HTTP 451).", status=status)
     if status == 429 or status >= 500:
-        return HttpError("SERVER_BUSY", f"{host} đang bận hoặc lỗi (HTTP {status}).", status=status, retryable=True)
+        wait = parse_retry_after(retry_after, datetime.now(timezone.utc)) if status in RETRY_AFTER_STATUSES else None
+        return HttpError("SERVER_BUSY", f"{host} đang bận hoặc lỗi (HTTP {status}).", status=status, retryable=True,
+                         retry_after=wait)
     return HttpError("HTTP_ERROR", f"{host} trả về HTTP {status}.", status=status)
 
 
@@ -456,10 +483,11 @@ class SafeHttp:
                                  if key.lower() not in ("content-type", "origin")}
                 continue
             if not 200 <= raw.status < 300:
+                retry_after = raw.getheader("Retry-After")
                 raw.close()
                 connection.close()
                 remove()
-                raise _status_error(raw.status, target.host)
+                raise _status_error(raw.status, target.host, retry_after)
             return Response(connection, raw, target, remove, control)
         raise HttpError("TOO_MANY_REDIRECTS", f"Quá {self.max_redirects} lần chuyển hướng; dừng.")
 

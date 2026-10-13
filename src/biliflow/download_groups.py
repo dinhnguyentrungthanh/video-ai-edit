@@ -692,8 +692,10 @@ class DownloadGroups:
 BUCKETS = ("pending", "held", "queued", "waiting_login", "running", "completed", "failed", "stopped", "interrupted",
            "cancelled", "expired", "removed", "attention")
 _UNFINISHED_BUCKETS = ("pending", "held", "queued", "waiting_login", "running", "attention")
-_STATE_BUCKETS = {"QUEUED": "queued", "WAITING_LOGIN": "waiting_login", "COMPLETED": "completed", "FAILED": "failed",
-                  "STOPPED": "stopped", "INTERRUPTED": "interrupted", "CANCELLED": "cancelled", "EXPIRED": "expired"}
+# WAITING_RETRY (a network error's wait, download_retry) counts as queued: it goes back to the queue by itself.
+_STATE_BUCKETS = {"QUEUED": "queued", "WAITING_RETRY": "queued", "WAITING_LOGIN": "waiting_login",
+                  "COMPLETED": "completed", "FAILED": "failed", "STOPPED": "stopped", "INTERRUPTED": "interrupted",
+                  "CANCELLED": "cancelled", "EXPIRED": "expired"}
 
 
 def _preview_summary(listing: Mapping[str, Any]) -> dict[str, Any]:

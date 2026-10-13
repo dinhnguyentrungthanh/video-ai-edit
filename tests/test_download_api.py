@@ -36,7 +36,9 @@ class ServiceTests(WorkerCase):
         self.assertEqual([task["id"] for task in snapshot["tasks"]], [created["tasks"][0]["id"]])
         self.assertNotIn("sources", snapshot)
         self.assertNotIn("source_id", snapshot["tasks"][0])
-        self.assertEqual(snapshot["settings"], {"slots": 2, "max_slots": 3})
+        # auto_retries: the worker's automatic retries (download_retry); this test's worker has none.
+        self.assertEqual(snapshot["settings"], {"slots": 2, "max_slots": 3, "auto_retries": 0})
+        self.assertEqual(snapshot["network_failures"], 0)
         self.assertEqual(snapshot["counts"], {"QUEUED": 1})
         self.assertEqual(snapshot["space"]["reserve_bytes"], self.space[1])
         self.assertIn("bytes", snapshot["temp"])

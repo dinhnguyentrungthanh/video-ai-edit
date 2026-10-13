@@ -315,6 +315,19 @@
       }, 'Dọn file tạm');
     }
 
+    /* "Thử lại các lượt lỗi mạng": no dialog (Thử lại drops only the parts of tasks that failed anyway). */
+    function retryNetwork() {
+      const a = K.networkRetry(data(), ctx());
+      if (!a || !a.enabled) return;
+      run('retry-network', null, async () => {
+        const result = await o.store.downloadAction('downloadRetryNetwork', null, {});
+        const moved = (result.retried || []).length + (result.resumed || []).length, skipped = result.skipped || [];
+        o.toast('Đã xếp lại ' + moved + ' lượt lỗi mạng vào hàng đợi' + (skipped.length ? '; ' + skipped.length +
+          ' lượt không thử lại được: ' + skipped.map(x => '#' + x.id + ' ' + x.reason).join('; ') : '') + '.', skipped.length > 0);
+        return result;
+      }, '[data-action="dl-retry-network"]');
+    }
+
     /* Returns true when the action was a download one (handled here). */
     function click(el, action, event) {
       if (EP && EP.click(el, action)) return true;
@@ -329,6 +342,7 @@
       else if (action === 'dl-choose') choose(el.dataset.id);
       else if (action === 'dl-filter') { ui.filter = el.dataset.filter; refresh(); }
       else if (action === 'dl-cleanup') cleanup();
+      else if (action === 'dl-retry-network') retryNetwork();
       else if (action === 'storage-refresh') o.store.loadStorage(true);
       else if (action === 'storage-cleanable') { if (event) event.preventDefault(); o.openCleanable(); }
       else return false;

@@ -243,7 +243,9 @@ class SourceTransfers:
         if guard is not None and guard.tripped:
             return DownloadOutcome(False, "TOO_LARGE", guard.message())
         if isinstance(error, (SourceError, HttpError)):
-            return DownloadOutcome(False, error.code, error.message, resumable=resumable_error(error))
+            return DownloadOutcome(False, error.code, error.message, resumable=resumable_error(error),
+                                   status=getattr(error, "status", None),
+                                   retry_after=getattr(error, "retry_after", None))
         if isinstance(error, OSError):  # the parts already written stay intact: these can be continued
             if error.errno == errno.ENOSPC or getattr(error, "winerror", None) == 112:
                 return DownloadOutcome(False, "DISK_FULL", "Ổ đĩa hết chỗ khi ghi file tạm.", resumable=True)
