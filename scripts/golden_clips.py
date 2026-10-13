@@ -9,6 +9,8 @@
               (only read) and the clips; the labeling page's old suggestions move into clip time.
   gate-score  Gate (b1): score v1 + v1.1 with the film queues of a scorecard and v2 with the same
               queues moved into clip time; every metric, label and item must be identical.
+  gate-diff   Gate (b2): one code version on the films (v1 + v1.1 scorecard) and on the clips (v2
+              scorecard); lists every label and item count that changed, for the user to approve.
   activate    For the user only: rename <staging>/v2 to annotations/golden/v2 and move v1 and v1.1 to
               annotations/golden-retired after a dated backup zip; without --confirm it only prints.
 Films, v1 and v1.1 are only read. Writes: <staging>, reports/evidence/golden-v2,
@@ -278,6 +280,40 @@ def cmd_gate_score(args) -> int:
     return 0 if passed else 1
 
 
+def _code_versions(p, card: dict) -> set[tuple]:
+    """(git HEAD, src diff hash) of every trial a scorecard was made from (the install folder's code)."""
+    versions = set()
+    for name in (card.get("timing") or {}).get("trials", {}):
+        trial = read_json(p["root"] / "reports/benchmarks" / name / "trial.json")
+        versions.add((trial.get("git_head"), trial.get("git_diff_src_sha256"), tuple(trial.get("detector_groups") or ())))
+    return versions
+
+
+def cmd_gate_diff(args) -> int:
+    p = paths(args)
+    film_path, clip_path = Path(args.film_scorecard), Path(args.clip_scorecard)
+    film_card, clip_card = read_json(film_path), read_json(clip_path)
+    if set(film_card.get("sets") or {}) != set(SOURCE_SETS) or set(clip_card.get("sets") or {}) != {"v2"}:
+        raise SystemExit("--film-scorecard must score v1 + v1.1 and --clip-scorecard v2")
+    versions = _code_versions(p, film_card) | _code_versions(p, clip_card)
+    if len(versions) != 1:
+        raise SystemExit(f"the trials ran different code or detector groups: {sorted(versions, key=str)}")
+    (head, src_diff, groups), = versions
+    result = gc.run_differences(film_card, clip_card)
+    summary = {"gate": "b2", "checked_at": gc.now_iso(), "code": {"git_head": head, "git_diff_src_sha256": src_diff,
+                                                               "detector_groups": list(groups)},
+               "film_scorecard_sha256": file_sha256(film_path), "clip_scorecard_sha256": file_sha256(clip_path),
+               "labels": len(result["labels"]), "changed_labels": len(result["changed"]), **result}
+    full = dict(summary, film_scorecard=str(film_path), clip_scorecard=str(clip_path))
+    _write_evidence(p, f"gate-b2-{_stamp()}.json", full, summary)
+    print(f"labels {summary['labels']}, changed {summary['changed_labels']}, segments with other item counts "
+          f"{len(result['items_changed'])}", flush=True)
+    for row in result["labels"]:
+        if not row["same"]:
+            print(f"  {row['id']} {row['group']}/{row['category']}: film {row['film']} -> clip {row['clip']}", flush=True)
+    return 0
+
+
 def cmd_activate(args) -> int:
     p = paths(args)
     retired = p["root"] / "annotations/golden-retired"
@@ -327,11 +363,15 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_parser("migrate")
     gate = sub.add_parser("gate-score")
     gate.add_argument("--scorecard", required=True, help="scorecard.json of v1 + v1.1 whose film queues are reused")
+    diff = sub.add_parser("gate-diff")
+    diff.add_argument("--film-scorecard", required=True, help="scorecard.json of v1 + v1.1 (whole-film trials)")
+    diff.add_argument("--clip-scorecard", required=True, help="scorecard.json of v2 (clip trials, same code)")
     activate = sub.add_parser("activate")
     activate.add_argument("--confirm", action="store_true", help="really move the folders (the user's call)")
     args = parser.parse_args(argv)
     return {"plan": cmd_plan, "cut": cmd_cut, "verify": cmd_verify, "migrate": cmd_migrate,
-            "gate-score": cmd_gate_score, "activate": cmd_activate}[args.command](args)
+            "gate-score": cmd_gate_score, "gate-diff": cmd_gate_diff,
+            "activate": cmd_activate}[args.command](args)
 
 
 if __name__ == "__main__":

@@ -275,6 +275,31 @@ class ClipSourceTest(unittest.TestCase):
                 source_file(root, manifest, "c")  # a clip needs its set folder
 
 
+class RunDifferencesTest(unittest.TestCase):
+    @staticmethod
+    def card(status, verdict, notes):
+        label = {"id": "gs-T1-0001", "segment_id": "T1", "group": "advertising", "category": "visual_logo",
+                 "severity": "must_catch", "status": status, "coverage": 1.0, "main_coverage": 1.0,
+                 "suggestion_agrees": True, "region": {"ok": True}, "notes": notes}
+        item = {"segment_id": "T1", "group": "advertising", "advisory": False, "verdict": verdict,
+                "trap_hits": [], "labels": [notes]}
+        return {"labels": [label], "items": [item], "metrics": {"advertising": {"all": {"recall_all": 1.0}}}}
+
+    def test_changed_labels_and_items_are_listed_without_notes_or_text(self):
+        result = gc.run_differences(self.card("caught", "useful", "secret"), self.card("missed", "false_positive", "x"))
+        self.assertEqual(result["changed"], ["gs-T1-0001"])
+        self.assertEqual((result["labels"][0]["film"]["status"], result["labels"][0]["clip"]["status"]),
+                         ("caught", "missed"))
+        self.assertEqual(result["items"]["T1"]["advertising"],
+                         {"film": {"main_useful": 1}, "clip": {"main_false_positive": 1}})
+        self.assertEqual(result["items_changed"], ["T1"])
+        self.assertNotIn("secret", repr(result))
+
+    def test_the_same_outcome_is_not_a_change(self):
+        result = gc.run_differences(self.card("caught", "useful", "a"), self.card("caught", "useful", "b"))
+        self.assertEqual((result["changed"], result["items_changed"]), ([], []))
+
+
 class WindowSourceTest(unittest.TestCase):
     def _set(self, root: Path, name: str, sources: dict) -> None:
         (root / "annotations/golden" / name).mkdir(parents=True)

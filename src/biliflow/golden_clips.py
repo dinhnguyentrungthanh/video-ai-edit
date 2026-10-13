@@ -512,3 +512,56 @@ def _compare_rows(film: dict, clip: dict, fields: tuple[str, ...], offsets: dict
                                                     for x, y in zip(left, right)):
                 problems.append(f"{what} {key} position {left} != {right} + {offset:.6f}")
     return problems
+
+
+# --- gate b2: the same code on the films and on the clips --------------------------------------
+
+OUTCOME_FIELDS = ("status", "coverage", "main_coverage", "suggestion_agrees")
+
+
+def _outcome(row: dict | None) -> dict | None:
+    if row is None:
+        return None
+    return {**{field: row.get(field) for field in OUTCOME_FIELDS}, "region_ok": (row.get("region") or {}).get("ok")}
+
+
+def _item_counts(card: dict) -> dict[str, dict[str, dict[str, int]]]:
+    """segment -> group -> counts of scored items by kind and verdict (plus trap hits)."""
+    counts: dict[str, dict[str, dict[str, int]]] = {}
+    for item in card["items"]:
+        row = counts.setdefault(item["segment_id"], {}).setdefault(item["group"], {})
+        kind = f"{'advisory' if item['advisory'] else 'main'}_{item['verdict']}"
+        row[kind] = row.get(kind, 0) + 1
+        if item.get("trap_hits"):
+            row["trap_hits"] = row.get("trap_hits", 0) + len(item["trap_hits"])
+    return counts
+
+
+def run_differences(film_card: dict[str, Any], clip_card: dict[str, Any]) -> dict[str, Any]:
+    """Gate (b2): per-label outcome of one code version on the films (v1 + v1.1) and on the clips (v2).
+
+    Not a pass/fail gate: the clips change what the detectors see (no whole-film context), so the
+    user reviews every changed label before the clip run becomes the v2 baseline. Only ids, groups
+    and outcomes are listed (no notes, no OCR text).
+    """
+    film = {row["id"]: row for row in film_card["labels"]}
+    clip = {row["id"]: row for row in clip_card["labels"]}
+    labels = []
+    for key in sorted(set(film) | set(clip)):
+        base = film.get(key) or clip[key]
+        left, right = _outcome(film.get(key)), _outcome(clip.get(key))
+        labels.append({"id": key, "segment_id": base["segment_id"], "group": base["group"],
+                       "category": base["category"], "severity": base["severity"],
+                       "film": left, "clip": right, "same": left == right})
+    film_items, clip_items = _item_counts(film_card), _item_counts(clip_card)
+    items = {segment: {group: {"film": film_items.get(segment, {}).get(group, {}),
+                               "clip": clip_items.get(segment, {}).get(group, {})}
+                       for group in sorted(set(film_items.get(segment, {})) | set(clip_items.get(segment, {})))}
+             for segment in sorted(set(film_items) | set(clip_items))}
+    metrics = {group: {"film": film_card["metrics"].get(group, {}).get("all"),
+                       "clip": clip_card["metrics"].get(group, {}).get("all")}
+               for group in sorted(set(film_card["metrics"]) | set(clip_card["metrics"]))}
+    return {"labels": labels, "changed": [row["id"] for row in labels if not row["same"]],
+            "items": items, "items_changed": sorted(segment for segment, groups in items.items()
+                                                    if any(g["film"] != g["clip"] for g in groups.values())),
+            "metrics": metrics}
