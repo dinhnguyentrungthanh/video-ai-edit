@@ -207,12 +207,12 @@ def troy_detector_scope(requested: list[str] | None, manifest: dict, labels: dic
     return detectors, unscored
 
 
-def clip_trial_argv(manifest: dict) -> list[list[str]]:
+def clip_trial_argv(manifest: dict, root: Path | None = None, golden_root: Path | None = None) -> list[list[str]]:
     """Harness argv of every scored clip of a clip set (one trial per clip, all detector groups)."""
     from biliflow.golden_set import is_clip
     return [[sys.executable, str(HARNESS), "run", "--label", "golden", "--golden-clip", key,
-             "--golden-set", str(manifest["golden_set"]), "--golden-root", str(GOLDEN_ROOT), "--root", str(ROOT),
-             "--fast-scan", "--detectors", *ALL_GROUPS]
+             "--golden-set", str(manifest["golden_set"]), "--golden-root", str(golden_root or GOLDEN_ROOT),
+             "--root", str(root or ROOT), "--fast-scan", "--detectors", *ALL_GROUPS]
             for key, source in manifest["sources"].items() if is_clip(source) and source.get("scored") is not False]
 
 
@@ -256,15 +256,26 @@ def run_command(args) -> None:
 
 
 def run_clips(args, manifest: dict) -> None:
-    """One isolated trial per scored clip (SHA-256 checked by the harness), then score."""
+    """One isolated trial per scored clip (SHA-256 checked by the harness), then score.
+
+    The trials run in a throw-away root (scripts/golden_trial_root.py) whose own input holds a copy of
+    the clips: the localize_logo stage reads only videos inside its root's input, and clips never go in
+    the real one. Its reports folder is a junction to this root's, so the queues are read from here.
+    """
+    import golden_trial_root
     queues, trials = [], []
-    for argv in clip_trial_argv(manifest):
-        print("RUN " + " ".join(argv[2:]), flush=True)
-        summary = _run_trial(argv)
-        trials.append(ROOT / "reports/benchmarks" / summary["trial"])
-        queues.append(ROOT / "reports/jobs" / summary["trial"] / "review-queue.json")
-        print(f"DONE {argv[argv.index('--golden-clip') + 1]}: {summary['total_wall_seconds']:.0f}s, "
-              f"original data preserved={summary['preserved_original_data']}", flush=True)
+    trial_root = golden_trial_root.create(ROOT, GOLDEN_ROOT, str(manifest["golden_set"]))
+    print(f"trial root: {trial_root}", flush=True)
+    try:
+        for argv in clip_trial_argv(manifest, trial_root, trial_root / "input" / "golden"):
+            print("RUN " + " ".join(argv[2:]), flush=True)
+            summary = _run_trial(argv)
+            trials.append(ROOT / "reports/benchmarks" / summary["trial"])
+            queues.append(ROOT / "reports/jobs" / summary["trial"] / "review-queue.json")
+            print(f"DONE {argv[argv.index('--golden-clip') + 1]}: {summary['total_wall_seconds']:.0f}s, "
+                  f"original data preserved={summary['preserved_original_data']}", flush=True)
+    finally:
+        golden_trial_root.remove(trial_root, ROOT)
     args.queue, args.trial = [str(q) for q in queues], [str(t) for t in trials]
     score_command(args)
 
