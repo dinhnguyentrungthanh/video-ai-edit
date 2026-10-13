@@ -37,12 +37,23 @@ class Float16Detector:
 
 
 def with_detect_precision(reader, precision: str):
-    """Return a reader using ``precision`` for detection; the caller's reader is untouched."""
+    """Return a reader using ``precision`` for detection; the caller's reader is untouched.
+
+    The fp16 (fast scan) reader also builds the CRAFT input on the GPU
+    (``ocr_detect_gpu``; bit-identical, measured only on this path). The fp32
+    path stays EasyOCR's own.
+    """
     import copy
     if validate_detect_precision(precision) == "fp32":
         return reader
     if not str(getattr(reader, "device", "")).startswith("cuda"):
         raise ValueError("fp16 text detection requires a CUDA OCR reader")
-    variant = copy.copy(reader)  # shares the loaded models; only .detector differs
+    variant = copy.copy(reader)  # shares the loaded models; only .detector and .get_textbox differ
     variant.detector = Float16Detector(reader.detector)
+    original_textbox = getattr(reader, "get_textbox", None)
+    if original_textbox is not None:
+        from easyocr.detection import get_textbox as craft_get_textbox
+        if original_textbox is craft_get_textbox:  # CRAFT only; other detectors keep their own
+            from biliflow.ocr_detect_gpu import gpu_textbox
+            variant.get_textbox = gpu_textbox(original_textbox)
     return variant
