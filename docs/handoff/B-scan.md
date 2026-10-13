@@ -228,15 +228,19 @@ Lỗi này có từ trước B1; B1 không đổi đường dẫn nào. Phần d
   - bước 1 (đo) xong;
   - người dùng đã duyệt danh sách;
   - mục 1 (gpupre) đã làm và qua cổng (`5072564`);
-  - mục 3 đang đo bằng bản thử.
+  - mục 3 đã đo bằng bản thử, không đạt ngưỡng nên **đã bỏ**;
+  - **đợt OCR xong**: root tạm đã xóa. Nhánh chưa push, chưa merge; full suite để điều phối chạy.
   - Bước 1 từng tạm dừng theo yêu cầu người dùng ngày 2026-10-12, khoảng 23:05, vì máy có ứng dụng khác làm nhiễu số đo.
   - Người dùng cho đo tiếp ngày 2026-10-13. Phần đo lại chạy từ 06:57 đến 08:11.
 
 ## Cách đo
 
-- **Root tạm:** `temp\b-ocr\root`, giữ lại để đo tiếp (7,5 GB). Gồm code của 9ae104c, bản sao models, tools, HF cache, và nguồn job 125 và 114 (đã kiểm SHA-256).
-- **Kết quả:** nằm ở `temp\b-ocr\results\<job>-<biến thể>`.
-- **Script đo:** `temp\b-ocr\harness\`, không commit:
+- **Root tạm:** `temp\b-ocr\root`, **đã xóa** khi xong đợt (2026-10-13). Gồm code của 9ae104c, bản sao models, tools, HF cache, và nguồn job 125 và 114 (đã kiểm SHA-256).
+- **Kết quả:** đã lưu trong `docs/evidence/perf-scan/ocr/`:
+  - `20261013-step1-measurements.json`: bước 1;
+  - `20261013-gate.json`: cổng của mục 1;
+  - `20261013-overlap-trial.json`: bản thử mục 3.
+- **Script đo:** ở `temp\b-ocr\harness\` lúc đo, không commit. Bản cuối đã chép vào scratchpad của session:
   - `ocr_probe.py setup|run <job> <biến thể>|cleanup`;
   - `ocr_probe_inner.py`;
   - `ocr_analyze.py`.
@@ -366,14 +370,37 @@ Mỗi lần chạy stage text, tính bằng giây. Job 125 (L, 889 khung), job 1
   - cả quét quảng cáo: 203,8 s → 190,4 s (−7 %).
   - Lượt gpupre đầu tiên của 125 và của 114 có bước ngữ nghĩa mất 19,4 và 15,8 s. Ở các lượt lặp và trong report thật, bước này chỉ 3,5–7,5 s, nên được tính là nhiễu.
 
-## Đang dở
+## Bước 3: mục 3 (CPU và GPU chạy chồng), bản thử, không đạt, đã bỏ
 
-- **Mục 3 (bản thử):** nhánh `exp/ocr-overlap`, commit `a84e42a` trên `5072564`. **Không merge vào `perf/scan-ocr`.**
-  - Cách làm: một luồng phụ chạy detect các khung kế tiếp theo đúng thứ tự, trong lúc luồng chính nhận dạng chữ (recognize) theo cửa sổ.
+- **Bản thử:** commit `a84e42a` trên `5072564`, ở nhánh `exp/ocr-overlap`. Không merge; nhánh đã xóa sau khi ghi lại. Khôi phục được bằng `git branch exp/ocr-overlap a84e42a`, khi commit còn trong reflog.
+  - `CrossFrameReader.iter_readtext` cho một luồng phụ chạy detect của tối đa `frame_window` khung kế tiếp, theo đúng thứ tự.
+  - Trong lúc đó luồng chính nhận dạng chữ theo cửa sổ, và nơi gọi làm tracking.
+  - Cửa sổ, ngân sách byte và các lần gọi nhận dạng giữ nguyên.
   - Test OCR liên quan đạt.
-  - Việc tiếp theo: đo xen kẽ `g` (5072564) với `ov` (a84e42a) bằng `temp\b-ocr\harness\ocr_probe.py`, trên 125, 114 và 38c; so kết quả giống hệt.
-  - Chỉ trình người dùng nếu nhanh thêm ít nhất 5 % và giống hệt trên cả 3 bản; nếu không thì ghi lại và bỏ.
-- **Root tạm `temp\b-ocr`:** có junction `.venv` trỏ tới `.venv` của bản cài.
-  - Chỉ xóa bằng `ocr_gate.py cleanup` trong scratchpad. Lệnh này gỡ junction trước rồi mới xóa thư mục.
-  - Lệnh cleanup của `ocr_probe.py` đã bị khóa.
-  - Xóa khi xong đợt.
+- **Đo:** stage text, xen kẽ `g` (5072564) với `ov` (a84e42a), 3 vòng, trên 3 bản (125, 114 và 38c = đoạn 5 phút 1080p của job 38). Mọi lượt có `contaminated false`.
+
+| Bản | g trung vị (s) | ov trung vị (s) | Nhanh thêm | Giống hệt |
+|---|---|---|---|---|
+| 38c (H, 1080p, 5 phút) | 25,7 | 25,1 | 2,3 % | 3/3 |
+| 125 (L) | 78,2 | 76,5 | 2,2 % | 3/3 |
+| 114 (L) | 107,7 | 103,9 | 3,5 % | 3/3 |
+
+- **Kết luận:** kết quả giống hệt trên cả 3 bản, nhưng chỉ nhanh thêm 2,2–3,5 %, dưới ngưỡng 5 % của người dùng. Vì vậy chỉ ghi lại và bỏ, không trình duyệt.
+  - Lý do đoán: sau gpupre, việc CPU còn lại trên luồng chính ít. Detect vẫn chờ GPU, và GPU dùng chung một stream cho cả detect lẫn nhận dạng chữ.
+
+## Kết thúc đợt OCR
+
+- **Nhánh `perf/scan-ocr`:** từ `origin/main` theo thứ tự:
+  - `3d5ee00` và `d7b7320`: docs bước 1;
+  - `d5413af`: merge;
+  - `5072564`: gpupre;
+  - `a1b4214`: docs cổng;
+  - commit docs này.
+  - Chưa push, chưa merge.
+- **Việc của điều phối:**
+  - chạy full suite;
+  - merge;
+  - cập nhật `CHANGELOG.md`, `docs/PROJECT_STATUS.md`, `docs/SESSION_HANDOFF.md`.
+- **Dọn dẹp:**
+  - `temp\b-ocr` đã xóa: `ocr_gate.py cleanup` gỡ junction `.venv` trước rồi mới xóa thư mục. `.venv` của bản cài còn nguyên, đã kiểm `import torch, easyocr`.
+  - `temp\wt-scan-speed` là worktree chung của B, không phải thư mục của đợt này, nên vẫn giữ.

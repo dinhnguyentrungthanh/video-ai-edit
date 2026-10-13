@@ -1,0 +1,164 @@
+{
+  "date": "2026-10-13",
+  "trial": "exp/ocr-overlap a84e42a on top of perf/scan-ocr 5072564: detection of the next frames in one worker thread while the main thread recognizes; not merged, dropped",
+  "sources": {
+    "125": "job 125 (L)",
+    "114": "job 114 (L)",
+    "38c": "job 38 (H, 1080p), 5-minute copy from 450 s"
+  },
+  "rule": "present only if >= 5 % faster and identical on all three sources",
+  "result": "identical on all three, 2.2-3.5 % faster: below the rule, dropped",
+  "reference": "g-r1 of each source; text-scan.json and text previews",
+  "runs": {
+    "38c-g-r2": {
+      "wall": 25.7,
+      "contaminated": false,
+      "result_differences": [],
+      "setting_fields": [],
+      "previews_identical": true
+    },
+    "38c-g-r3": {
+      "wall": 25.42,
+      "contaminated": false,
+      "result_differences": [],
+      "setting_fields": [],
+      "previews_identical": true
+    },
+    "38c-ov-r1": {
+      "wall": 24.75,
+      "contaminated": false,
+      "result_differences": [],
+      "setting_fields": [],
+      "previews_identical": true
+    },
+    "38c-ov-r2": {
+      "wall": 25.66,
+      "contaminated": false,
+      "result_differences": [],
+      "setting_fields": [],
+      "previews_identical": true
+    },
+    "38c-ov-r3": {
+      "wall": 25.1,
+      "contaminated": false,
+      "result_differences": [],
+      "setting_fields": [],
+      "previews_identical": true
+    },
+    "38c-median": {
+      "g": [
+        26.33,
+        25.7,
+        25.42
+      ],
+      "ov": [
+        24.75,
+        25.66,
+        25.1
+      ],
+      "g_median": 25.7,
+      "ov_median": 25.1,
+      "saving_percent": 2.3
+    },
+    "125-g-r2": {
+      "wall": 78.24,
+      "contaminated": false,
+      "result_differences": [],
+      "setting_fields": [],
+      "previews_identical": true
+    },
+    "125-g-r3": {
+      "wall": 78.39,
+      "contaminated": false,
+      "result_differences": [],
+      "setting_fields": [],
+      "previews_identical": true
+    },
+    "125-ov-r1": {
+      "wall": 76.1,
+      "contaminated": false,
+      "result_differences": [],
+      "setting_fields": [],
+      "previews_identical": true
+    },
+    "125-ov-r2": {
+      "wall": 76.53,
+      "contaminated": false,
+      "result_differences": [],
+      "setting_fields": [],
+      "previews_identical": true
+    },
+    "125-ov-r3": {
+      "wall": 76.58,
+      "contaminated": false,
+      "result_differences": [],
+      "setting_fields": [],
+      "previews_identical": true
+    },
+    "125-median": {
+      "g": [
+        77.48,
+        78.24,
+        78.39
+      ],
+      "ov": [
+        76.1,
+        76.53,
+        76.58
+      ],
+      "g_median": 78.24,
+      "ov_median": 76.53,
+      "saving_percent": 2.2
+    },
+    "114-g-r2": {
+      "wall": 107.65,
+      "contaminated": false,
+      "result_differences": [],
+      "setting_fields": [],
+      "previews_identical": true
+    },
+    "114-g-r3": {
+      "wall": 108.4,
+      "contaminated": false,
+      "result_differences": [],
+      "setting_fields": [],
+      "previews_identical": true
+    },
+    "114-ov-r1": {
+      "wall": 103.96,
+      "contaminated": false,
+      "result_differences": [],
+      "setting_fields": [],
+      "previews_identical": true
+    },
+    "114-ov-r2": {
+      "wall": 103.72,
+      "contaminated": false,
+      "result_differences": [],
+      "setting_fields": [],
+      "previews_identical": true
+    },
+    "114-ov-r3": {
+      "wall": 103.88,
+      "contaminated": false,
+      "result_differences": [],
+      "setting_fields": [],
+      "previews_identical": true
+    },
+    "114-median": {
+      "g": [
+        107.31,
+        107.65,
+        108.4
+      ],
+      "ov": [
+        103.96,
+        103.72,
+        103.88
+      ],
+      "g_median": 107.65,
+      "ov_median": 103.88,
+      "saving_percent": 3.5
+    }
+  }
+}

@@ -60,5 +60,9 @@ fast scan. It has the runs, the report comparisons and the job 125 repeats. It n
   - advertising scan median 203.8 s → 190.4 s.
   - The first gpupre runs of 125 and 114 had a 15.8–19.4 s semantic step. It did not come back in the repeats, and the
     real reports show 3.5–7.5 s, so it is counted as noise.
-- **Not kept.** The temporary root, the source copies, the clip and the reports stay local and are removed at the end
-  of the round.
+- **Also here.**
+  - `ocr/20261013-step1-measurements.json` holds the step 1 text-stage runs: the harness-only variants, their medians
+    and their identity against `plain-a`.
+  - `ocr/20261013-overlap-trial.json` holds the trial that overlapped detection with recognition (`a84e42a`, never
+    merged). It was identical on all three sources, but only 2.2–3.5 % faster, below the 5 % rule, so it was dropped.
+- **Not kept.** The temporary root, the source copies, the clip and the reports were removed at the end of the round.
