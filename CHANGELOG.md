@@ -1,3 +1,9 @@
+# G5 merge: golden set v2, hybrid (2026-10-13, branch `merge/g5` from `main` `ed39653`; not yet in the main folder)
+
+- Merged `feat/golden-clips` with `--no-ff` (entry "Golden Set v2, hybrid" below). Not activated: activation runs after the main folder is updated and the Control Center restarted.
+- Delete protection: a golden clip source protects only its own SHA-256, so the job of its origin film is no longer locked once v2 is active. A clip with a job id or without a SHA-256 makes the golden file unreadable, so every delete is refused.
+- Scan cache keys unchanged (10 stages); full suite 3,236 tests OK, 28 skipped.
+
 # Golden Set v2, hybrid (2026-10-13, branch `feat/golden-clips` from `origin/main` `ed39653`; not merged, not activated)
 
 - What v2 holds:

@@ -1,5 +1,12 @@
 # BiliFlow session handoff
 
+## G5 merge, golden set v2 (hybrid) — 2026-10-13, branch `merge/g5` (worktree `temp\wt-merge-g5`), not yet in the main folder
+
+- **Request:** the user approved the hybrid v2 (clips of job 39, whole films of jobs 37 and 38), its baseline card and the `AGENTS.md` golden-set text.
+- **Merge:** `feat/golden-clips` (`9e87a44`) into `merge/g5` from `main` `ed39653` with `--no-ff`, no conflict. Delete protection (`job_purge._read_golden`): a clip source names no job and protects only its own SHA-256; a clip with a job id or without a SHA-256 makes the file unreadable, which refuses every delete; `annotations\golden-retired\` and the staging folder are not read.
+- **Gates:** scan cache keys identical to `ed39653` (10 stages); full suite 3,236 tests OK, 28 skipped.
+- **Next:** with the Control Center off and the user's explicit go, fast-forward the main folder to `merge/g5`; the user restarts it; session G activates v2 (dry run first), fills the date into `AGENTS.md` and checks with a read-only GET that job 39 is unlocked and jobs 37 and 38 stay locked. Deleting job 39's film is the user's own action. Push only on the user's word. Session F (`fix/small-bugs`) is fixing four small bugs in parallel.
+
 ## G4 merge, scan OCR round — 2026-10-13, branch `merge/g4` (worktree `temp\wt-merge-g4`), not yet in the main folder
 
 - **Request:** the user approved item 1 (gpupre) with an extra 1080p gate, dropped item 2, and allowed a measured trial of item 3 (dropped: under 5 %).

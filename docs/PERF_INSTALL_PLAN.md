@@ -980,6 +980,12 @@ Session cloud lập kế hoạch dừng vì hết credit. Một session **điề
 - B đợt OCR: gpupre (chuẩn bị ảnh cho bước tìm chữ trên GPU, chỉ chế độ "Tăng tốc xử lý") đạt cổng giống hệt trên job 125, 114 và đoạn 1080p của job 38; quét quảng cáo nhanh thêm khoảng 7 %; chỉ đổi khóa của stage `text`. Bỏ: nạp sẵn thư viện ngữ nghĩa (nhiễu), chạy chồng CPU/GPU (chỉ 2–3,5 %), NVDEC cho OCR (chậm hơn 10–18 %).
 - Còn chờ người dùng: đề xuất "phim vàng" (cắt 13 đoạn thành clip, gỡ khóa 3 phim gốc, khoảng 11,3 GB).
 
+### 14.10 G5: phim vàng v2 (2026-10-13)
+
+- Người dùng duyệt phương án lai: clip cho job 39, giữ nguyên phim của job 37 và 38; duyệt mốc chuẩn v2 và văn bản `AGENTS.md`.
+- Gộp `feat/golden-clips` vào `merge/g5`: khóa cache quét không đổi, full suite 3.236 OK. Chưa kích hoạt: chờ cập nhật thư mục chính và khởi động lại Control Center, rồi G kích hoạt. Người dùng tự xóa phim job 39 (khoảng 5,7 GB).
+- Session F (`fix/small-bugs`) sửa 4 lỗi nhỏ: hủy xuất bị lọt, hai test chập chờn, byte lỗi và trích dẫn sai trong tài liệu. Để sau, gom vào đợt quét B3 vì đổi khóa cache: E3 (stage text âm thầm chạy CPU ở họ `standard`), E4, phần còn lại của B1.
+
 ### 14.6 Cách session điều phối làm việc
 
 - Làm trong worktree `temp\wt-coord`, nhánh `coord/plan` (từ `origin/main`). **Không sửa thư mục chính** đang chạy Control Center.

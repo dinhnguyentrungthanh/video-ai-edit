@@ -1,3 +1,7 @@
+## G5 merge, golden set v2 hybrid (2026-10-13) — branch `merge/g5`, not yet in the main folder
+
+- `feat/golden-clips` merged: v2 code, tests and docs; v2 is still in staging, not activated. Scan cache keys unchanged; full suite 3,236 OK. Details in `CHANGELOG.md` ("Golden Set v2, hybrid").
+
 ## G4 merge, scan OCR round (2026-10-13) — branch `merge/g4`, not yet in the main folder
 
 - gpupre (session B): OCR detection input built on the GPU in fast scan; outputs identical on jobs 125, 114 and a 1080p clip; ad scan about 7 % faster; only the `text` cache key changes. Full suite 3,195 OK. Details in `CHANGELOG.md`.
