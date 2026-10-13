@@ -553,13 +553,34 @@ class SessionTest(SiteCase):
         self.assertLess(time.monotonic() - started, 15)
         self.assert_edge_gone()
 
+    @staticmethod
+    def cancel_when(control: ProcessControl, ready, *, limit: float = 45) -> threading.Event:
+        """Requests the cancel as soon as ``ready()`` holds, or after ``limit`` seconds (under the run's 60 s
+        deadline) so the run never waits for it; the event is set only when ``ready()`` held."""
+        held = threading.Event()
+
+        def watch() -> None:
+            deadline = time.monotonic() + limit
+            while not ready() and time.monotonic() < deadline:
+                time.sleep(0.05)
+            if ready():
+                held.set()
+            control.request("cancel")
+        threading.Thread(target=watch, daemon=True).start()
+        return held
+
     def test_cookies_rotated_before_a_cancel_are_kept(self):
         site = self.series_site(rotate="rotated-before-cancel", tickets={"s1e1--v1080": TicketBehaviour(wait=30)})
         before = self.manager.status("alpha")
         control = ProcessControl()
-        threading.Timer(4, control.request, ("cancel",)).start()
+        # The cancel lands in the ticket's 30 s wait: once the ticket page was asked for with the rotated cookie,
+        # the film page that set it has loaded. A fixed delay could come before Edge loaded it on a busy PC.
+        in_ticket_wait = self.cancel_when(control, lambda: any(
+            "sid=rotated-before-cancel" in item.headers.get("cookie", "")
+            for item in self.server.seen("/t/s1e1--v1080")))
         with self.assertRaises(Cancelled):
             self.provider().resolve(site.url, self.context(self.chosen("s1e1"), control=control))
+        self.assertTrue(in_ticket_wait.is_set(), "the run never asked for the ticket with the rotated cookie")
         self.assertEqual(self.stored_cookie(), "rotated-before-cancel")  # the next run sends the source's new one
         after = self.manager.status("alpha")
         self.assertEqual((after["authenticated_at"], after["recheck_at"]), (before["authenticated_at"],
