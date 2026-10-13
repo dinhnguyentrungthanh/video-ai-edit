@@ -40,3 +40,29 @@ The gate copies and reports stayed local and were removed afterwards:
 - **`outside_model_work_seconds`.** The stage wall time minus the counted model-work phases: model step, frame-pipe
   and prefetch waits, tracking, preview writes and frame extraction. What is left is process start, imports, model
   load, the cache key and reporting.
+
+# OCR input on the GPU (B, OCR round), 2026-10-13
+
+`ocr/20261013-gate.json` holds the gate of `perf/scan-ocr` 5072564, which builds EasyOCR's CRAFT input on the GPU in
+fast scan. It has the runs, the report comparisons and the job 125 repeats. It names jobs only by id and label
+(L = live action, H = animation), with no paths, film or file names, or links.
+
+- **Revisions.** `base` = `d5413af` (`origin/main` 6df5c63 merged into the branch), `gpupre` = `5072564`.
+- **Sources.** Jobs 125 (L) and 114 (L), from SHA-256-checked copies of their sources. Job 38 (H, 1080p): a 5-minute
+  stream copy from 450 s, the window of the real report with the most text tracks.
+- **Scan.** The same as the B1 gate: the Control Center's scheduler path, careful, fast scan, advertising, stage cache
+  off. The job 38 copy ran as animation. Every run happened while the real Control Center had no running stage, export
+  included (`contaminated: false`).
+- **Quality rule.** The same as B1: the four reports must be equal, except for the B1 time and performance fields. The
+  text previews must also be byte-identical. Every pair passed, including base↔base and gpupre↔gpupre across repeats.
+- **Speed.** Job 125, three runs of each:
+  - text stage median 92.0 s → 79.9 s;
+  - advertising scan median 203.8 s → 190.4 s.
+  - The first gpupre runs of 125 and 114 had a 15.8–19.4 s semantic step. It did not come back in the repeats, and the
+    real reports show 3.5–7.5 s, so it is counted as noise.
+- **Also here.**
+  - `ocr/20261013-step1-measurements.json` holds the step 1 text-stage runs: the harness-only variants, their medians
+    and their identity against `plain-a`.
+  - `ocr/20261013-overlap-trial.json` holds the trial that overlapped detection with recognition (`a84e42a`, never
+    merged). It was identical on all three sources, but only 2.2–3.5 % faster, below the 5 % rule, so it was dropped.
+- **Not kept.** The temporary root, the source copies, the clip and the reports were removed at the end of the round.

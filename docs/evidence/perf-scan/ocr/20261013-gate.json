@@ -1,0 +1,413 @@
+{
+  "date": "2026-10-13",
+  "change": "perf/scan-ocr 5072564: CRAFT detection input built on the GPU in fast scan (ocr_detect_gpu.py)",
+  "revisions": {
+    "base": "d5413af (origin/main 6df5c63 merged into perf/scan-ocr)",
+    "gpupre": "5072564"
+  },
+  "sources": {
+    "125": "job 125 (L, full film)",
+    "114": "job 114 (L, full film)",
+    "38c": "job 38 (H, 1080p), 5-minute stream copy from 450 s"
+  },
+  "method": "Advertising scans through JobScheduler._select/_execute in a temporary root under the install temp folder, same settings as the B1 gate (careful, fast scan, advertising; 38c as animation). Stage cache off (long paths). Each run installs its revision and resets reports, state and scan caches. Runs only while the real Control Center had no running stage (export included); contaminated=false means none started.",
+  "quality_rule": "text/text-scan.json, visual-logo/scan.json, visual-logo/scan-florence.json, review-queue.json equal except the B1 time and performance fields; text previews byte-identical.",
+  "passed": true,
+  "comparisons": [
+    {
+      "pair": [
+        "base-125",
+        "gpupre-125"
+      ],
+      "other_differences": 0,
+      "per_report": {
+        "text/text-scan.json": 0,
+        "visual-logo/scan.json": 0,
+        "visual-logo/scan-florence.json": 0,
+        "review-queue.json": 0
+      },
+      "text_previews": 84,
+      "text_previews_identical": true
+    },
+    {
+      "pair": [
+        "base-114",
+        "gpupre-114"
+      ],
+      "other_differences": 0,
+      "per_report": {
+        "text/text-scan.json": 0,
+        "visual-logo/scan.json": 0,
+        "visual-logo/scan-florence.json": 0,
+        "review-queue.json": 0
+      },
+      "text_previews": 84,
+      "text_previews_identical": true
+    },
+    {
+      "pair": [
+        "base-38c",
+        "gpupre-38c"
+      ],
+      "other_differences": 0,
+      "per_report": {
+        "text/text-scan.json": 0,
+        "visual-logo/scan.json": 0,
+        "visual-logo/scan-florence.json": 0,
+        "review-queue.json": 0
+      },
+      "text_previews": 32,
+      "text_previews_identical": true
+    },
+    {
+      "pair": [
+        "base-125",
+        "gpupre-125-b"
+      ],
+      "other_differences": 0,
+      "per_report": {
+        "text/text-scan.json": 0,
+        "visual-logo/scan.json": 0,
+        "visual-logo/scan-florence.json": 0,
+        "review-queue.json": 0
+      },
+      "text_previews": 84,
+      "text_previews_identical": true
+    },
+    {
+      "pair": [
+        "base-125",
+        "gpupre-125-c"
+      ],
+      "other_differences": 0,
+      "per_report": {
+        "text/text-scan.json": 0,
+        "visual-logo/scan.json": 0,
+        "visual-logo/scan-florence.json": 0,
+        "review-queue.json": 0
+      },
+      "text_previews": 84,
+      "text_previews_identical": true
+    },
+    {
+      "pair": [
+        "base-125-b",
+        "gpupre-125-b"
+      ],
+      "other_differences": 0,
+      "per_report": {
+        "text/text-scan.json": 0,
+        "visual-logo/scan.json": 0,
+        "visual-logo/scan-florence.json": 0,
+        "review-queue.json": 0
+      },
+      "text_previews": 84,
+      "text_previews_identical": true
+    },
+    {
+      "pair": [
+        "base-125",
+        "base-125-b"
+      ],
+      "other_differences": 0,
+      "per_report": {
+        "text/text-scan.json": 0,
+        "visual-logo/scan.json": 0,
+        "visual-logo/scan-florence.json": 0,
+        "review-queue.json": 0
+      },
+      "text_previews": 84,
+      "text_previews_identical": true
+    },
+    {
+      "pair": [
+        "base-125",
+        "base-125-c"
+      ],
+      "other_differences": 0,
+      "per_report": {
+        "text/text-scan.json": 0,
+        "visual-logo/scan.json": 0,
+        "visual-logo/scan-florence.json": 0,
+        "review-queue.json": 0
+      },
+      "text_previews": 84,
+      "text_previews_identical": true
+    },
+    {
+      "pair": [
+        "gpupre-125",
+        "gpupre-125-c"
+      ],
+      "other_differences": 0,
+      "per_report": {
+        "text/text-scan.json": 0,
+        "visual-logo/scan.json": 0,
+        "visual-logo/scan-florence.json": 0,
+        "review-queue.json": 0
+      },
+      "text_previews": 84,
+      "text_previews_identical": true
+    }
+  ],
+  "ignored_fields_seen": [
+    "/created_at",
+    "/metrics/cross_frame_recognition/detect_seconds",
+    "/metrics/cross_frame_recognition/recognize_seconds",
+    "/metrics/elapsed_seconds",
+    "/metrics/localization_performance/phases/frame_extract/wall_seconds",
+    "/metrics/localization_performance/phases/model_load/wall_seconds",
+    "/metrics/localization_performance/phases/model_step/wall_seconds",
+    "/metrics/localization_performance/total_wall_seconds",
+    "/metrics/localization_performance/unattributed_wall_seconds",
+    "/metrics/peak_process_ram_bytes",
+    "/metrics/performance/phases/frame_pipe_wait/wall_seconds",
+    "/metrics/performance/phases/model_load/wall_seconds",
+    "/metrics/performance/phases/model_step/wall_seconds",
+    "/metrics/performance/phases/prefetch_wait/wall_seconds",
+    "/metrics/performance/phases/preview_output/wall_seconds",
+    "/metrics/performance/phases/preview_write/wall_seconds",
+    "/metrics/performance/phases/source_hash/wall_seconds",
+    "/metrics/performance/phases/text_semantics/wall_seconds",
+    "/metrics/performance/phases/tracking/wall_seconds",
+    "/metrics/performance/total_wall_seconds",
+    "/metrics/performance/unattributed_wall_seconds",
+    "/metrics/video_seconds_per_processing_second",
+    "/metrics/vlm_prefetch_performance/phases/frame_write/wall_seconds",
+    "/metrics/vlm_prefetch_performance/phases/processor/wall_seconds",
+    "/metrics/vlm_prefetch_performance/total_wall_seconds",
+    "/metrics/vlm_prefetch_performance/unattributed_wall_seconds",
+    "/region_localization_summary/created_at",
+    "/region_localization_summary/elapsed_seconds",
+    "/updated_at"
+  ],
+  "runs": {
+    "base-114": {
+      "state": "WAITING_REVIEW",
+      "contaminated": false,
+      "scan_wall_seconds": 268.5,
+      "stage_wall_seconds": {
+        "preflight": 0.8,
+        "text": 125.4,
+        "visual_logo": 75.8,
+        "localize_logo": 25.3,
+        "build_review": 40.4
+      },
+      "text_phases_seconds": {
+        "frame_pipe_wait": 2.4,
+        "model_load": 7.4,
+        "model_step": 105.8,
+        "preview_output": 0.3,
+        "preview_write": 0.2,
+        "source_hash": 0.0,
+        "text_semantics": 5.3,
+        "tracking": 0.3
+      }
+    },
+    "base-125": {
+      "state": "WAITING_REVIEW",
+      "contaminated": false,
+      "scan_wall_seconds": 203.5,
+      "stage_wall_seconds": {
+        "preflight": 0.6,
+        "text": 90.0,
+        "visual_logo": 60.6,
+        "localize_logo": 12.2,
+        "build_review": 39.3
+      },
+      "text_phases_seconds": {
+        "frame_pipe_wait": 1.7,
+        "model_load": 7.6,
+        "model_step": 71.9,
+        "preview_output": 0.3,
+        "preview_write": 0.2,
+        "source_hash": 0.0,
+        "text_semantics": 5.4,
+        "tracking": 0.3
+      }
+    },
+    "base-125-b": {
+      "state": "WAITING_REVIEW",
+      "contaminated": false,
+      "scan_wall_seconds": 203.8,
+      "stage_wall_seconds": {
+        "preflight": 0.6,
+        "text": 92.0,
+        "visual_logo": 59.7,
+        "localize_logo": 12.2,
+        "build_review": 38.3
+      },
+      "text_phases_seconds": {
+        "frame_pipe_wait": 1.8,
+        "model_load": 7.7,
+        "model_step": 72.3,
+        "preview_output": 0.3,
+        "preview_write": 0.3,
+        "source_hash": 0.0,
+        "text_semantics": 6.1,
+        "tracking": 0.3
+      }
+    },
+    "base-125-c": {
+      "state": "WAITING_REVIEW",
+      "contaminated": false,
+      "scan_wall_seconds": 205.9,
+      "stage_wall_seconds": {
+        "preflight": 0.5,
+        "text": 93.1,
+        "visual_logo": 60.0,
+        "localize_logo": 12.2,
+        "build_review": 39.3
+      },
+      "text_phases_seconds": {
+        "frame_pipe_wait": 1.7,
+        "model_load": 7.6,
+        "model_step": 71.9,
+        "preview_output": 0.3,
+        "preview_write": 0.3,
+        "source_hash": 0.0,
+        "text_semantics": 7.5,
+        "tracking": 0.3
+      }
+    },
+    "base-38c": {
+      "state": "WAITING_REVIEW",
+      "contaminated": false,
+      "scan_wall_seconds": 161.4,
+      "stage_wall_seconds": {
+        "preflight": 0.7,
+        "text": 30.3,
+        "visual_logo": 33.3,
+        "localize_logo": 57.7,
+        "build_review": 38.5
+      },
+      "text_phases_seconds": {
+        "frame_pipe_wait": 0.4,
+        "model_load": 7.8,
+        "model_step": 12.2,
+        "preview_output": 0.1,
+        "preview_write": 0.1,
+        "source_hash": 0.0,
+        "text_semantics": 6.7,
+        "tracking": 0.2
+      }
+    },
+    "gpupre-114": {
+      "state": "WAITING_REVIEW",
+      "contaminated": false,
+      "scan_wall_seconds": 265.6,
+      "stage_wall_seconds": {
+        "preflight": 0.7,
+        "text": 119.3,
+        "visual_logo": 74.9,
+        "localize_logo": 27.3,
+        "build_review": 42.4
+      },
+      "text_phases_seconds": {
+        "frame_pipe_wait": 2.5,
+        "model_load": 8.2,
+        "model_step": 88.2,
+        "preview_output": 0.3,
+        "preview_write": 0.2,
+        "source_hash": 0.0,
+        "text_semantics": 15.8,
+        "tracking": 0.3
+      }
+    },
+    "gpupre-125": {
+      "state": "WAITING_REVIEW",
+      "contaminated": false,
+      "scan_wall_seconds": 205.6,
+      "stage_wall_seconds": {
+        "preflight": 0.6,
+        "text": 92.9,
+        "visual_logo": 59.6,
+        "localize_logo": 12.4,
+        "build_review": 39.4
+      },
+      "text_phases_seconds": {
+        "frame_pipe_wait": 1.7,
+        "model_load": 8.0,
+        "model_step": 60.0,
+        "preview_output": 0.3,
+        "preview_write": 0.2,
+        "source_hash": 0.0,
+        "text_semantics": 19.4,
+        "tracking": 0.3
+      }
+    },
+    "gpupre-125-b": {
+      "state": "WAITING_REVIEW",
+      "contaminated": false,
+      "scan_wall_seconds": 190.4,
+      "stage_wall_seconds": {
+        "preflight": 0.6,
+        "text": 78.8,
+        "visual_logo": 59.6,
+        "localize_logo": 12.2,
+        "build_review": 38.4
+      },
+      "text_phases_seconds": {
+        "frame_pipe_wait": 1.7,
+        "model_load": 7.4,
+        "model_step": 60.0,
+        "preview_output": 0.3,
+        "preview_write": 0.2,
+        "source_hash": 0.0,
+        "text_semantics": 5.2,
+        "tracking": 0.3
+      }
+    },
+    "gpupre-125-c": {
+      "state": "WAITING_REVIEW",
+      "contaminated": false,
+      "scan_wall_seconds": 190.4,
+      "stage_wall_seconds": {
+        "preflight": 0.5,
+        "text": 79.9,
+        "visual_logo": 59.6,
+        "localize_logo": 11.2,
+        "build_review": 38.4
+      },
+      "text_phases_seconds": {
+        "frame_pipe_wait": 1.8,
+        "model_load": 7.7,
+        "model_step": 60.2,
+        "preview_output": 0.3,
+        "preview_write": 0.3,
+        "source_hash": 0.0,
+        "text_semantics": 6.2,
+        "tracking": 0.3
+      }
+    },
+    "gpupre-38c": {
+      "state": "WAITING_REVIEW",
+      "contaminated": false,
+      "scan_wall_seconds": 143.7,
+      "stage_wall_seconds": {
+        "preflight": 0.3,
+        "text": 26.3,
+        "visual_logo": 33.5,
+        "localize_logo": 46.4,
+        "build_review": 36.3
+      },
+      "text_phases_seconds": {
+        "frame_pipe_wait": 0.4,
+        "model_load": 7.5,
+        "model_step": 9.9,
+        "preview_output": 0.1,
+        "preview_write": 0.1,
+        "source_hash": 0.0,
+        "text_semantics": 5.5,
+        "tracking": 0.2
+      }
+    }
+  },
+  "job_125_repeats": {
+    "base_text_median": 92.0,
+    "gpupre_text_median": 79.9,
+    "base_scan_median": 203.8,
+    "gpupre_scan_median": 190.4,
+    "note": "gpupre-125 and gpupre-114 (first runs) had text_semantics 19.4 and 15.8 s; the repeats and the real reports show 3.5-7.5 s, so these are counted as noise, not as an effect of the change."
+  }
+}

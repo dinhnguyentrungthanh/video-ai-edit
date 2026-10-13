@@ -220,3 +220,187 @@ Lỗi này có từ trước B1; B1 không đổi đường dẫn nào. Phần d
 - **Không sửa:** `final_renderer.py`, `blur_filter.py`, `export_encoder.py`, `hardware_*.py`, `models\`. `scheduler.py` chỉ sửa khi bắt buộc, và báo người dùng trước. B1 không đụng `scheduler.py`.
 - **`prune()` và `prune_file_caches()` xóa file:** không bao giờ gọi trên thư mục cài khi đo.
 - **Không ghi vào repo** tên phim, tên file nguồn hay link. Tên thư mục report có chứa tên phim.
+
+# Đợt OCR (stage text)
+
+- **Nhánh:** `perf/scan-ocr`, tách từ `origin/main` 9ae104c (B1 đã gộp và push). Worktree: `temp\wt-scan-speed`.
+- **Trạng thái (2026-10-13):**
+  - bước 1 (đo) xong;
+  - người dùng đã duyệt danh sách;
+  - mục 1 (gpupre) đã làm và qua cổng (`5072564`);
+  - mục 3 đã đo bằng bản thử, không đạt ngưỡng nên **đã bỏ**;
+  - **đợt OCR xong**: root tạm đã xóa. Nhánh chưa push, chưa merge; full suite để điều phối chạy.
+  - Bước 1 từng tạm dừng theo yêu cầu người dùng ngày 2026-10-12, khoảng 23:05, vì máy có ứng dụng khác làm nhiễu số đo.
+  - Người dùng cho đo tiếp ngày 2026-10-13. Phần đo lại chạy từ 06:57 đến 08:11.
+
+## Cách đo
+
+- **Root tạm:** `temp\b-ocr\root`, **đã xóa** khi xong đợt (2026-10-13). Gồm code của 9ae104c, bản sao models, tools, HF cache, và nguồn job 125 và 114 (đã kiểm SHA-256).
+- **Kết quả:** đã lưu trong `docs/evidence/perf-scan/ocr/`:
+  - `20261013-step1-measurements.json`: bước 1;
+  - `20261013-gate.json`: cổng của mục 1;
+  - `20261013-overlap-trial.json`: bản thử mục 3.
+- **Script đo:** ở `temp\b-ocr\harness\` lúc đo, không commit. Bản cuối đã chép vào scratchpad của session:
+  - `ocr_probe.py setup|run <job> <biến thể>|cleanup`;
+  - `ocr_probe_inner.py`;
+  - `ocr_analyze.py`.
+- **Lệnh chạy:** đúng argv production của stage text ở chế độ "Tăng tốc xử lý": batch 8, cửa sổ 4 khung, detect fp16, kèm tiến trình con làm nóng routing logo bằng NVDEC.
+- **Điều kiện chạy:**
+  - chỉ chạy khi DB thật (`mode=ro`) không có stage RUNNING nào, kể cả xuất;
+  - giữ mutex `Local\BiliFlowGpuInference`;
+  - ghi mẫu GPU bằng `nvidia-smi` và mẫu CPU của cây tiến trình;
+  - kể từ lần chạy `125-probe-gpupre` trở đi, ghi thêm CPU của các tiến trình khác trên máy để nhận ra nhiễu.
+- **Bộ đo (`probe`):** hook lúc import, không sửa file nào; có `cuda.synchronize` quanh forward. Bộ đo làm chậm khoảng 6 s mỗi lần chạy.
+
+## Số đo đến lúc dừng
+
+Mỗi lần chạy stage text, tính bằng giây. Job 125 (L, 889 khung), job 114 (L, 1.113 khung).
+
+| Biến thể | 125 wall | 114 wall | Kết quả so với plain-a |
+|---|---|---|---|
+| plain-a / plain-b | 96,3 / 97,3 | 138,1 / 175,0 (\*) | giống hệt |
+| prefetch 2 khung | 96,2 | 133,7 | giống hệt; không nhanh hơn |
+| cửa sổ 8 khung | 98,2 | 135,9 | **không giống hệt** (`tracks[].max_confidence`); không nhanh hơn |
+| NVDEC cho OCR | 106,7 | 163,2 | giống hệt; chậm hơn 10–18 % |
+| không làm nóng routing (chỉ tham khảo) | 82,0 | 139,8 | giống hệt |
+
+(\*) Lần chạy bị nhiễu: các ứng dụng khác của người dùng chiếm CPU.
+
+**Tách thời gian** (lần `probe`; 125 / 114):
+
+- **detect:** tổng 63,0 / 94,8. Trong đó:
+  - forward GPU 37,1 / 56,6;
+  - normalize trên CPU 12,7 / 17,5;
+  - resize/pad trên CPU 3,4 / 4,6;
+  - hậu xử lý 2,0 / 5,4;
+  - phần còn lại khoảng 7,7 / 10,3 (chuyển dữ liệu, chép mảng).
+- **recognize:** 12,3 / 17,1 (forward GPU 8,7 / 12,2).
+- **Mô hình ngữ nghĩa:** nạp 7,2 / 5,8; phân loại khoảng 0,1.
+- **`model_load`:** 11,7 / 8,2 (import cộng `Reader` 3,0–3,4).
+- **Chờ khung:** 1,9 / 2,9.
+- **Chờ tiến trình làm nóng routing:** 0.
+- **Còn lại:** tracking và preview, mỗi phần khoảng 0,3.
+- **Máy:**
+  - GPU bận trung bình chỉ 42–48 %, không lúc nào chạm 90 %;
+  - FFmpeg giải mã bằng CPU tốn 174–262 giây CPU, tiến trình làm nóng routing 125–160;
+  - CPU 6 nhân bị chia giữa các tiến trình này.
+- **Khung giống hệt khung trước:** không có ở cả hai job. Job 114 có 5 khung trùng với một khung nào đó trước đó.
+- **Khung không có chữ:** 713/889 và 967/1.113.
+
+**Thí nghiệm** (chỉ trong script đo, không sửa code BiliFlow):
+
+- **`gpupre`:** dựng input của CRAFT trên GPU từ khung uint8. Resize cùng cỡ là bản chép (đã kiểm), đệm bằng số 0; phép trừ và chia làm ở float64 rồi làm tròn về float32.
+  - Job 125: **889/889 khung có detect giống hệt** (cùng hash hộp chữ).
+  - detect_total giảm từ 65,4 xuống 54,8 s. Nhưng lần chạy này bị nhiễu (CPU của tiến trình làm nóng routing tăng từ khoảng 138 lên 189 s), nên wall 116,8 s không dùng được.
+- **Đo lại ngày 2026-10-13:**
+  - các biến thể chạy xen kẽ theo vòng, thứ tự đảo giữa các vòng;
+  - lấy trung vị;
+  - mọi lần chạy đều có `contaminated False`.
+
+| Biến thể | 125 trung vị (khoảng) | 114 trung vị (khoảng) | Giống hệt plain-a |
+|---|---|---|---|
+| plain (5 vòng) | 94,9 (92,0–116,1) | 127,0 (124,8–135,9) | 5/5, 5/5 |
+| `gpupre` (5 vòng) | **81,4** (79,4–97,4) | **112,8** (108,8–113,9) | **5/5, 5/5** |
+| `semimport` (2 vòng) | 92,3 (90,0–94,6) | 128,8 (125,2–132,4) | 2/2, 2/2 |
+| `both2` = gpupre + semimport (2 vòng) | 80,3 (79,1–81,6) | 111,9 (110,8–113,1) | 2/2, 2/2 |
+| `sembg` (3 vòng) | 92,8 | 123,1 | **0/3, 1/3** |
+| `both` = gpupre + sembg (3 vòng) | 76,2; một lần **lỗi** | 105,0 | **0/2, 0/3** |
+
+- **`gpupre` cho detect giống hệt từng khung:**
+  - job 125: 889/889 khung, cùng điểm ảnh, cùng hash hộp chữ, cùng số crop;
+  - job 114: 1.113/1.113 khung, so `probe` với `probe-gpupre`.
+- **VRAM tối đa của `gpupre` tăng 20–24 MiB:** khoảng 1.075 so với 1.055 MiB ở job 125, 1.117 so với 1.093 MiB ở job 114.
+- **`sembg` không an toàn:** nạp mô hình ngữ nghĩa ở luồng nền.
+  - Lần `125-both-r1` lỗi `cudnn_batch_norm` (Float/Half), vì `from_pretrained(dtype=float16)` đổi kiểu số mặc định của torch cho cả tiến trình trong lúc OCR đang chạy.
+  - Các lần không lỗi vẫn ra `semantic_scores` và `ad_probability` khác bản gốc. Lần `125-sembg-r3` đổi cả `routing` và `routing_counts`.
+- **`semimport`:** chỉ import `transformers` ở luồng nền.
+  - Thời gian nạp ngữ nghĩa giảm từ 5,85 xuống 3,70 s, kết quả giống hệt.
+  - Nhưng wall chỉ khác 1–2 s, nằm trong nhiễu.
+
+**Danh sách trình người dùng (2026-10-13):**
+
+1. **`gpupre`: dựng input của CRAFT trên GPU.**
+   - **Tiết kiệm:** stage text giảm 11–14 % (−13,5 s ở job 125, −14,2 s ở job 114); cả quét quảng cáo khoảng 5–6 %.
+   - **Giống hệt:** có.
+   - **Khóa cache:** chỉ đổi khóa của stage text. Code sẽ nằm trong `ocr_precision.py` hoặc `ocr_batch_experiment.py`; chỉ `textscan` import hai file này, còn `cli.py` là ranh giới.
+   - Ngoài trường hợp đã đo, mọi trường hợp khác dùng lại `test_net` gốc: CPU, khung không phải uint8 3 kênh, resize khác cỡ, `estimate_num_chars`.
+2. **`semimport`: import `transformers` trong lúc OCR chạy.** Tiết kiệm 1–2 s, trong nhiễu. Giống hệt. Chỉ đổi khóa của stage text. Đề xuất: **bỏ qua**, vì thêm một luồng mà lợi rất ít.
+3. **Chạy chồng CPU và GPU (pipeline detect/recognize):**
+   - chưa đo; ước đoán 5–10 %;
+   - phải sửa vòng lặp OCR nhiều hơn, và phải chứng minh giống hệt;
+   - chỉ đo nếu người dùng muốn.
+- **Đã loại:**
+  - `sembg` và `both`: không giống hệt, có lần lỗi;
+  - cửa sổ 8 khung: không giống hệt;
+  - NVDEC: chậm hơn 10–18 %;
+  - prefetch: không nhanh hơn;
+  - bỏ qua khung trùng: không có khung nào giống hệt khung trước;
+  - bỏ làm nóng routing: chỉ dời việc sang stage visual_logo.
+
+**Người dùng duyệt (2026-10-13):**
+- (0) merge `origin/main` vào nhánh;
+- (1) làm mục 1;
+- (2) bỏ mục 2;
+- (3) đo thử mục 3 bằng bản thử, không đưa vào nhánh. Chỉ trình nếu nhanh thêm ít nhất 5 % **và** kết quả giống hệt trên cả 3 bản.
+
+## Bước 2: mục 1 (gpupre), đã làm
+
+- **Merge:** `d5413af`, merge `origin/main` 6df5c63 vào nhánh, không rebase. Các commit mới là bản sửa lỗi tải và tài liệu; không đụng tới phần quét.
+- **Code (`5072564`):**
+  - `src/biliflow/ocr_detect_gpu.py` mới: `craft_input` dựng tensor 1×3×H32×W32 float32 trên GPU. `gpu_textbox` bọc `get_textbox` CRAFT của EasyOCR.
+  - `ocr_precision.with_detect_precision(reader, "fp16")` gắn `gpu_textbox` cho bản sao của reader, chỉ khi `reader.get_textbox` đúng là hàm CRAFT của EasyOCR. Reader của nơi gọi không đổi. Đường fp32 (chế độ thường) vẫn là EasyOCR nguyên bản.
+  - **Đường quay về `get_textbox` gốc:** thiết bị không phải CUDA; khung không phải uint8 RGB hoặc khung rỗng; khung mà EasyOCR sẽ resize (`mag_ratio`, `canvas_size`); `optimal_num_chars`.
+- **Test:** `tests/test_ocr_detect_gpu.py` có 6 test, kiểm trên CPU và cả CUDA:
+  - input giống từng bit với `resize_aspect_ratio` + `normalizeMeanVariance`;
+  - hộp chữ và polygon float giống `test_net` trên cùng thiết bị;
+  - 8 trường hợp quay về;
+  - cách gắn vào reader.
+  - Kiểm đột biến: 3/3 đột biến bị bắt (mean float64, bỏ kiểm số kênh, ratio lệch 0,01 %).
+  - Test liên quan đạt: 63 OK, bỏ qua 4. Full suite để điều phối chạy.
+- **Khóa cache:** đã kiểm bằng `stage_source_paths`. `ocr_detect_gpu.py` và `ocr_precision.py` chỉ nằm trong khóa của stage text; 9 stage khác không đổi.
+- **Cổng: đạt.** Bằng chứng ở `docs/evidence/perf-scan/ocr/20261013-gate.json` và `README.md`.
+  - Quét quảng cáo đầy đủ qua scheduler, cùng thiết lập như cổng B1, trên 3 bản:
+    - job 125 (L);
+    - job 114 (L);
+    - đoạn 5 phút của job 38 (H, 1080p, từ giây 450; đoạn có nhiều vết chữ nhất trong report thật).
+  - 9 lượt quét. Mọi cặp base↔gpupre, base↔base và gpupre↔gpupre đều có 4 report (`text-scan.json`, `scan.json`, `scan-florence.json`, `review-queue.json`) chỉ khác ở các trường thời gian và hiệu năng của B1. Ảnh xem trước giống từng byte: 84, 84 và 32 ảnh.
+  - Mọi lượt có `contaminated false`: Control Center thật không chạy stage nào, kể cả xuất.
+- **Tốc độ (job 125, mỗi bản 3 lượt):**
+  - stage text: trung vị 92,0 s → 79,9 s (−13 %);
+  - cả quét quảng cáo: 203,8 s → 190,4 s (−7 %).
+  - Lượt gpupre đầu tiên của 125 và của 114 có bước ngữ nghĩa mất 19,4 và 15,8 s. Ở các lượt lặp và trong report thật, bước này chỉ 3,5–7,5 s, nên được tính là nhiễu.
+
+## Bước 3: mục 3 (CPU và GPU chạy chồng), bản thử, không đạt, đã bỏ
+
+- **Bản thử:** commit `a84e42a` trên `5072564`, ở nhánh `exp/ocr-overlap`. Không merge; nhánh đã xóa sau khi ghi lại. Khôi phục được bằng `git branch exp/ocr-overlap a84e42a`, khi commit còn trong reflog.
+  - `CrossFrameReader.iter_readtext` cho một luồng phụ chạy detect của tối đa `frame_window` khung kế tiếp, theo đúng thứ tự.
+  - Trong lúc đó luồng chính nhận dạng chữ theo cửa sổ, và nơi gọi làm tracking.
+  - Cửa sổ, ngân sách byte và các lần gọi nhận dạng giữ nguyên.
+  - Test OCR liên quan đạt.
+- **Đo:** stage text, xen kẽ `g` (5072564) với `ov` (a84e42a), 3 vòng, trên 3 bản (125, 114 và 38c = đoạn 5 phút 1080p của job 38). Mọi lượt có `contaminated false`.
+
+| Bản | g trung vị (s) | ov trung vị (s) | Nhanh thêm | Giống hệt |
+|---|---|---|---|---|
+| 38c (H, 1080p, 5 phút) | 25,7 | 25,1 | 2,3 % | 3/3 |
+| 125 (L) | 78,2 | 76,5 | 2,2 % | 3/3 |
+| 114 (L) | 107,7 | 103,9 | 3,5 % | 3/3 |
+
+- **Kết luận:** kết quả giống hệt trên cả 3 bản, nhưng chỉ nhanh thêm 2,2–3,5 %, dưới ngưỡng 5 % của người dùng. Vì vậy chỉ ghi lại và bỏ, không trình duyệt.
+  - Lý do đoán: sau gpupre, việc CPU còn lại trên luồng chính ít. Detect vẫn chờ GPU, và GPU dùng chung một stream cho cả detect lẫn nhận dạng chữ.
+
+## Kết thúc đợt OCR
+
+- **Nhánh `perf/scan-ocr`:** từ `origin/main` theo thứ tự:
+  - `3d5ee00` và `d7b7320`: docs bước 1;
+  - `d5413af`: merge;
+  - `5072564`: gpupre;
+  - `a1b4214`: docs cổng;
+  - commit docs này.
+  - Chưa push, chưa merge.
+- **Việc của điều phối:**
+  - chạy full suite;
+  - merge;
+  - cập nhật `CHANGELOG.md`, `docs/PROJECT_STATUS.md`, `docs/SESSION_HANDOFF.md`.
+- **Dọn dẹp:**
+  - `temp\b-ocr` đã xóa: `ocr_gate.py cleanup` gỡ junction `.venv` trước rồi mới xóa thư mục. `.venv` của bản cài còn nguyên, đã kiểm `import torch, easyocr`.
+  - `temp\wt-scan-speed` là worktree chung của B, không phải thư mục của đợt này, nên vẫn giữ.
