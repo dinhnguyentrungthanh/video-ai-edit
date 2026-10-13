@@ -1,0 +1,1943 @@
+{
+  "gate": "b2",
+  "checked_at": "2026-10-13T08:39:13+00:00",
+  "code": {
+    "git_head": "ed396532323b6b35c1cb6b706785ed51052fbc14",
+    "git_diff_src_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "detector_groups": [
+      "adult",
+      "advertising",
+      "gore",
+      "violence"
+    ]
+  },
+  "film_scorecard_sha256": "b30d60550fff014dd9ebee5c3e534d9110325e15a27c2b3e39c44b69dc897074",
+  "clip_scorecard_sha256": "e2fdd4c6c3b73143c1d58962a3de17fc9498d222fb7b9cfda32325ef3846544a",
+  "labels": [
+    {
+      "id": "gs-C20A-0001",
+      "segment_id": "C20A",
+      "group": "advertising",
+      "category": "visual_logo",
+      "severity": "must_catch",
+      "film": {
+        "status": "caught",
+        "coverage": 1.0,
+        "main_coverage": 1.0,
+        "suggestion_agrees": true,
+        "region_ok": true
+      },
+      "clip": {
+        "status": "caught",
+        "coverage": 1.0,
+        "main_coverage": 1.0,
+        "suggestion_agrees": true,
+        "region_ok": true
+      },
+      "same": true
+    },
+    {
+      "id": "gs-C20B-0001",
+      "segment_id": "C20B",
+      "group": "advertising",
+      "category": "visual_logo",
+      "severity": "must_catch",
+      "film": {
+        "status": "caught",
+        "coverage": 1.0,
+        "main_coverage": 1.0,
+        "suggestion_agrees": true,
+        "region_ok": true
+      },
+      "clip": {
+        "status": "caught",
+        "coverage": 1.0,
+        "main_coverage": 1.0,
+        "suggestion_agrees": true,
+        "region_ok": true
+      },
+      "same": true
+    },
+    {
+      "id": "gs-C20C-0001",
+      "segment_id": "C20C",
+      "group": "advertising",
+      "category": "visual_logo",
+      "severity": "must_catch",
+      "film": {
+        "status": "caught",
+        "coverage": 1.0,
+        "main_coverage": 1.0,
+        "suggestion_agrees": true,
+        "region_ok": true
+      },
+      "clip": {
+        "status": "caught",
+        "coverage": 1.0,
+        "main_coverage": 1.0,
+        "suggestion_agrees": true,
+        "region_ok": true
+      },
+      "same": true
+    },
+    {
+      "id": "gs-C20D-0001",
+      "segment_id": "C20D",
+      "group": "advertising",
+      "category": "visual_logo",
+      "severity": "must_catch",
+      "film": {
+        "status": "caught",
+        "coverage": 1.0,
+        "main_coverage": 1.0,
+        "suggestion_agrees": true,
+        "region_ok": true
+      },
+      "clip": {
+        "status": "caught",
+        "coverage": 1.0,
+        "main_coverage": 1.0,
+        "suggestion_agrees": true,
+        "region_ok": true
+      },
+      "same": true
+    },
+    {
+      "id": "gs-C20D-0004",
+      "segment_id": "C20D",
+      "group": "gore",
+      "category": "gore",
+      "severity": "must_catch",
+      "film": {
+        "status": "caught",
+        "coverage": 1.0,
+        "main_coverage": 1.0,
+        "suggestion_agrees": null,
+        "region_ok": null
+      },
+      "clip": {
+        "status": "caught",
+        "coverage": 1.0,
+        "main_coverage": 1.0,
+        "suggestion_agrees": null,
+        "region_ok": null
+      },
+      "same": true
+    },
+    {
+      "id": "gs-C20D-0009",
+      "segment_id": "C20D",
+      "group": "gore",
+      "category": "gore",
+      "severity": "must_catch",
+      "film": {
+        "status": "caught",
+        "coverage": 0.8364,
+        "main_coverage": 0.8364,
+        "suggestion_agrees": null,
+        "region_ok": null
+      },
+      "clip": {
+        "status": "caught",
+        "coverage": 0.8364,
+        "main_coverage": 0.8364,
+        "suggestion_agrees": null,
+        "region_ok": null
+      },
+      "same": true
+    },
+    {
+      "id": "gs-C20D-0010",
+      "segment_id": "C20D",
+      "group": "gore",
+      "category": "gore",
+      "severity": "must_catch",
+      "film": {
+        "status": "caught",
+        "coverage": 1.0,
+        "main_coverage": 1.0,
+        "suggestion_agrees": null,
+        "region_ok": null
+      },
+      "clip": {
+        "status": "caught",
+        "coverage": 1.0,
+        "main_coverage": 1.0,
+        "suggestion_agrees": null,
+        "region_ok": null
+      },
+      "same": true
+    },
+    {
+      "id": "gs-C20E-0001",
+      "segment_id": "C20E",
+      "group": "advertising",
+      "category": "visual_logo",
+      "severity": "must_catch",
+      "film": {
+        "status": "caught",
+        "coverage": 1.0,
+        "main_coverage": 1.0,
+        "suggestion_agrees": true,
+        "region_ok": true
+      },
+      "clip": {
+        "status": "caught",
+        "coverage": 1.0,
+        "main_coverage": 1.0,
+        "suggestion_agrees": true,
+        "region_ok": true
+      },
+      "same": true
+    },
+    {
+      "id": "gs-C20E-0005",
+      "segment_id": "C20E",
+      "group": "gore",
+      "category": "gore",
+      "severity": "must_catch",
+      "film": {
+        "status": "caught",
+        "coverage": 1.0,
+        "main_coverage": 1.0,
+        "suggestion_agrees": null,
+        "region_ok": null
+      },
+      "clip": {
+        "status": "caught",
+        "coverage": 1.0,
+        "main_coverage": 1.0,
+        "suggestion_agrees": null,
+        "region_ok": null
+      },
+      "same": true
+    },
+    {
+      "id": "gs-C20F-0001",
+      "segment_id": "C20F",
+      "group": "advertising",
+      "category": "visual_logo",
+      "severity": "must_catch",
+      "film": {
+        "status": "caught",
+        "coverage": 1.0,
+        "main_coverage": 1.0,
+        "suggestion_agrees": true,
+        "region_ok": true
+      },
+      "clip": {
+        "status": "caught",
+        "coverage": 1.0,
+        "main_coverage": 1.0,
+        "suggestion_agrees": true,
+        "region_ok": true
+      },
+      "same": true
+    },
+    {
+      "id": "gs-C20F-0005",
+      "segment_id": "C20F",
+      "group": "violence",
+      "category": "violence",
+      "severity": "should_catch",
+      "film": {
+        "status": "caught",
+        "coverage": 1.0,
+        "main_coverage": 1.0,
+        "suggestion_agrees": null,
+        "region_ok": null
+      },
+      "clip": {
+        "status": "caught",
+        "coverage": 1.0,
+        "main_coverage": 1.0,
+        "suggestion_agrees": null,
+        "region_ok": null
+      },
+      "same": true
+    },
+    {
+      "id": "gs-C20F-0006",
+      "segment_id": "C20F",
+      "group": "gore",
+      "category": "gore",
+      "severity": "should_catch",
+      "film": {
+        "status": "caught",
+        "coverage": 1.0,
+        "main_coverage": 1.0,
+        "suggestion_agrees": null,
+        "region_ok": null
+      },
+      "clip": {
+        "status": "caught",
+        "coverage": 1.0,
+        "main_coverage": 1.0,
+        "suggestion_agrees": null,
+        "region_ok": null
+      },
+      "same": true
+    },
+    {
+      "id": "gs-C20F-0007",
+      "segment_id": "C20F",
+      "group": "violence",
+      "category": "violence",
+      "severity": "should_catch",
+      "film": {
+        "status": "caught",
+        "coverage": 1.0,
+        "main_coverage": 1.0,
+        "suggestion_agrees": null,
+        "region_ok": null
+      },
+      "clip": {
+        "status": "caught",
+        "coverage": 1.0,
+        "main_coverage": 1.0,
+        "suggestion_agrees": null,
+        "region_ok": null
+      },
+      "same": true
+    },
+    {
+      "id": "gs-C20F-0008",
+      "segment_id": "C20F",
+      "group": "gore",
+      "category": "gore",
+      "severity": "should_catch",
+      "film": {
+        "status": "caught",
+        "coverage": 1.0,
+        "main_coverage": 1.0,
+        "suggestion_agrees": null,
+        "region_ok": null
+      },
+      "clip": {
+        "status": "caught",
+        "coverage": 1.0,
+        "main_coverage": 1.0,
+        "suggestion_agrees": null,
+        "region_ok": null
+      },
+      "same": true
+    },
+    {
+      "id": "gs-C21A-0001",
+      "segment_id": "C21A",
+      "group": "advertising",
+      "category": "visual_logo",
+      "severity": "must_catch",
+      "film": {
+        "status": "caught",
+        "coverage": 1.0,
+        "main_coverage": 1.0,
+        "suggestion_agrees": true,
+        "region_ok": true
+      },
+      "clip": {
+        "status": "caught",
+        "coverage": 1.0,
+        "main_coverage": 1.0,
+        "suggestion_agrees": true,
+        "region_ok": true
+      },
+      "same": true
+    },
+    {
+      "id": "gs-C21A-0006",
+      "segment_id": "C21A",
+      "group": "gore",
+      "category": "gore",
+      "severity": "must_catch",
+      "film": {
+        "status": "caught",
+        "coverage": 1.0,
+        "main_coverage": 1.0,
+        "suggestion_agrees": null,
+        "region_ok": null
+      },
+      "clip": {
+        "status": "caught",
+        "coverage": 1.0,
+        "main_coverage": 1.0,
+        "suggestion_agrees": null,
+        "region_ok": null
+      },
+      "same": true
+    },
+    {
+      "id": "gs-C21B-0001",
+      "segment_id": "C21B",
+      "group": "advertising",
+      "category": "visual_logo",
+      "severity": "must_catch",
+      "film": {
+        "status": "caught",
+        "coverage": 1.0,
+        "main_coverage": 1.0,
+        "suggestion_agrees": true,
+        "region_ok": true
+      },
+      "clip": {
+        "status": "caught",
+        "coverage": 1.0,
+        "main_coverage": 1.0,
+        "suggestion_agrees": true,
+        "region_ok": true
+      },
+      "same": true
+    },
+    {
+      "id": "gs-C21C-0001",
+      "segment_id": "C21C",
+      "group": "advertising",
+      "category": "visual_logo",
+      "severity": "must_catch",
+      "film": {
+        "status": "caught",
+        "coverage": 1.0,
+        "main_coverage": 1.0,
+        "suggestion_agrees": true,
+        "region_ok": true
+      },
+      "clip": {
+        "status": "caught",
+        "coverage": 1.0,
+        "main_coverage": 1.0,
+        "suggestion_agrees": true,
+        "region_ok": true
+      },
+      "same": true
+    },
+    {
+      "id": "gs-C21D-0001",
+      "segment_id": "C21D",
+      "group": "advertising",
+      "category": "visual_logo",
+      "severity": "must_catch",
+      "film": {
+        "status": "caught",
+        "coverage": 1.0,
+        "main_coverage": 1.0,
+        "suggestion_agrees": true,
+        "region_ok": true
+      },
+      "clip": {
+        "status": "caught",
+        "coverage": 1.0,
+        "main_coverage": 1.0,
+        "suggestion_agrees": true,
+        "region_ok": true
+      },
+      "same": true
+    },
+    {
+      "id": "gs-C21E-0001",
+      "segment_id": "C21E",
+      "group": "advertising",
+      "category": "visual_logo",
+      "severity": "must_catch",
+      "film": {
+        "status": "caught",
+        "coverage": 1.0,
+        "main_coverage": 1.0,
+        "suggestion_agrees": true,
+        "region_ok": true
+      },
+      "clip": {
+        "status": "caught",
+        "coverage": 1.0,
+        "main_coverage": 1.0,
+        "suggestion_agrees": true,
+        "region_ok": true
+      },
+      "same": true
+    },
+    {
+      "id": "gs-C21E-0002",
+      "segment_id": "C21E",
+      "group": "gore",
+      "category": "gore",
+      "severity": "should_catch",
+      "film": {
+        "status": "caught",
+        "coverage": 1.0,
+        "main_coverage": 1.0,
+        "suggestion_agrees": null,
+        "region_ok": null
+      },
+      "clip": {
+        "status": "caught",
+        "coverage": 1.0,
+        "main_coverage": 1.0,
+        "suggestion_agrees": null,
+        "region_ok": null
+      },
+      "same": true
+    },
+    {
+      "id": "gs-C21E-0003",
+      "segment_id": "C21E",
+      "group": "gore",
+      "category": "gore",
+      "severity": "should_catch",
+      "film": {
+        "status": "caught",
+        "coverage": 1.0,
+        "main_coverage": 1.0,
+        "suggestion_agrees": null,
+        "region_ok": null
+      },
+      "clip": {
+        "status": "caught",
+        "coverage": 1.0,
+        "main_coverage": 1.0,
+        "suggestion_agrees": null,
+        "region_ok": null
+      },
+      "same": true
+    },
+    {
+      "id": "gs-C21E-0004",
+      "segment_id": "C21E",
+      "group": "gore",
+      "category": "gore",
+      "severity": "should_catch",
+      "film": {
+        "status": "caught",
+        "coverage": 1.0,
+        "main_coverage": 1.0,
+        "suggestion_agrees": null,
+        "region_ok": null
+      },
+      "clip": {
+        "status": "caught",
+        "coverage": 1.0,
+        "main_coverage": 1.0,
+        "suggestion_agrees": null,
+        "region_ok": null
+      },
+      "same": true
+    },
+    {
+      "id": "gs-C21E-0005",
+      "segment_id": "C21E",
+      "group": "gore",
+      "category": "gore",
+      "severity": "should_catch",
+      "film": {
+        "status": "caught",
+        "coverage": 1.0,
+        "main_coverage": 1.0,
+        "suggestion_agrees": null,
+        "region_ok": null
+      },
+      "clip": {
+        "status": "caught",
+        "coverage": 1.0,
+        "main_coverage": 1.0,
+        "suggestion_agrees": null,
+        "region_ok": null
+      },
+      "same": true
+    },
+    {
+      "id": "gs-C21E-0006",
+      "segment_id": "C21E",
+      "group": "gore",
+      "category": "gore",
+      "severity": "should_catch",
+      "film": {
+        "status": "caught",
+        "coverage": 1.0,
+        "main_coverage": 1.0,
+        "suggestion_agrees": null,
+        "region_ok": null
+      },
+      "clip": {
+        "status": "caught",
+        "coverage": 1.0,
+        "main_coverage": 1.0,
+        "suggestion_agrees": null,
+        "region_ok": null
+      },
+      "same": true
+    },
+    {
+      "id": "gs-C21E-0007",
+      "segment_id": "C21E",
+      "group": "gore",
+      "category": "gore",
+      "severity": "should_catch",
+      "film": {
+        "status": "caught",
+        "coverage": 1.0,
+        "main_coverage": 1.0,
+        "suggestion_agrees": null,
+        "region_ok": null
+      },
+      "clip": {
+        "status": "caught",
+        "coverage": 1.0,
+        "main_coverage": 1.0,
+        "suggestion_agrees": null,
+        "region_ok": null
+      },
+      "same": true
+    },
+    {
+      "id": "gs-C21E-0008",
+      "segment_id": "C21E",
+      "group": "gore",
+      "category": "gore",
+      "severity": "should_catch",
+      "film": {
+        "status": "caught",
+        "coverage": 1.0,
+        "main_coverage": 1.0,
+        "suggestion_agrees": null,
+        "region_ok": null
+      },
+      "clip": {
+        "status": "caught",
+        "coverage": 1.0,
+        "main_coverage": 1.0,
+        "suggestion_agrees": null,
+        "region_ok": null
+      },
+      "same": true
+    },
+    {
+      "id": "gs-T1-0009",
+      "segment_id": "T1",
+      "group": "advertising",
+      "category": "visual_logo",
+      "severity": "must_catch",
+      "film": {
+        "status": "caught",
+        "coverage": 1.0,
+        "main_coverage": 1.0,
+        "suggestion_agrees": true,
+        "region_ok": true
+      },
+      "clip": {
+        "status": "caught",
+        "coverage": 1.0,
+        "main_coverage": 1.0,
+        "suggestion_agrees": true,
+        "region_ok": true
+      },
+      "same": true
+    },
+    {
+      "id": "gs-T2-0001",
+      "segment_id": "T2",
+      "group": "advertising",
+      "category": "visual_logo",
+      "severity": "must_catch",
+      "film": {
+        "status": "caught",
+        "coverage": 1.0,
+        "main_coverage": 1.0,
+        "suggestion_agrees": true,
+        "region_ok": true
+      },
+      "clip": {
+        "status": "caught",
+        "coverage": 1.0,
+        "main_coverage": 1.0,
+        "suggestion_agrees": true,
+        "region_ok": true
+      },
+      "same": true
+    },
+    {
+      "id": "gs-T2-0002",
+      "segment_id": "T2",
+      "group": "adult",
+      "category": "adult",
+      "severity": "must_catch",
+      "film": {
+        "status": "caught",
+        "coverage": 1.0,
+        "main_coverage": 1.0,
+        "suggestion_agrees": null,
+        "region_ok": null
+      },
+      "clip": {
+        "status": "caught",
+        "coverage": 1.0,
+        "main_coverage": 1.0,
+        "suggestion_agrees": null,
+        "region_ok": null
+      },
+      "same": true
+    },
+    {
+      "id": "gs-T3-0001",
+      "segment_id": "T3",
+      "group": "advertising",
+      "category": "visual_logo",
+      "severity": "must_catch",
+      "film": {
+        "status": "caught",
+        "coverage": 1.0,
+        "main_coverage": 1.0,
+        "suggestion_agrees": true,
+        "region_ok": true
+      },
+      "clip": {
+        "status": "partial",
+        "coverage": 0.0833,
+        "main_coverage": 0.0667,
+        "suggestion_agrees": null,
+        "region_ok": null
+      },
+      "same": false
+    },
+    {
+      "id": "gs-T4-0001",
+      "segment_id": "T4",
+      "group": "advertising",
+      "category": "visual_logo",
+      "severity": "must_catch",
+      "film": {
+        "status": "caught",
+        "coverage": 1.0,
+        "main_coverage": 1.0,
+        "suggestion_agrees": true,
+        "region_ok": true
+      },
+      "clip": {
+        "status": "caught",
+        "coverage": 1.0,
+        "main_coverage": 1.0,
+        "suggestion_agrees": true,
+        "region_ok": true
+      },
+      "same": true
+    },
+    {
+      "id": "gs-T5-0001",
+      "segment_id": "T5",
+      "group": "advertising",
+      "category": "visual_logo",
+      "severity": "must_catch",
+      "film": {
+        "status": "caught",
+        "coverage": 1.0,
+        "main_coverage": 1.0,
+        "suggestion_agrees": true,
+        "region_ok": true
+      },
+      "clip": {
+        "status": "caught",
+        "coverage": 1.0,
+        "main_coverage": 1.0,
+        "suggestion_agrees": true,
+        "region_ok": true
+      },
+      "same": true
+    },
+    {
+      "id": "gs-T5-0002",
+      "segment_id": "T5",
+      "group": "adult",
+      "category": "adult",
+      "severity": "must_catch",
+      "film": {
+        "status": "caught",
+        "coverage": 1.0,
+        "main_coverage": 1.0,
+        "suggestion_agrees": null,
+        "region_ok": null
+      },
+      "clip": {
+        "status": "caught",
+        "coverage": 1.0,
+        "main_coverage": 1.0,
+        "suggestion_agrees": null,
+        "region_ok": null
+      },
+      "same": true
+    },
+    {
+      "id": "gs-T5-0003",
+      "segment_id": "T5",
+      "group": "adult",
+      "category": "adult",
+      "severity": "must_catch",
+      "film": {
+        "status": "caught",
+        "coverage": 1.0,
+        "main_coverage": 1.0,
+        "suggestion_agrees": null,
+        "region_ok": null
+      },
+      "clip": {
+        "status": "caught",
+        "coverage": 1.0,
+        "main_coverage": 1.0,
+        "suggestion_agrees": null,
+        "region_ok": null
+      },
+      "same": true
+    },
+    {
+      "id": "gs-T5-0004",
+      "segment_id": "T5",
+      "group": "adult",
+      "category": "adult",
+      "severity": "should_catch",
+      "film": {
+        "status": "caught",
+        "coverage": 1.0,
+        "main_coverage": 1.0,
+        "suggestion_agrees": null,
+        "region_ok": null
+      },
+      "clip": {
+        "status": "caught",
+        "coverage": 1.0,
+        "main_coverage": 1.0,
+        "suggestion_agrees": null,
+        "region_ok": null
+      },
+      "same": true
+    },
+    {
+      "id": "gs-T6-0001",
+      "segment_id": "T6",
+      "group": "advertising",
+      "category": "visual_logo",
+      "severity": "must_catch",
+      "film": {
+        "status": "caught",
+        "coverage": 1.0,
+        "main_coverage": 1.0,
+        "suggestion_agrees": true,
+        "region_ok": true
+      },
+      "clip": {
+        "status": "caught",
+        "coverage": 1.0,
+        "main_coverage": 1.0,
+        "suggestion_agrees": true,
+        "region_ok": true
+      },
+      "same": true
+    },
+    {
+      "id": "gs-T6-0002",
+      "segment_id": "T6",
+      "group": "adult",
+      "category": "adult",
+      "severity": "must_catch",
+      "film": {
+        "status": "caught",
+        "coverage": 1.0,
+        "main_coverage": 1.0,
+        "suggestion_agrees": null,
+        "region_ok": null
+      },
+      "clip": {
+        "status": "caught",
+        "coverage": 1.0,
+        "main_coverage": 1.0,
+        "suggestion_agrees": null,
+        "region_ok": null
+      },
+      "same": true
+    },
+    {
+      "id": "gs-T6-0003",
+      "segment_id": "T6",
+      "group": "adult",
+      "category": "adult",
+      "severity": "must_catch",
+      "film": {
+        "status": "caught",
+        "coverage": 0.9028,
+        "main_coverage": 0.9028,
+        "suggestion_agrees": null,
+        "region_ok": null
+      },
+      "clip": {
+        "status": "caught",
+        "coverage": 0.9028,
+        "main_coverage": 0.9028,
+        "suggestion_agrees": null,
+        "region_ok": null
+      },
+      "same": true
+    },
+    {
+      "id": "gs-T6-0004",
+      "segment_id": "T6",
+      "group": "adult",
+      "category": "adult",
+      "severity": "should_catch",
+      "film": {
+        "status": "caught",
+        "coverage": 1.0,
+        "main_coverage": 1.0,
+        "suggestion_agrees": null,
+        "region_ok": null
+      },
+      "clip": {
+        "status": "caught",
+        "coverage": 1.0,
+        "main_coverage": 1.0,
+        "suggestion_agrees": null,
+        "region_ok": null
+      },
+      "same": true
+    },
+    {
+      "id": "gs-T7-0001",
+      "segment_id": "T7",
+      "group": "advertising",
+      "category": "visual_logo",
+      "severity": "must_catch",
+      "film": {
+        "status": "caught",
+        "coverage": 1.0,
+        "main_coverage": 1.0,
+        "suggestion_agrees": true,
+        "region_ok": true
+      },
+      "clip": {
+        "status": "caught",
+        "coverage": 1.0,
+        "main_coverage": 1.0,
+        "suggestion_agrees": true,
+        "region_ok": true
+      },
+      "same": true
+    },
+    {
+      "id": "gs-T7-0002",
+      "segment_id": "T7",
+      "group": "violence",
+      "category": "violence",
+      "severity": "should_catch",
+      "film": {
+        "status": "caught",
+        "coverage": 1.0,
+        "main_coverage": 1.0,
+        "suggestion_agrees": null,
+        "region_ok": null
+      },
+      "clip": {
+        "status": "caught",
+        "coverage": 1.0,
+        "main_coverage": 1.0,
+        "suggestion_agrees": null,
+        "region_ok": null
+      },
+      "same": true
+    },
+    {
+      "id": "gs-T7-0003",
+      "segment_id": "T7",
+      "group": "violence",
+      "category": "violence",
+      "severity": "should_catch",
+      "film": {
+        "status": "caught",
+        "coverage": 1.0,
+        "main_coverage": 1.0,
+        "suggestion_agrees": null,
+        "region_ok": null
+      },
+      "clip": {
+        "status": "caught",
+        "coverage": 1.0,
+        "main_coverage": 1.0,
+        "suggestion_agrees": null,
+        "region_ok": null
+      },
+      "same": true
+    },
+    {
+      "id": "gs-T7-0004",
+      "segment_id": "T7",
+      "group": "violence",
+      "category": "violence",
+      "severity": "should_catch",
+      "film": {
+        "status": "caught",
+        "coverage": 1.0,
+        "main_coverage": 1.0,
+        "suggestion_agrees": null,
+        "region_ok": null
+      },
+      "clip": {
+        "status": "caught",
+        "coverage": 1.0,
+        "main_coverage": 1.0,
+        "suggestion_agrees": null,
+        "region_ok": null
+      },
+      "same": true
+    },
+    {
+      "id": "gs-T7-0005",
+      "segment_id": "T7",
+      "group": "violence",
+      "category": "violence",
+      "severity": "should_catch",
+      "film": {
+        "status": "caught",
+        "coverage": 1.0,
+        "main_coverage": 1.0,
+        "suggestion_agrees": null,
+        "region_ok": null
+      },
+      "clip": {
+        "status": "caught",
+        "coverage": 1.0,
+        "main_coverage": 1.0,
+        "suggestion_agrees": null,
+        "region_ok": null
+      },
+      "same": true
+    },
+    {
+      "id": "gs-T7-0006",
+      "segment_id": "T7",
+      "group": "violence",
+      "category": "violence",
+      "severity": "should_catch",
+      "film": {
+        "status": "caught",
+        "coverage": 1.0,
+        "main_coverage": 1.0,
+        "suggestion_agrees": null,
+        "region_ok": null
+      },
+      "clip": {
+        "status": "caught",
+        "coverage": 1.0,
+        "main_coverage": 1.0,
+        "suggestion_agrees": null,
+        "region_ok": null
+      },
+      "same": true
+    },
+    {
+      "id": "gs-T7-0007",
+      "segment_id": "T7",
+      "group": "violence",
+      "category": "violence",
+      "severity": "should_catch",
+      "film": {
+        "status": "caught",
+        "coverage": 1.0,
+        "main_coverage": 1.0,
+        "suggestion_agrees": null,
+        "region_ok": null
+      },
+      "clip": {
+        "status": "caught",
+        "coverage": 1.0,
+        "main_coverage": 1.0,
+        "suggestion_agrees": null,
+        "region_ok": null
+      },
+      "same": true
+    },
+    {
+      "id": "gs-T7-0008",
+      "segment_id": "T7",
+      "group": "gore",
+      "category": "gore",
+      "severity": "should_catch",
+      "film": {
+        "status": "partial",
+        "coverage": 0.4667,
+        "main_coverage": 0.4667,
+        "suggestion_agrees": null,
+        "region_ok": null
+      },
+      "clip": {
+        "status": "partial",
+        "coverage": 0.4667,
+        "main_coverage": 0.4667,
+        "suggestion_agrees": null,
+        "region_ok": null
+      },
+      "same": true
+    },
+    {
+      "id": "gs-T8-0001",
+      "segment_id": "T8",
+      "group": "advertising",
+      "category": "visual_logo",
+      "severity": "must_catch",
+      "film": {
+        "status": "caught",
+        "coverage": 1.0,
+        "main_coverage": 1.0,
+        "suggestion_agrees": true,
+        "region_ok": true
+      },
+      "clip": {
+        "status": "caught",
+        "coverage": 1.0,
+        "main_coverage": 1.0,
+        "suggestion_agrees": true,
+        "region_ok": true
+      },
+      "same": true
+    },
+    {
+      "id": "gs-T8-0002",
+      "segment_id": "T8",
+      "group": "violence",
+      "category": "violence",
+      "severity": "should_catch",
+      "film": {
+        "status": "partial",
+        "coverage": 0.694,
+        "main_coverage": 0.694,
+        "suggestion_agrees": null,
+        "region_ok": null
+      },
+      "clip": {
+        "status": "partial",
+        "coverage": 0.694,
+        "main_coverage": 0.694,
+        "suggestion_agrees": null,
+        "region_ok": null
+      },
+      "same": true
+    },
+    {
+      "id": "gs-T8-0003",
+      "segment_id": "T8",
+      "group": "violence",
+      "category": "violence",
+      "severity": "should_catch",
+      "film": {
+        "status": "caught",
+        "coverage": 1.0,
+        "main_coverage": 1.0,
+        "suggestion_agrees": null,
+        "region_ok": null
+      },
+      "clip": {
+        "status": "caught",
+        "coverage": 1.0,
+        "main_coverage": 1.0,
+        "suggestion_agrees": null,
+        "region_ok": null
+      },
+      "same": true
+    },
+    {
+      "id": "gs-T8-0004",
+      "segment_id": "T8",
+      "group": "violence",
+      "category": "violence",
+      "severity": "should_catch",
+      "film": {
+        "status": "caught",
+        "coverage": 0.9,
+        "main_coverage": 0.9,
+        "suggestion_agrees": null,
+        "region_ok": null
+      },
+      "clip": {
+        "status": "caught",
+        "coverage": 0.9,
+        "main_coverage": 0.9,
+        "suggestion_agrees": null,
+        "region_ok": null
+      },
+      "same": true
+    },
+    {
+      "id": "gs-T8-0005",
+      "segment_id": "T8",
+      "group": "violence",
+      "category": "violence",
+      "severity": "should_catch",
+      "film": {
+        "status": "caught",
+        "coverage": 1.0,
+        "main_coverage": 1.0,
+        "suggestion_agrees": null,
+        "region_ok": null
+      },
+      "clip": {
+        "status": "caught",
+        "coverage": 1.0,
+        "main_coverage": 1.0,
+        "suggestion_agrees": null,
+        "region_ok": null
+      },
+      "same": true
+    },
+    {
+      "id": "gs-T8-0006",
+      "segment_id": "T8",
+      "group": "violence",
+      "category": "violence",
+      "severity": "should_catch",
+      "film": {
+        "status": "partial",
+        "coverage": 0.7857,
+        "main_coverage": 0.7857,
+        "suggestion_agrees": null,
+        "region_ok": null
+      },
+      "clip": {
+        "status": "partial",
+        "coverage": 0.7857,
+        "main_coverage": 0.7857,
+        "suggestion_agrees": null,
+        "region_ok": null
+      },
+      "same": true
+    },
+    {
+      "id": "gs-T8-0007",
+      "segment_id": "T8",
+      "group": "violence",
+      "category": "violence",
+      "severity": "should_catch",
+      "film": {
+        "status": "caught",
+        "coverage": 1.0,
+        "main_coverage": 1.0,
+        "suggestion_agrees": null,
+        "region_ok": null
+      },
+      "clip": {
+        "status": "caught",
+        "coverage": 1.0,
+        "main_coverage": 1.0,
+        "suggestion_agrees": null,
+        "region_ok": null
+      },
+      "same": true
+    }
+  ],
+  "changed_labels": 1,
+  "changed": [
+    "gs-T3-0001"
+  ],
+  "items": {
+    "C20A": {
+      "advertising": {
+        "film": {
+          "main_useful": 1,
+          "main_false_positive": 1,
+          "advisory_false_positive": 16
+        },
+        "clip": {
+          "main_useful": 1,
+          "main_false_positive": 1,
+          "advisory_false_positive": 16
+        }
+      },
+      "violence": {
+        "film": {
+          "main_false_positive": 1
+        },
+        "clip": {
+          "main_false_positive": 1
+        }
+      }
+    },
+    "C20B": {
+      "advertising": {
+        "film": {
+          "main_useful": 1,
+          "advisory_false_positive": 22
+        },
+        "clip": {
+          "main_useful": 1,
+          "advisory_false_positive": 22
+        }
+      },
+      "gore": {
+        "film": {
+          "main_false_positive": 2
+        },
+        "clip": {
+          "main_false_positive": 2
+        }
+      }
+    },
+    "C20C": {
+      "advertising": {
+        "film": {
+          "main_useful": 1,
+          "advisory_false_positive": 28,
+          "advisory_useful": 1
+        },
+        "clip": {
+          "main_useful": 1,
+          "advisory_false_positive": 28,
+          "advisory_useful": 1
+        }
+      },
+      "gore": {
+        "film": {
+          "advisory_false_positive": 1
+        },
+        "clip": {
+          "advisory_false_positive": 1
+        }
+      }
+    },
+    "C20D": {
+      "advertising": {
+        "film": {
+          "main_useful": 1,
+          "advisory_false_positive": 14
+        },
+        "clip": {
+          "main_useful": 1,
+          "advisory_false_positive": 14
+        }
+      },
+      "gore": {
+        "film": {
+          "main_useful": 3,
+          "main_false_positive": 2
+        },
+        "clip": {
+          "main_useful": 3,
+          "main_false_positive": 2
+        }
+      }
+    },
+    "C20E": {
+      "advertising": {
+        "film": {
+          "main_useful": 1,
+          "main_false_positive": 1,
+          "advisory_false_positive": 33
+        },
+        "clip": {
+          "main_useful": 1,
+          "main_false_positive": 1,
+          "advisory_false_positive": 33
+        }
+      },
+      "gore": {
+        "film": {
+          "main_false_positive": 1,
+          "main_useful": 1
+        },
+        "clip": {
+          "main_false_positive": 1,
+          "main_useful": 1
+        }
+      }
+    },
+    "C20F": {
+      "advertising": {
+        "film": {
+          "main_useful": 1,
+          "advisory_false_positive": 13
+        },
+        "clip": {
+          "main_useful": 1,
+          "advisory_false_positive": 13
+        }
+      },
+      "gore": {
+        "film": {
+          "main_useful": 1,
+          "main_false_positive": 1
+        },
+        "clip": {
+          "main_useful": 1,
+          "main_false_positive": 1
+        }
+      },
+      "violence": {
+        "film": {
+          "main_useful": 2
+        },
+        "clip": {
+          "main_useful": 2
+        }
+      }
+    },
+    "C21A": {
+      "advertising": {
+        "film": {
+          "main_useful": 1,
+          "main_false_positive": 1,
+          "advisory_useful": 1,
+          "advisory_false_positive": 13
+        },
+        "clip": {
+          "main_useful": 1,
+          "main_false_positive": 1,
+          "advisory_useful": 1,
+          "advisory_false_positive": 13
+        }
+      },
+      "gore": {
+        "film": {
+          "main_false_positive": 2,
+          "main_useful": 1
+        },
+        "clip": {
+          "main_false_positive": 2,
+          "main_useful": 1
+        }
+      }
+    },
+    "C21B": {
+      "advertising": {
+        "film": {
+          "main_useful": 1,
+          "advisory_false_positive": 19,
+          "advisory_useful": 1
+        },
+        "clip": {
+          "main_useful": 1,
+          "advisory_false_positive": 19,
+          "advisory_useful": 1
+        }
+      },
+      "gore": {
+        "film": {
+          "main_false_positive": 1,
+          "advisory_false_positive": 3
+        },
+        "clip": {
+          "main_false_positive": 1,
+          "advisory_false_positive": 3
+        }
+      },
+      "violence": {
+        "film": {
+          "main_false_positive": 2
+        },
+        "clip": {
+          "main_false_positive": 2
+        }
+      }
+    },
+    "C21C": {
+      "advertising": {
+        "film": {
+          "main_useful": 1,
+          "advisory_useful": 2,
+          "advisory_false_positive": 16
+        },
+        "clip": {
+          "main_useful": 1,
+          "advisory_useful": 2,
+          "advisory_false_positive": 16
+        }
+      },
+      "gore": {
+        "film": {
+          "main_false_positive": 1,
+          "advisory_false_positive": 1
+        },
+        "clip": {
+          "main_false_positive": 1,
+          "advisory_false_positive": 1
+        }
+      }
+    },
+    "C21D": {
+      "advertising": {
+        "film": {
+          "main_useful": 1,
+          "main_false_positive": 1,
+          "advisory_false_positive": 19
+        },
+        "clip": {
+          "main_useful": 1,
+          "main_false_positive": 1,
+          "advisory_false_positive": 19
+        }
+      },
+      "violence": {
+        "film": {
+          "main_false_positive": 1
+        },
+        "clip": {
+          "main_false_positive": 1
+        }
+      }
+    },
+    "C21E": {
+      "advertising": {
+        "film": {
+          "main_useful": 1,
+          "advisory_false_positive": 8
+        },
+        "clip": {
+          "main_useful": 1,
+          "advisory_false_positive": 8
+        }
+      },
+      "gore": {
+        "film": {
+          "main_useful": 4
+        },
+        "clip": {
+          "main_useful": 4
+        }
+      }
+    },
+    "T1": {
+      "adult": {
+        "film": {
+          "main_false_positive": 1
+        },
+        "clip": {
+          "main_false_positive": 1
+        }
+      },
+      "advertising": {
+        "film": {
+          "main_useful": 1,
+          "main_false_positive": 5,
+          "advisory_false_positive": 25
+        },
+        "clip": {
+          "main_useful": 1,
+          "main_false_positive": 5,
+          "advisory_false_positive": 34
+        }
+      }
+    },
+    "T2": {
+      "adult": {
+        "film": {
+          "main_useful": 1,
+          "main_false_positive": 1,
+          "advisory_false_positive": 1
+        },
+        "clip": {
+          "main_useful": 1,
+          "main_false_positive": 1,
+          "advisory_false_positive": 1
+        }
+      },
+      "advertising": {
+        "film": {
+          "main_useful": 1,
+          "advisory_false_positive": 12
+        },
+        "clip": {
+          "main_useful": 1,
+          "advisory_false_positive": 19
+        }
+      },
+      "violence": {
+        "film": {
+          "main_false_positive": 1
+        },
+        "clip": {
+          "main_false_positive": 1
+        }
+      }
+    },
+    "T3": {
+      "advertising": {
+        "film": {
+          "main_useful": 1,
+          "advisory_false_positive": 12
+        },
+        "clip": {
+          "main_useful": 4,
+          "advisory_false_positive": 30,
+          "advisory_useful": 2
+        }
+      }
+    },
+    "T4": {
+      "adult": {
+        "film": {
+          "advisory_false_positive": 5
+        },
+        "clip": {
+          "advisory_false_positive": 5
+        }
+      },
+      "advertising": {
+        "film": {
+          "main_useful": 1,
+          "main_false_positive": 1,
+          "advisory_false_positive": 19
+        },
+        "clip": {
+          "main_useful": 1,
+          "main_false_positive": 15,
+          "advisory_false_positive": 127
+        }
+      }
+    },
+    "T5": {
+      "adult": {
+        "film": {
+          "main_false_positive": 3,
+          "main_useful": 3
+        },
+        "clip": {
+          "main_false_positive": 3,
+          "main_useful": 3
+        }
+      },
+      "advertising": {
+        "film": {
+          "main_useful": 1,
+          "advisory_false_positive": 2
+        },
+        "clip": {
+          "main_useful": 1,
+          "advisory_false_positive": 8
+        }
+      }
+    },
+    "T6": {
+      "adult": {
+        "film": {
+          "main_useful": 2,
+          "main_false_positive": 1
+        },
+        "clip": {
+          "main_useful": 2,
+          "main_false_positive": 1
+        }
+      },
+      "advertising": {
+        "film": {
+          "main_useful": 1,
+          "advisory_false_positive": 4
+        },
+        "clip": {
+          "main_useful": 1,
+          "advisory_false_positive": 21
+        }
+      }
+    },
+    "T7": {
+      "adult": {
+        "film": {
+          "main_false_positive": 2,
+          "advisory_false_positive": 5
+        },
+        "clip": {
+          "main_false_positive": 2,
+          "advisory_false_positive": 5
+        }
+      },
+      "advertising": {
+        "film": {
+          "main_useful": 1,
+          "advisory_false_positive": 8
+        },
+        "clip": {
+          "main_useful": 1,
+          "advisory_false_positive": 20
+        }
+      },
+      "gore": {
+        "film": {
+          "main_useful": 1
+        },
+        "clip": {
+          "main_useful": 1
+        }
+      },
+      "violence": {
+        "film": {
+          "main_useful": 2
+        },
+        "clip": {
+          "main_useful": 1
+        }
+      }
+    },
+    "T8": {
+      "adult": {
+        "film": {
+          "main_false_positive": 2,
+          "advisory_false_positive": 1
+        },
+        "clip": {
+          "main_false_positive": 2,
+          "advisory_false_positive": 1
+        }
+      },
+      "advertising": {
+        "film": {
+          "main_useful": 1,
+          "advisory_false_positive": 4
+        },
+        "clip": {
+          "main_useful": 1,
+          "advisory_false_positive": 20
+        }
+      },
+      "violence": {
+        "film": {
+          "main_useful": 2
+        },
+        "clip": {
+          "main_useful": 2
+        }
+      }
+    }
+  },
+  "items_changed": [
+    "T1",
+    "T2",
+    "T3",
+    "T4",
+    "T5",
+    "T6",
+    "T7",
+    "T8"
+  ],
+  "metrics": {
+    "adult": {
+      "film": {
+        "scored_seconds": 5332.366,
+        "labels": 7,
+        "caught": 7,
+        "caught_main": 7,
+        "advisory_only": 0,
+        "partial": 0,
+        "missed": 0,
+        "must_catch": 5,
+        "must_caught": 5,
+        "recall_all": 1.0,
+        "recall_must": 1.0,
+        "main_items": 16,
+        "useful_main": 6,
+        "false_positive_main": 10,
+        "precision_main": 0.375,
+        "advisory_items": 12,
+        "advisory_noise": 12,
+        "advisory_noise_rate": 1.0,
+        "region_evaluated": 0,
+        "region_ok": 0,
+        "region_ok_rate": null,
+        "suggestion_evaluated": 0,
+        "suggestion_agree": 0,
+        "ambiguous": 0,
+        "trap_hits": 0,
+        "review_load_per_hour": 18.9
+      },
+      "clip": {
+        "scored_seconds": 5332.366,
+        "labels": 7,
+        "caught": 7,
+        "caught_main": 7,
+        "advisory_only": 0,
+        "partial": 0,
+        "missed": 0,
+        "must_catch": 5,
+        "must_caught": 5,
+        "recall_all": 1.0,
+        "recall_must": 1.0,
+        "main_items": 16,
+        "useful_main": 6,
+        "false_positive_main": 10,
+        "precision_main": 0.375,
+        "advisory_items": 12,
+        "advisory_noise": 12,
+        "advisory_noise_rate": 1.0,
+        "region_evaluated": 0,
+        "region_ok": 0,
+        "region_ok_rate": null,
+        "suggestion_evaluated": 0,
+        "suggestion_agree": 0,
+        "ambiguous": 0,
+        "trap_hits": 0,
+        "review_load_per_hour": 18.9
+      }
+    },
+    "advertising": {
+      "film": {
+        "scored_seconds": 5332.366,
+        "labels": 19,
+        "caught": 19,
+        "caught_main": 19,
+        "advisory_only": 0,
+        "partial": 0,
+        "missed": 0,
+        "must_catch": 19,
+        "must_caught": 19,
+        "recall_all": 1.0,
+        "recall_must": 1.0,
+        "main_items": 29,
+        "useful_main": 19,
+        "false_positive_main": 10,
+        "precision_main": 0.6552,
+        "advisory_items": 292,
+        "advisory_noise": 287,
+        "advisory_noise_rate": 0.9829,
+        "region_evaluated": 19,
+        "region_ok": 19,
+        "region_ok_rate": 1.0,
+        "suggestion_evaluated": 19,
+        "suggestion_agree": 19,
+        "ambiguous": 0,
+        "trap_hits": 0,
+        "review_load_per_hour": 216.71
+      },
+      "clip": {
+        "scored_seconds": 5332.366,
+        "labels": 19,
+        "caught": 18,
+        "caught_main": 18,
+        "advisory_only": 0,
+        "partial": 1,
+        "missed": 0,
+        "must_catch": 19,
+        "must_caught": 18,
+        "recall_all": 0.9474,
+        "recall_must": 0.9474,
+        "main_items": 46,
+        "useful_main": 22,
+        "false_positive_main": 24,
+        "precision_main": 0.4783,
+        "advisory_items": 487,
+        "advisory_noise": 480,
+        "advisory_noise_rate": 0.9856,
+        "region_evaluated": 18,
+        "region_ok": 18,
+        "region_ok_rate": 1.0,
+        "suggestion_evaluated": 18,
+        "suggestion_agree": 18,
+        "ambiguous": 0,
+        "trap_hits": 0,
+        "review_load_per_hour": 359.84
+      }
+    },
+    "gore": {
+      "film": {
+        "scored_seconds": 5332.366,
+        "labels": 15,
+        "caught": 14,
+        "caught_main": 14,
+        "advisory_only": 0,
+        "partial": 1,
+        "missed": 0,
+        "must_catch": 5,
+        "must_caught": 5,
+        "recall_all": 0.9333,
+        "recall_must": 1.0,
+        "main_items": 21,
+        "useful_main": 11,
+        "false_positive_main": 10,
+        "precision_main": 0.5238,
+        "advisory_items": 5,
+        "advisory_noise": 5,
+        "advisory_noise_rate": 1.0,
+        "region_evaluated": 0,
+        "region_ok": 0,
+        "region_ok_rate": null,
+        "suggestion_evaluated": 0,
+        "suggestion_agree": 0,
+        "ambiguous": 0,
+        "trap_hits": 0,
+        "review_load_per_hour": 17.55
+      },
+      "clip": {
+        "scored_seconds": 5332.366,
+        "labels": 15,
+        "caught": 14,
+        "caught_main": 14,
+        "advisory_only": 0,
+        "partial": 1,
+        "missed": 0,
+        "must_catch": 5,
+        "must_caught": 5,
+        "recall_all": 0.9333,
+        "recall_must": 1.0,
+        "main_items": 21,
+        "useful_main": 11,
+        "false_positive_main": 10,
+        "precision_main": 0.5238,
+        "advisory_items": 5,
+        "advisory_noise": 5,
+        "advisory_noise_rate": 1.0,
+        "region_evaluated": 0,
+        "region_ok": 0,
+        "region_ok_rate": null,
+        "suggestion_evaluated": 0,
+        "suggestion_agree": 0,
+        "ambiguous": 0,
+        "trap_hits": 0,
+        "review_load_per_hour": 17.55
+      }
+    },
+    "violence": {
+      "film": {
+        "scored_seconds": 5332.366,
+        "labels": 14,
+        "caught": 12,
+        "caught_main": 12,
+        "advisory_only": 0,
+        "partial": 2,
+        "missed": 0,
+        "must_catch": 0,
+        "must_caught": 0,
+        "recall_all": 0.8571,
+        "recall_must": null,
+        "main_items": 11,
+        "useful_main": 6,
+        "false_positive_main": 5,
+        "precision_main": 0.5455,
+        "advisory_items": 0,
+        "advisory_noise": 0,
+        "advisory_noise_rate": null,
+        "region_evaluated": 0,
+        "region_ok": 0,
+        "region_ok_rate": null,
+        "suggestion_evaluated": 0,
+        "suggestion_agree": 0,
+        "ambiguous": 0,
+        "trap_hits": 0,
+        "review_load_per_hour": 7.43
+      },
+      "clip": {
+        "scored_seconds": 5332.366,
+        "labels": 14,
+        "caught": 12,
+        "caught_main": 12,
+        "advisory_only": 0,
+        "partial": 2,
+        "missed": 0,
+        "must_catch": 0,
+        "must_caught": 0,
+        "recall_all": 0.8571,
+        "recall_must": null,
+        "main_items": 10,
+        "useful_main": 5,
+        "false_positive_main": 5,
+        "precision_main": 0.5,
+        "advisory_items": 0,
+        "advisory_noise": 0,
+        "advisory_noise_rate": null,
+        "region_evaluated": 0,
+        "region_ok": 0,
+        "region_ok_rate": null,
+        "suggestion_evaluated": 0,
+        "suggestion_agree": 0,
+        "ambiguous": 0,
+        "trap_hits": 0,
+        "review_load_per_hour": 6.75
+      }
+    }
+  }
+}

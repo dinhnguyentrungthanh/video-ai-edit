@@ -1,0 +1,439 @@
+{
+  "gate": "a",
+  "checked_at": "2026-10-13T05:57:26+00:00",
+  "passed": true,
+  "clips": {
+    "j38-00000": {
+      "clip_frames": 20250,
+      "expected_frames": 20250,
+      "missing": 0,
+      "mismatched": 0,
+      "unknown": 0,
+      "extra_after_end": 0,
+      "starts_at_zero": true,
+      "ok": true,
+      "first_problem_pts": [],
+      "job_id": 38,
+      "scored": true,
+      "segments": [
+        "C20A",
+        "C20B"
+      ],
+      "on_sampling_grid": true,
+      "grid_offsets_seconds": {
+        "1/8": 0.0,
+        "1/4": 0.0,
+        "1/2": 0.0,
+        "2": 0.0,
+        "3": 0.0
+      }
+    },
+    "j38-01261": {
+      "clip_frames": 9000,
+      "expected_frames": 9000,
+      "missing": 0,
+      "mismatched": 0,
+      "unknown": 0,
+      "extra_after_end": 0,
+      "starts_at_zero": true,
+      "ok": true,
+      "first_problem_pts": [],
+      "job_id": 38,
+      "scored": true,
+      "segments": [
+        "C20C"
+      ],
+      "on_sampling_grid": false,
+      "grid_offsets_seconds": {
+        "1/8": 0.052088888888888886,
+        "1/4": 0.17708888888888888,
+        "1/2": 0.17708888888888888,
+        "2": 1.6770888888888889,
+        "3": 1.6770888888888889
+      }
+    },
+    "j38-03263": {
+      "clip_frames": 9000,
+      "expected_frames": 9000,
+      "missing": 0,
+      "mismatched": 0,
+      "unknown": 0,
+      "extra_after_end": 0,
+      "starts_at_zero": true,
+      "ok": true,
+      "first_problem_pts": [],
+      "job_id": 38,
+      "scored": true,
+      "segments": [
+        "C20D"
+      ],
+      "on_sampling_grid": false,
+      "grid_offsets_seconds": {
+        "1/8": 0.052088888888888886,
+        "1/4": 0.17708888888888888,
+        "1/2": 0.17708888888888888,
+        "2": 1.6770888888888889,
+        "3": 2.677088888888889
+      }
+    },
+    "j38-04483": {
+      "clip_frames": 7750,
+      "expected_frames": 7750,
+      "missing": 0,
+      "mismatched": 0,
+      "unknown": 0,
+      "extra_after_end": 0,
+      "starts_at_zero": true,
+      "ok": true,
+      "first_problem_pts": [],
+      "job_id": 38,
+      "scored": true,
+      "segments": [
+        "C20F"
+      ],
+      "on_sampling_grid": false,
+      "grid_offsets_seconds": {
+        "1/8": 0.020833333333333332,
+        "1/4": 0.14583333333333334,
+        "1/2": 0.14583333333333334,
+        "2": 1.6458333333333333,
+        "3": 1.6458333333333333
+      }
+    },
+    "j38-06360": {
+      "clip_frames": 7888,
+      "expected_frames": 7888,
+      "missing": 0,
+      "mismatched": 0,
+      "unknown": 0,
+      "extra_after_end": 0,
+      "starts_at_zero": true,
+      "ok": true,
+      "first_problem_pts": [],
+      "job_id": 38,
+      "scored": true,
+      "segments": [
+        "C20E"
+      ],
+      "on_sampling_grid": false,
+      "grid_offsets_seconds": {
+        "1/8": 0.020833333333333332,
+        "1/4": 0.020833333333333332,
+        "1/2": 0.020833333333333332,
+        "2": 0.5208333333333334,
+        "3": 0.5208333333333334
+      }
+    },
+    "j37-00000": {
+      "clip_frames": 6750,
+      "expected_frames": 6750,
+      "missing": 0,
+      "mismatched": 0,
+      "unknown": 0,
+      "extra_after_end": 0,
+      "starts_at_zero": true,
+      "ok": true,
+      "first_problem_pts": [],
+      "job_id": 37,
+      "scored": true,
+      "segments": [
+        "C21A"
+      ],
+      "on_sampling_grid": true,
+      "grid_offsets_seconds": {
+        "1/8": 0.0,
+        "1/4": 0.0,
+        "1/2": 0.0,
+        "2": 0.0,
+        "3": 0.0
+      }
+    },
+    "j37-01261": {
+      "clip_frames": 9000,
+      "expected_frames": 9000,
+      "missing": 0,
+      "mismatched": 0,
+      "unknown": 0,
+      "extra_after_end": 0,
+      "starts_at_zero": true,
+      "ok": true,
+      "first_problem_pts": [],
+      "job_id": 37,
+      "scored": true,
+      "segments": [
+        "C21B"
+      ],
+      "on_sampling_grid": false,
+      "grid_offsets_seconds": {
+        "1/8": 0.052088888888888886,
+        "1/4": 0.17708888888888888,
+        "1/2": 0.17708888888888888,
+        "2": 1.6770888888888889,
+        "3": 1.6770888888888889
+      }
+    },
+    "j37-02106": {
+      "clip_frames": 8000,
+      "expected_frames": 8000,
+      "missing": 0,
+      "mismatched": 0,
+      "unknown": 0,
+      "extra_after_end": 0,
+      "starts_at_zero": true,
+      "ok": true,
+      "first_problem_pts": [],
+      "job_id": 37,
+      "scored": true,
+      "segments": [
+        "C21E"
+      ],
+      "on_sampling_grid": false,
+      "grid_offsets_seconds": {
+        "1/8": 0.020833333333333332,
+        "1/4": 0.020833333333333332,
+        "1/2": 0.2708333333333333,
+        "2": 0.2708333333333333,
+        "3": 0.2708333333333333
+      }
+    },
+    "j37-04160": {
+      "clip_frames": 9250,
+      "expected_frames": 9250,
+      "missing": 0,
+      "mismatched": 0,
+      "unknown": 0,
+      "extra_after_end": 0,
+      "starts_at_zero": true,
+      "ok": true,
+      "first_problem_pts": [],
+      "job_id": 37,
+      "scored": true,
+      "segments": [
+        "C21C"
+      ],
+      "on_sampling_grid": false,
+      "grid_offsets_seconds": {
+        "1/8": 0.03125555555555556,
+        "1/4": 0.15625555555555556,
+        "1/2": 0.40625555555555554,
+        "2": 0.40625555555555554,
+        "3": 2.4062555555555556
+      }
+    },
+    "j37-06412": {
+      "clip_frames": 7801,
+      "expected_frames": 7801,
+      "missing": 0,
+      "mismatched": 0,
+      "unknown": 0,
+      "extra_after_end": 0,
+      "starts_at_zero": true,
+      "ok": true,
+      "first_problem_pts": [],
+      "job_id": 37,
+      "scored": true,
+      "segments": [
+        "C21D"
+      ],
+      "on_sampling_grid": false,
+      "grid_offsets_seconds": {
+        "1/8": 0.03125555555555556,
+        "1/4": 0.15625555555555556,
+        "1/2": 0.15625555555555556,
+        "2": 0.6562555555555556,
+        "3": 1.6562555555555556
+      }
+    },
+    "j39-00000": {
+      "clip_frames": 15902,
+      "expected_frames": 15900,
+      "missing": 0,
+      "mismatched": 0,
+      "unknown": 0,
+      "extra_after_end": 2,
+      "starts_at_zero": true,
+      "ok": true,
+      "first_problem_pts": [],
+      "job_id": 39,
+      "scored": true,
+      "segments": [
+        "T1",
+        "T2"
+      ],
+      "on_sampling_grid": true,
+      "grid_offsets_seconds": {
+        "1/8": 0.0,
+        "1/4": 0.0,
+        "1/2": 0.0,
+        "2": 0.0,
+        "3": 0.0
+      }
+    },
+    "j39-00816": {
+      "clip_frames": 8252,
+      "expected_frames": 8250,
+      "missing": 0,
+      "mismatched": 0,
+      "unknown": 0,
+      "extra_after_end": 2,
+      "starts_at_zero": true,
+      "ok": true,
+      "first_problem_pts": [],
+      "job_id": 39,
+      "scored": true,
+      "segments": [
+        "T5"
+      ],
+      "on_sampling_grid": true,
+      "grid_offsets_seconds": {
+        "1/8": 0.0,
+        "1/4": 0.0,
+        "1/2": 0.0,
+        "2": 0.0,
+        "3": 0.0
+      }
+    },
+    "j39-01962": {
+      "clip_frames": 9352,
+      "expected_frames": 9350,
+      "missing": 0,
+      "mismatched": 0,
+      "unknown": 0,
+      "extra_after_end": 2,
+      "starts_at_zero": true,
+      "ok": true,
+      "first_problem_pts": [],
+      "job_id": 39,
+      "scored": true,
+      "segments": [
+        "T3"
+      ],
+      "on_sampling_grid": true,
+      "grid_offsets_seconds": {
+        "1/8": 0.0,
+        "1/4": 0.0,
+        "1/2": 0.0,
+        "2": 0.0,
+        "3": 0.0
+      }
+    },
+    "j39-03216": {
+      "clip_frames": 9577,
+      "expected_frames": 9575,
+      "missing": 0,
+      "mismatched": 0,
+      "unknown": 0,
+      "extra_after_end": 2,
+      "starts_at_zero": true,
+      "ok": true,
+      "first_problem_pts": [],
+      "job_id": 39,
+      "scored": true,
+      "segments": [
+        "T7"
+      ],
+      "on_sampling_grid": true,
+      "grid_offsets_seconds": {
+        "1/8": 0.0,
+        "1/4": 0.0,
+        "1/2": 0.0,
+        "2": 0.0,
+        "3": 0.0
+      }
+    },
+    "j39-06744": {
+      "clip_frames": 7802,
+      "expected_frames": 7800,
+      "missing": 0,
+      "mismatched": 0,
+      "unknown": 0,
+      "extra_after_end": 2,
+      "starts_at_zero": true,
+      "ok": true,
+      "first_problem_pts": [],
+      "job_id": 39,
+      "scored": true,
+      "segments": [
+        "T6"
+      ],
+      "on_sampling_grid": true,
+      "grid_offsets_seconds": {
+        "1/8": 0.0,
+        "1/4": 0.0,
+        "1/2": 0.0,
+        "2": 0.0,
+        "3": 0.0
+      }
+    },
+    "j39-08562": {
+      "clip_frames": 6852,
+      "expected_frames": 6850,
+      "missing": 0,
+      "mismatched": 0,
+      "unknown": 0,
+      "extra_after_end": 2,
+      "starts_at_zero": true,
+      "ok": true,
+      "first_problem_pts": [],
+      "job_id": 39,
+      "scored": true,
+      "segments": [
+        "T8"
+      ],
+      "on_sampling_grid": true,
+      "grid_offsets_seconds": {
+        "1/8": 0.0,
+        "1/4": 0.0,
+        "1/2": 0.0,
+        "2": 0.0,
+        "3": 0.0
+      }
+    },
+    "j39-11364": {
+      "clip_frames": 9968,
+      "expected_frames": 9968,
+      "missing": 0,
+      "mismatched": 0,
+      "unknown": 0,
+      "extra_after_end": 0,
+      "starts_at_zero": true,
+      "ok": true,
+      "first_problem_pts": [],
+      "job_id": 39,
+      "scored": true,
+      "segments": [
+        "T4"
+      ],
+      "on_sampling_grid": true,
+      "grid_offsets_seconds": {
+        "1/8": 0.0,
+        "1/4": 0.0,
+        "1/2": 0.0,
+        "2": 0.0,
+        "3": 0.0
+      }
+    },
+    "j39-05400": {
+      "clip_frames": 3752,
+      "expected_frames": 3750,
+      "missing": 0,
+      "mismatched": 0,
+      "unknown": 0,
+      "extra_after_end": 2,
+      "starts_at_zero": true,
+      "ok": true,
+      "first_problem_pts": [],
+      "job_id": 39,
+      "scored": false,
+      "segments": [],
+      "on_sampling_grid": true,
+      "grid_offsets_seconds": {
+        "1/8": 0.0,
+        "1/4": 0.0,
+        "1/2": 0.0,
+        "2": 0.0,
+        "3": 0.0
+      }
+    }
+  }
+}

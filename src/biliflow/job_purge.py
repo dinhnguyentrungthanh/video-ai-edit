@@ -187,6 +187,12 @@ def _read_golden(root: Path, files: list[Path]) -> GoldenIndex:
             for source in sources.values():
                 if not isinstance(source, dict):
                     raise ValueError("a source is not an object")
+                if source.get("kind") == "clip":  # golden v2: a clip names no job; its origin film is not locked
+                    digest = source.get("sha256")
+                    if source.get("job_id") is not None or not isinstance(digest, str) or not digest:
+                        raise ValueError("a clip source has a job id or no sha256")
+                    shas.add(digest.lower())
+                    continue
                 job_id, digest = source.get("job_id"), source.get("sha256")
                 if isinstance(job_id, bool) or not isinstance(job_id, int) or not isinstance(digest, str) or not digest:
                     raise ValueError("a source has no job id or sha256")

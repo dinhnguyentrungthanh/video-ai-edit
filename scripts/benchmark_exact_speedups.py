@@ -49,9 +49,9 @@ OUT = ROOT / "reports/benchmarks/exact-speedups"
 FFMPEG = ROOT / "tools/ffmpeg/bin/ffmpeg.exe"
 TROY_BASELINE = ROOT / "reports/jobs/troy-allgroups-full-speedbase-20261001-203927"
 TROY_EXCERPTS = ROOT / "reports/benchmarks/live-safety-h/excerpts"
-# (name, golden source key, start, duration)
-EXCERPTS = (("troy-0400", "troy", 400.0, 150.0), ("troy-5400", "troy", 5400.0, 150.0),
-            ("conan20-0000", "conan20", 0.0, 300.0))
+# (name, golden job, start, duration)
+EXCERPTS = (("troy-0400", 39, 400.0, 150.0), ("troy-5400", 39, 5400.0, 150.0),
+            ("conan20-0000", 38, 0.0, 300.0))
 CONFIRM_SUBSET = 40
 AB_CONFIRM_INTERVALS = 24
 AB_ORDER = ("head", "now", "now", "head")
@@ -60,20 +60,17 @@ IGNORED = ("metrics", "created_at", "verified_at")
 BRAND_MEMORY = ROOT / "state" / "brand-memory.json"
 
 
-def _source(key: str) -> Path:
-    manifest = json.loads((ROOT / "annotations/golden/v1/segments.json").read_text(encoding="utf-8"))
-    return ROOT / manifest["sources"][key]["path"]
-
-
-def _excerpt(name: str, key: str, start: float, duration: float) -> Path:
+def _excerpt(name: str, job_id: int, start: float, duration: float) -> Path:
+    from biliflow.golden_clips import window_source
     existing = TROY_EXCERPTS / f"{name}.mp4"
     if existing.exists():
         return existing
     target = OUT / "excerpts" / f"{name}.mp4"
     if not target.exists():
         target.parent.mkdir(parents=True, exist_ok=True)
-        subprocess.run([str(FFMPEG), "-hide_banner", "-loglevel", "error", "-ss", str(start), "-t", str(duration),
-                        "-i", str(_source(key)), "-map", "0:v:0", "-c", "copy", "-an", str(target)], check=True)
+        video, offset = window_source(ROOT, job_id, start, duration)
+        subprocess.run([str(FFMPEG), "-hide_banner", "-loglevel", "error", "-ss", str(offset), "-t", str(duration),
+                        "-i", str(video), "-map", "0:v:0", "-c", "copy", "-an", str(target)], check=True)
     return target
 
 
@@ -262,12 +259,12 @@ def equivalence(args) -> None:
         summary_path.write_text(json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8")
 
     head = _head_patches()
-    for name, key, start, duration in EXCERPTS:
-        labels = [label for label in (("adult", "live") if key == "troy" else ("animation", "logo"))
+    for name, job_id, start, duration in EXCERPTS:
+        labels = [label for label in (("adult", "live") if job_id == 39 else ("animation", "logo"))
                   if label in parts]
         if not labels:
             continue
-        video = _excerpt(name, key, start, duration)
+        video = _excerpt(name, job_id, start, duration)
         base = run_dir / name
         commands = {"adult": (_adult_argv, ("head", "now")), "live": (_live_argv, ("now", "head")),
                     "animation": (_animation_argv, ("head", "now")),

@@ -445,7 +445,7 @@ def extension(parent, segments=None, **changes):
 class SetManifestTest(unittest.TestCase):
     def test_v1_1_manifest_is_accepted_and_unknown_sets_are_rejected(self):
         self.assertEqual(validate_manifest(extension(manifest()))["golden_set"], "v1.1")
-        for bad in (dict(manifest(), golden_set="v2"), dict(manifest(), golden_set=None),
+        for bad in (dict(manifest(), golden_set="v3"), dict(manifest(), golden_set=None),
                     dict(manifest(), golden_set="v1+v1.1")):
             with self.subTest(golden_set=bad["golden_set"]), self.assertRaisesRegex(ValueError, "Golden Set đã biết"):
                 validate_manifest(bad)
@@ -899,4 +899,51 @@ class AuditReopenScriptTest(unittest.TestCase):
         self.assertEqual((labels, suggestions), (self.root / "annotations/golden/v1",
                                                  self.root / "reports/benchmarks/golden-v1/prefill/suggestions.json"))
         with self.assertRaises(SystemExit):
-            self.script.set_paths("v2")
+            self.script.set_paths("v3")
+
+
+def clip_manifest(**source_changes):
+    source = {"kind": "clip", "path": "media/j39-00816.mp4", "sha256": SHA, "size_bytes": 5,
+              "duration_seconds": 330.0, "width": 1920, "height": 1080, "fps": 25.0, "content_style": "live_action",
+              "scored": True, "origin": {"job_id": 39, "sha256": "b" * 64, "origin_seconds": 816.0}}
+    source.update(source_changes)
+    return {"schema_version": 1, "golden_set": "v2", "sources": {"j39-00816": source},
+            "segments": [{"id": "T5", "source": "j39-00816", "start_seconds": 39.0, "end_seconds": 294.0,
+                          "split": "dev"}]}
+
+
+class ClipSetTest(unittest.TestCase):
+    """Golden Set v2: clips of job 39 and whole films of jobs 37 and 38, never mixed with v1/v1.1."""
+
+    def test_a_clip_manifest_is_valid(self):
+        validate_manifest(clip_manifest())
+
+    def test_bad_clip_sources_are_refused(self):
+        for changes in ({"job_id": 39}, {"path": "../input/x.mp4"}, {"path": "C:/x.mp4"}, {"sha256": ""},
+                        {"origin": {"job_id": 39}}, {"scored": False}):
+            with self.subTest(changes=changes), self.assertRaises(ValueError):
+                validate_manifest(clip_manifest(**changes))
+
+    def test_clips_only_in_a_clip_set_whose_films_name_their_job(self):
+        mixed = clip_manifest()
+        mixed["golden_set"] = "v1"
+        with self.assertRaises(ValueError):
+            validate_manifest(mixed)
+        hybrid = clip_manifest()
+        hybrid["sources"]["j38"] = {"job_id": 38, "path": "input/h.mp4", "sha256": "c" * 64, "size_bytes": 9,
+                                    "duration_seconds": 6800.0, "width": 1920, "height": 1080, "fps": 23.976,
+                                    "content_style": "animation"}
+        hybrid["segments"].append({"id": "C20A", "source": "j38", "start_seconds": 0.0, "end_seconds": 300.0,
+                                   "split": "dev"})
+        validate_manifest(hybrid)
+        film = manifest()  # a film without a job id
+        film["golden_set"] = "v2"
+        with self.assertRaises(ValueError):
+            validate_manifest(film)
+
+    def test_v2_is_never_scored_with_another_set(self):
+        from biliflow.golden_set import load_golden_sets
+        with tempfile.TemporaryDirectory() as folder:
+            with self.assertRaises(ValueError) as caught:
+                load_golden_sets(Path(folder), ["v1", "v2"])
+            self.assertIn("không chấm chung", str(caught.exception))

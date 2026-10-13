@@ -1,3 +1,29 @@
+# Golden Set v2, hybrid (2026-10-13, branch `feat/golden-clips` from `origin/main` `ed39653`; not merged, not activated)
+
+- What v2 holds:
+  - for job 39, stream-copied clips of its 8 labelled segments, plus one unscored 150 s benchmark clip at 5400 s;
+  - for jobs 37 and 38, the original films as whole-film sources (job id and SHA-256, as in v1.1);
+  - 19 segments and 55 labels in all.
+- Where it lives: it is built in `annotations\golden-v2-staging\` (not in Git). Activation (`scripts/golden_clips.py activate`) renames it to `annotations\golden\v2\` and moves v1 and v1.1 unchanged to `annotations\golden-retired\`. The command is a dry run by default, writes a verified backup zip first and checks the SHA-256 tree after the move. v2 is not activated yet.
+- Gates:
+  - (a) every decoded frame of the 18 cut clips is bit-identical to its film (framemd5);
+  - (b1) the same detector output gives identical scores (hybrid: 55 labels, 386 items, 0 differences);
+  - running the detectors on clips of the animation films changed 15/55 labels (sampling grid off the keyframes, film-long watermarks, per-video caps), so the user kept those films whole.
+- v2 baseline, approved by the user: `reports\benchmarks\golden-v2-baseline-20261013-153857` on `ed39653`. Against the whole-film card:
+  - only gs-T3-0001 differs (caught → partial, a film-long watermark);
+  - advertising review load rises from 216.7 to 359.8 items/h, because candidate caps apply per clip;
+  - one pair of violence items merged; the label is still caught;
+  - adult and gore are identical.
+  - v2 no longer covers the whole-film behaviour of job 39.
+- Delete locks (`job_purge`, test `HybridGoldenV2ActivationTests`): a clip source locks only its own SHA-256. After activation job 39 is unlocked and jobs 37 and 38 stay locked; the retired sets lock nothing. AGENTS.md has the approved Golden set rule; its activation date is filled in at activation.
+- Tooling:
+  - `golden_clips.py`: plan, cut, verify, drop-clips, migrate, gate-score, gate-diff and activate;
+  - clip trials run in a throw-away root under `temp` (`scripts/golden_trial_root.py`);
+  - `evaluate_golden.py run` runs whole films for film sources and clips for clip sources;
+  - the benchmarks read their windows through the active set.
+- Space: deleting the job 39 film saves 5.73 GB (its 1.88 GB of clips are kept). The films of jobs 37 and 38 (4.48 GB) stay.
+- Tests: 382 related tests OK, 1 skipped (it needs the real `annotations`; it passes on the install data).
+
 # G4 merge: scan OCR round (2026-10-13, branch `merge/g4` from `main` `6df5c63`; not yet in the main folder)
 
 - Merged `perf/scan-ocr` with `--no-ff`: in fast scan ("Tăng tốc xử lý", fp16) the CRAFT detection input of the text stage is built on the GPU (`ocr_detect_gpu.py`); it falls back to the old path without CUDA, for frames that are not uint8 RGB, when a resize is needed or with `optimal_num_chars`. Standard mode is unchanged.

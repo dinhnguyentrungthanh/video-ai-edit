@@ -11,7 +11,9 @@
   compare  Read-only comparison of two trials: reports (runtime/confidence/cache
            telemetry excluded), preview/scanner JPEG hashes and review proposals.
 The production job (--job-id, default 39 Troy; 38 Conan Movie 20; 37 Conan Movie 21), its review queue,
-source file and brand memory are only read.
+source file and brand memory are only read. --golden-clip KEY runs a Golden v2 clip instead (no
+production job; the clip's SHA-256 is checked against its manifest first). --root runs the stages of
+another BiliFlow folder (its scripts, models and reports), e.g. the install folder from a worktree.
 """
 from __future__ import annotations
 
@@ -37,8 +39,31 @@ TEXT_STAGE = ROOT / "scripts/benchmark-text-stage.ps1"
 PREWARM = ROOT / "scripts/benchmark_prewarm_routing.py"
 
 
+def use_root(root: Path) -> None:
+    """Run against another BiliFlow folder: its stage scripts, state (read-only) and reports."""
+    global ROOT, COLD_STAGE, TEXT_STAGE, PREWARM
+    ROOT = Path(root).resolve()
+    COLD_STAGE = ROOT / "scripts/benchmark-cold-ad-stage.ps1"
+    TEXT_STAGE = ROOT / "scripts/benchmark-text-stage.ps1"
+    PREWARM = ROOT / "scripts/benchmark_prewarm_routing.py"
+
+
 def digest(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def golden_clip_source(args) -> dict:
+    """The trial source of --golden-clip: a scored clip of a clip Golden Set, SHA-256 checked."""
+    from biliflow.golden_set import is_clip, load_golden_sets, source_file
+    golden_root = Path(args.golden_root) if args.golden_root else ROOT / "annotations/golden"
+    manifest, _, _ = load_golden_sets(golden_root, [args.golden_set])
+    source = manifest["sources"].get(args.golden_clip)
+    if not is_clip(source or {}) or source.get("scored") is False:
+        raise ValueError(f"{args.golden_clip} is not a scored clip of Golden Set {args.golden_set}")
+    path = source_file(ROOT, manifest, args.golden_clip, full_hash=True, set_dir=golden_root / args.golden_set)
+    return {"slug": args.golden_clip, "style": source["content_style"], "path": path, "sha256": source["sha256"],
+            "size_bytes": source["size_bytes"], "mtime_ns": path.stat().st_mtime_ns,
+            "duration_seconds": source["duration_seconds"]}
 
 
 def read_original(job_id: int) -> dict:
@@ -55,12 +80,21 @@ def run(args) -> None:
     from biliflow.job_store import JobStore, now_iso
     from biliflow.scheduler import JobScheduler
 
-    if args.job_id not in AUTHORIZED_JOBS:
-        raise ValueError(f"Job {args.job_id} is not authorized for full trials")
-    slug, marker, style = AUTHORIZED_JOBS[args.job_id]
-    original = read_original(args.job_id)
-    if original["content_style"] != style or marker not in original["source_path"]:
-        raise RuntimeError(f"Authorized source no longer matches job {args.job_id}")
+    if args.golden_clip:
+        clip = golden_clip_source(args)
+        slug, style, source = clip["slug"], clip["style"], clip["path"]
+        original = {"source_sha256": clip["sha256"], "source_size_bytes": clip["size_bytes"],
+                    "source_mtime_ns": clip["mtime_ns"], "duration_seconds": clip["duration_seconds"]}
+        queue = None
+    else:
+        if args.job_id not in AUTHORIZED_JOBS:
+            raise ValueError(f"Job {args.job_id} is not authorized for full trials")
+        slug, marker, style = AUTHORIZED_JOBS[args.job_id]
+        original = read_original(args.job_id)
+        if original["content_style"] != style or marker not in original["source_path"]:
+            raise RuntimeError(f"Authorized source no longer matches job {args.job_id}")
+        source = Path(original["source_path"])
+        queue = ROOT / original["active_queue_path"]
     detectors = sorted(set(args.detectors))
     scope = "" if detectors == ["advertising"] else "-allgroups" if len(detectors) == 4 else "-" + "-".join(detectors)
     key = f"{slug}{scope}-full-{args.label}-" + datetime.now().strftime("%Y%m%d-%H%M%S")
@@ -71,14 +105,14 @@ def run(args) -> None:
     # Marker before any queue exists: the Dashboard never auto-imports this trial.
     (report_root / ".biliflow-benchmark").write_text("Isolated trial; never auto-import", encoding="utf-8")
     cache = evidence / "cold-cache"
-    source = Path(original["source_path"])
-    queue = ROOT / original["active_queue_path"]
     brand = ROOT / "state/brand-memory.json"
 
     def snapshot():
-        return {"source_size": source.stat().st_size, "source_mtime_ns": source.stat().st_mtime_ns,
-                "review_sha256": digest(queue), "brand_memory_sha256": digest(brand),
-                "original_job": read_original(args.job_id)}
+        state = {"source_size": source.stat().st_size, "source_mtime_ns": source.stat().st_mtime_ns,
+                 "brand_memory_sha256": digest(brand)}
+        if queue is not None:  # a production job: its review queue and row must stay untouched
+            state.update(review_sha256=digest(queue), original_job=read_original(args.job_id))
+        return state
 
     before = snapshot()
     store = JobStore(evidence / "trial.sqlite3")
@@ -456,6 +490,10 @@ def main():
                    choices=("advertising", "adult", "gore", "violence"))
     r.add_argument("--fast-scan", action="store_true")
     r.add_argument("--prewarm-overlap", action="store_true")
+    r.add_argument("--golden-clip", help="run this scored clip of a clip Golden Set instead of --job-id")
+    r.add_argument("--golden-set", default="v2", help="the clip Golden Set of --golden-clip")
+    r.add_argument("--golden-root", help="folder holding the Golden Set directories (default <root>/annotations/golden)")
+    r.add_argument("--root", help="BiliFlow folder whose stages, state and reports are used (default: this checkout)")
     d = sub.add_parser("review-diff")
     d.add_argument("--baseline", required=True)
     d.add_argument("--candidate", required=True)
@@ -464,6 +502,8 @@ def main():
     c.add_argument("--candidate", required=True)
     args = parser.parse_args()
     if args.command == "run":
+        if args.root:
+            use_root(Path(args.root))
         expected = {"standard": (False, False, False), "fast": (True, False, False),
                     "overlap": (True, True, False), "fp16": (True, False, True),
                     "golden": (True, False, False),

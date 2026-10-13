@@ -432,3 +432,31 @@ Phân tích xong, chưa thi công: `docs/ANIME_GORE_PLAN.md` (bằng chứng `te
 - **Thẻ 0:00–0:05 "Opening boundary review"** (luật giữ 5 giây đầu một lần, có từ khi bỏ sót logo Netflix): ở Nhất Âu Xuân tập 11/12/14/17/20, AI trả lời KHÔNG, không có vùng, không có chữ; giao diện lại gọi là "LOGO" và giấu câu trả lời. Chưa từng bắt được intro thật trong dữ liệu hiện có.
 - **Quyết định của người dùng (02/10):** (1) thẻ mở đầu khi AI trả lời KHÔNG **vẫn ở danh sách chính**; chỉ sửa giao diện cho trung thực (tên "Kiểm tra đoạn mở đầu", câu trả lời của AI, nút phát đoạn, khung vàng tham khảo cho vùng AI định vị). (2) Bộ nhớ "logo hãng phim" **bỏ qua vùng watermark đã chọn làm mờ** và **nhớ nhiều khung** của logo động, để một logo nhớ từ tập có watermark khớp được tập sạch; lớp phủ lạ ở chỗ khác vẫn phải làm hỏng việc khớp. Phải đo không chuyển nhầm trên Troy/Conan/Nhất Âu Xuân trước khi bật.
 - **Đã làm (02/10):** giao diện thẻ mở đầu trung thực (đã tích hợp); bộ nhớ logo hãng phim bản 2 (bỏ qua vùng watermark đã làm mờ, nhớ mọi khung có thông tin trong đoạn, chặn khung đen/mờ dần; 0/7.803 thẻ phim khác khớp nhầm). Giới hạn theo đúng quyết định: nội dung nằm trọn trong vùng watermark đã làm mờ không làm hỏng việc khớp ảnh; chữ ở đó vẫn bị chặn bởi kiểm tra OCR, hình đồ họa thì không.
+
+## 25. Golden Set v2 lai: clip của job 39, phim gốc của job 37 và 38 (13/10/2026)
+
+- **Mục đích:** để người dùng xóa hoặc lưu trữ phim gốc mà vẫn giữ Golden Set. Lệnh, bằng chứng và các bước kích hoạt: `docs/handoff/G-golden-clips.md`, `docs/evidence/golden-v2/`.
+- **Cách làm:** cắt clip stream copy từ keyframe quanh từng đoạn (lề ≥ 35 s trước, ≥ 36 s sau). Giờ của đoạn và nhãn dời theo gốc clip; manifest ghi gốc trong phim (pts, time base, độ lệch lưới lấy mẫu).
+- **Cổng:**
+  - (a) mọi khung giải mã của 18 clip giống hệt phim gốc (framemd5): đạt;
+  - (b1) cùng đầu ra detector thì cùng điểm: đạt (bản lai: 55 nhãn, 386 mục, 0 khác);
+  - (b2) detector chạy trên clip so với cả phim: bản toàn clip khác 15/55 nhãn. Ba nguyên nhân: watermark kéo dài cả phim; clip H lệch lưới lấy mẫu (keyframe H cách 10,4 s); trần ứng viên logo tính theo từng video.
+- **Người dùng chọn phương án lai:**
+  - L (job 39, giữ được lưới lấy mẫu): 8 clip, gồm 1 clip phụ 150 s quanh mốc 5400 s, không chấm điểm;
+  - H (job 37, 38): giữ phim gốc làm nguồn cả phim, theo job id và SHA-256 như v1.1;
+  - tổng 19 đoạn, 55 nhãn; 27 nhãn H giống hệt v1/v1.1.
+- **Mốc chuẩn v2 (người dùng duyệt 13/10):** thẻ `golden-v2-baseline-20261013-153857` trên ed39653. Nhãn L lấy từ lượt clip, nhãn H từ lượt cả phim.
+
+| Nhóm | Nhãn | Recall | Precision mục chính | Tải duyệt (mục/giờ) | So với thẻ cả phim |
+| --- | --- | --- | --- | --- | --- |
+| adult | 7 | 1,0 | 0,375 | 18,9 | giống hệt |
+| advertising | 19 | 0,947 | 0,478 | 359,8 | gs-T3-0001: caught → partial (watermark cả phim); tải duyệt 216,7 → 359,8 vì trần ứng viên tính riêng cho mỗi clip |
+| gore | 15 | 0,933 (must 1,0) | 0,524 | 17,55 | giống hệt |
+| violence | 14 | 0,857 | 0,5 | 6,75 | T7: 2 mục đúng gộp thành 1, nhãn vẫn caught (precision 0,545 → 0,5) |
+
+- **v2 không đo:** hành vi cả phim của job 39 (watermark suốt phim, cửa sổ 30 s đầu và cuối, trần theo phim). Từ nay cổng detector trên Golden Set so v2 với v2.
+- **Khóa xóa sau kích hoạt:**
+  - chỉ job 39 hết khóa; job 37 và 38 vẫn khóa;
+  - v1 và v1.1 chuyển nguyên từng byte sang `annotations/golden-retired/` và không còn khóa gì.
+- **Dung lượng:** xóa phim job 39 (7,61 GB) và giữ 8 clip (1,88 GB) tiết kiệm 5,73 GB. Phim job 37 và 38 (4,48 GB) ở lại.
+- **Trạng thái:** nhánh `feat/golden-clips`, chưa gộp. Chưa kích hoạt: chờ gộp, khởi động lại Control Center, rồi người dùng bảo.

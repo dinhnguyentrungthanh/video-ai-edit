@@ -4,7 +4,8 @@ Default: this PC only, http://127.0.0.1:8766. --phone: also reachable from a pho
 home Wi-Fi, protected by a random access code; the link is printed and saved to
 reports/benchmarks/golden-<set>/phone-link.txt. Windows may ask once to allow Python through the
 firewall; the person at the PC decides. --set v1.1 labels annotations/golden/v1.1 (suggestions and
-frames under reports/benchmarks/golden-v1.1); the default is v1.
+frames under reports/benchmarks/golden-v1.1); the default is v2 once annotations/golden/v2 exists,
+otherwise v1.
 """
 from __future__ import annotations
 
@@ -20,6 +21,12 @@ from biliflow.golden_set import KNOWN_SETS
 
 ROOT = Path(__file__).resolve().parents[1]
 CODE_ALPHABET = "abcdefghjkmnpqrstuvwxyz23456789"
+
+
+def default_set(root: Path | None = None) -> str:
+    """v2 once it is in annotations/golden (the clip set), otherwise v1."""
+    root = root or ROOT
+    return "v2" if (root / "annotations/golden/v2/segments.json").exists() else "v1"
 
 
 def set_paths(name: str, root: Path | None = None) -> dict[str, Path]:
@@ -51,8 +58,9 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--port", type=int, default=8766)
     parser.add_argument("--no-browser", action="store_true")
     parser.add_argument("--phone", action="store_true", help="also open to a phone on the same home Wi-Fi (access code)")
-    parser.add_argument("--set", default="v1", choices=KNOWN_SETS, help="Golden Set to label (default v1)")
+    parser.add_argument("--set", choices=KNOWN_SETS, help="Golden Set to label (default v2 when present, else v1)")
     args = parser.parse_args(argv)
+    args.set = args.set or default_set()
     paths = set_paths(args.set)
     if not (paths["labels_dir"] / "segments.json").exists():
         raise SystemExit(f"Chưa có manifest {paths['labels_dir'] / 'segments.json'}; tạo bằng "

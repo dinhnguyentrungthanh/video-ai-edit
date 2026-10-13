@@ -31,24 +31,20 @@ OUT = ROOT / "reports/benchmarks/anime-safety-h"
 FFMPEG = ROOT / "tools/ffmpeg/bin/ffmpeg.exe"
 FFPROBE = ROOT / "tools/ffmpeg/bin/ffprobe.exe"
 MODEL = ROOT / "models/wd_vit_tagger_v3"
-EXCERPTS = (("conan20-3300", "conan20", 3300.0, 150.0), ("conan21-0000", "conan21", 0.0, 150.0))
+EXCERPTS = (("conan20-3300", 38, 3300.0, 150.0), ("conan21-0000", 37, 0.0, 150.0))  # (name, job, start, duration)
 IGNORED = {"metrics", "runtime", "created_at"}
 
 
-def _manifest() -> dict:
-    return json.loads((ROOT / "annotations/golden/v1/segments.json").read_text(encoding="utf-8"))
-
-
 def excerpts(args=None) -> list[Path]:
-    manifest = _manifest()
+    from biliflow.golden_clips import window_source
     paths = []
-    for name, source, start, duration in EXCERPTS:
+    for name, job_id, start, duration in EXCERPTS:
         target = OUT / "excerpts" / f"{name}.mp4"
         if not target.exists():
             target.parent.mkdir(parents=True, exist_ok=True)
-            subprocess.run([str(FFMPEG), "-hide_banner", "-loglevel", "error", "-ss", str(start), "-t", str(duration),
-                            "-i", str(ROOT / manifest["sources"][source]["path"]), "-map", "0:v:0", "-c", "copy",
-                            "-an", str(target)], check=True)
+            video, offset = window_source(ROOT, job_id, start, duration)
+            subprocess.run([str(FFMPEG), "-hide_banner", "-loglevel", "error", "-ss", str(offset), "-t", str(duration),
+                            "-i", str(video), "-map", "0:v:0", "-c", "copy", "-an", str(target)], check=True)
         paths.append(target)
         print(f"excerpt {target.name}: {target.stat().st_size / 1e6:.1f} MB", flush=True)
     return paths
@@ -133,6 +129,7 @@ def equivalence(args) -> None:
 
 
 # Full-film plan (§17.2). Order: same-source baseline before current for a fair same-session A/B.
+FULL_JOBS = {"conan21": 37, "conan20": 38}  # run key -> Golden film (whole in v1, v1.1 and v2)
 FULL_RUNS = (("conan21", "baseline-fp32"), ("conan21", "current-fp32"), ("conan21", "current-fp16"),
              ("conan20", "current-fp32"), ("conan20", "current-fp16"))
 CONAN20_TRIAL = ROOT / "reports/jobs/conan20-allgroups-full-fp16-20260929-193703"  # HEAD scanner, fp32
@@ -174,11 +171,10 @@ def _write_json(path: Path, value) -> None:
 def full(args) -> None:
     """Five stage-only runs, byte comparison (H1), review-level fp16 comparison (H2), pre-registered gates."""
     from biliflow.animation_safety_scanner import scan_animation_safety as current
-    from biliflow.golden_set import source_file
+    from biliflow.golden_clips import film_source
     from biliflow.review_workflow import build_review_queue
     from benchmark_full_advertising import diff_review_queues, render_review_diff, review_difference_rows
 
-    manifest = _manifest()
     if args.run_dir:
         run_dir = Path(args.run_dir).resolve(strict=True)
         if not run_dir.is_relative_to(OUT):
@@ -206,7 +202,7 @@ def full(args) -> None:
             while (run_dir / f"{key}.attempt-{attempt}").exists():
                 attempt += 1
             (run_dir / key).rename(run_dir / f"{key}.attempt-{attempt}")
-        video = source_file(ROOT, manifest, source)
+        video = film_source(ROOT, FULL_JOBS[source])
         report_dir = run_dir / key / "animation-safety"
         if variant == "baseline-fp32":
             baseline = baseline or _baseline_module().scan_animation_safety
