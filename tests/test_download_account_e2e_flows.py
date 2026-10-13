@@ -22,7 +22,6 @@ import threading
 import time
 import unittest
 from dataclasses import replace
-from http.server import ThreadingHTTPServer
 from pathlib import Path
 from typing import Any, Callable
 from unittest import mock
@@ -49,6 +48,7 @@ from biliflow.download_runner import YtDlpRunner
 from biliflow.download_sources import default_registry
 from biliflow.download_store import DownloadStore
 from biliflow.download_worker import DownloadWorker
+from biliflow.http_guards import LocalHTTPServer
 from biliflow.job_store import JobStore
 from tests.account_e2e_fixtures import (
     CLIPS,
@@ -708,7 +708,7 @@ class ProductionDefaultsTest(FlowCase):
         self.addCleanup(self.jobs.close)
         self.center = self._center()
         self.log = RequestLog()
-        pc = ThreadingHTTPServer(("127.0.0.1", 0), logged(_handler_class(self.center), self.log, "pc"))
+        pc = LocalHTTPServer(("127.0.0.1", 0), logged(_handler_class(self.center), self.log, "pc"))
         pc.daemon_threads = True
         self.pc_port = pc.server_address[1]
         threading.Thread(target=pc.serve_forever, name="m6-pc", daemon=True).start()

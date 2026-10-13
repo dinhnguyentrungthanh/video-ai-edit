@@ -96,7 +96,7 @@
 | Tham số | Kết quả khi đổi giá trị |
 |---|---|
 | Số worker routing (`RoutingPool`) | Giống hệt |
-| OCR batch 8 + cửa sổ 4 | **Không** giống hệt từng byte: điểm lệch tối đa 2,1e-5 (`SCAN_PERFORMANCE.md:129-131`). Chỉ giống ở mức danh sách duyệt |
+| OCR batch 8 + cửa sổ 4 | **Không** giống hệt từng byte: điểm lệch tối đa 2,1e-5 (`SCAN_PERFORMANCE.md:152`). Chỉ giống ở mức danh sách duyệt |
 | Precision fp16 | Chỉ giống ở mức danh sách duyệt |
 
   Mọi cổng kiểm tra đều mới chạy trên **một** card RTX 2060.
@@ -213,7 +213,7 @@
   - Đo khi chưa khởi động scheduler, hoặc khi scheduler đang rảnh và tạm dừng.
   - Lấy khóa GPU và khóa render.
   - Đo trên clip mẫu đi kèm, không phải video của người dùng.
-- **Cách giải mã và số worker:** **không** chọn chỉ dựa trên một lần đo nhanh đứng riêng. NVDEC từng chậm hơn khi CPU rảnh (`SCAN_PERFORMANCE.md:93-95`). Dùng bảng số đo thật và có ngưỡng trễ (hysteresis) để không đổi qua đổi lại.
+- **Cách giải mã và số worker:** **không** chọn chỉ dựa trên một lần đo nhanh đứng riêng. NVDEC từng chậm hơn khi CPU rảnh (`CLAUDE_SCAN_OPTIMIZATION_HANDOFF.md:446-457`). Dùng bảng số đo thật và có ngưỡng trễ (hysteresis) để không đổi qua đổi lại.
 - **Trang Cài đặt:** hiện hồ sơ; có "Đo lại" và "Chỉ dùng CPU", **chỉ trên PC** (127.0.0.1 + token).
 - E0–E2 **không sửa `scheduler.py`**. Việc đóng băng lựa chọn theo job làm sau điểm gộp G1 (mục 9).
 

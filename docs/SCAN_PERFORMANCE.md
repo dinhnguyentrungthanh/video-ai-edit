@@ -137,10 +137,10 @@ Evidence: `reports/benchmarks/ocr-cross-frame-occupancy-20260928-224612/`,
 `ocr-cross-frame-cancel-20260928-230913/`. Commands (GPU mutex launcher):
 
 ```powershell
-.\scriptsenchmark-ocr-cross-frame.ps1 occupancy
-.\scriptsenchmark-ocr-cross-frame.ps1 abba
-.\scriptsenchmark-ocr-cross-frame.ps1 downstream
-.\scriptsenchmark-ocr-cross-frame.ps1 cancel
+.\scripts\benchmark-ocr-cross-frame.ps1 occupancy
+.\scripts\benchmark-ocr-cross-frame.ps1 abba
+.\scripts\benchmark-ocr-cross-frame.ps1 downstream
+.\scripts\benchmark-ocr-cross-frame.ps1 cancel
 ```
 
 Full Troy OCR stage, user-authorized, A/B/B/A in one process with shared model

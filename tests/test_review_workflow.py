@@ -10,7 +10,6 @@ import subprocess
 import threading
 import time
 import unittest
-from http.server import ThreadingHTTPServer
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
@@ -28,7 +27,12 @@ from biliflow.export_guards import (
     STANDALONE_SKIPPED_EDIT_REFUSAL,
 )
 from biliflow.final_renderer import normalize_output_size_policy
-from biliflow.http_guards import CONTENT_LENGTH_MESSAGE, REQUEST_TIMEOUT_MESSAGE, REQUEST_TIMEOUT_SECONDS
+from biliflow.http_guards import (
+    CONTENT_LENGTH_MESSAGE,
+    REQUEST_TIMEOUT_MESSAGE,
+    REQUEST_TIMEOUT_SECONDS,
+    LocalHTTPServer,
+)
 from biliflow.job_store import JobStore
 from biliflow.review_workflow import (
     _guard_in_film_text,
@@ -2310,7 +2314,7 @@ class StandaloneReviewServerTests(unittest.TestCase):
         created = threading.Event()
         holder = {}
 
-        class CapturingServer(ThreadingHTTPServer):
+        class CapturingServer(LocalHTTPServer):
             daemon_threads = True
 
             def __init__(self, *args, **kwargs):
@@ -2319,7 +2323,7 @@ class StandaloneReviewServerTests(unittest.TestCase):
                 created.set()
 
         self.patches = [
-            patch("biliflow.review_workflow.ThreadingHTTPServer", CapturingServer),
+            patch("biliflow.review_workflow.LocalHTTPServer", CapturingServer),
             patch("builtins.print"),
         ]
         for value in self.patches:

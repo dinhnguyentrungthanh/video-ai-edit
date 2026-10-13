@@ -59,7 +59,6 @@ import time
 import unittest
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-from http.server import ThreadingHTTPServer
 from pathlib import Path
 from secrets import token_hex
 from typing import Any, Callable, Iterable
@@ -83,6 +82,7 @@ from biliflow.download_runner import YtDlpRunner
 from biliflow.download_sources import DirectMediaProvider, SourceRegistry, SourceTransfers
 from biliflow.download_store import DownloadStore
 from biliflow.download_worker import DownloadWorker
+from biliflow.http_guards import LocalHTTPServer
 from biliflow.job_store import JobStore
 from biliflow.review_evidence import ReviewFrameCache
 from biliflow.scheduler import JobScheduler
@@ -641,7 +641,7 @@ class E2EBase(unittest.TestCase):
         self.addCleanup(self.jobs.close)
         self.center = self._center()
         self.log = RequestLog()
-        self.pc = ThreadingHTTPServer(("127.0.0.1", 0), logged(_handler_class(self.center), self.log, "pc"))
+        self.pc = LocalHTTPServer(("127.0.0.1", 0), logged(_handler_class(self.center), self.log, "pc"))
         self.pc.daemon_threads = True
         self.pc_port = self.pc.server_address[1]
         threading.Thread(target=self.pc.serve_forever, name="m6-pc", daemon=True).start()

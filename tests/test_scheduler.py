@@ -2,6 +2,7 @@ import hashlib
 import json
 import os
 import sys
+import threading
 import time
 import unittest
 from pathlib import Path
@@ -1348,6 +1349,127 @@ class CancelGuardTests(SchedulerFixture):
                 self.store.update_job(a, state=state)
                 self.assertEqual(self.scheduler.cancel(a)["state"], "CANCELLED")
         self.assertEqual(len(self.cancel_events(a)), 5)
+
+
+class StopBeforeLaunchTests(SchedulerFixture):
+    """Hủy or Dừng ngay landing after the worker claimed an export never lets it start (A-export.md:362)."""
+
+    def setUp(self):
+        super().setUp()
+        popen = patch("biliflow.scheduler.subprocess.Popen")
+        self.popen = popen.start()
+        self.addCleanup(popen.stop)
+        self.popen.return_value.pid = 4321
+        self.popen.return_value.poll.return_value = 0
+        self.popen.return_value.wait.return_value = 0
+
+    def waiting_export(self, name):
+        self.popen.reset_mock()
+        job_id = self.job(name)
+        self.export(job_id)
+        selection = self.scheduler._select()
+        self.assertEqual((selection[0]["id"], selection[2].name), (job_id, "render"))
+        return job_id, selection
+
+    def assert_not_started(self, job_id, job_state, stage_state):
+        self.popen.assert_not_called()
+        job = self.store.get_job(job_id)
+        self.assertEqual((job["state"], job["stop_mode"]), (job_state, job_state))
+        self.assertEqual(self.store.stage(job_id, "render")["state"], stage_state)
+        self.assertFalse(self.scheduler.is_busy(job_id))
+        self.assertIsNone(self.scheduler.active)
+
+    def test_a_stop_between_the_claim_and_the_running_stage_never_starts_the_export(self):
+        for action, job_state, stage_state in (("cancel", "CANCELLED", "CANCELLED"),
+                                               ("pause_now", "PAUSED", "PENDING")):
+            with self.subTest(action=action):
+                job_id, selection = self.waiting_export(action)
+                real_claim = self.store.claim_queued
+
+                def claim_then_stop(claimed_id, state, stage):
+                    claimed = real_claim(claimed_id, state, stage)
+                    getattr(self.scheduler, action)(claimed_id)
+                    return claimed
+
+                with patch.object(self.store, "claim_queued", side_effect=claim_then_stop):
+                    self.scheduler._execute(*selection)
+                self.assert_not_started(job_id, job_state, stage_state)
+                self.assertFalse(any(
+                    event["event_type"] == "STAGE_STARTED" for event in self.store.events(job_id)
+                ))
+                self.assertIsNone(self.scheduler._select())
+                if action == "pause_now":
+                    # Tiếp tục still runs it as an export, at the front of the queue.
+                    self.scheduler.resume(job_id)
+                    self.assertEqual(self.order(), [(job_id, "export")])
+                    self.scheduler.cancel(job_id)
+
+    def test_a_stop_after_the_running_stage_but_before_the_process_never_starts_it(self):
+        for action, job_state, stage_state in (("cancel", "CANCELLED", "CANCELLED"),
+                                               ("pause_now", "PAUSED", "PENDING")):
+            with self.subTest(action=action):
+                job_id, selection = self.waiting_export(action)
+                real_restore = self.scheduler._stage_cache.restore
+
+                def stop_then_restore(**kwargs):
+                    self.assertEqual(self.store.stage(job_id, "render")["state"], "RUNNING")
+                    getattr(self.scheduler, action)(job_id)
+                    return real_restore(**kwargs)
+
+                with patch.object(self.scheduler._stage_cache, "restore", side_effect=stop_then_restore):
+                    self.scheduler._execute(*selection)
+                self.assert_not_started(job_id, job_state, stage_state)
+                self.assertFalse(any(
+                    event["event_type"] == "STAGE_FAILED" for event in self.store.events(job_id)
+                ))
+                if action == "pause_now":
+                    self.scheduler.cancel(job_id)
+
+    def test_a_cancel_racing_the_launch_still_stops_the_export(self):
+        # Hủy writes CANCELLED while the worker launches the render: the launch
+        # either sees the write or Hủy sees the running process and stops it.
+        job_id, selection = self.waiting_export("race")
+        stopped, cancel_writing, launched = threading.Event(), threading.Event(), threading.Event()
+        process = Mock(pid=4321)
+        process.poll.side_effect = lambda: 1 if stopped.is_set() else None
+        process.wait.side_effect = lambda *args, **kwargs: (stopped.wait(10), 1)[1]
+
+        def launch(*args, **kwargs):
+            self.assertTrue(cancel_writing.wait(5), "Hủy never reached its write")
+            launched.set()
+            return process
+
+        self.popen.side_effect = launch
+        real_update_job_if = self.store.update_job_if
+
+        def write_after_the_launch(target, **kwargs):
+            if kwargs.get("state") == "CANCELLED":
+                cancel_writing.set()
+                self.assertTrue(launched.wait(5), "the worker never launched the render")
+            return real_update_job_if(target, **kwargs)
+
+        terminated = []
+
+        def terminate(_process):
+            terminated.append(True)
+            stopped.set()
+
+        worker = threading.Thread(target=self.scheduler._execute, args=selection, daemon=True)
+        try:
+            with patch.object(self.scheduler, "_terminate_process", side_effect=terminate), \
+                    patch.object(self.store, "update_job_if", side_effect=write_after_the_launch):
+                worker.start()
+                self.scheduler.cancel(job_id)
+                worker.join(10)
+                self.assertFalse(worker.is_alive(), "the cancelled render kept running")
+        finally:
+            stopped.set()
+            worker.join(10)
+        self.assertEqual(terminated, [True])
+        job = self.store.get_job(job_id)
+        self.assertEqual((job["state"], job["stop_mode"]), ("CANCELLED", "CANCELLED"))
+        self.assertEqual(self.store.stage(job_id, "render")["state"], "CANCELLED")
+        self.assertFalse(self.scheduler.is_busy(job_id))
 
 
 class InputWatcherRestoreTests(unittest.TestCase):
