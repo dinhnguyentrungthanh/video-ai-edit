@@ -1043,7 +1043,7 @@ class StartupAndShutdownTests(unittest.TestCase):
             center, manager = self.stub(root)
             with patch.object(source_cleanup, "wait_idle",
                               side_effect=lambda timeout: manager.wait_idle(timeout=timeout)), \
-                    patch("biliflow.control_center.ThreadingHTTPServer", side_effect=OSError("port in use")):
+                    patch("biliflow.control_center.LocalHTTPServer", side_effect=OSError("port in use")):
                 with self.assertRaises(OSError):
                     center.serve()
             self.assertEqual(manager.mock_calls,

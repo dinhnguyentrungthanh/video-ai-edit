@@ -10,23 +10,36 @@ Standard library only. Both servers:
 - close a connection whose request stops arriving (``REQUEST_TIMEOUT_SECONDS``
   per socket read or write; streaming a video lifts it). It is a limit per
   read, not a deadline: a local program that trickles a byte at a time can
-  still hold a thread, which only processes of this machine can reach.
+  still hold a thread, which only processes of this machine can reach;
+- listen with a backlog of ``LISTEN_BACKLOG`` (``LocalHTTPServer``; the phone
+  listener too).
 """
 
 from __future__ import annotations
 
 import argparse
 import ipaddress
+from http.server import ThreadingHTTPServer
 from typing import Any
 
 # Seconds one read or write of a request or its response may wait.
 REQUEST_TIMEOUT_SECONDS = 20.0
+# Connections the kernel queues while the server thread is busy (socket.listen()'s own default). A
+# Dashboard V2 load opens about 20 at once (HTTP/1.0: one connection per request); with socketserver's
+# 5, Windows refused the rest (Edge: ERR_CONNECTION_REFUSED, or ERR_NO_BUFFER_SPACE at once).
+LISTEN_BACKLOG = 128
 CONTENT_LENGTH_MESSAGE = "Content-Length không hợp lệ"
 REQUEST_TIMEOUT_MESSAGE = "Hết thời gian chờ dữ liệu gửi lên"
 LOOPBACK_ONLY_MESSAGE = (
     "BiliFlow chỉ mở trên chính máy này: --host phải là 127.0.0.1 (hoặc localhost), "
     "không dùng “{host}”."
 )
+
+
+class LocalHTTPServer(ThreadingHTTPServer):
+    """ThreadingHTTPServer that queues up to LISTEN_BACKLOG connections instead of socketserver's 5."""
+
+    request_queue_size = LISTEN_BACKLOG
 
 
 def content_length(headers: Any) -> int:

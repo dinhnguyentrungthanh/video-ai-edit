@@ -15,7 +15,7 @@ import unicodedata
 import urllib.parse
 from collections import Counter
 from datetime import datetime, timezone
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from http.server import BaseHTTPRequestHandler
 from pathlib import Path
 from typing import Any, Callable, Iterable
 
@@ -111,6 +111,7 @@ from biliflow.export_identity import export_paths, render_identity, verified_exp
 from biliflow.http_guards import (
     REQUEST_TIMEOUT_MESSAGE,
     REQUEST_TIMEOUT_SECONDS,
+    LocalHTTPServer,
     content_length,
     loopback_bind_address,
     require_loopback_host,
@@ -4934,7 +4935,7 @@ def serve_review_ui(
             except OSError:
                 self._json(500, {"error": "Không thể ghi lựa chọn xuống ổ đĩa"})
 
-    server = ThreadingHTTPServer((loopback_bind_address(host), port), Handler)
+    server = LocalHTTPServer((loopback_bind_address(host), port), Handler)
     print(f"BiliFlow review UI: http://{host}:{server.server_port}/", flush=True)
     try:
         server.serve_forever()

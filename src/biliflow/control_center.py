@@ -64,6 +64,7 @@ from biliflow.export_guards import (
 from biliflow.http_guards import (
     REQUEST_TIMEOUT_MESSAGE,
     REQUEST_TIMEOUT_SECONDS,
+    LocalHTTPServer,
     content_length,
     loopback_bind_address,
     require_loopback_host,
@@ -1857,7 +1858,7 @@ class ControlCenter:
     def serve(self) -> None:
         require_loopback_host(self.host)
         try:
-            self.server = ThreadingHTTPServer((loopback_bind_address(self.host), self.port), _handler_class(self))
+            self.server = LocalHTTPServer((loopback_bind_address(self.host), self.port), _handler_class(self))
             actual_port = self.server.server_port
             state = {"schema_version": 1, "pid": os.getpid(), "host": self.host,
                      "port": actual_port, "url": f"http://{self.host}:{actual_port}/",

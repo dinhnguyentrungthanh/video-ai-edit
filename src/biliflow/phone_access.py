@@ -38,6 +38,8 @@ from http.server import ThreadingHTTPServer
 from pathlib import Path
 from typing import Any, Callable
 
+from biliflow.http_guards import LocalHTTPServer
+
 CODE_ALPHABET = "abcdefghjkmnpqrstuvwxyz23456789"
 CODE_LENGTH = 8
 DEFAULT_PORT = 8767  # 8765 Control Center, 8766 Golden Label
@@ -298,7 +300,7 @@ def pc_only_reason(path: str) -> str | None:
     return None if allowed else reason
 
 
-class _PhoneServer(ThreadingHTTPServer):
+class _PhoneServer(LocalHTTPServer):
     # Without SO_REUSEADDR a second listener on Windows fails to bind instead of sharing the port.
     allow_reuse_address = False
     daemon_threads = True
