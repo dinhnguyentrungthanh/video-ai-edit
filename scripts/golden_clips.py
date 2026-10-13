@@ -151,7 +151,8 @@ def cmd_cut(args) -> int:
         record["clips"][clip["key"]] = dict(probe, path=f"media/{clip['key']}.mp4", sha256=file_sha256(target),
                                             size_bytes=target.stat().st_size, cut_at=gc.now_iso())
         write_json_atomic(p["clips"], record)
-    total = sum(info["size_bytes"] for info in record["clips"].values())
+    write_json_atomic(p["clips"], record)  # the current plan, also when every clip was cut earlier
+    total = sum(record["clips"][clip["key"]]["size_bytes"] for clip in clips)
     print(f"{len(clips)} clips, {total / 1e9:.2f} GB in {p['set'] / 'media'}", flush=True)
     return 0
 
