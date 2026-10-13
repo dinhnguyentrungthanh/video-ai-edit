@@ -147,7 +147,10 @@ class DownloadSourceSteps:
             self._note_hang(task, error)
             if control.requested or isinstance(error, Cancelled):
                 return self._end_requested(task_id, control)
-            return self._fail(task_id, {"PROBING"}, error.code, error.message)
+            message = self._retry_later(task_id, "PROBING", error.code, error.message,
+                                        status=getattr(error, "status", None),
+                                        retry_after=getattr(error, "retry_after", None))
+            return None if message is None else self._fail(task_id, {"PROBING"}, error.code, message)
         if control.requested:
             return self._end_requested(task_id, control)
         self._log_marks(task, "Thăm dò link tải", source)
@@ -187,7 +190,8 @@ class DownloadSourceSteps:
         """The source resolved again (fresh links); SourceChanged when it is no longer the probed one."""
         probe = task.get("probe") or {}
         try:
-            source = provider.resolve(task["url"], self._source_context(task, control, probing=False))
+            with self._paced_lookup(task, control):  # one lookup per host at a time (download_retry)
+                source = provider.resolve(task["url"], self._source_context(task, control, probing=False))
         except SourceDeclined as declined:
             raise SourceChanged(f"không còn đọc được như lúc thăm dò: {declined.message}") from None
         if source.identity_key != probe.get("identity"):
@@ -248,7 +252,9 @@ class DownloadSourceSteps:
             if isinstance(error, HttpError) and resumable_error(error):
                 if error.status is not None:  # the server answered (429, 5xx): the next Tiếp tục gets a new ticket
                     self.tickets.discard(task_id)
-                self._interrupt(task_id, error.code, error.message)  # no answer at all: the link stays kept
+                # no answer at all: the link stays kept
+                self._interrupt(task_id, error.code, error.message, status=error.status,
+                                retry_after=error.retry_after)
                 return RUN_ENDED
             self.tickets.discard(task_id)  # refused (401/403…) or no longer the video: one new ticket
             self.store.append_log(task_id, attempt, [f"Link tải đã giữ không còn dùng được ({error.code}); lấy vé mới."])
@@ -271,7 +277,13 @@ class DownloadSourceSteps:
             return None
         return source
 
-    def _interrupt(self, task_id: int, code: str | None, message: str | None) -> None:
+    def _interrupt(self, task_id: int, code: str | None, message: str | None, *, status: int | None = None,
+                   retry_after: float | None = None) -> None:
+        """A download that may be continued: a passing network error first waits in WAITING_RETRY (download_retry);
+        otherwise, or once its automatic retries are used, INTERRUPTED with the part kept."""
+        message = self._retry_later(task_id, "DOWNLOADING", code, message, status=status, retry_after=retry_after)
+        if message is None:
+            return None
         text = f"{message or 'Lỗi mạng.'} Phần đã tải được giữ; {RESUME_NOTE}"
         moved = self.store.transition(task_id, {"DOWNLOADING"}, "INTERRUPTED", error_code=code, error_message=text,
                                       speed=None, eta=None, pid=None, pid_created=None)
@@ -322,7 +334,8 @@ class DownloadSourceSteps:
                 if control.requested or isinstance(error, Cancelled):
                     return self._end_requested(task_id, control)
                 if resumable_error(error):  # e.g. a network error, or a hidden browser that did not run: part kept
-                    return self._interrupt(task_id, error.code, error.message)
+                    return self._interrupt(task_id, error.code, error.message, status=getattr(error, "status", None),
+                                           retry_after=getattr(error, "retry_after", None))
                 return self._fail(task_id, {"DOWNLOADING"}, error.code, error.message)
         login: list[SourceLoginRequired] = []
 
@@ -355,7 +368,8 @@ class DownloadSourceSteps:
             if outcome.resumable:
                 if outcome.code == "SERVER_BUSY":  # the file server answered 429/5xx: never pin that link
                     self.tickets.discard(task_id)
-                return self._interrupt(task_id, outcome.code, outcome.message)
+                return self._interrupt(task_id, outcome.code, outcome.message, status=outcome.status,
+                                       retry_after=outcome.retry_after)
             return self._fail(task_id, {"DOWNLOADING"}, outcome.code, outcome.message)
         return self.store.transition(task_id, {"DOWNLOADING"}, "VERIFYING", temp_file=str(outcome.final_path),
                                      speed=None, eta=None)

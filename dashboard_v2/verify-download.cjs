@@ -35,7 +35,7 @@ const tests = [];
 const test = (name, fn) => tests.push([name, fn]);
 
 test('every state has a label, a tone and exactly one filter group', () => {
-  assert.equal(new Set(K.STATES).size, 16);
+  assert.equal(new Set(K.STATES).size, 17);
   const groups = K.FILTERS.map(f => f[0]).filter(f => f !== 'all');
   for (const s of K.STATES) {
     assert.ok(K.LABELS[s], 'label ' + s);
@@ -44,8 +44,32 @@ test('every state has a label, a tone and exactly one filter group', () => {
     assert.equal(groups.filter(g => K.matches({state: s}, g)).length, 1, s);
   }
   const counted = K.counts(K.STATES.map((s, i) => ({id: i, state: s})));
-  assert.equal(counted.all, 16);
-  assert.equal(groups.reduce((sum, g) => sum + counted[g], 0), 16);
+  assert.equal(counted.all, 17);
+  assert.equal(groups.reduce((sum, g) => sum + counted[g], 0), 17);
+});
+
+test('a network error\'s wait: "Chờ thử lại (lần n/3)", its countdown, Dừng and Hủy; the bulk button', () => {
+  const now = Date.parse('2026-10-13T08:00:00Z');
+  const waiting = task(4, 'WAITING_RETRY', {retry_count: 2, retry_at: '2026-10-13T08:00:45Z', error_code: 'NETWORK',
+    error_message: 'Mất kết nối với host2.example (RemoteDisconnected).'});
+  assert.equal(K.label(waiting, 3), 'Chờ thử lại (lần 2/3)');
+  assert.equal(K.label(waiting), 'Chờ thử lại (lần 2)');
+  assert.equal(K.group(waiting), 'queued');
+  assert.equal(K.retryWait(waiting, now), 'Tự thử lại sau 45 giây');
+  assert.equal(K.retryWait({...waiting, retry_at: '2026-10-13T08:03:00Z'}, now), 'Tự thử lại sau 3 phút');
+  assert.equal(K.retryWait({...waiting, retry_at: '2026-10-13T07:59:00Z'}, now), 'Sắp tự thử lại');
+  assert.equal(K.retryWait(task(4, 'QUEUED'), now), '');
+  assert.deepEqual(K.actions(waiting, {}).map(a => a.id), ['stop', 'cancel']);
+  const data = snapshot([waiting], {settings: {slots: 2, max_slots: 3, auto_retries: 3}, network_failures: 0});
+  const html = V.row(waiting, V.createUi(), ctx({data, now}));
+  assert.match(html, /Chờ thử lại \(lần 2\/3\)/);
+  assert.match(html, /Tự thử lại sau 45 giây/);
+  assert.ok(!V.tools(data, V.createUi(), ctx()).includes('dl-retry-network'), 'no button without network failures');
+  const failed = {...data, network_failures: 14};
+  assert.match(V.tools(failed, V.createUi(), ctx()), /data-action="dl-retry-network"[^>]*>Thử lại 14 lượt lỗi mạng</);
+  assert.match(V.tools(failed, V.createUi(), ctx({offline: true})), /data-action="dl-retry-network" disabled/);
+  const request = C.request('downloadRetryNetwork');
+  assert.deepEqual([request.method, request.path], ['POST', '/api/downloads/retry-network']);
 });
 
 test('buttons follow the backend sets; offline locks every write', () => {

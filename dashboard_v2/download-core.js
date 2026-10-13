@@ -10,22 +10,25 @@
 })(typeof window === 'undefined' ? this : window, function () {
   'use strict';
   /* WAITING_LOGIN and EXPANDED come from source accounts (docs/SOURCE_ACCOUNTS_PLAN.md 9.14): a task waiting for a
-   * sign-in, and a series page split into a group of episode tasks (its Xóa removes the whole group). */
+   * sign-in, and a series page split into a group of episode tasks (its Xóa removes the whole group). WAITING_RETRY
+   * (download_retry, VIDEO_DOWNLOAD_PLAN 4.15): a passing network error's wait, no slot; it goes back to the queue. */
   const STATES = ['QUEUED', 'PROBING', 'NEEDS_CHOICE', 'WAITING_SPACE', 'DOWNLOADING', 'VERIFYING', 'PUBLISHING',
-    'COMPLETED', 'STOPPED', 'FAILED', 'CANCELLING', 'CANCELLED', 'INTERRUPTED', 'EXPIRED', 'WAITING_LOGIN', 'EXPANDED'];
+    'COMPLETED', 'STOPPED', 'FAILED', 'CANCELLING', 'CANCELLED', 'INTERRUPTED', 'EXPIRED', 'WAITING_LOGIN', 'EXPANDED',
+    'WAITING_RETRY'];
   const LABELS = {QUEUED: 'Chờ tải', PROBING: 'Đang thăm dò', NEEDS_CHOICE: 'Cần chọn video', WAITING_SPACE: 'Chờ chỗ trống',
     DOWNLOADING: 'Đang tải', VERIFYING: 'Đang kiểm tra file', PUBLISHING: 'Đang chuyển vào input', COMPLETED: 'Đã vào input',
     STOPPED: 'Đã dừng', FAILED: 'Lỗi', CANCELLING: 'Đang hủy', CANCELLED: 'Đã hủy', INTERRUPTED: 'Bị ngắt',
-    EXPIRED: 'Đã dọn file tạm', WAITING_LOGIN: 'Chờ đăng nhập', EXPANDED: 'Đã tách thành nhóm tập'};
+    EXPIRED: 'Đã dọn file tạm', WAITING_LOGIN: 'Chờ đăng nhập', EXPANDED: 'Đã tách thành nhóm tập',
+    WAITING_RETRY: 'Chờ thử lại'};
   const TONES = {DOWNLOADING: 'blue', PROBING: 'blue', VERIFYING: 'blue', PUBLISHING: 'blue', CANCELLING: 'grey',
     NEEDS_CHOICE: 'amber', WAITING_SPACE: 'amber', INTERRUPTED: 'amber', FAILED: 'red', COMPLETED: '', QUEUED: 'grey',
-    STOPPED: 'grey', CANCELLED: 'grey', EXPIRED: 'grey', WAITING_LOGIN: 'amber', EXPANDED: 'grey'};
+    STOPPED: 'grey', CANCELLED: 'grey', EXPIRED: 'grey', WAITING_LOGIN: 'amber', EXPANDED: 'grey', WAITING_RETRY: 'amber'};
   const without = out => STATES.filter(s => !out.includes(s));
   /* A state from the server is looked up only as an own key ("constructor" is not a state). */
   const own = (table, key) => typeof key === 'string' && Object.prototype.hasOwnProperty.call(table, key) ? table[key] : undefined;
   /* download_worker.py: STOPPABLE, RESUMABLE, CANCELLABLE, RETRYABLE, RENAMABLE; download_store: FINAL_STATES and
    * SLOT_STATES (RUNNING here, the "Đang chạy" group). */
-  const STOPPABLE = ['QUEUED', 'PROBING', 'WAITING_SPACE', 'DOWNLOADING', 'WAITING_LOGIN'];
+  const STOPPABLE = ['QUEUED', 'PROBING', 'WAITING_SPACE', 'DOWNLOADING', 'WAITING_LOGIN', 'WAITING_RETRY'];
   const RESUMABLE = ['STOPPED', 'INTERRUPTED'];
   const CANCELLABLE = without(['PUBLISHING', 'COMPLETED', 'EXPIRED', 'CANCELLED', 'EXPANDED']);
   const RETRYABLE = ['FAILED', 'INTERRUPTED', 'STOPPED', 'CANCELLED', 'EXPIRED'];
@@ -40,16 +43,34 @@
   /* download_probe: the codes of a page with no video yt-dlp can read ("Trang này chưa được hỗ trợ"). */
   const UNSUPPORTED = ['UNSUPPORTED', 'NO_ENTRIES'];
 
-  /* The badge text: a page yt-dlp cannot read says so instead of a bare "Lỗi". */
-  function label(task) {
+  /* The badge text: a page yt-dlp cannot read says so instead of a bare "Lỗi"; a network error's wait names its
+   * automatic retry (`limit`: settings.auto_retries of GET /api/downloads, when known). */
+  function label(task, limit) {
     if (task.state === 'FAILED' && UNSUPPORTED.includes(task.error_code)) return 'Chưa hỗ trợ';
+    const n = Number(task.retry_count) || 0, most = Number(limit) || 0;
+    if (task.state === 'WAITING_RETRY' && n > 0) return 'Chờ thử lại (lần ' + n + (most ? '/' + most : '') + ')';
     return own(LABELS, task.state) || String(task.state || '');
+  }
+  /* When a network error's wait ends, by this page's clock (`now`, ms): the server moves the task back to the queue. */
+  function retryWait(task, now) {
+    if (!task || task.state !== 'WAITING_RETRY') return '';
+    const left = Math.ceil((Date.parse(task.retry_at) - Number(now)) / 1000);
+    if (!Number.isFinite(left) || left <= 0) return 'Sắp tự thử lại';
+    return 'Tự thử lại sau ' + (left < 60 ? left + ' giây' : Math.ceil(left / 60) + ' phút');
+  }
+  /* "Thử lại các lượt lỗi mạng" (POST /api/downloads/retry-network): shown only while the server counts such tasks. */
+  function networkRetry(data, ctx) {
+    const n = Math.max(0, Number(data && data.network_failures) || 0);
+    if (!n) return null;
+    const offline = !!(ctx && ctx.offline);
+    return {label: 'Thử lại ' + n + ' lượt lỗi mạng', count: n, enabled: !offline, reason: offline ? OFFLINE :
+      'Lượt lỗi vì mạng tải lại từ đầu; lượt bị ngắt vì mạng tải tiếp phần đã có.'};
   }
 
   function group(task) {
     const s = task && task.state;
     if (RUNNING.includes(s)) return 'running';
-    if (s === 'QUEUED') return 'queued';
+    if (s === 'QUEUED' || s === 'WAITING_RETRY') return 'queued';
     if (['NEEDS_CHOICE', 'FAILED', 'INTERRUPTED', 'WAITING_LOGIN'].includes(s)) return 'attention';
     if (s === 'COMPLETED') return 'completed';
     return 'ended';
@@ -268,7 +289,7 @@
     return parts.join(' · ');
   }
   return {STATES, LABELS, TONES, STOPPABLE, RESUMABLE, CANCELLABLE, RETRYABLE, RENAMABLE, FINAL, RUNNING, KEEPS_PART, FILTERS,
-    MAX_LINKS, UNSUPPORTED, own, label, group, matches, counts, actions, canRename, formatBytes, clock, progress, links, checkBatch, batchErrors,
+    MAX_LINKS, UNSUPPORTED, own, label, retryWait, networkRetry, group, matches, counts, actions, canRename, formatBytes, clock, progress, links, checkBatch, batchErrors,
     entryLine, choosesEpisodes, ACCOUNT_LABELS, accountState, ttlPassed, accountActions, BUCKET_LABELS, groupState, groupActions, groupConfirm,
     groupLeft, memberState};
 });

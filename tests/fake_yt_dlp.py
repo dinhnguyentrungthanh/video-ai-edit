@@ -2,7 +2,8 @@
 
 Behaviour comes from the JSON file named by FAKE_YTDLP_SCENARIO:
   {"probe": {...}, "download": {...}, "by_url": {"<url>": {"probe": ..., "download": ...}}}
-Every call appends {"argv", "env", "pid"} to the JSON-lines file FAKE_YTDLP_LOG.
+Every call appends {"argv", "env", "pid", "at"} (its start, time.time()) to the JSON-lines file
+FAKE_YTDLP_LOG.
 """
 import json
 import os
@@ -128,7 +129,8 @@ def main():
     argv = sys.argv[1:]
     log = os.environ.get("FAKE_YTDLP_LOG")
     if log:
-        append_call(log, {"argv": argv, "pid": os.getpid(), "env": {key: os.environ.get(key) for key in ENV_KEYS}})
+        append_call(log, {"argv": argv, "pid": os.getpid(), "at": time.time(),
+                          "env": {key: os.environ.get(key) for key in ENV_KEYS}})
     url = argv[argv.index("--") + 1] if "--" in argv else ""
     with open(os.environ["FAKE_YTDLP_SCENARIO"], encoding="utf-8") as handle:
         scenario = json.load(handle)

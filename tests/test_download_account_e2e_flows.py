@@ -99,6 +99,7 @@ VARIANT_BAIT = '<img src=x onerror="window.__bf=2"> 1080p'
 # purpose. None of them pauses everything (plan 9.10 point 11: no global pause; the slots stay 1 to 3).
 EXPECTED_POST_ROUTES = frozenset({
     r"/api/downloads", r"/api/downloads/settings", r"/api/downloads/cleanup-temp",
+    r"/api/downloads/retry-network",  # "Thử lại các lượt lỗi mạng" (download_retry): only tasks ended on a network error
     r"/api/downloads/(\d+)/(rename|choose|stop|resume|cancel|retry|remove)",
     r"/api/downloads/(\d+)/episodes/(draft|confirm)",
     r"/api/downloads/groups/(\d+)/(stop|resume|cancel|retry|remove)",
