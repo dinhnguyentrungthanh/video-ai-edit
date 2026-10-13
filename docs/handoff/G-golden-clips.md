@@ -29,8 +29,16 @@
   - Thử trích đoạn: cửa sổ 3300 s của job 38 cắt từ clip và từ phim gốc cho 3597 khung giống hệt.
 
 ## Đang dở
-- Lượt cả phim cuối (job 39, 38, 37; v1 + v1.1; code ed39653 của thư mục cài đặt) đang chạy từ 12:59, log
-  `temp\golden-clips-trial\full-film.log`. Sau đó chạy b2.
+- Lượt cả phim cuối xong (code ed39653; job 39 2354 s, job 38 732 s, job 37 756 s; thẻ
+  `reports\benchmarks\golden-20261013-140309`; bằng chứng `docs/evidence/golden-v2/final-film-20261013-140309.json`).
+- b1 chạy lại với thẻ này: **đạt** (55 nhãn, 386 mục, 0 khác).
+- b2 xong (17 clip, 2830 s, cùng code; lượt clip chạy trong root tạm `temp\golden-trial-root-*`, đã dọn; thẻ
+  `reports\benchmarks\golden-20261013-151925`; bằng chứng `gate-b2-20261013-151956.json`): **15/55 nhãn khác**,
+  chờ người dùng duyệt. Ba nguyên nhân:
+  - watermark cả phim (4 nhãn quảng cáo C20C, C21C, C21D, T3: caught → partial);
+  - clip H lệch lưới lấy mẫu (11 nhãn gore/violence trên j38-03263, j38-04483, j37-02106; 2 missed);
+  - trần ứng viên logo tính theo từng video (mỗi clip có trần riêng: tải duyệt quảng cáo 217 → 460 mục/giờ).
+  Clip đúng lưới (mọi clip L, j38-00000, j37-00000): adult/gore/violence giống hệt cả phim.
 
 ## Bước tiếp theo
 1. Xong lượt cả phim: chạy b2 (lệnh ở "Cách kiểm"), rồi `golden_clips.py gate-diff` và gate-score lại với thẻ
