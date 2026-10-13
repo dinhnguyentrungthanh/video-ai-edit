@@ -1,3 +1,11 @@
+# G4 merge: scan OCR round (2026-10-13, branch `merge/g4` from `main` `6df5c63`; not yet in the main folder)
+
+- Merged `perf/scan-ocr` with `--no-ff`: in fast scan ("Tăng tốc xử lý", fp16) the CRAFT detection input of the text stage is built on the GPU (`ocr_detect_gpu.py`); it falls back to the old path without CUDA, for frames that are not uint8 RGB, when a resize is needed or with `optimal_num_chars`. Standard mode is unchanged.
+- Gates (session B): full ad scans through the scheduler, 9 runs on jobs 125 and 114 and a 5-minute 1080p clip of job 38: `text-scan.json`, `scan.json`, `scan-florence.json` and `review-queue.json` differ only in timing fields, previews byte-identical.
+- Speed: text stage about 13 % faster (job 125: 92.0 → 79.9 s), a whole ad scan about 7 % faster (204 → 190 s).
+- Only the `text` stage's cache key changes; the other 9 stages keep theirs. Dropped: semantic import ahead (noise), CPU/GPU overlap (identical but only 2–3.5 % faster).
+- Full suite: 3,195 tests OK, 28 skipped.
+
 # Download network retries — session T (2026-10-13, branch `fix/download-network-retry` from `origin/main` `9ae104c`; not merged)
 
 - Cause of the 2026-10-11 batch failure (14 of 19 tasks of one page, `embedded-media`, slots 3, NETWORK while probing): three hidden browsers loaded the same page at once, each request a new connection, and the player host dropped them; no layer retried a network error while probing (FAILED at once) and a download's network error waited for the user (INTERRUPTED).

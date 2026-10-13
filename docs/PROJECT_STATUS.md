@@ -1,3 +1,7 @@
+## G4 merge, scan OCR round (2026-10-13) — branch `merge/g4`, not yet in the main folder
+
+- gpupre (session B): OCR detection input built on the GPU in fast scan; outputs identical on jobs 125, 114 and a 1080p clip; ad scan about 7 % faster; only the `text` cache key changes. Full suite 3,195 OK. Details in `CHANGELOG.md`.
+
 ## G2 merge, scan B1 (2026-10-12) — branch `merge/g2`, not yet in the main folder
 
 - B1 (session B, `perf/scan-b1`): faster stage start, cheaper cache pruning, scoped cache key, long-path skip. Outputs identical on jobs 125 and 114; scan about 5–9 % faster. Details in `CHANGELOG.md`.

@@ -974,6 +974,12 @@ Session cloud lập kế hoạch dừng vì hết credit. Một session **điề
 - Người dùng chọn gộp B1 không chờ E3. E3 đổi khóa cache lần nữa; nên gộp cùng B2–B3 hoặc lúc làm bộ cài.
 - Chỗ còn đáng làm cho quét: stage `text` (OCR) chiếm khoảng 45 % thời gian quét; `build_review` 13–17 s cắt khung bằng FFmpeg.
 
+### 14.9 Đợt OCR (2026-10-13)
+
+- Session T sửa lỗi tải hàng loạt (tự thử lại lỗi mạng tạm thời, giãn nhịp theo host, nút thử lại); đã vào main và push (6df5c63).
+- B đợt OCR: gpupre (chuẩn bị ảnh cho bước tìm chữ trên GPU, chỉ chế độ "Tăng tốc xử lý") đạt cổng giống hệt trên job 125, 114 và đoạn 1080p của job 38; quét quảng cáo nhanh thêm khoảng 7 %; chỉ đổi khóa của stage `text`. Bỏ: nạp sẵn thư viện ngữ nghĩa (nhiễu), chạy chồng CPU/GPU (chỉ 2–3,5 %), NVDEC cho OCR (chậm hơn 10–18 %).
+- Còn chờ người dùng: đề xuất "phim vàng" (cắt 13 đoạn thành clip, gỡ khóa 3 phim gốc, khoảng 11,3 GB).
+
 ### 14.6 Cách session điều phối làm việc
 
 - Làm trong worktree `temp\wt-coord`, nhánh `coord/plan` (từ `origin/main`). **Không sửa thư mục chính** đang chạy Control Center.

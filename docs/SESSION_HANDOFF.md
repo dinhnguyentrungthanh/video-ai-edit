@@ -1,5 +1,12 @@
 # BiliFlow session handoff
 
+## G4 merge, scan OCR round — 2026-10-13, branch `merge/g4` (worktree `temp\wt-merge-g4`), not yet in the main folder
+
+- **Request:** the user approved item 1 (gpupre) with an extra 1080p gate, dropped item 2, and allowed a measured trial of item 3 (dropped: under 5 %).
+- **Merge:** `perf/scan-ocr` (which already contains `origin/main` `6df5c63`) into `merge/g4`, no conflict; only the `text` stage's cache key changes.
+- **Gates:** B's identical-output gate on three sources; full suite 3,195 tests OK, 28 skipped.
+- **Next:** with the Control Center off and the user's explicit go, fast-forward the main folder to `merge/g4`; push only on the user's word.
+
 ## G2 merge, scan B1 — 2026-10-12, branch `merge/g2` (worktree `temp\wt-merge-g2`), not yet in the main folder
 
 - **Request:** the user approved the B1 list (items 1, 8, 4, 5, 10, 7; item 6 option b), "keep quality as it is", the long-path skip, and merging B1 without waiting for E3.
