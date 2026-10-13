@@ -224,7 +224,9 @@ Lỗi này có từ trước B1; B1 không đổi đường dẫn nào. Phần d
 # Đợt OCR (stage text)
 
 - **Nhánh:** `perf/scan-ocr`, tách từ `origin/main` 9ae104c (B1 đã gộp và push). Worktree: `temp\wt-scan-speed`.
-- **Trạng thái:** bước 1 (đo, chưa sửa code) **tạm dừng theo yêu cầu người dùng** ngày 2026-10-12, khoảng 23:05. Máy đang có ứng dụng khác chạy, làm số đo bị nhiễu. Người dùng sẽ báo khi máy trống để đo lại cho chính xác. Chưa trình danh sách; chưa sửa code.
+- **Trạng thái:** bước 1 (đo, chưa sửa code) **xong** ngày 2026-10-13. Danh sách đã trình, **đang chờ người dùng duyệt**; chưa sửa code.
+  - Bước 1 từng tạm dừng theo yêu cầu người dùng ngày 2026-10-12, khoảng 23:05, vì máy có ứng dụng khác làm nhiễu số đo.
+  - Người dùng cho đo tiếp ngày 2026-10-13. Phần đo lại chạy từ 06:57 đến 08:11.
 
 ## Cách đo
 
@@ -282,16 +284,53 @@ Mỗi lần chạy stage text, tính bằng giây. Job 125 (L, 889 khung), job 1
 - **`gpupre`:** dựng input của CRAFT trên GPU từ khung uint8. Resize cùng cỡ là bản chép (đã kiểm), đệm bằng số 0; phép trừ và chia làm ở float64 rồi làm tròn về float32.
   - Job 125: **889/889 khung có detect giống hệt** (cùng hash hộp chữ).
   - detect_total giảm từ 65,4 xuống 54,8 s. Nhưng lần chạy này bị nhiễu (CPU của tiến trình làm nóng routing tăng từ khoảng 138 lên 189 s), nên wall 116,8 s không dùng được.
-- **Chưa xong:**
-  - `125-gpupre` bị dừng giữa chừng: thư mục kết quả chưa đủ, phải chạy lại;
-  - chưa chạy: `sembg` (nạp mô hình ngữ nghĩa ở luồng nền), `both`, `plain-c`, và cả loạt của job 114.
+- **Đo lại ngày 2026-10-13:**
+  - các biến thể chạy xen kẽ theo vòng, thứ tự đảo giữa các vòng;
+  - lấy trung vị;
+  - mọi lần chạy đều có `contaminated False`.
+
+| Biến thể | 125 trung vị (khoảng) | 114 trung vị (khoảng) | Giống hệt plain-a |
+|---|---|---|---|
+| plain (5 vòng) | 94,9 (92,0–116,1) | 127,0 (124,8–135,9) | 5/5, 5/5 |
+| `gpupre` (5 vòng) | **81,4** (79,4–97,4) | **112,8** (108,8–113,9) | **5/5, 5/5** |
+| `semimport` (2 vòng) | 92,3 (90,0–94,6) | 128,8 (125,2–132,4) | 2/2, 2/2 |
+| `both2` = gpupre + semimport (2 vòng) | 80,3 (79,1–81,6) | 111,9 (110,8–113,1) | 2/2, 2/2 |
+| `sembg` (3 vòng) | 92,8 | 123,1 | **0/3, 1/3** |
+| `both` = gpupre + sembg (3 vòng) | 76,2; một lần **lỗi** | 105,0 | **0/2, 0/3** |
+
+- **`gpupre` cho detect giống hệt từng khung:**
+  - job 125: 889/889 khung, cùng điểm ảnh, cùng hash hộp chữ, cùng số crop;
+  - job 114: 1.113/1.113 khung, so `probe` với `probe-gpupre`.
+- **VRAM tối đa của `gpupre` tăng 20–24 MiB:** khoảng 1.075 so với 1.055 MiB ở job 125, 1.117 so với 1.093 MiB ở job 114.
+- **`sembg` không an toàn:** nạp mô hình ngữ nghĩa ở luồng nền.
+  - Lần `125-both-r1` lỗi `cudnn_batch_norm` (Float/Half), vì `from_pretrained(dtype=float16)` đổi kiểu số mặc định của torch cho cả tiến trình trong lúc OCR đang chạy.
+  - Các lần không lỗi vẫn ra `semantic_scores` và `ad_probability` khác bản gốc. Lần `125-sembg-r3` đổi cả `routing` và `routing_counts`.
+- **`semimport`:** chỉ import `transformers` ở luồng nền.
+  - Thời gian nạp ngữ nghĩa giảm từ 5,85 xuống 3,70 s, kết quả giống hệt.
+  - Nhưng wall chỉ khác 1–2 s, nằm trong nhiễu.
+
+**Danh sách trình người dùng (2026-10-13):**
+
+1. **`gpupre`: dựng input của CRAFT trên GPU.**
+   - **Tiết kiệm:** stage text giảm 11–14 % (−13,5 s ở job 125, −14,2 s ở job 114); cả quét quảng cáo khoảng 5–6 %.
+   - **Giống hệt:** có.
+   - **Khóa cache:** chỉ đổi khóa của stage text. Code sẽ nằm trong `ocr_precision.py` hoặc `ocr_batch_experiment.py`; chỉ `textscan` import hai file này, còn `cli.py` là ranh giới.
+   - Ngoài trường hợp đã đo, mọi trường hợp khác dùng lại `test_net` gốc: CPU, khung không phải uint8 3 kênh, resize khác cỡ, `estimate_num_chars`.
+2. **`semimport`: import `transformers` trong lúc OCR chạy.** Tiết kiệm 1–2 s, trong nhiễu. Giống hệt. Chỉ đổi khóa của stage text. Đề xuất: **bỏ qua**, vì thêm một luồng mà lợi rất ít.
+3. **Chạy chồng CPU và GPU (pipeline detect/recognize):**
+   - chưa đo; ước đoán 5–10 %;
+   - phải sửa vòng lặp OCR nhiều hơn, và phải chứng minh giống hệt;
+   - chỉ đo nếu người dùng muốn.
+- **Đã loại:**
+  - `sembg` và `both`: không giống hệt, có lần lỗi;
+  - cửa sổ 8 khung: không giống hệt;
+  - NVDEC: chậm hơn 10–18 %;
+  - prefetch: không nhanh hơn;
+  - bỏ qua khung trùng: không có khung nào giống hệt khung trước;
+  - bỏ làm nóng routing: chỉ dời việc sang stage visual_logo.
 
 ## Đang dở
 
-- **Đo lại khi người dùng báo máy trống:**
-  - các cặp plain/gpupre/sembg/both xen kẽ, lặp lại, lấy trung vị;
-  - kiểm detect từng khung (`probe-gpupre`) trên job 114;
-  - so report của mọi biến thể với plain-a.
-- Sau đó trình danh sách cho người dùng duyệt. Ứng viên chính:
-  - tiền xử lý detect trên GPU: ước tính 15–30 s mỗi job, cần chứng minh giống hệt; khóa cache chỉ đổi cho stage text;
-  - nạp mô hình ngữ nghĩa trong lúc OCR chạy: khoảng 6–7 s.
+- **Chờ người dùng duyệt danh sách trên.** Bước 2 chỉ làm các mục được duyệt.
+- **Cổng kiểm tra:** `text-scan.json` và `review-queue.json` giống hệt bản trước, trừ các trường thời gian và hiệu năng đã liệt kê ở B1.
+- **Root tạm `temp\b-ocr`:** giữ lại để làm cổng kiểm tra, xóa khi xong đợt.
