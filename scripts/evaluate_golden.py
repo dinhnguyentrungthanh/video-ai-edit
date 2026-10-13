@@ -216,6 +216,12 @@ def clip_trial_argv(manifest: dict) -> list[list[str]]:
             for key, source in manifest["sources"].items() if is_clip(source) and source.get("scored") is not False]
 
 
+def film_trial_argv(job_id: int, detectors: list[str]) -> list[str]:
+    """Harness argv of a whole-film trial; --root makes it use the same folder's state, stages and reports."""
+    return [sys.executable, str(HARNESS), "run", "--label", "golden", "--job-id", str(job_id), "--root", str(ROOT),
+            "--fast-scan", "--detectors", *detectors]
+
+
 def run_command(args) -> None:
     from biliflow.golden_set import is_clip, source_file
     manifest, labels, _ = _load(args)  # fail before an hour of trials if labels are unusable
@@ -238,8 +244,7 @@ def run_command(args) -> None:
         if key not in manifest["sources"]:
             continue
         detectors = troy_detectors if key == "troy" else list(ALL_GROUPS)
-        argv = [sys.executable, str(HARNESS), "run", "--label", "golden", "--job-id", str(job_id), "--fast-scan",
-                "--detectors", *detectors]
+        argv = film_trial_argv(job_id, detectors)
         print("RUN " + " ".join(argv[2:]), flush=True)
         summary = _run_trial(argv)
         trials.append(ROOT / "reports/benchmarks" / summary["trial"])

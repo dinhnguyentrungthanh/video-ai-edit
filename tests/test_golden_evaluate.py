@@ -147,6 +147,12 @@ class ClipSetRunTest(unittest.TestCase):
         self.assertIn("--fast-scan", argv)
         self.assertEqual(argv[argv.index("--detectors") + 1:], list(evaluate_golden.ALL_GROUPS))
 
+    def test_a_film_trial_uses_the_data_root(self):
+        with patch.object(evaluate_golden, "ROOT", Path("R")):
+            argv = evaluate_golden.film_trial_argv(39, ["advertising"])
+        self.assertEqual([argv[argv.index(flag) + 1] for flag in ("--job-id", "--root", "--detectors")],
+                         ["39", "R", "advertising"])
+
     def test_approximate_suggestions_of_a_clip_set_come_from_its_manifest(self):
         with tempfile.TemporaryDirectory() as folder, patch.object(evaluate_golden, "BENCHMARKS", Path(folder)):
             found = evaluate_golden._approximate_suggestions(
