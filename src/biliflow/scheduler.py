@@ -81,6 +81,8 @@ RESUME_SETTLED_STATES = frozenset({"WAITING_REVIEW", "READY_TO_EXPORT", "COMPLET
 CANCEL_REPEAT_REFUSAL = "Video #{job_id} đã được hủy trước đó; không hủy thêm lần nữa."
 CANCEL_COMPLETED_REFUSAL = "Video #{job_id} đã hoàn tất; không có gì để hủy."
 CANCEL_SETTLED_STATES = frozenset({"COMPLETED", "SKIPPED", "CANCELLED"})
+# Job states Dừng ngay and Hủy write while the worker may be inside _execute.
+STOPPED_BY_USER_STATES = frozenset({"PAUSED", "CANCELLED"})
 # RESUMABLE_EXPORT_STATES (imported above): the only states in which a pending
 # render is an export the user paused, that failed, or that a restart
 # interrupted, so Tiếp tục may run it. The standalone review UI refuses edits
@@ -434,14 +436,16 @@ class JobScheduler:
         with self.job_action_lock:
             self._refuse_skipped(job_id)
             self._refuse_locked(job_id, stop=True)
-            with self._lock:
-                active = self._active
             stages = self.store.stages(job_id)
             for stage in stages:
                 if stage["state"] == "RUNNING":
                     self.store.update_stage(job_id, stage["name"], state="PENDING", pid=None,
                                             heartbeat_at=None, error="Paused; this stage will restart")
             value = self.store.update_job(job_id, state="PAUSED", stop_mode="PAUSED", error=None)
+            # Read after the write: a stage process the worker launches from
+            # now on sees PAUSED and never starts (_execute checks under _lock).
+            with self._lock:
+                active = self._active
         # The process tree is stopped outside the action lock so other clicks never wait on it.
         if active and active[0] == job_id:
             self._terminate_active("Paused by user")
@@ -453,8 +457,6 @@ class JobScheduler:
             self._refuse_skipped(job_id)
             self._refuse_locked(job_id, stop=True)
             self._refuse_settled_cancel(self.store.get_job(job_id))
-            with self._lock:
-                active = self._active
             # Conditional: a job the worker finished, or another tab cancelled,
             # since the check above is refused instead of cancelled twice.
             value = self.store.update_job_if(
@@ -471,6 +473,10 @@ class JobScheduler:
             # neither Tiếp tục nor the worker can start it later. current_stage
             # stays 'render' for the "Đã hủy xuất video" card.
             self.retire_render_request(job_id, "cancel")
+            # Read after the write: a stage process the worker launches from
+            # now on sees CANCELLED and never starts (_execute checks under _lock).
+            with self._lock:
+                active = self._active
         if active and active[0] == job_id:
             self._terminate_active("Cancelled by user")
         self.store.add_event(job_id, "JOB_CANCELLED", "Job cancelled; source was not changed")
@@ -747,9 +753,11 @@ class JobScheduler:
         log_dir = self.root / "logs" / "control-center"
         log_dir.mkdir(parents=True, exist_ok=True)
         log_path = log_dir / f"job-{job_id}-{name}-attempt-{attempt}.log"
-        self.store.update_stage(job_id, name, state="RUNNING", attempt=attempt,
-                                progress=0.0, started_at=now_iso(), completed_at=None,
-                                heartbeat_at=now_iso(), error=None)
+        # Conditional too: a Hủy or Dừng ngay landing since the claim wins.
+        if not self.store.start_stage(job_id, name, job_state=definition.job_state, attempt=attempt,
+                                      progress=0.0, started_at=now_iso(), completed_at=None,
+                                      heartbeat_at=now_iso(), error=None):
+            return
         self.store.add_event(job_id, "STAGE_STARTED", f"Stage {name} started",
                              payload={"attempt": attempt, "log": log_path.relative_to(self.root).as_posix()})
         try:
@@ -785,13 +793,19 @@ class JobScheduler:
                     self._register_artifact(job_id, name, artifact)
             else:
                 for command in definition.commands:
-                    log_handle = log_path.open("ab")
-                    kwargs: dict[str, Any] = {"cwd": self.root, "stdout": log_handle,
-                                              "stderr": subprocess.STDOUT}
-                    if os.name == "nt":
-                        kwargs["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
-                    process = subprocess.Popen(command.argv, **kwargs)
+                    # Checked and published under _lock. cancel and pause_now
+                    # write the job state first and read _active under _lock
+                    # after, so either this check sees their write or they see
+                    # the process and stop it.
                     with self._lock:
+                        if self.store.get_job(job_id)["state"] in STOPPED_BY_USER_STATES:
+                            raise RuntimeError(f"Stage {name} was stopped before its process started")
+                        log_handle = log_path.open("ab")
+                        kwargs: dict[str, Any] = {"cwd": self.root, "stdout": log_handle,
+                                                  "stderr": subprocess.STDOUT}
+                        if os.name == "nt":
+                            kwargs["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
+                        process = subprocess.Popen(command.argv, **kwargs)
                         self._process = process
                         self._active = (job_id, name)
                         self._log_handle = log_handle
@@ -863,7 +877,7 @@ class JobScheduler:
                 self._log_handle = None
             self._cleanup_interrupted_stage(job_id, name)
             current = self.store.get_job(job_id)
-            if current["state"] not in {"PAUSED", "CANCELLED"}:
+            if current["state"] not in STOPPED_BY_USER_STATES:
                 self.store.update_stage(job_id, name, state="FAILED_RETRYABLE", pid=None,
                                         completed_at=now_iso(), error=str(error))
                 self.store.update_job(job_id, state="FAILED", error=str(error), current_stage=name)
@@ -955,7 +969,7 @@ class JobScheduler:
             self._cleanup_interrupted_stage(job_id, name)
             return
         job = self.store.get_job(job_id)
-        if job["state"] in {"PAUSED", "CANCELLED"}:
+        if job["state"] in STOPPED_BY_USER_STATES:
             # Dừng ngay or Hủy landed while a stage without a subprocess (cache
             # hit, preflight) finished: keep the user's choice, never requeue.
             self.store.update_job(job_id, current_stage=None, progress=progress)

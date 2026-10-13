@@ -719,6 +719,29 @@ class JobStore:
             self._connection.commit()
         return self.stage(job_id, name)
 
+    def start_stage(self, job_id: int, name: str, *, job_state: str, **values: Any) -> bool:
+        """Mark the stage a worker claimed RUNNING; False when a pause or cancel came first.
+
+        One conditional UPDATE: the stage must still be waiting (PENDING or
+        FAILED_RETRYABLE) and the job still in the state claim_queued gave it.
+        A Hủy or Dừng ngay landing between the claim and this write wins, and
+        the stage keeps what it left (CANCELLED, or PENDING for Tiếp tục).
+        """
+        allowed = {"attempt", "progress", "pid", "heartbeat_at", "started_at", "completed_at", "error"}
+        unknown = set(values) - allowed
+        if unknown:
+            raise ValueError(f"Unsupported stage fields: {sorted(unknown)}")
+        assignments = ",".join(f"{key}=?" for key in ("state", *values))
+        with self._lock:
+            cursor = self._connection.execute(
+                f"""UPDATE stages SET {assignments} WHERE job_id=? AND name=?
+                AND state IN ('PENDING','FAILED_RETRYABLE')
+                AND EXISTS (SELECT 1 FROM jobs WHERE id=? AND state=?)""",  # noqa: S608
+                ("RUNNING", *values.values(), job_id, name, job_id, job_state),
+            )
+            self._connection.commit()
+        return cursor.rowcount == 1
+
     def next_pending_stage(self, job_id: int) -> dict[str, Any] | None:
         with self._lock:
             row = self._connection.execute(

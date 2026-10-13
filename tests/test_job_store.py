@@ -217,6 +217,32 @@ class JobStoreTests(unittest.TestCase):
         self.assertFalse(self.store.claim_queued(self.job["id"], "PREFLIGHT", "preflight"))
         self.assertFalse(self.store.pause_if_queued(self.job["id"]))
 
+    def test_start_stage_only_while_the_claim_still_holds(self):
+        job_id = self.job["id"]
+        self.store.replace_stages(job_id, ["preflight"])
+        self.store.mark_queued(job_id, reseq=True)
+        self.assertTrue(self.store.claim_queued(job_id, "PREFLIGHT", "preflight"))
+        # A Hủy or Dừng ngay that landed after the claim wins: nothing is written.
+        for state in ("CANCELLED", "PAUSED"):
+            self.store.update_job(job_id, state=state)
+            self.assertFalse(self.store.start_stage(job_id, "preflight", job_state="PREFLIGHT", attempt=1))
+            self.assertEqual(self.store.stage(job_id, "preflight")["state"], "PENDING")
+        self.store.update_job(job_id, state="PREFLIGHT", stop_mode="AFTER_STAGE")
+        # Dừng sau bước này still lets the claimed stage run.
+        self.assertTrue(self.store.start_stage(job_id, "preflight", job_state="PREFLIGHT", attempt=1,
+                                               error=None))
+        stage = self.store.stage(job_id, "preflight")
+        self.assertEqual((stage["state"], stage["attempt"]), ("RUNNING", 1))
+        # Only a waiting stage starts: a RUNNING or CANCELLED one is never rewritten.
+        self.assertFalse(self.store.start_stage(job_id, "preflight", job_state="PREFLIGHT", attempt=2))
+        self.store.update_stage(job_id, "preflight", state="CANCELLED")
+        self.assertFalse(self.store.start_stage(job_id, "preflight", job_state="PREFLIGHT", attempt=2))
+        self.assertEqual(self.store.stage(job_id, "preflight")["attempt"], 1)
+        self.store.update_stage(job_id, "preflight", state="FAILED_RETRYABLE")
+        self.assertTrue(self.store.start_stage(job_id, "preflight", job_state="PREFLIGHT", attempt=2))
+        with self.assertRaisesRegex(ValueError, "Unsupported stage fields"):
+            self.store.start_stage(job_id, "preflight", job_state="PREFLIGHT", state="COMPLETED")
+
     def test_conditional_update_only_in_the_expected_states(self):
         job_id = self.job["id"]
         self.store.mark_queued(job_id, reseq=True)
