@@ -247,13 +247,16 @@ class ProbeOutcome:
 @dataclass(frozen=True)
 class DownloadOutcome:
     """``resumable``: the part on disk is good and "Tiếp tục" may continue it (a network error after the
-    retries of a source transfer); the worker then ends the task INTERRUPTED instead of FAILED."""
+    retries of a source transfer); the worker then ends the task INTERRUPTED instead of FAILED. ``status`` and
+    ``retry_after``: the HTTP answer of a source transfer's error and the wait it asked for (download_retry)."""
     ok: bool
     code: str | None = None
     message: str | None = None
     final_path: Path | None = None
     returncode: int | None = None
     resumable: bool = False
+    status: int | None = None
+    retry_after: float | None = None
 
 
 _STOP_CODES = {"stop": "STOPPED", "cancel": "CANCELLED", "shutdown": "SHUTDOWN"}

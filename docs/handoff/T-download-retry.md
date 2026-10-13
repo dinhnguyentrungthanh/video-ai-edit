@@ -1,82 +1,63 @@
 # Bàn giao T – tải phim hàng loạt bị lỗi mạng
 - Nhánh: fix/download-network-retry (từ origin/main 9ae104c) · Worktree: `temp\wt-download-retry` · Cập nhật: 2026-10-13
-- Chạy ở: PC · Trạng thái: chờ người dùng duyệt thiết kế (bước 1 xong, chưa sửa code)
+- Chạy ở: PC · Trạng thái: bước 2 xong, chờ điều phối chạy full suite và gộp (không push, không merge)
 
 ## Đã xong
-- Bước 1: đọc `state\downloads.sqlite3` (mode=ro) và code tìm nguồn/tải; nguyên nhân và thiết kế ở dưới.
-
-## Nguyên nhân (đã xác nhận trên dữ liệu và code)
-- Sự kiện 2026-10-11 09:43–09:46 (UTC trong DB), lượt 27–40, slots = 3: mọi lượt là trang của host1, provider
-  `embedded-media` ("Nguồn trong trình phát trang"). 13 lượt lỗi `RemoteDisconnected` từ host2 (host của trình phát,
-  khác host1), lượt 35 quá thời gian chờ từ host3. Các link được dán cách nhau ~8–10 s nên 3 lượt thăm dò chạy cùng lúc.
-  Lượt 41–45 (09:48–09:51) dán thưa hơn, mỗi lượt tìm nguồn ~10 s nên gần như chạy một mình: đều xong.
-- Mỗi lượt thăm dò của `embedded-media` mở một Edge ẩn; mọi yêu cầu của trang đi qua `SafeHttp`, mỗi yêu cầu là một kết nối
-  TCP + TLS mới (không keep-alive). Ba trang cùng nạp một lúc thành một đợt kết nối dồn dập tới host2; host2 đóng kết nối.
-  (Không đo được luật của máy chủ; dấu hiệu: chỉ lỗi khi dồn, cùng host, chạy thưa thì được.)
-- Không có tầng nào thử lại:
-  - `browser_source` giữ lỗi NETWORK của yêu cầu trong `bridge.failure`, trình phát không có nguồn, rồi ném lỗi đó;
-  - `_probe_source` (`download_source_steps.py`) đổi mọi `SourceError`/`HttpError` thành FAILED; yt-dlp cũng vậy
-    (`classify_error` → NETWORK → FAILED);
-  - `SafeHttp.open` không thử lại; `with_retries` chỉ dùng cho đoạn HLS;
-  - ở bước tải, NETWORK/SERVER_BUSY/DNS_FAILED thành INTERRUPTED, chờ người dùng bấm Tiếp tục;
-  - 429/5xx là SERVER_BUSY nhưng `Retry-After` không được đọc; trong Edge ẩn SERVER_BUSY làm hỏng ngay.
-
-## Thiết kế đề xuất (chờ duyệt)
-### (1) Tự thử lại có giãn cách
-- Lỗi tạm thời: `NETWORK` (RemoteDisconnected, reset, timeout, ngắt giữa chừng), `DNS_FAILED`, HTTP 429/502/503/504.
-  Lỗi NETWORK của yt-dlp (thăm dò) cũng vậy. Không thử lại: 404/410/451, 401/403/407, đăng nhập (vẫn WAITING_LOGIN),
-  TLS, luật mạng, DRM, file bị xóa, hết đĩa, SOURCE_CHANGED, PLAYER_CHANGED, 500, lỗi nội bộ.
-- Lịch: 20 s, 60 s, 180 s, mỗi lần nhân ngẫu nhiên 0,8–1,2. `Retry-After` (giây hoặc ngày giờ HTTP) của 429/503: chờ
-  max(lịch, Retry-After); quá 15 phút thì thôi tự thử, kết thúc như hôm nay kèm "máy chủ hẹn sau N phút".
-- Trạng thái mới `WAITING_RETRY`: không giữ slot, không luồng, không trình duyệt (giống WAITING_LOGIN). Cột mới
-  `retry_count`, `retry_at` (thêm bằng `ALTER TABLE ADD COLUMN`). Đến giờ thì về QUEUED, cuối hàng.
-- Ở bước thăm dò: thử lại thăm dò. Ở bước tải: thử lại như Tiếp tục (giữ phần đã tải, cùng attempt).
-  Mỗi bước tối đa 3 lần; qua bước thì đếm lại. Hết 3 lần: như hôm nay (thăm dò → FAILED, tải → INTERRUPTED) kèm
-  "đã tự thử lại 3 lần".
-- Dừng/Hủy được trong lúc chờ. Control Center khởi động lại: lượt WAITING_RETRY vẫn chờ tới `retry_at`.
-- Nguồn tài khoản: WAITING_RETRY giữ link như INTERRUPTED (`KEEPS_TICKET`).
-- Sự kiện `AUTO_RETRY_SCHEDULED` (WARNING, lý do đã che) và `AUTO_RETRY` (INFO). Giao diện: "Chờ thử lại (lần n/3)",
-  màu vàng, đếm ngược.
-
-### (2) Giãn nhịp tìm nguồn theo host
-- Khóa theo host của link trang (`check_link`): mỗi host chỉ một lượt tìm nguồn một lúc, lần bắt đầu sau cách lần trước
-  ít nhất 5 s. Tìm nguồn = PROBING (provider và yt-dlp) và lần lấy lại nguồn trước khi tải của provider.
-- `dispatch` không lấy slot cho lượt cần thăm dò khi host đang bận; lượt của host khác hoặc lượt đã thăm dò xong được
-  chạy trước. Lần lấy lại nguồn trong bước tải chờ khóa trong luồng (ngắn, Dừng/Hủy cắt được).
-- Truyền file (HTTP, HLS, yt-dlp tải) vẫn theo slots như cũ.
-
-### (3) Nút "Thử lại các lượt lỗi mạng"
-- `POST /api/downloads/retry-network` (cùng quyền như nút Thử lại từng lượt). FAILED với mã tạm thời → Thử lại
-  (attempt + 1, từ đầu); INTERRUPTED với mã tạm thời → Tiếp tục (giữ phần đã tải). Lượt trong nhóm đã hủy hoặc tập đã có
-  lượt khác thì bỏ qua và báo số. Trả về số lượt đã thử lại, tiếp tục, bỏ qua.
-- Nút chỉ hiện khi có ít nhất một lượt như vậy, kèm số lượt. Nhờ (2) các lượt chạy lần lượt theo host.
-
-### File sẽ sửa
-- Mới `download_retry.py` (luật lỗi tạm thời, lịch, Retry-After, khóa host, thao tác hàng loạt) để
-  `download_worker.py` (845 dòng) không dài thêm.
-- `download_http.py` (Retry-After vào `HttpError`), `download_store.py` (trạng thái, cột), `download_worker.py`,
-  `download_source_steps.py`, `download_embedded_source.py` (giữ Retry-After), `download_api.py`, `dashboard_v2`
-  (download-core.js, download-view.js, fake server), tài liệu.
-- Không đụng file xuất, quét, cache, `hardware_*`, `models\`.
+- Bước 1 (commit e4e275f): nguyên nhân và thiết kế. Người dùng duyệt cả 4 khuyến nghị ngày 2026-10-13:
+  tự thử lại cả ở bước tải; WAITING_RETRY giữ nguyên qua khởi động lại; giãn 5 s, áp dụng cả cho yt-dlp; nút hàng loạt
+  gồm cả lượt INTERRUPTED (Tiếp tục).
+- Bước 2: cài theo thiết kế; chi tiết ở `docs/VIDEO_DOWNLOAD_PLAN.md` mục 4.15, tóm tắt ở `CHANGELOG.md`.
+  - Mới: `src/biliflow/download_retry.py`, gồm `NetworkPolicy`, `is_transient`, `retry_delay`, `HostPacer` và mixin
+    `DownloadRetrySteps` (`_retry_later`, `_wake_retries`, giãn nhịp, `retry_network`).
+  - Sửa:
+    - `download_http.py`: `parse_retry_after`, `HttpError.retry_after` cho 429/503.
+    - `download_runner.DownloadOutcome`: thêm `status`, `retry_after`.
+    - `download_sources.py`: truyền hai trường đó.
+    - `download_store.py`: trạng thái WAITING_RETRY, cột `retry_count`/`retry_at`/`retry_phase`.
+    - `download_worker.py`: mixin, `network_policy`, dispatch, `_settle`, `stop`/`resume`.
+    - `download_source_steps.py`: thăm dò, `_interrupt`, lấy lại nguồn có giãn nhịp.
+    - `download_groups.py`: WAITING_RETRY tính là "chờ tải".
+    - `download_api.py`: `NetworkPolicy()` cho Control Center, route `POST /api/downloads/retry-network`, snapshot
+      `settings.auto_retries` và `network_failures`, trường `retry_*`.
+    - `phone_access.py`: cho phép route trên điện thoại.
+    - `dashboard_v2`: `download-core.js`, `download-view.js`, `download-live.js`, `contracts.js`,
+      `download-fake-server.cjs`, `verify-download.cjs`.
+    - test: `source_fixtures.py` (reply `drop`/`stall`), `fake_yt_dlp.py` (ghi `at`), `try_source_downloads.py`
+      (Control Center thử có `NetworkPolicy()`), `test_download_api.py`, `test_dashboard_v2_downloads.py` (gate 23).
+  - Test đã chạy (PYTHONPATH = `src` của worktree):
+    - `tests.test_download_retry`: 30 OK.
+    - `discover -p "test_download_*.py"`: 1179 test, các lỗi đều đã xử lý:
+      - `test_download_api` do snapshot có thêm `auto_retries`: đã sửa test.
+      - `test_download_account_api` lỗi một lần vì máy bận; chạy lại riêng thì OK.
+      - 3 module E2E cần TEMP/TMP = `E:\DungChung\BiliFlow\temp`; chạy lại với biến đó, kết quả ở mục "Cách kiểm".
+    - `test_dashboard_v2_downloads`, `_contract`, `_phone_hardening`, `_phone`, `_frontend`, `_route`: OK.
+    - `node dashboard_v2/verify-download.cjs`: 23/23.
 
 ## Đang dở
 - (không)
 
 ## Bước tiếp theo
-1. Người dùng duyệt thiết kế (và các câu hỏi dưới).
-2. Bước 2: test trước (fake provider + `tests/source_fixtures.py` giả ngắt kết nối, timeout, 429 có Retry-After; fake
-   yt-dlp lỗi mạng rồi được), rồi code; commit.
+1. Điều phối: full suite và gộp. Không có file quét, cache, xuất hay `hardware_*` nào bị sửa (khóa cache quét không đổi).
+2. Nếu người dùng muốn kiểm thật: Control Center thử (`tests/try_source_downloads.py`, root tạm trong `temp\`, cổng riêng)
+   với link người dùng đưa; không bao giờ trên Control Center thật.
 
 ## Cách kiểm
-- Lệnh test: `.\.venv\Scripts\python.exe -m unittest tests.test_download_retry -v` và các test download liên quan;
-  `node dashboard_v2/verify-download.cjs`. Full suite để điều phối chạy.
-- Cổng: lỗi tạm thời tự thử lại đúng lịch và không giữ slot; lỗi lâu dài không thử lại; mỗi host một lượt tìm nguồn;
-  nút hàng loạt chỉ đụng lượt lỗi mạng.
+- Lệnh test: `$env:PYTHONPATH="<worktree>\src"; .\.venv\Scripts\python.exe -m unittest tests.test_download_retry -v`;
+  `node dashboard_v2/verify-download.cjs`; module E2E nguồn tài khoản cần `TEMP`/`TMP` trong `<install>\temp`.
+- Cổng:
+  - lỗi tạm thời tự thử lại đúng lịch (đồng hồ giả) và không giữ slot;
+  - lỗi lâu dài không thử lại;
+  - Retry-After được tôn trọng; hẹn quá 15 phút thì kết thúc;
+  - mỗi host một lượt tìm nguồn, cách nhau ≥ gap;
+  - nút hàng loạt chỉ đụng lượt lỗi mạng;
+  - `network_policy=None` giữ hành vi cũ.
 
 ## Chờ người dùng
-- Duyệt thiết kế; các câu hỏi trong tin nhắn bước 1.
+- Không có quyết định nào đang chờ. Kiểm thật chỉ khi người dùng đưa link và đồng ý chạy trên Control Center thử.
 
 ## Lưu ý cho người tiếp quản
-- Không bao giờ thêm, tiếp tục, thử lại lượt tải hay POST `/api/downloads*` trên Control Center thật. Kiểm thật chỉ trên
-  Control Center thử (root tạm trong `temp\`, cổng riêng) với link người dùng đưa.
+- Không bao giờ thêm, tiếp tục, thử lại lượt tải hay POST `/api/downloads*` trên Control Center thật.
 - Repo công khai: chỉ dùng host1/host2, `*.example`; không ghi host thật, link hay tên phim.
+- `DownloadWorker` mặc định không tự thử lại; chỉ `DownloadService` và Control Center thử truyền `NetworkPolicy()`. Test cũ giữ
+  nguyên hành vi (FAILED/INTERRUPTED ngay).
+- Chạy test trong worktree phải đặt `PYTHONPATH` = `src` của worktree, nếu không `.venv` nạp code của thư mục chính.

@@ -29,6 +29,7 @@
     /* "Tải video" (docs/VIDEO_DOWNLOAD_PLAN.md §5): {id} is the download task id, not a job id. */
     downloads:['GET','/api/downloads'],downloadTask:['GET','/api/downloads/{id}'],storageSummary:['GET','/api/storage-summary'],
     downloadAdd:['POST','/api/downloads'],downloadSettings:['POST','/api/downloads/settings'],downloadCleanup:['POST','/api/downloads/cleanup-temp'],
+    downloadRetryNetwork:['POST','/api/downloads/retry-network'],
     downloadRename:['POST','/api/downloads/{id}/rename'],downloadChoose:['POST','/api/downloads/{id}/choose'],downloadStop:['POST','/api/downloads/{id}/stop'],
     downloadResume:['POST','/api/downloads/{id}/resume'],downloadCancel:['POST','/api/downloads/{id}/cancel'],downloadRetry:['POST','/api/downloads/{id}/retry'],
     downloadRemove:['POST','/api/downloads/{id}/remove'],

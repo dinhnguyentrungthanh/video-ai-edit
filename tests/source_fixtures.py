@@ -141,7 +141,9 @@ def remove_tree(path: Path) -> None:
 @dataclass
 class Reply:
     """One answer of the fixture server. ``cut_after``: close the socket after that many body bytes.
-    ``length``: False sends no Content-Length (the server speaks HTTP/1.0: the body ends when it closes)."""
+    ``length``: False sends no Content-Length (the server speaks HTTP/1.0: the body ends when it closes).
+    ``drop``: close the connection without any answer (the client sees RemoteDisconnected). ``stall``: wait that
+    many seconds before the status line (a client with a shorter read timeout gives up)."""
 
     body: bytes = b""
     status: int = 200
@@ -153,6 +155,8 @@ class Reply:
     chunk: int = 64 * 1024
     cut_after: int | None = None
     length: bool = True
+    drop: bool = False
+    stall: float = 0.0
 
 
 @dataclass(frozen=True)
@@ -250,6 +254,16 @@ class FixtureServer:
 
     @staticmethod
     def _send(handler: BaseHTTPRequestHandler, reply: Reply, seen: Seen) -> None:
+        stall = getattr(reply, "stall", 0.0)  # a reply-like object of another fixture may not have these two
+        if stall:
+            time.sleep(stall)
+        if getattr(reply, "drop", False):
+            handler.close_connection = True
+            try:
+                handler.connection.shutdown(socket.SHUT_RDWR)
+            except OSError:
+                pass
+            return
         body, status = reply.body, reply.status
         headers = {"Content-Type": reply.content_type, **reply.headers}
         if reply.etag:

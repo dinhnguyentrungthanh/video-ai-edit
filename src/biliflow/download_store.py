@@ -10,6 +10,10 @@ kept) and EXPANDED (a pasted film page split into an episode group: final, no
 file of its own, its link released), the episode preview of a page
 (``download_previews``) and the groups (``download_groups``,
 ``download_group_members``; download_groups.py writes them).
+
+Automatic retries (docs/VIDEO_DOWNLOAD_PLAN.md 4.15) add WAITING_RETRY: a task whose probe or download met a
+passing network error waits until ``retry_at`` (no slot, no thread, its part kept), with ``retry_count``
+retries made in ``retry_phase`` (PROBING or DOWNLOADING).
 """
 from __future__ import annotations
 
@@ -25,7 +29,7 @@ from biliflow.download_links import DownloadBatchError
 STATES = (
     "QUEUED", "PROBING", "NEEDS_CHOICE", "WAITING_SPACE", "DOWNLOADING", "VERIFYING",
     "PUBLISHING", "COMPLETED", "STOPPED", "FAILED", "CANCELLING", "CANCELLED",
-    "INTERRUPTED", "EXPIRED", "WAITING_LOGIN", "EXPANDED",
+    "INTERRUPTED", "EXPIRED", "WAITING_LOGIN", "EXPANDED", "WAITING_RETRY",
 )
 # A task in one of these states holds a download slot.
 SLOT_STATES = frozenset({"PROBING", "WAITING_SPACE", "DOWNLOADING", "VERIFYING", "PUBLISHING",
@@ -45,13 +49,14 @@ _COLUMNS = frozenset({
     "output_path", "output_sha256", "output_size", "verify_json", "name_locked", "pid",
     "pid_created", "progress_basis", "fragments_done", "fragments_total", "transfer_stage",
     "group_id", "member_id", "item_key", "account_owner", "login_source", "login_generation", "login_reason",
+    "retry_count", "retry_at", "retry_phase",
 })
-# Added after D5 (source providers) and M4 (source accounts); older databases get them on open (ALTER TABLE ADD
-# COLUMN, no data change).
+# Added after D5 (source providers), M4 (source accounts) and the automatic retries; older databases get them on
+# open (ALTER TABLE ADD COLUMN, no data change).
 _ADDED_COLUMNS = {"progress_basis": "TEXT", "fragments_done": "INTEGER", "fragments_total": "INTEGER",
                   "transfer_stage": "TEXT", "group_id": "INTEGER", "member_id": "INTEGER", "item_key": "TEXT",
                   "account_owner": "TEXT", "login_source": "TEXT", "login_generation": "INTEGER",
-                  "login_reason": "TEXT"}
+                  "login_reason": "TEXT", "retry_count": "INTEGER", "retry_at": "TEXT", "retry_phase": "TEXT"}
 # The episode preview of a pasted film page and the episode groups (download_groups.py).
 _GROUP_SCHEMA = """
 CREATE UNIQUE INDEX IF NOT EXISTS download_tasks_member ON download_tasks(member_id) WHERE member_id IS NOT NULL;

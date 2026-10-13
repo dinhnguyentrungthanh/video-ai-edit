@@ -12,6 +12,8 @@ HLS playlist) is fetched by BiliFlow itself (``download_source_steps``); every
 other link, and every link a provider declines, goes to yt-dlp. A link of a
 source account waits for the user's sign-in without a slot (WAITING_LOGIN), and
 a series page becomes a group of episode tasks (``download_account_tasks``).
+A passing network error waits in WAITING_RETRY (no slot) and is tried again, and
+source lookups are paced per host (``download_retry``).
 """
 from __future__ import annotations
 
@@ -36,6 +38,7 @@ from biliflow.download_account_tasks import DownloadAccountSteps
 from biliflow.download_episode_names import group_target
 from biliflow.download_http import SafeHttp
 from biliflow.download_probe import ProbeEntry, choose
+from biliflow.download_retry import RETRY_FIELDS, DownloadRetrySteps, NetworkPolicy
 from biliflow.download_runner import ProcessControl, Progress, SizeGuard, YtDlpRunner, mask_line
 from biliflow.download_links import DownloadBatchError, Resolver, default_resolver, validate_batch
 from biliflow.download_source_steps import RESUME_NOTE, SOURCE_DECLINED, DownloadSourceSteps, with_reader_note
@@ -68,11 +71,12 @@ NO_INPUT_MESSAGE = ("Không thấy thư mục input của BiliFlow nên chưa ch
                     "chuyển).")
 
 RUNNING = frozenset({"PROBING", "WAITING_SPACE", "DOWNLOADING", "VERIFYING"})
-STOPPABLE = frozenset({"QUEUED", "PROBING", "WAITING_SPACE", "DOWNLOADING", "WAITING_LOGIN"})
+STOPPABLE = frozenset({"QUEUED", "PROBING", "WAITING_SPACE", "DOWNLOADING", "WAITING_LOGIN", "WAITING_RETRY"})
 RESUMABLE = frozenset({"STOPPED", "INTERRUPTED"})
 # A run that ended in these keeps its source account link in memory (download_account_tickets); QUEUED and
-# WAITING_SPACE: a slot or space wait handed back (shutdown clears every link anyway).
-KEEPS_TICKET = frozenset({"STOPPED", "INTERRUPTED", "QUEUED", "WAITING_SPACE"})
+# WAITING_SPACE: a slot or space wait handed back; WAITING_RETRY: a network error's wait (shutdown clears every link
+# anyway).
+KEEPS_TICKET = frozenset({"STOPPED", "INTERRUPTED", "QUEUED", "WAITING_SPACE", "WAITING_RETRY"})
 # EXPANDED (a page split into an episode group) is ended, cancelled and removed through its group only.
 CANCELLABLE = frozenset(set(STATES) - {"PUBLISHING", "COMPLETED", "EXPIRED", "CANCELLED", "EXPANDED"})
 RETRYABLE = frozenset({"FAILED", "INTERRUPTED", "STOPPED", "CANCELLED", "EXPIRED"})
@@ -83,7 +87,7 @@ _RESET_FIELDS = {
     "error_code": None, "error_message": None, "temp_dir": None, "temp_file": None, "output_path": None,
     "output_sha256": None, "output_size": None, "verify": None, "name_locked": 0, "pid": None,
     "pid_created": None, "progress_basis": None, "fragments_done": None, "fragments_total": None,
-    "transfer_stage": None,
+    "transfer_stage": None, **RETRY_FIELDS,
 }
 
 SpaceProbe = Callable[[Path], tuple[int, int]]
@@ -107,7 +111,7 @@ def _gb(value: int | float) -> str:
     return f"{value / GIB:.1f}"
 
 
-class DownloadWorker(DownloadSourceSteps, DownloadAccountSteps, DownloadUpkeep):
+class DownloadWorker(DownloadSourceSteps, DownloadAccountSteps, DownloadUpkeep, DownloadRetrySteps):
     def __init__(self, root: Path, store: DownloadStore, *, runner: YtDlpRunner | None = None,
                  ffmpeg: Path | None = None, ffprobe: Path | None = None,
                  space_probe: SpaceProbe = default_space, verifier: Callable[..., Any] = verify_video,
@@ -115,7 +119,7 @@ class DownloadWorker(DownloadSourceSteps, DownloadAccountSteps, DownloadUpkeep):
                  space_retry_seconds: float = SPACE_RETRY_SECONDS, sweep_seconds: float = SWEEP_SECONDS,
                  cache_pruner: Callable[[Path], Any] = prune_download_caches,
                  sources: SourceRegistry | None = None, http: SafeHttp | None = None,
-                 transfers: SourceTransfers | None = None):
+                 transfers: SourceTransfers | None = None, network_policy: NetworkPolicy | None = None):
         self.root = root.resolve(strict=True)
         self.store = store
         self.runner = runner or YtDlpRunner(self.root)
@@ -152,6 +156,7 @@ class DownloadWorker(DownloadSourceSteps, DownloadAccountSteps, DownloadUpkeep):
         self._loop: threading.Thread | None = None
         self._last_sweep: float | None = None
         self._init_accounts()
+        self._init_retries(network_policy)  # None: a network error ends the task at once, lookups are not paced
 
     # ----------------------------------------------------------------- lifecycle
     def start(self) -> dict[str, int]:
@@ -239,6 +244,7 @@ class DownloadWorker(DownloadSourceSteps, DownloadAccountSteps, DownloadUpkeep):
             self._reconcile()
             self._settle_groups()  # first: a cancelled group's episodes never start or wake
             self._account_upkeep()  # episode tasks while there is room; tasks whose sign-in landed
+            self._wake_retries()  # tasks whose network-error wait is over, to the end of the queue
             busy = len(self.store.tasks_in(SLOT_STATES))
             cancelled, skipped = self.groups.cancelled_group_ids(), set()
             while busy < self.slots():
@@ -251,9 +257,13 @@ class DownloadWorker(DownloadSourceSteps, DownloadAccountSteps, DownloadUpkeep):
                     continue
                 if self._park_for_login(task):  # waits for a sign-in without taking the slot
                     continue
+                if not self._lookup_lease(task):  # its host has a lookup running: another task goes first
+                    skipped.add(task["id"])
+                    continue
                 ready = bool(task["probe"] and task["probe"].get("ready"))
                 claimed = self.store.transition(task["id"], {"QUEUED"}, "WAITING_SPACE" if ready else "PROBING")
                 if claimed is None:
+                    self._release_lookup(task["id"])
                     continue
                 control = ProcessControl()
                 thread = threading.Thread(target=self._run_task, args=(claimed["id"], control),
@@ -273,6 +283,7 @@ class DownloadWorker(DownloadSourceSteps, DownloadAccountSteps, DownloadUpkeep):
                 if task is None:
                     break
                 task = step(task, control)
+                self._release_lookup(task_id)  # only the probe holds its host's lookup lease
         except Exception as error:
             try:
                 self._fail(task_id, RUNNING | {"PUBLISHING"}, "INTERNAL_ERROR",
@@ -280,6 +291,7 @@ class DownloadWorker(DownloadSourceSteps, DownloadAccountSteps, DownloadUpkeep):
             except Exception as failure:  # noqa: BLE001 - the database failed; _reconcile settles it later
                 self._note_error(f"{type(failure).__name__}: {failure}")
         finally:
+            self._release_lookup(task_id)
             # One step under the lock: an action sees the thread (and asks it) or a settled task.
             with self._lock:
                 try:
@@ -318,6 +330,8 @@ class DownloadWorker(DownloadSourceSteps, DownloadAccountSteps, DownloadUpkeep):
                 self._end_requested(task_id, control)
             else:
                 self._fail(task_id, RUNNING, "INTERNAL_ERROR", "Lượt tải dừng bất thường.")
+        elif task["state"] == "WAITING_RETRY" and control.reason == "stop":
+            self._stop_waiting_retry(task)
 
     def _reconcile(self) -> None:
         """Settle tasks left in a slot state without a thread (caller holds the lock).
@@ -392,7 +406,10 @@ class DownloadWorker(DownloadSourceSteps, DownloadAccountSteps, DownloadUpkeep):
             validate_batch([task["url"]], resolver=self.resolver)
         except DownloadBatchError as error:
             item = error.errors[0] if error.errors else {}
-            self._fail(task["id"], {state}, item.get("code") or "LINK_REJECTED", item.get("message") or str(error))
+            code = item.get("code") or "LINK_REJECTED"
+            message = self._retry_later(task["id"], state, code, item.get("message") or str(error))
+            if message is not None:  # a failed lookup of the name waits; a refused link ends here
+                self._fail(task["id"], {state}, code, message)
             return False
         return True
 
@@ -415,7 +432,9 @@ class DownloadWorker(DownloadSourceSteps, DownloadAccountSteps, DownloadUpkeep):
         if control.requested:
             return self._end_requested(task_id, control)
         if not outcome.ok:
-            return self._fail(task_id, {"PROBING"}, outcome.code, with_reader_note(outcome.code, outcome.message, note))
+            message = self._retry_later(task_id, "PROBING", outcome.code,
+                                        with_reader_note(outcome.code, outcome.message, note))
+            return None if message is None else self._fail(task_id, {"PROBING"}, outcome.code, message)
         info = outcome.info or {}
         choice = choose(info)
         entries = [entry.as_dict() for entry in choice.entries]
@@ -515,8 +534,9 @@ class DownloadWorker(DownloadSourceSteps, DownloadAccountSteps, DownloadUpkeep):
         self.store.update_fields(task_id, pid=None, pid_created=None)
         if control.requested:
             return self._end_requested(task_id, control)
-        if not outcome.ok:
-            return self._fail(task_id, {"DOWNLOADING"}, outcome.code, outcome.message)
+        if not outcome.ok:  # a network error waits, then continues the part (--continue)
+            message = self._retry_later(task_id, "DOWNLOADING", outcome.code, outcome.message)
+            return None if message is None else self._fail(task_id, {"DOWNLOADING"}, outcome.code, message)
         return self.store.transition(task_id, {"DOWNLOADING"}, "VERIFYING",
                                      temp_file=str(outcome.final_path), speed=None, eta=None)
 
@@ -697,7 +717,7 @@ class DownloadWorker(DownloadSourceSteps, DownloadAccountSteps, DownloadUpkeep):
                 raise DownloadActionError("Lượt này không ở trạng thái dừng được.")
             control, thread = self._controls.get(task_id), self._threads.get(task_id)
             if control is None:
-                moved = self.store.transition(task_id, STOPPABLE, "STOPPED", speed=None, eta=None)
+                moved = self.store.transition(task_id, STOPPABLE, "STOPPED", speed=None, eta=None, retry_at=None)
                 if moved is None:
                     raise DownloadActionError("Trạng thái vừa đổi; thử lại.")
                 self._event(moved, "STOPPED", "Đã dừng.")
@@ -736,7 +756,7 @@ class DownloadWorker(DownloadSourceSteps, DownloadAccountSteps, DownloadUpkeep):
                 raise DownloadActionError("Chỉ tiếp tục được lượt đã dừng hoặc bị ngắt.")
             self._refuse_in_cancelled_group(task)
             moved = self.store.transition(task_id, RESUMABLE, "QUEUED", error_code=None, error_message=None,
-                                          queued_at=self.store.clock().isoformat())
+                                          queued_at=self.store.clock().isoformat(), **RETRY_FIELDS)
             if moved:
                 self._event(moved, "RESUMED", "Tiếp tục: tải nối phần đã có nếu trang hỗ trợ.")
                 self._clear_member_intent(moved)

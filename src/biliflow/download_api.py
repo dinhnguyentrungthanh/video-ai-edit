@@ -9,6 +9,7 @@ POST /api/downloads/<id>/choose           {entry_index}
 POST /api/downloads/<id>/<action>         stop | resume | cancel | retry | remove
 POST /api/downloads/settings              {slots: 1..3}
 POST /api/downloads/cleanup-temp          {confirm: true, ids?: [task ids the confirmation listed]}
+POST /api/downloads/retry-network         "Thử lại các lượt lỗi mạng" (download_retry; the body is ignored)
 
 Source accounts (docs/SOURCE_ACCOUNTS_PLAN.md 9.14; the phone may use these like the other download actions):
 GET  /api/downloads/<id>/episodes                 the stored episode list of a series page, its draft and plan
@@ -35,6 +36,7 @@ from typing import Any, Callable
 from biliflow.download_account_api import AccountRuntime
 from biliflow.download_groups import GroupError
 from biliflow.download_links import DownloadBatchError
+from biliflow.download_retry import NetworkPolicy
 from biliflow.download_runner import mask_line
 from biliflow.download_source_types import is_volatile_query_name
 from biliflow.download_sources import default_registry
@@ -53,7 +55,7 @@ GROUP_ACTION = re.compile(r"/api/downloads/groups/(\d+)/(stop|resume|cancel|retr
 GET_ROUTES = (r"/api/downloads", TASK_DETAIL.pattern, r"/api/storage-summary", EPISODES.pattern,
               GROUP_DETAIL.pattern)
 POST_ROUTES = (r"/api/downloads", r"/api/downloads/settings", r"/api/downloads/cleanup-temp",
-               TASK_ACTION.pattern, EPISODE_ACTION.pattern, GROUP_ACTION.pattern)
+               r"/api/downloads/retry-network", TASK_ACTION.pattern, EPISODE_ACTION.pattern, GROUP_ACTION.pattern)
 UNAVAILABLE_MESSAGE = "Tính năng tải video chưa sẵn sàng: {error}"
 CLOSE_POLL_SECONDS = 0.5  # after a stop that timed out: how often the closer checks that the last thread ended
 _PUBLIC_FIELDS = (
@@ -61,7 +63,7 @@ _PUBLIC_FIELDS = (
     "estimated_bytes", "downloaded_bytes", "total_bytes", "speed", "eta", "error_code", "error_message",
     "chosen_entry", "name_locked", "created_at", "state_since", "finished_at", "queued_at",
     "progress_basis", "fragments_done", "fragments_total", "transfer_stage", "group_id", "login_source",
-    "login_reason",
+    "login_reason", "retry_count", "retry_at", "retry_phase",
 )
 _MEMBER_FIELDS = ("id", "group_id", "ordinal", "season_number", "season_label", "episode_number", "episode_label",
                   "special", "variant_label", "code", "status", "task_id", "last_state", "task_state",
@@ -165,7 +167,9 @@ class DownloadService:
         self.accounts = accounts if accounts is not None or worker is not None else AccountRuntime(root)
         if worker is None:
             manager = self.accounts.manager if self.accounts is not None else None
-            worker = DownloadWorker(root, self.store, sources=default_registry(root, accounts=manager))
+            # A passing network error waits and is tried again; source lookups are paced per host (download_retry).
+            worker = DownloadWorker(root, self.store, sources=default_registry(root, accounts=manager),
+                                    network_policy=NetworkPolicy())
         self.worker = worker
         if self.accounts is not None:
             self.accounts.attach(wake=self.worker.wake_logins, registry=self.worker.sources,
@@ -289,7 +293,9 @@ class DownloadService:
         return {
             "tasks": tasks,
             "counts": dict(Counter(task["state"] for task in tasks)),
-            "settings": {"slots": self.worker.slots(), "max_slots": MAX_SLOTS},
+            "settings": {"slots": self.worker.slots(), "max_slots": MAX_SLOTS,
+                         "auto_retries": self.worker.auto_retries()},
+            "network_failures": self.worker.network_failures(),
             "space": self._scrub_tree(space),
             "temp": self.worker.temp_summary(),
             "running": sorted(self.worker.running_ids()),
@@ -368,6 +374,8 @@ class DownloadService:
                     type(item) is int and 0 < item < 10 ** MAX_ID_DIGITS for item in ids)):
                 return 400, {"error": "ids phải là danh sách id lượt tải."}
             return 200, worker.cleanup_temp(ids)
+        if path == "/api/downloads/retry-network":
+            return 200, worker.retry_network()
         if match := EPISODE_ACTION.fullmatch(path):
             if len(match.group(1)) > MAX_ID_DIGITS:
                 return 404, {"error": "Không thấy lượt tải."}

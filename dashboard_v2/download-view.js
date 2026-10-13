@@ -59,8 +59,12 @@
     const tempText = temp.tasks ? 'Dọn file tạm (' + Number(temp.tasks) + ' lượt · ' + K.formatBytes(temp.bytes) + ')' : 'Dọn file tạm';
     const spaceText = Number.isFinite(space.free_bytes) ? 'Ổ còn ' + K.formatBytes(space.free_bytes) + ' trống · giữ lại ' +
       K.formatBytes(space.reserve_bytes) : space.error ? 'Không đọc được chỗ trống: ' + space.error : '';
+    const retry = K.networkRetry(data, ctx);
+    const retryButton = retry ? '<button class="secondary small" data-action="dl-retry-network"' +
+      attr(!retry.enabled || ui.busy.has('retry-network'), 'disabled') + ' title="' + esc(retry.reason) + '">' + esc(retry.label) + '</button>' : '';
     return '<div class="download-queue-tools"><label>Tải đồng thời <select id="dl-slots" aria-label="Số lượt tải đồng thời"' +
-      attr(ctx.offline || ui.busy.has('slots'), 'disabled') + '>' + options + '</select></label><button class="secondary small" data-action="dl-cleanup"' +
+      attr(ctx.offline || ui.busy.has('slots'), 'disabled') + '>' + options + '</select></label>' + retryButton +
+      '<button class="secondary small" data-action="dl-cleanup"' +
       attr(ctx.offline || !temp.tasks, 'disabled') + ' title="Xóa file tạm của các lượt đã dừng, lỗi hoặc bị ngắt">' + esc(tempText) +
       '</button></div>' + (spaceText ? '<p class="dl-space muted">' + esc(spaceText) + '</p>' : '');
   }
@@ -322,8 +326,10 @@
     const id = Number(task.id);
     const p = K.progress(task);
     const percent = p.percent === null ? '' : p.percent + '%';
-    // Sizes, speed and time left (or the joining stage) only: the badge already names the state.
-    const meta = [p.stage, p.sizeText, p.speed, p.eta].filter(Boolean).join(' · ');
+    // Sizes, speed and time left (or the joining stage, or when a network error's wait ends) only: the badge already
+    // names the state.
+    const meta = [K.retryWait(task, ctx.now || Date.now()), p.stage, p.sizeText, p.speed, p.eta].filter(Boolean).join(' · ');
+    const limit = ctx.data && ctx.data.settings ? ctx.data.settings.auto_retries : null;
     const media = task.state === 'COMPLETED' && task.media && task.media.height ? '<p class="muted dl-media">' + esc(task.media.height + 'p · ' +
       [task.media.video_codec, task.media.audio_codec].filter(Boolean).join(' + ')) + '</p>' : '';
     const source = task.media && task.media.source_label ? '<p class="muted dl-media">Nguồn: ' + esc(task.media.source_label) + '</p>' : '';
@@ -340,7 +346,7 @@
     const line = meta || percent ? '<div class="download-item-progress"><span>' + esc(meta) + '</span><strong>' + percent + '</strong></div>' : '';
     return '<article class="download-item" data-download-id="' + id + '"><div class="download-item-top"><div class="download-item-name">' +
       '<span class="download-item-number">' + id + '</span><h3>' + esc(task.title || 'Lượt tải ' + id) + '</h3></div><span class="badge ' +
-      esc(K.own(K.TONES, task.state) || 'grey') + '">' + esc(K.label(task)) + '</span></div><p class="download-source">' +
+      esc(K.own(K.TONES, task.state) || 'grey') + '">' + esc(K.label(task, limit)) + '</span></div><p class="download-source">' +
       esc(task.url) + '</p>' + source + accountLine(task, ui, ctx) + rename(task, ui, ctx) + line + meter + message(task) + choice(task, ui, ctx) + media +
       (buttons ? '<div class="download-item-actions">' + buttons + '</div>' : '') + log(task, ui) + '</article>';
   }

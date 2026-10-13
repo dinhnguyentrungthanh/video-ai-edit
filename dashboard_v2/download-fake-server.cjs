@@ -71,8 +71,12 @@ function create(options = {}) {
   if (options.accounts !== 'old') { tasks = [...tasks, ...accounts.seed()]; nextId = 40; }
   const RUN = ['PROBING', 'WAITING_SPACE', 'DOWNLOADING', 'VERIFYING', 'PUBLISHING', 'CANCELLING'];
   const cleanable = () => tasks.filter(x => ['FAILED', 'STOPPED', 'INTERRUPTED'].includes(x.state));
+  // download_retry.NETWORK_CODES: what "Thử lại các lượt lỗi mạng" picks up.
+  const networkFailed = () => tasks.filter(x => ['FAILED', 'INTERRUPTED'].includes(x.state) &&
+    ['NETWORK', 'DNS_FAILED', 'SERVER_BUSY'].includes(x.error_code));
   const snapshot = () => ({...accounts.snapshotExtras(), tasks: tasks.map(accounts.decorate), counts: tasks.reduce((c, x) => ({...c, [x.state]: (c[x.state] || 0) + 1}), {}),
-    settings: {slots, max_slots: 3}, space: {free_bytes: 412 * GB, reserve_bytes: 100 * GB},
+    settings: {slots, max_slots: 3, auto_retries: 3}, network_failures: networkFailed().length,
+    space: {free_bytes: 412 * GB, reserve_bytes: 100 * GB},
     temp: {tasks: cleanable().length, bytes: 520 * MB, ids: cleanable().map(x => x.id), total_temp_bytes: 1.4 * GB},
     running: tasks.filter(x => RUN.includes(x.state)).map(x => x.id), worker_error: null, worker_error_at: null});
   const storage = {computing: false, error: null, summary: {computed_at: new Date().toISOString(),
@@ -129,6 +133,12 @@ function create(options = {}) {
       if (![1, 2, 3].includes(body.slots)) return send(res, 400, {error: 'Số luồng từ 1 đến 3.'});
       slots = body.slots;
       return send(res, 200, {slots});
+    }
+    if (p === '/api/downloads/retry-network') { // as download_retry.retry_network: FAILED starts again, INTERRUPTED continues
+      const picked = networkFailed(), failed = picked.filter(x => x.state === 'FAILED');
+      picked.forEach(x => set(x, 'QUEUED', x.state === 'FAILED' ? {attempt: (x.attempt || 1) + 1, downloaded_bytes: 0} : {}));
+      return send(res, 200, {retried: failed.map(x => x.id), resumed: picked.filter(x => !failed.includes(x)).map(x => x.id),
+        skipped: []});
     }
     if (p === '/api/downloads/cleanup-temp') {
       const ended = cleanable().filter(x => !Array.isArray(body.ids) || body.ids.includes(x.id)); // as the backend: only the listed ids
