@@ -1,0 +1,2 @@
+{"load_processes": 0, "regions": 60, "wiring": {"layout": "shared", "paths": 316, "regions_reading_older_picture": 0}, "returncode": 0, "stderr": "", "render_seconds": 51.6, "output_seconds": 70.0, "longest_quiet_seconds": {"progress": 4.0, "reads": 38.3, "either": 1.0}}
+{"load_processes": 4, "regions": 60, "wiring": {"layout": "shared", "paths": 316, "regions_reading_older_picture": 0}, "returncode": 0, "stderr": "", "render_seconds": 1065.6, "output_seconds": 70.0, "longest_quiet_seconds": {"progress": 146.2, "reads": 705.6, "either": 98.3}}

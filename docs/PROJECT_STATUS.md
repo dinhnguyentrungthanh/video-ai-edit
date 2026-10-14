@@ -1,3 +1,7 @@
+## Exports with many blur regions, render watch (2026-10-14) — branch `fix/export-many-regions`, not merged
+
+- An export with many blur regions (job 134: 25) no longer hangs FFmpeg; plans of up to 10 regions give byte-identical x264 exports. A render whose FFmpeg stops moving is stopped after 10 minutes (more for long CUTs, twice that beside a scan) and fails with a Vietnamese message instead of holding the queue. Details in `docs/handoff/H-export-regions.md`.
+
 ## G7 merge, A1b export lane (2026-10-14) — branch `merge/g7`, not yet in the main folder
 
 - An NVENC export can run beside a GPU scan when the machine allows it ("Xuất song song: Tự động / Tắt" in Cài đặt); scan plus export about 17 % faster in the gate. Exports and scan outputs unchanged. Needs "Đo lại" on the install root before it takes effect. Details in `CHANGELOG.md`.

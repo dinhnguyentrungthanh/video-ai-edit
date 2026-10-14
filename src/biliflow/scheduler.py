@@ -48,8 +48,10 @@ from biliflow.final_renderer import (
     DEFAULT_TARGET_OUTPUT_BYTES,
     export_deferral_path,
     read_export_deferral,
+    read_render_stall,
     render_graph_path,
     render_progress_path,
+    render_stall_path,
 )
 from biliflow.probe import duration_seconds, probe_video
 from biliflow.license_policy import audit_project_models
@@ -700,6 +702,7 @@ class JobScheduler:
             # A1b: a new request starts clean, NVENC beside a scan allowed again; a
             # record an earlier request's render left (handed back to the main lane) goes.
             export_deferral_path(self.root, output_path).unlink(missing_ok=True)
+            render_stall_path(self.root, output_path).unlink(missing_ok=True)
             with self._lock:
                 self._sequential_exports.discard(job_id)
                 self._parallel_decisions.pop(job_id, None)
@@ -956,6 +959,13 @@ class JobScheduler:
         if not isinstance(render, dict) or not render.get("output"):
             return False
         return os.path.lexists(export_deferral_path(self.root, self.root / str(render["output"])))
+
+    def _render_stall(self, job_id: int) -> str | None:
+        """The Vietnamese message the watch on FFmpeg left for this job's render, if it stopped it."""
+        render = self.store.setting(f"render:{job_id}")
+        if not isinstance(render, dict) or not render.get("output"):
+            return None
+        return read_render_stall(self.root, self.root / str(render["output"]))
 
     def _probe_frame(self, source: Path) -> dict:
         """ffprobe's answer for a source, kept per (path, size, mtime) between checks."""
@@ -1222,6 +1232,11 @@ class JobScheduler:
         code = process.wait()
         self._release_lane(lane)
         if code != 0:
+            # The watch on FFmpeg stopped the render (render_watchdog): the stage
+            # fails with its message in either lane, never handed back to the main lane.
+            stalled = self._render_stall(job_id) if name == "render" else None
+            if stalled is not None:
+                raise RuntimeError(stalled)
             if lane == EXPORT_LANE and name == "render" and self._handed_back(job_id):
                 raise _ExportHandedBack(f"Stage process exited with code {code}; see {log_path}")
             raise RuntimeError(f"Stage process exited with code {code}; see {log_path}")
@@ -1387,6 +1402,8 @@ class JobScheduler:
         render_progress_path(self.root, output).unlink(missing_ok=True)
         # A stop kills the render-final process before it can remove its graph file.
         render_graph_path(self.root, output).unlink(missing_ok=True)
+        # Read (or not needed) by now: _run_process takes its message before this runs.
+        render_stall_path(self.root, output).unlink(missing_ok=True)
 
     def _terminate_active(self, reason: str) -> None:
         """Stop the stage process of every lane (shutdown timeout)."""

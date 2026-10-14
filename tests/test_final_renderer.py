@@ -16,6 +16,7 @@ from biliflow.final_renderer import (
     EXPORT_LANE_ENVIRONMENT,
     MAX_VIDEO_MAXRATE,
     PARALLEL_EXPORT_LANE,
+    STALL_STDERR_CHARS,
     ExportDeferred,
     approve_previews,
     authorize_final_from_resolved_review,
@@ -24,10 +25,13 @@ from biliflow.final_renderer import (
     export_deferral_path,
     normalize_output_size_policy,
     read_render_progress,
+    read_render_stall,
     render_final_output,
     render_graph_path,
     render_progress_path,
+    render_stall_path,
 )
+from biliflow.render_watchdog import STALL_SECONDS, RenderStalled, stall_limit, stall_message
 
 # Largest value FFmpeg accepts for -maxrate and -bufsize (a signed 32-bit int).
 INT_MAX = 2**31 - 1
@@ -333,6 +337,10 @@ class RenderCompletionTests(unittest.TestCase):
             tool.write_bytes(b"")
         self.during_render = lambda: None
         self.commands = []
+        self.watch_options = []
+        # RenderStalled for the render to raise (the watch on FFmpeg stopped it), None for none.
+        self.stall = None
+        self.partial_held = False
         self.audio = False
         self.render_fails = False
         # (exit code, stderr) of a render FFmpeg ends without an output, None for one that works.
@@ -376,11 +384,24 @@ class RenderCompletionTests(unittest.TestCase):
             self.during_render()
         return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
 
+    def fake_watched(self, command, **watch):
+        # The render goes through the watch on FFmpeg (render_watchdog.run_watched).
+        self.watch_options.append(watch)
+        if self.stall is not None:
+            self.commands.append(command)
+            if self.partial_held:
+                Path(command[-1]).mkdir()  # a partial output that cannot be removed
+            else:
+                Path(command[-1]).write_bytes(b"part of a video")  # what FFmpeg wrote before the watch killed it
+            raise self.stall
+        return self.fake_run(command, capture_output=True, text=True)
+
     def render(self, **limits):
         video = {"codec_type": "video", **({"pix_fmt": self.pix_fmt} if self.pix_fmt else {})}
         streams = [video] + ([{"codec_type": "audio"}] if self.audio else [])
         probe = {"format": {"duration": str(self.duration)}, "streams": streams}
         with patch("biliflow.final_renderer.subprocess.run", side_effect=self.fake_run), \
+                patch("biliflow.final_renderer.run_watched", side_effect=self.fake_watched), \
                 patch("biliflow.final_renderer.probe_video", return_value=probe), \
                 patch("biliflow.final_renderer.require_capacity"):
             return render_final_output(
@@ -480,7 +501,8 @@ class RenderCompletionTests(unittest.TestCase):
 
     def test_a_graph_with_a_nul_is_refused_before_ffmpeg_runs(self):
         # FFmpeg would silently stop reading the file at the NUL.
-        with patch("biliflow.final_renderer.build_final_filter_graph", return_value=("[0:v]null\x00[vout]", 10.0)):
+        wiring = {"layout": "nested", "paths": 1, "regions_reading_older_picture": 0}
+        with patch("biliflow.final_renderer._final_filter_graph", return_value=("[0:v]null\x00[vout]", 10.0, wiring)):
             with self.assertRaisesRegex(ValueError, "NUL"):
                 self.render()
         self.assertFalse(any("-/filter_complex" in item for item in self.commands))
@@ -758,6 +780,100 @@ class RenderCompletionTests(unittest.TestCase):
         self.assertIsNone(manifest_problem(
             self.root, self.output, read_manifest(self.output), source_sha256=self.sha, render=[],
         ))
+
+    # The watch on FFmpeg (render_watchdog): a render that stops moving.
+
+    def stalls(self, stderr=""):
+        message = stall_message(idle_seconds=STALL_SECONDS, encoded=None, expected_seconds=self.duration)
+        self.stall = RenderStalled(message, idle_seconds=STALL_SECONDS, encoded_seconds=None, stderr=stderr)
+
+    def stall_record(self):
+        return json.loads(render_stall_path(self.root, self.output).read_text(encoding="utf-8"))
+
+    def test_a_render_the_watch_stops_fails_with_its_record_and_no_x264_retry(self):
+        self.write_plan(render_settings=None)  # auto: NVENC, which A3 would retry with x264 on an error
+        self.stalls()
+        with patch("biliflow.final_renderer.time.sleep") as sleep, self.assertRaises(RenderStalled) as raised:
+            self.render()
+        self.assertEqual([self.encoder_of(item) for item in self.renders()], ["h264_nvenc"])
+        sleep.assert_not_called()
+        record = self.stall_record()
+        self.assertEqual(
+            (record["schema"], record["message"], record["lane"], record["plan"], record["output"]),
+            (1, str(raised.exception), "main", "work/movie-edit-plan.json", "output/movie-reviewed.mp4"),
+        )
+        self.assertIn("chưa xuất được khung hình nào", record["message"])
+        self.assertEqual(read_render_stall(self.root, self.output), str(raised.exception))
+        for path in (self.partial, self.output, self.manifest_path, self.graph_path):
+            self.assertFalse(path.exists(), path)
+        self.assertFalse(os.path.lexists(export_deferral_path(self.root, self.output)))
+
+    def test_a_stall_keeps_the_end_of_ffmpegs_stderr_for_the_stage_log(self):
+        self.write_plan()
+        self.stalls(stderr="[h264 @ 0] early line\n" + "x" * 5000 + "\n[libx264 @ 1] last line\n")
+        with patch("sys.stderr") as log, self.assertRaises(RenderStalled):
+            self.render()
+        tail = self.stall_record()["stderr_tail"]
+        self.assertTrue(tail.endswith("[libx264 @ 1] last line"))
+        self.assertEqual(len(tail), STALL_STDERR_CHARS)
+        self.assertIn(tail, "".join(str(call.args[0]) for call in log.write.call_args_list))
+
+    def test_a_partial_output_that_cannot_be_removed_never_hides_the_stall(self):
+        self.write_plan()
+        self.stalls()
+        self.partial_held = True
+        with patch("sys.stderr"), self.assertRaises(RenderStalled) as raised:
+            self.render()
+        self.assertTrue(self.partial.is_dir())
+        self.assertEqual(read_render_stall(self.root, self.output), str(raised.exception))
+
+    def test_beside_a_scan_a_render_the_watch_stops_fails_and_is_never_handed_back(self):
+        self.write_plan(render_settings=None)
+        self.stalls()
+        environment, profile = self.beside_a_scan()
+        with environment, profile, patch("biliflow.final_renderer.time.sleep") as sleep, \
+                self.assertRaises(RenderStalled) as raised:
+            self.render()
+        # Not ExportDeferred, and no record that would send it to the main lane to stall again.
+        self.assertNotIsInstance(raised.exception, ExportDeferred)
+        self.assertFalse(os.path.lexists(export_deferral_path(self.root, self.output)))
+        self.assertEqual([self.encoder_of(item) for item in self.renders()], ["h264_nvenc"])
+        sleep.assert_not_called()
+        self.assertEqual((self.stall_record()["lane"], self.stall_record()["message"]),
+                         ("parallel", str(raised.exception)))
+        self.assertFalse(self.partial.exists())
+
+    def test_the_watch_allows_more_time_beside_a_scan_and_for_the_longest_cut(self):
+        cuts = [{"id": "c1", "type": "cut", "start_seconds": 1.0, "end_seconds": 3.0},
+                {"id": "c2", "type": "cut", "start_seconds": 5.0, "end_seconds": 8.5}]
+        self.write_plan(cuts, render_settings=None)
+        environment, profile = self.beside_a_scan()
+        # The fake probe gives the output the source's 10 s: each render ends on the duration check.
+        with self.assertRaisesRegex(RuntimeError, "duration mismatch"):
+            self.render()
+        with environment, profile, self.assertRaisesRegex(RuntimeError, "duration mismatch"):
+            self.render()
+        progress = render_progress_path(self.root, self.output)
+        self.assertEqual(self.watch_options, [
+            {"progress_path": progress, "expected_seconds": 4.5,
+             "stall_seconds": stall_limit(longest_cut_seconds=3.5, parallel=False)},
+            {"progress_path": progress, "expected_seconds": 4.5,
+             "stall_seconds": stall_limit(longest_cut_seconds=3.5, parallel=True)},
+        ])
+        self.assertEqual([item["stall_seconds"] for item in self.watch_options], [614.0, 1228.0])
+
+    def test_a_stall_record_of_an_earlier_render_goes_before_the_next_one(self):
+        record = render_stall_path(self.root, self.output)
+        record.parent.mkdir(parents=True, exist_ok=True)
+        record.write_text(json.dumps({"schema": 1, "message": "earlier"}), encoding="utf-8")
+        self.render()
+        self.assertFalse(record.exists())
+        self.assertIsNone(read_render_stall(self.root, self.output))
+
+    def test_the_manifest_records_how_the_blurs_were_wired(self):
+        manifest = self.render()
+        self.assertEqual(manifest["encoding"]["filter_graph"],
+                         {"layout": "nested", "paths": 1, "regions_reading_older_picture": 0})
 
     def test_the_main_lane_finishes_a_handed_back_export_with_the_x264_of_a3(self):
         # The x264 command of a forced-x264 export of the same plan: the byte-identical path.

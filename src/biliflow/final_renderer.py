@@ -5,6 +5,7 @@ import json
 import math
 import os
 import subprocess
+import sys
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -13,7 +14,14 @@ from biliflow.blur_filter import (
     blur_feather_mode,
     blur_method,
     blur_parameters,
-    regional_blur_filters,
+)
+from biliflow.blur_layout import (
+    FULL_FRAME,
+    NESTED_LAYOUT,
+    SHARED_LAYOUT,
+    SegmentBlur,
+    SegmentLayout,
+    segment_blur_filters,
 )
 from biliflow.export_encoder import (
     ENCODER_ERROR,
@@ -32,6 +40,7 @@ from biliflow.export_encoder import (
     video_description,
 )
 from biliflow.probe import duration_seconds, probe_video
+from biliflow.render_watchdog import RenderStalled, run_watched, stall_limit
 from biliflow.resource_lock import project_resource_lock
 from biliflow.storage import require_capacity
 
@@ -65,6 +74,11 @@ DEFERRED_MESSAGE = (
     "Bản xuất chạy song song dừng lại ({reason}); bản xuất sẽ được làm lại bằng x264 "
     "sau khi lượt quét đang chạy xong."
 )
+
+
+STALL_SCHEMA = 1
+# The end of FFmpeg's stderr kept with a stall (the stage log and its record).
+STALL_STDERR_CHARS = 4000
 
 
 class ExportDeferred(RuntimeError):
@@ -269,18 +283,79 @@ def _render_command(
 
 def _run_render(
     root: Path, graph_path: Path, graph: str, progress_path: Path, command: list[str],
+    *, expected_seconds: float, stall_seconds: float,
 ) -> tuple[subprocess.CompletedProcess, float]:
-    """One FFmpeg render: (its result, its seconds). The graph file lives only while it runs."""
+    """One FFmpeg render: (its result, its seconds). The graph file lives only while it runs.
+
+    RenderStalled when the watch (render_watchdog) stopped FFmpeg.
+    """
     progress_path.unlink(missing_ok=True)
     # The graph goes through a file (FFmpeg 7+): on the command line, a plan with
     # many cuts would pass Windows' limit of 32,767 characters.
     _write_render_graph(root, graph_path, graph)
     started = time.perf_counter()
     try:
-        result = subprocess.run(command, capture_output=True, text=True)
+        result = run_watched(
+            command, progress_path=progress_path, expected_seconds=expected_seconds,
+            stall_seconds=stall_seconds,
+        )
     finally:
         _remove_render_graph(graph_path)
     return result, time.perf_counter() - started
+
+
+def render_stall_path(project_root: Path, output_path: Path) -> Path:
+    """The record of a render the watch stopped, for the scheduler: the stage's Vietnamese error.
+
+    Beside the progress file, named after the same output. The scheduler reads
+    it when the render stage fails and removes it with the stage's other
+    files; a new render of the output removes it first. Unlike a deferral
+    (A1b) it never sends the export to the main lane.
+    """
+    return render_progress_path(project_root, output_path).with_suffix(".stalled.json")
+
+
+def read_render_stall(project_root: Path, output_path: Path) -> str | None:
+    """The message of this output's stall record, or None (no record, or one that cannot be read)."""
+    try:
+        record = json.loads(render_stall_path(project_root, output_path).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    if not isinstance(record, dict) or record.get("schema") != STALL_SCHEMA:
+        return None
+    message = record.get("message")
+    return message if isinstance(message, str) and message.strip() else None
+
+
+def _record_render_stall(
+    root: Path, plan_path: Path, output_path: Path, partial: Path, stall: RenderStalled, *, lane: str,
+) -> None:
+    """Leave the stall's record for the scheduler, then remove the partial output.
+
+    The record comes first and neither step may hide the stall: Windows can
+    hold the killed FFmpeg's file for a moment (an antivirus scan), and the
+    stage must still fail with the stall's message.
+    """
+    stderr_tail = stall.stderr.strip()[-STALL_STDERR_CHARS:]
+    if stderr_tail:
+        print("FFmpeg stderr before the stop:", stderr_tail, sep="\n", file=sys.stderr)
+    try:
+        _write_json(render_stall_path(root, output_path), {
+            "schema": STALL_SCHEMA, "created_at": _now(),
+            "plan": plan_path.relative_to(root).as_posix(),
+            "output": output_path.relative_to(root).as_posix(),
+            "lane": lane,
+            "message": str(stall),
+            "idle_seconds": round(stall.idle_seconds, 1),
+            "encoded_seconds": stall.encoded_seconds,
+            "stderr_tail": stderr_tail,
+        })
+    except OSError as error:
+        print(f"Could not write the stall record: {error}", file=sys.stderr)
+    try:
+        partial.unlink(missing_ok=True)
+    except OSError as error:
+        print(f"Could not remove the partial output: {error}", file=sys.stderr)
 
 
 def read_render_progress(
@@ -503,6 +578,50 @@ def build_final_filter_graph(
 
     chroma_rows_divisor caps each regional gblur's threads at its chroma rows (4 for yuv410p).
     """
+    graph, expected_duration, _ = _final_filter_graph(
+        operations=operations, duration=duration, has_audio=has_audio,
+        frame_size=frame_size, chroma_rows_divisor=chroma_rows_divisor,
+    )
+    return graph, expected_duration
+
+
+def _segment_blurs(
+    blurs: list[dict], segment_start: float, segment_end: float,
+) -> list[SegmentBlur]:
+    """The blurs of one kept segment in the graph's order: one per group of equal blurs, its times merged."""
+    grouped_blurs: dict[tuple, tuple[dict, list[tuple[float, float]]]] = {}
+    for blur in blurs:
+        if not _overlap(
+            segment_start, segment_end,
+            float(blur["start_seconds"]), float(blur["end_seconds"]),
+        ):
+            continue
+        key = _blur_group_key(blur)
+        if key not in grouped_blurs:
+            grouped_blurs[key] = (blur, [])
+        grouped_blurs[key][1].append((
+            max(segment_start, float(blur["start_seconds"])) - segment_start,
+            min(segment_end, float(blur["end_seconds"])) - segment_start,
+        ))
+    result = []
+    for blur, ranges in grouped_blurs.values():
+        region = blur.get("region_source_pixels")
+        if region != FULL_FRAME and not isinstance(region, dict):
+            raise ValueError(f"BLUR operation has no valid region: {blur.get('id')}")
+        sigma, feather = blur_parameters(blur)
+        result.append(SegmentBlur(
+            region=region, sigma=sigma, feather=feather,
+            feather_mode=blur_feather_mode(blur), method=blur_method(blur),
+            ranges=tuple(_merge_time_ranges(ranges)),
+        ))
+    return result
+
+
+def _final_filter_graph(
+    *, operations: list[dict], duration: float, has_audio: bool,
+    frame_size: tuple[int, int] | None, chroma_rows_divisor: int,
+) -> tuple[str, float, dict]:
+    """build_final_filter_graph's graph and duration, and how its blurs were wired (for the manifest)."""
     cuts = _merge_cuts(operations, duration)
     segments = _kept_segments(cuts, duration)
     blurs = _prune_redundant_blurs([
@@ -511,55 +630,21 @@ def build_final_filter_graph(
     graph: list[str] = []
     video_labels = []
     audio_labels = []
+    layouts: list[SegmentLayout] = []
     for index, (segment_start, segment_end) in enumerate(segments):
-        current = f"v{index}trim"
+        trimmed = f"v{index}trim"
         graph.append(
             f"[0:v:0]trim=start={segment_start:.6f}:end={segment_end:.6f},"
-            f"setpts=PTS-STARTPTS[{current}]"
+            f"setpts=PTS-STARTPTS[{trimmed}]"
         )
-        grouped_blurs: dict[tuple, tuple[dict, list[tuple[float, float]]]] = {}
-        for blur in blurs:
-            if not _overlap(
-                segment_start, segment_end,
-                float(blur["start_seconds"]), float(blur["end_seconds"]),
-            ):
-                continue
-            key = _blur_group_key(blur)
-            if key not in grouped_blurs:
-                grouped_blurs[key] = (blur, [])
-            grouped_blurs[key][1].append((
-                max(segment_start, float(blur["start_seconds"])) - segment_start,
-                min(segment_end, float(blur["end_seconds"])) - segment_start,
-            ))
-        for blur_index, (blur, ranges) in enumerate(grouped_blurs.values()):
-            region = blur.get("region_source_pixels")
-            sigma, feather = blur_parameters(blur)
-            feather_mode = blur_feather_mode(blur)
-            enabled_ranges = _merge_time_ranges(ranges)
-            expression = "+".join(
-                f"between(t,{start:.6f},{end:.6f})"
-                for start, end in enabled_ranges
-            )
-            enable = f"enable='{expression}'"
-            if region == "FULL_FRAME":
-                output = f"v{index}blur{blur_index}"
-                graph.append(
-                    f"[{current}]gblur=sigma={sigma:g}:{enable}"
-                    f"[{output}]"
-                )
-                current = output
-            elif isinstance(region, dict):
-                output = f"v{index}blur{blur_index}"
-                graph.extend(regional_blur_filters(
-                    input_label=current, output_label=output,
-                    prefix=f"v{index}region{blur_index}", region=region,
-                    sigma=sigma, feather=feather, feather_mode=feather_mode,
-                    enable=enable, method=blur_method(blur), frame_size=frame_size,
-                    chroma_rows_divisor=chroma_rows_divisor,
-                ))
-                current = output
-            else:
-                raise ValueError(f"BLUR operation has no valid region: {blur.get('id')}")
+        layout = segment_blur_filters(
+            index=index, input_label=trimmed,
+            blurs=_segment_blurs(blurs, segment_start, segment_end),
+            frame_size=frame_size, chroma_rows_divisor=chroma_rows_divisor,
+        )
+        layouts.append(layout)
+        graph.extend(layout.filters)
+        current = layout.output_label
         video_label = f"v{index}"
         graph.append(f"[{current}]setpts=PTS-STARTPTS[{video_label}]")
         video_labels.append(f"[{video_label}]")
@@ -584,7 +669,12 @@ def build_final_filter_graph(
             f"{''.join(video_labels)}concat=n={len(segments)}:v=1:a=0[vout]"
         )
     cut_seconds = sum(end - start for start, end in cuts)
-    return ";".join(graph), duration - cut_seconds
+    wiring = {
+        "layout": SHARED_LAYOUT if any(item.layout == SHARED_LAYOUT for item in layouts) else NESTED_LAYOUT,
+        "paths": max(item.paths for item in layouts),
+        "regions_reading_older_picture": sum(item.older_reads for item in layouts),
+    }
+    return ";".join(graph), duration - cut_seconds, wiring
 
 
 def expected_output_duration(*, operations: list[dict], duration: float) -> float:
@@ -701,6 +791,8 @@ def _render_final_output_unlocked(
     if os.path.lexists(output_path):
         raise FileExistsError(f"Output already exists: {output_path}")
     output_path = _inside((root / "output").resolve(strict=True), output_path, "Output path")
+    # A stall record names only the render that left it, never this one.
+    render_stall_path(root, output_path).unlink(missing_ok=True)
     ffmpeg_path = ffmpeg_path.resolve(strict=True)
     ffprobe_path = ffprobe_path.resolve(strict=True)
     size_limited = max_output_bytes is not None
@@ -742,12 +834,21 @@ def _render_final_output_unlocked(
     audio_stream = next((item for item in streams if item.get("codec_type") == "audio"), None)
     if video_stream is None:
         raise ValueError("Source has no video stream")
-    graph, expected_duration = build_final_filter_graph(
-        operations=plan.get("approved_operations", []),
+    operations = plan.get("approved_operations", [])
+    graph, expected_duration, wiring = _final_filter_graph(
+        operations=operations,
         duration=duration,
         has_audio=audio_stream is not None,
         frame_size=_frame_size(video_stream),
         chroma_rows_divisor=_chroma_rows_divisor(video_stream),
+    )
+    # The watch on FFmpeg (render_watchdog): FFmpeg decodes a CUT without a frame,
+    # and beside a scan the export shares the CPU.
+    stall_seconds = stall_limit(
+        longest_cut_seconds=max(
+            (end - start for start, end in _merge_cuts(operations, duration)), default=0.0,
+        ),
+        parallel=parallel,
     )
     deferred_fallback = deferral.get("fallback") if deferral is not None else None
     if parallel:
@@ -803,7 +904,19 @@ def _render_final_output_unlocked(
             graph_path=graph_path, audio_bitrate=audio_bitrate if audio_stream is not None else None,
             video=arguments, partial=partial,
         )
-        result, seconds = _run_render(root, graph_path, graph, progress_path, command)
+        try:
+            result, seconds = _run_render(
+                root, graph_path, graph, progress_path, command,
+                expected_seconds=expected_duration, stall_seconds=stall_seconds,
+            )
+        except RenderStalled as stall:
+            # The stage fails with the stall's message, in either lane: no NVENC
+            # fallback and no deferral, which would only run the stalling graph again.
+            _record_render_stall(
+                root, plan_path, output_path, partial, stall,
+                lane=PARALLEL_EXPORT_LANE if parallel else MAIN_EXPORT_LANE,
+            )
+            raise
         elapsed += seconds
         if result.returncode:
             partial.unlink(missing_ok=True)
@@ -904,6 +1017,9 @@ def _render_final_output_unlocked(
             "encoder_choice": choice.record(),
             "fallback": fallback,
             "lane": PARALLEL_EXPORT_LANE if parallel else MAIN_EXPORT_LANE,
+            # blur_layout: how the blurs were wired; a region "reading an older
+            # picture" differs from the nested layout where it overlaps an earlier blur.
+            "filter_graph": wiring,
             "validation_method": VALIDATION_METHOD,
             "video_target_bitrate": video_target_bitrate,
             "video_maxrate": video_maxrate,

@@ -328,7 +328,7 @@ class BlurGatingEquivalenceTests(SyntheticClipCase):
 
     def graphs(self, operations):
         gated = self.export_graph(operations)
-        with patch("biliflow.final_renderer.regional_blur_filters", ungated_regional_blur_filters):
+        with patch("biliflow.blur_layout.regional_blur_filters", ungated_regional_blur_filters):
             ungated = self.export_graph(operations)
         return ungated, gated
 

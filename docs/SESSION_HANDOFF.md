@@ -1,5 +1,12 @@
 # BiliFlow session handoff
 
+## Session H, exports with many blur regions and the render watch — 2026-10-14, branch `fix/export-many-regions` (worktree `temp\wt-export-regions`), not merged
+
+- **Request:** job 134's export hung (25 nested blur regions); fix the graph so at least 60 regions export, keep plans of up to 10 regions byte-identical, and stop a render whose FFmpeg no longer moves (also in A1b's export lane, without an export deferral).
+- **Done:** `blur_layout.py` (shared layout above 1024 nested paths; exact reads up to 10 regions; budget above), `render_watchdog.py` (progress block or read bytes; `(600 s + 4 s × longest CUT) × 2` in the export lane), stall record turned into a FAILED stage by the scheduler. Handoff `docs/handoff/H-export-regions.md`; evidence `docs/evidence/export-regions/`.
+- **Gates:** 12/12 plans of 1–10 regions byte-identical (x264 + framemd5) to `a63119b`; 30/60-region exports pass with every region blurred; job 134's first 60 s exported in a temp root (49.5 s, placement checked); focused tests OK; scan cache keys unchanged.
+- **Next:** coordinator runs the full suite on the merge. Job 134 is PAUSED at its render; after the merge and a Control Center restart the user presses "Tiếp tục".
+
 ## G7 merge, A1b export lane — 2026-10-14, branch `merge/g7` (worktree `temp\wt-merge-g7`), not yet in the main folder
 
 - **Request:** the user approved A1b with an automatic choice per machine ("Xuất song song: Tự động / Tắt"; never parallel on a CPU-only machine, never x264 beside a scan).

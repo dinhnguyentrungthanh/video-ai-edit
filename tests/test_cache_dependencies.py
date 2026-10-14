@@ -160,9 +160,11 @@ class RepositoryCacheScopeTests(unittest.TestCase):
     # source cleanup; 2026-10-03, batch 4 adds source archive; 2026-10-05, the
     # permanent delete flow adds job removal; 2026-10-07, the anime gore triage
     # settings, read only when a queue is built; 2026-10-11, the hardware profile, E1;
-    # 2026-10-14, A1b's export lane and the renderer, encoder and phone files it edits).
+    # 2026-10-14, A1b's export lane and the renderer, encoder and phone files it edits;
+    # 2026-10-14, the export's blur wiring and the watch on its FFmpeg render).
     CONTROL_PLANE = (
         "export_lanes.py", "final_renderer.py", "export_encoder.py", "phone_access.py",
+        "blur_filter.py", "blur_layout.py", "render_watchdog.py",
         "control_center.py", "scheduler.py", "job_store.py", "job_import.py",
         "review_workflow.py", "export_dialog.py",
         "export_guards.py", "recycle_bin.py", "source_cleanup.py",
