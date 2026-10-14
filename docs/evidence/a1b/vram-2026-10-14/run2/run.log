@@ -1,0 +1,15 @@
+12:21:23 test root E:\DungChung\BiliFlow\temp\a1b-measure-20261014-122045
+12:21:26 clip 1080p: {'width': 1920, 'height': 1080, 'duration_seconds': 605.707833}
+12:21:26 clip small: {'width': 1280, 'height': 640, 'duration_seconds': 604.638222}
+12:21:26 test Control Center pid 48008 on port 8791
+12:21:28 idle 15 s
+12:23:04 alone 1080p: {'returncode': 0, 'start': 208892.859, 'end': 208973.843, 'seconds': 81.0, 'before_max_mib': 499, 'before_median_mib': 499.0, 'peak_mib': 743, 'encoder': 'h264_nvenc', 'nvenc_check': 'trial_ok', 'fallback': None, 'encode_seconds': 64.014, 'error_tail': None, 'tag': '1080p', 'frame': {'width': 1920, 'height': 1080, 'duration_seconds': 605.707833}}
+12:24:29 alone small: {'returncode': 0, 'start': 208978.859, 'end': 209058.609, 'seconds': 79.8, 'before_max_mib': 499, 'before_median_mib': 499, 'peak_mib': 668, 'encoder': 'h264_nvenc', 'nvenc_check': 'trial_ok', 'fallback': None, 'encode_seconds': 72.948, 'error_tail': None, 'tag': 'small', 'frame': {'width': 1280, 'height': 640, 'duration_seconds': 604.638222}}
+12:24:34 scan alone: job 1
+12:29:19 scan alone ended WAITING_REVIEW
+12:29:24 scan with renders beside Qwen2-VL: job 2
+12:32:43 beside 1080p: {'returncode': 0, 'start': 209455.203, 'end': 209552.218, 'seconds': 97.0, 'before_max_mib': 5434, 'before_median_mib': 5434, 'peak_mib': 5678, 'encoder': 'h264_nvenc', 'nvenc_check': 'trial_ok', 'fallback': None, 'encode_seconds': 77.391, 'error_tail': None, 'tag': '1080p', 'frame': {'width': 1920, 'height': 1080, 'duration_seconds': 605.707833}, 'stage': 'confirm_violence', 'stage_pid': 45984, 'stage_baseline_mib': 490, 'stage_still_running': False}
+12:34:29 beside small: {'returncode': 0, 'start': 209566.546, 'end': 209658.484, 'seconds': 91.9, 'before_max_mib': 5180, 'before_median_mib': 5180, 'peak_mib': 5350, 'encoder': 'h264_nvenc', 'nvenc_check': 'trial_ok', 'fallback': None, 'encode_seconds': 84.49, 'error_tail': None, 'tag': 'small', 'frame': {'width': 1280, 'height': 640, 'duration_seconds': 604.638222}, 'stage': 'visual_logo', 'stage_pid': 17604, 'stage_baseline_mib': 490, 'stage_still_running': False}
+12:34:29 beside ended WAITING_REVIEW
+12:34:31 evidence in E:\DungChung\BiliFlow\temp\wt-a1b\docs\evidence\a1b\vram-2026-10-14\run2
+12:34:31 test root kept: E:\DungChung\BiliFlow\temp\a1b-measure-20261014-122045

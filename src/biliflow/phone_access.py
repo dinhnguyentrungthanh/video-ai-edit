@@ -133,6 +133,7 @@ PC_ONLY_POSTS = {
     "/api/logo-memory/class": "Chỉ làm trên PC: không sửa bộ nhớ logo qua điện thoại.",
     "/api/logo-memory/delete": "Chỉ làm trên PC: không xóa bộ nhớ logo qua điện thoại.",
     "/api/phone-mode": "Chỉ làm trên PC: bật/tắt chế độ điện thoại chỉ làm trên PC.",
+    "/api/scheduler/parallel-export": "Chỉ làm trên PC: bật/tắt xuất song song chỉ làm trên PC.",
 }
 # Dashboard V2 → Cài đặt → Tailscale (docs/TAILSCALE_PLAN.md): installing and driving Tailscale is PC only.
 PC_ONLY_TAILSCALE = "Chỉ làm trên PC: cài, đăng nhập và điều khiển Tailscale chỉ làm trên PC."

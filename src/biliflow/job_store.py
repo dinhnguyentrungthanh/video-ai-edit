@@ -742,6 +742,22 @@ class JobStore:
             self._connection.commit()
         return cursor.rowcount == 1
 
+    def requeue_running_stage(self, job_id: int, name: str, *, error: str | None = None) -> bool:
+        """Put a RUNNING stage back to PENDING; False when a pause or cancel already moved it.
+
+        One conditional UPDATE (perf plan A1b: an export of the second lane handed
+        back to the main lane). A Hủy that wrote CANCELLED, or a Dừng ngay that
+        wrote PENDING, first is never overwritten.
+        """
+        with self._lock:
+            cursor = self._connection.execute(
+                """UPDATE stages SET state='PENDING',pid=NULL,heartbeat_at=NULL,error=?
+                WHERE job_id=? AND name=? AND state='RUNNING'""",
+                (error, job_id, name),
+            )
+            self._connection.commit()
+        return cursor.rowcount == 1
+
     def next_pending_stage(self, job_id: int) -> dict[str, Any] | None:
         with self._lock:
             row = self._connection.execute(

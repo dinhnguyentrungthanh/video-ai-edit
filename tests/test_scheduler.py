@@ -1,6 +1,7 @@
 import hashlib
 import json
 import os
+import subprocess
 import sys
 import threading
 import time
@@ -10,10 +11,14 @@ from tempfile import TemporaryDirectory
 from unittest.mock import Mock, patch
 
 from biliflow.export_guards import ActionConflict, SOURCE_ARCHIVED_MESSAGE, SOURCE_ARCHIVED_STOP_REFUSAL
+from biliflow.export_lanes import REASON_TEXT, VramRead
 from biliflow.job_pipeline import PipelineStage, StageCommand
 from biliflow.job_store import JobStore, sha256_file
 from biliflow.scheduler import (
+    EXPORT_DEFERRED_MESSAGES,
+    EXPORT_LANE,
     EXPORT_RETIRE_MESSAGES,
+    MAIN_LANE,
     RESUME_SETTLED_REFUSAL,
     RESUME_STALE_EXPORT_REFUSAL,
     SKIPPED_REFUSAL,
@@ -25,8 +30,16 @@ from biliflow.scheduler import (
     SOURCE_RESTORED_MESSAGE,
     InputWatcher,
     JobScheduler,
+    _GpuStage,
+    _LaneWake,
 )
-from biliflow.final_renderer import render_graph_path, render_progress_path
+from biliflow.final_renderer import (
+    EXPORT_LANE_ENVIRONMENT,
+    PARALLEL_EXPORT_LANE,
+    export_deferral_path,
+    render_graph_path,
+    render_progress_path,
+)
 
 
 class SchedulerTests(unittest.TestCase):
@@ -540,7 +553,7 @@ class QueueOrderTests(SchedulerFixture):
         process.poll.return_value = None
         self.assertTrue(self.store.claim_queued(a, definition.job_state, definition.name))
         self.store.update_stage(a, "one", state="RUNNING", pid=process.pid)
-        self.scheduler._process, self.scheduler._active = process, (a, "one")
+        self.scheduler._process[MAIN_LANE], self.scheduler._active[MAIN_LANE] = process, (a, "one")
         with patch.object(self.scheduler, "_terminate_process") as terminate:
             self.export(b)
         # The running stage is never cut short.
@@ -550,7 +563,7 @@ class QueueOrderTests(SchedulerFixture):
         self.assertEqual(self.store.stage(a, "one")["state"], "RUNNING")
         self.assertEqual(self.order(), [(b, "export"), (c, "scan")])
         # The stage ends as _execute ends it.
-        self.scheduler._process = self.scheduler._active = None
+        self.scheduler._release_lane(MAIN_LANE)
         self.store.update_stage(a, "one", state="COMPLETED", progress=1.0, pid=None)
         self.scheduler._after_success(a, "one", definition)
         job = self.store.get_job(a)
@@ -798,13 +811,13 @@ class QueueOrderTests(SchedulerFixture):
         # ends, before _after_success; a Tiếp tục in that window must not run
         # _after_success a second time.
         a, _queue = self._crash_after_review_build("a")
-        self.scheduler._executing_job_id = a
+        self.scheduler._executing[MAIN_LANE] = a
         with patch("biliflow.scheduler.run_local_queue_audit",
                    return_value={"result": "PASS", "summary": "ok"}) as audit:
             with self.assertRaisesRegex(ValueError, "đang được xử lý"):
                 self.scheduler.resume(a)
             self.assertFalse(audit.called)
-        self.scheduler._executing_job_id = None
+        self.scheduler._executing.pop(MAIN_LANE)
         self.store.update_job(a, state="BUILDING_REVIEW")
         with self.assertRaisesRegex(ValueError, "đang được xử lý"):
             self.scheduler.resume(a)
@@ -1470,6 +1483,606 @@ class StopBeforeLaunchTests(SchedulerFixture):
         self.assertEqual((job["state"], job["stop_mode"]), ("CANCELLED", "CANCELLED"))
         self.assertEqual(self.store.stage(job_id, "render")["state"], "CANCELLED")
         self.assertFalse(self.scheduler.is_busy(job_id))
+
+
+class FakeStageProcess:
+    """A stage subprocess that ends when the test says (finish) or the scheduler stops it."""
+
+    def __init__(self, argv, kwargs, pid, on_success):
+        self.argv = tuple(str(value) for value in argv)
+        self.kwargs = kwargs
+        self.pid = pid
+        if "render-final" in self.argv:
+            self.kind = f"render:{Path(self.argv[self.argv.index('--output') + 1]).stem}"
+        else:
+            self.kind = self.argv[1]
+        self._on_success = on_success
+        self._lock = threading.Lock()
+        self._ended = threading.Event()
+        self.returncode = None
+
+    def finish(self, code=0):
+        with self._lock:
+            if self._ended.is_set():
+                return
+            if code == 0:
+                self._on_success(self)
+            self.returncode = code
+            self._ended.set()
+
+    def poll(self):
+        return self.returncode if self._ended.is_set() else None
+
+    def wait(self, timeout=None):
+        if not self._ended.wait(10 if timeout is None else timeout):
+            raise subprocess.TimeoutExpired(self.argv, timeout)
+        return self.returncode
+
+
+class ExportLaneTests(SchedulerFixture):
+    """Perf plan A1b: one NVENC export beside a GPU scan stage, only when the machine allows it.
+
+    Measured VRAM numbers are given here (the real ones come from the A1b
+    measurement); stage processes are fakes the test ends, so both lanes really
+    run at once in the scheduler's own threads.
+    """
+
+    FULL_HD = {"streams": [{"codec_type": "video", "width": 1920, "height": 1080}]}
+
+    def setUp(self):
+        super().setUp()
+        self.device = "cuda"
+        stages = patch("biliflow.scheduler.pipeline_stages",
+                       side_effect=lambda **arguments: self.scan_stages(arguments["job_key"]))
+        stages.start()
+        self.addCleanup(stages.stop)
+        measured = patch.multiple(
+            "biliflow.export_lanes",
+            NVENC_NEED_MIB=((1280 * 720, 300), (1920 * 1080, 500)), SCAN_PEAK_MIB=6000, SAFETY_MARGIN_MIB=1000,
+        )
+        measured.start()
+        self.addCleanup(measured.stop)
+        profile = patch("biliflow.export_lanes.profile_nvenc_trial", return_value="ok")
+        self.profile = profile.start()
+        self.addCleanup(profile.stop)
+        # 12 GiB, 1000 MiB in use: room for the scan's 6000 MiB, NVENC's 500 and the 1000 margin.
+        self.vram = VramRead(total_mib=12288, used_mib=1000, free_mib=11288)
+        self.scheduler.read_vram = Mock(side_effect=lambda: self.vram)
+        self.probe = self.FULL_HD
+        probe = patch.object(self.scheduler, "_probe_frame", side_effect=lambda source: self.probe)
+        probe.start()
+        self.addCleanup(probe.stop)
+        self.scheduler.poll_seconds = 0.05
+        self.launched = []
+        self.launch_lock = threading.Lock()
+        popen = patch("biliflow.scheduler.subprocess.Popen", side_effect=self.launch)
+        popen.start()
+        self.addCleanup(popen.stop)
+        self.terminated = []
+        terminate = patch.object(self.scheduler, "_terminate_process", side_effect=self.terminate)
+        terminate.start()
+        self.addCleanup(terminate.stop)
+        # Runs first: the lanes stop while the fakes above are still in place.
+        self.addCleanup(self.stop_lanes)
+
+    def scan_stages(self, job_key):
+        return [
+            PipelineStage(name, state, (StageCommand(("python", f"{job_key}:{name}", "--device", self.device), ()),),
+                          uses_gpu=True)
+            for name, state in (("scan_one", "SCANNING_TEXT"), ("scan_two", "SCANNING_LOGO"))
+        ]
+
+    def launch(self, argv, **kwargs):
+        with self.launch_lock:
+            process = FakeStageProcess(argv, kwargs, 5000 + len(self.launched), self.succeed)
+            self.launched.append(process)
+        return process
+
+    def terminate(self, process):
+        self.terminated.append(process.kind)
+        process.finish(1)
+
+    @staticmethod
+    def succeed(process):
+        if process.kind.startswith("render:"):
+            output = Path(process.argv[process.argv.index("--output") + 1])
+            output.write_bytes(b"video")
+            output.with_name(output.name + ".manifest.json").write_text(
+                json.dumps({"status": "COMPLETED"}), encoding="utf-8",
+            )
+
+    def stop_lanes(self):
+        self.scheduler._draining.set()
+        self.scheduler._stop.set()
+        self.scheduler._wake.set()
+        with self.launch_lock:
+            launched = list(self.launched)
+        for process in launched:
+            process.finish(1)
+        for thread in self.scheduler._threads.values():
+            thread.join(10)
+
+    def kinds(self):
+        with self.launch_lock:
+            return [process.kind for process in self.launched]
+
+    def wait_until(self, predicate, message="condition never held", timeout=10.0):
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            if predicate():
+                return
+            time.sleep(0.02)
+        self.fail(f"{message}; started: {self.kinds()}")
+
+    def wait_for(self, kind, count=1):
+        """The ``count``-th process of this kind the scheduler started."""
+        def found():
+            with self.launch_lock:
+                return [process for process in self.launched if process.kind == kind]
+        self.wait_until(lambda: len(found()) >= count, f"{kind} #{count} never started")
+        return found()[count - 1]
+
+    def export_auto(self, job_id, render_settings=None):
+        """Xuất video with an approved plan of the job's source ("auto" unless told otherwise)."""
+        plan = {"status": "READY_FOR_FINAL_RENDER", "source": {"path": self.store.get_job(job_id)["source_path"]}}
+        if render_settings is not None:
+            plan["render_settings"] = render_settings
+        (self.root / "work" / f"{job_id}.json").write_text(json.dumps(plan), encoding="utf-8")
+        return self.export(job_id)
+
+    def write_deferral(self, job_id, reason):
+        """The record the renderer leaves when it hands an export of the export lane back."""
+        path = export_deferral_path(self.root, self.root / "output" / f"{job_id}.mp4")
+        path.parent.mkdir(parents=True, exist_ok=True)
+        fallback = None if reason == "not_nvenc" else {
+            "from": "h264_nvenc", "reason": reason, "returncode": 1, "message": None, "elapsed_seconds": 1.0,
+        }
+        path.write_text(json.dumps({
+            "schema": 1, "created_at": "2026-10-14T10:00:00+07:00",
+            "plan": f"work/{job_id}.json", "output": f"output/{job_id}.mp4", "reason": reason,
+            "encoder_choice": {"requested": "auto", "nvenc_check": "profile_ok"} if fallback else None,
+            "fallback": fallback, "nvenc_elapsed_seconds": 1.0,
+        }), encoding="utf-8")
+        return path
+
+    def events_of(self, job_id, event_type):
+        return [event for event in self.store.events(job_id, limit=1000) if event["event_type"] == event_type]
+
+    def both_running(self):
+        """Scan job a on the GPU in the main lane, export b beside it in the export lane."""
+        a, b = self.job("a"), self.job("b")
+        self.start(a)
+        self.export_auto(b)
+        self.scheduler.start()
+        scan = self.wait_for("a:scan_one")
+        render = self.wait_for(f"render:{b}")
+        self.wait_until(lambda: len(self.scheduler.active_lanes) == 2, "both lanes never ran")
+        return a, b, scan, render
+
+    def test_auto_runs_one_nvenc_export_beside_a_gpu_scan_stage(self):
+        a, b, scan, render = self.both_running()
+        self.assertEqual(
+            [(item["lane"], item["job_id"], item["stage"], item["pid"]) for item in self.scheduler.active_lanes],
+            [(MAIN_LANE, a, "scan_one", scan.pid), (EXPORT_LANE, b, "render", render.pid)],
+        )
+        # The single dict the classic dashboard and "Đo lại" read: the main lane's stage.
+        self.assertEqual(self.scheduler.active, {"job_id": a, "stage": "scan_one", "pid": scan.pid})
+        # Only the export lane's render gets the lane variable (the renderer then never runs x264).
+        self.assertEqual(render.kwargs["env"][EXPORT_LANE_ENVIRONMENT], PARALLEL_EXPORT_LANE)
+        self.assertNotIn("env", scan.kwargs)
+        (event,) = self.events_of(b, "EXPORT_LANE_PARALLEL")
+        self.assertEqual(
+            {key: event["payload"][key] for key in
+             ("reason", "scan_job_id", "scan_stage", "baseline_mib", "scan_peak_mib", "need_mib", "left_mib",
+              "width", "height")},
+            {"reason": "opened", "scan_job_id": a, "scan_stage": "scan_one", "baseline_mib": 1000,
+             "scan_peak_mib": 6000, "need_mib": 500, "left_mib": 12288 - 7000 - 500, "width": 1920, "height": 1080},
+        )
+        self.assertEqual(self.events_of(b, "EXPORT_LANE_SEQUENTIAL"), [])
+        render.finish(0)
+        self.wait_until(lambda: self.store.get_job(b)["state"] == "COMPLETED", "the export never completed")
+        # The scan stage beside it runs on, untouched.
+        self.assertIsNone(scan.poll())
+        self.assertEqual(self.store.get_job(a)["state"], "SCANNING_TEXT")
+        scan.finish(0)
+        self.wait_for("a:scan_two").finish(0)
+        self.wait_until(lambda: not self.scheduler.is_busy(a), "the scan job never finished")
+        self.assertEqual(self.terminated, [])
+        self.assertEqual(self.kinds(), ["a:scan_one", f"render:{b}", "a:scan_two"])
+
+    def test_off_runs_exports_and_scans_one_at_a_time_as_before(self):
+        self.assertEqual(self.scheduler.set_parallel_export_mode("off"), "off")
+        a, b = self.job("a"), self.job("b")
+        self.start(a)
+        self.export_auto(b)
+        self.scheduler.start()
+        render = self.wait_for(f"render:{b}")
+        self.assertNotIn("env", render.kwargs)
+        time.sleep(0.5)  # ten looks of each lane: nothing starts beside the export
+        self.assertEqual(self.kinds(), [f"render:{b}"])
+        render.finish(0)
+        scan = self.wait_for("a:scan_one")
+        c = self.job("c")
+        self.export_auto(c)
+        time.sleep(0.5)  # nor beside the scan stage
+        self.assertEqual(self.kinds(), [f"render:{b}", "a:scan_one"])
+        self.assertIsNone(self.scheduler._gpu_stage)
+        scan.finish(0)
+        # At the stage boundary the export goes first (A1a), in the main lane.
+        later = self.wait_for(f"render:{c}")
+        self.assertNotIn("env", later.kwargs)
+        self.assertEqual([item["lane"] for item in self.scheduler.active_lanes], [MAIN_LANE])
+        later.finish(0)
+        self.wait_for("a:scan_two").finish(0)
+        self.wait_until(lambda: not self.scheduler.is_busy(a), "the scan job never finished")
+        self.assertEqual(self.kinds(), [f"render:{b}", "a:scan_one", f"render:{c}", "a:scan_two"])
+        # "Tắt" reads no VRAM and records no lane decision: exactly the single worker of before.
+        self.scheduler.read_vram.assert_not_called()
+        for job_id in (b, c):
+            self.assertEqual(self.events_of(job_id, "EXPORT_LANE_SEQUENTIAL"), [])
+            self.assertEqual(self.events_of(job_id, "EXPORT_LANE_PARALLEL"), [])
+
+    def test_a_stop_of_one_lane_never_stops_the_other(self):
+        self.scheduler.start()
+        cases = (("cancel", EXPORT_LANE), ("pause_now", EXPORT_LANE), ("cancel", MAIN_LANE), ("pause_now", MAIN_LANE))
+        for index, (action, lane) in enumerate(cases):
+            with self.subTest(action=action, lane=lane):
+                a, b = self.job(f"a{index}"), self.job(f"b{index}")
+                self.start(a)
+                self.export_auto(b)
+                scan, render = self.wait_for(f"a{index}:scan_one"), self.wait_for(f"render:{b}")
+                if lane == EXPORT_LANE:
+                    (stopped, stopped_job, stage), (running, running_job) = (render, b, "render"), (scan, a)
+                else:
+                    (stopped, stopped_job, stage), (running, running_job) = (scan, a, "scan_one"), (render, b)
+                running_state = self.store.get_job(running_job)["state"]
+                getattr(self.scheduler, action)(stopped_job)
+                self.assertEqual(self.terminated[-1], stopped.kind)
+                self.assertIsNone(running.poll())
+                self.wait_until(lambda: not self.scheduler.is_busy(stopped_job), "the stopped lane never ended")
+                self.assertEqual([item["job_id"] for item in self.scheduler.active_lanes], [running_job])
+                expected = ("CANCELLED", "CANCELLED") if action == "cancel" else ("PAUSED", "PENDING")
+                self.assertEqual((self.store.get_job(stopped_job)["state"], self.store.stage(stopped_job, stage)["state"]),
+                                 expected)
+                self.assertEqual(self.events_of(stopped_job, "STAGE_FAILED"), [])
+                self.assertEqual(self.events_of(stopped_job, "EXPORT_DEFERRED"), [])
+                self.assertEqual(self.store.get_job(running_job)["state"], running_state)
+                self.assertIsNone(running.poll())
+                # The other lane's stage ends as usual.
+                running.finish(0)
+                if running_job == a:
+                    self.wait_for(f"a{index}:scan_two").finish(0)
+                self.wait_until(lambda: not self.scheduler.is_busy(running_job), "the other lane never ended")
+                if running_job == b:
+                    self.assertEqual(self.store.get_job(b)["state"], "COMPLETED")
+        self.assertEqual(len(self.terminated), len(cases))
+
+    def test_is_busy_covers_each_lane_until_its_result_is_recorded(self):
+        # Xóa video gốc and Lưu trữ refuse a busy job: the gap after a lane's process
+        # ended and before its result is written must count as busy too.
+        a, b, scan, render = self.both_running()
+        real = self.scheduler._after_success
+        entered = {a: threading.Event(), b: threading.Event()}
+        release = threading.Event()
+
+        def slow(job_id, name, definition):
+            entered[job_id].set()
+            release.wait(10)
+            return real(job_id, name, definition)
+
+        try:
+            with patch.object(self.scheduler, "_after_success", side_effect=slow):
+                render.finish(0)
+                self.assertTrue(entered[b].wait(10))
+                self.assertEqual(self.store.stage(b, "render")["state"], "COMPLETED")
+                self.assertEqual([item["lane"] for item in self.scheduler.active_lanes], [MAIN_LANE])
+                self.assertTrue(self.scheduler.is_busy(b))
+                self.assertTrue(self.scheduler._lane_busy(EXPORT_LANE))
+                scan.finish(0)
+                self.assertTrue(entered[a].wait(10))
+                self.assertEqual(self.scheduler.active_lanes, [])
+                self.assertIsNone(self.scheduler.active)
+                self.assertTrue(self.scheduler.is_busy(a))
+                self.assertTrue(self.scheduler.is_busy(b))
+                release.set()
+                self.wait_until(lambda: not self.scheduler.is_busy(b), "the export lane never recorded its result")
+        finally:
+            release.set()
+        self.assertEqual(self.store.get_job(b)["state"], "COMPLETED")
+        self.wait_for("a:scan_two").finish(0)
+        self.wait_until(lambda: not self.scheduler.is_busy(a), "the scan job never finished")
+
+    def test_an_immediate_shutdown_stops_both_lanes(self):
+        a, b, scan, render = self.both_running()
+        self.scheduler.shutdown(immediate=True, timeout=10)
+        self.assertEqual(sorted(self.terminated), sorted([scan.kind, render.kind]))
+        self.assertFalse(any(thread.is_alive() for thread in self.scheduler._threads.values()))
+        for job_id, stage in ((a, "scan_one"), (b, "render")):
+            self.assertEqual((self.store.get_job(job_id)["state"], self.store.stage(job_id, stage)["state"]),
+                             ("PAUSED", "PENDING"))
+        self.assertEqual(self.scheduler.active_lanes, [])
+        self.assertEqual(self.kinds(), [scan.kind, render.kind])
+
+    def test_a_graceful_shutdown_waits_for_both_lanes_to_reach_their_boundary(self):
+        a, b, scan, render = self.both_running()
+        done = threading.Event()
+        stopper = threading.Thread(
+            target=lambda: (self.scheduler.shutdown(timeout=10), done.set()), daemon=True,
+        )
+        stopper.start()
+        self.wait_until(
+            lambda: all(self.store.get_job(job_id)["stop_mode"] == "AFTER_STAGE" for job_id in (a, b)),
+            "shutdown never asked both jobs to stop after their stage",
+        )
+        render.finish(0)
+        self.wait_until(lambda: self.store.get_job(b)["state"] == "COMPLETED", "the export never completed")
+        self.assertFalse(done.is_set())  # the scan stage still runs
+        self.assertIsNone(scan.poll())
+        scan.finish(0)
+        self.assertTrue(done.wait(10))
+        stopper.join(10)
+        self.assertEqual(self.terminated, [])
+        self.assertFalse(any(thread.is_alive() for thread in self.scheduler._threads.values()))
+        job = self.store.get_job(a)
+        self.assertEqual((job["state"], job["stop_mode"]), ("PAUSED", "PAUSED"))
+        self.assertEqual(self.store.stage(a, "scan_two")["state"], "PENDING")
+        # Nothing started while the lanes drained.
+        self.assertEqual(self.kinds(), [scan.kind, render.kind])
+
+    def test_an_export_handed_back_runs_with_x264_in_the_main_lane_after_the_scan_job(self):
+        a, b, scan, render = self.both_running()
+        c = self.job("c")
+        self.start(c)  # a scan job clicked later
+        # NVENC failed beside the scan: the renderer left its record and stopped.
+        self.write_deferral(b, "encoder_error")
+        render.finish(2)
+        self.wait_until(lambda: self.events_of(b, "EXPORT_DEFERRED"), "the export was never handed back")
+        (event,) = self.events_of(b, "EXPORT_DEFERRED")
+        self.assertEqual((event["level"], event["message"], event["payload"]["reason"]),
+                         ("WARNING", EXPORT_DEFERRED_MESSAGES["encoder_error"], "encoder_error"))
+        self.assertEqual(event["payload"]["fallback"]["from"], "h264_nvenc")
+        job = self.store.get_job(b)
+        self.assertEqual((job["state"], job["current_stage"]), ("QUEUED", "render"))
+        self.assertEqual(self.store.stage(b, "render")["state"], "PENDING")
+        self.assertEqual(self.events_of(b, "STAGE_FAILED"), [])
+        # The scan job that ran beside it finishes first; nothing cuts in.
+        scan.finish(0)
+        second = self.wait_for("a:scan_two")
+        time.sleep(0.3)
+        self.assertEqual(self.kinds(), ["a:scan_one", f"render:{b}", "a:scan_two"])
+        second.finish(0)
+        # Then the export, in the main lane with no lane variable (x264 as A3), before the later scan job.
+        again = self.wait_for(f"render:{b}", count=2)
+        self.assertNotIn("env", again.kwargs)
+        self.assertEqual([item["lane"] for item in self.scheduler.active_lanes], [MAIN_LANE])
+        self.assertEqual(self.kinds()[-1], f"render:{b}")
+        again.finish(0)
+        self.wait_until(lambda: self.store.get_job(b)["state"] == "COMPLETED", "the export never completed")
+        self.wait_for("c:scan_one").finish(0)
+        self.wait_for("c:scan_two").finish(0)
+        self.wait_until(lambda: not self.scheduler.is_busy(c), "the later scan never finished")
+        self.assertEqual(len(self.events_of(b, "EXPORT_LANE_PARALLEL")), 1)
+
+    def running_export(self, name, reason):
+        """An export the export lane is running (RENDERING, its render stage RUNNING) and its record."""
+        job_id = self.job(name)
+        self.export_auto(job_id)
+        self.assertTrue(self.store.claim_queued(job_id, "RENDERING", "render"))
+        self.assertTrue(self.store.start_stage(job_id, "render", job_state="RENDERING", attempt=1))
+        self.write_deferral(job_id, reason)
+        return job_id
+
+    def test_a_hand_back_never_overwrites_a_stop_that_landed_first(self):
+        for action, job_state, stage_state in (("cancel", "CANCELLED", "CANCELLED"),
+                                               ("pause_now", "PAUSED", "PENDING")):
+            with self.subTest(action=action):
+                b = self.running_export(f"b-{action}", "size_limit")
+                real = self.store.requeue_running_stage
+
+                def stop_first(job_id, name, **kwargs):
+                    getattr(self.scheduler, action)(job_id)
+                    return real(job_id, name, **kwargs)
+
+                with patch.object(self.store, "requeue_running_stage", side_effect=stop_first):
+                    self.scheduler._hand_back_export(b)
+                job = self.store.get_job(b)
+                self.assertEqual((job["state"], job["stop_mode"]), (job_state, job_state))
+                self.assertEqual(self.store.stage(b, "render")["state"], stage_state)
+                self.assertEqual(self.events_of(b, "EXPORT_DEFERRED"), [])
+                self.assertNotIn(b, self.scheduler._sequential_exports)
+
+    def test_a_hand_back_during_a_stop_after_the_stage_pauses_the_export(self):
+        b = self.running_export("b", "not_nvenc")
+        self.store.update_job(b, stop_mode="AFTER_STAGE")
+        self.scheduler._hand_back_export(b)
+        job = self.store.get_job(b)
+        self.assertEqual((job["state"], job["stop_mode"], job["current_stage"]), ("PAUSED", "PAUSED", "render"))
+        self.assertEqual(self.store.stage(b, "render")["state"], "PENDING")
+        (event,) = self.events_of(b, "EXPORT_DEFERRED")
+        self.assertEqual((event["message"], event["payload"]), (EXPORT_DEFERRED_MESSAGES["not_nvenc"],
+                                                                {"reason": "not_nvenc", "fallback": None}))
+        # Tiếp tục: an export again, taken by the main lane.
+        self.scheduler.resume(b)
+        job, stage, _definition = self.scheduler._select()
+        self.assertEqual((job["id"], stage["name"]), (b, "render"))
+
+    def test_an_export_the_lane_turns_down_runs_first_in_the_main_lane(self):
+        cases = (
+            ("vram_short", {"vram": VramRead(total_mib=8192, used_mib=1000, free_mib=7192)}),
+            ("vram_unreadable", {"vram": None}),
+            ("forced_x264", {"render_settings": {"video_encoder": "libx264"}}),
+            ("nvenc_not_confirmed", {"profile": "failed"}),
+            ("nvenc_not_confirmed", {"profile": None}),
+            ("size_not_measured", {"probe": {"streams": [{"codec_type": "video", "width": 3840, "height": 2160}]}}),
+            ("size_unknown", {"probe": {"streams": []}}),
+        )
+        for index, (reason, case) in enumerate(cases):
+            with self.subTest(reason=reason, case=case):
+                self.vram = case.get("vram", VramRead(total_mib=12288, used_mib=1000, free_mib=11288))
+                self.profile.return_value = case.get("profile", "ok")
+                self.probe = case.get("probe", self.FULL_HD)
+                a, b = self.job(f"a{index}"), self.job(f"b{index}")
+                self.start(a)
+                self.export_auto(b, render_settings=case.get("render_settings"))
+                job, _stage, definition = self.scheduler._select()
+                self.assertEqual((job["id"], definition.name), (b, "render"))
+                self.scheduler._select()  # judged once per export request
+                (event,) = self.events_of(b, "EXPORT_LANE_SEQUENTIAL")
+                self.assertEqual(event["payload"]["reason"], reason)
+                self.assertEqual(event["message"], REASON_TEXT[reason])
+                # Nor does the export lane take it beside a GPU stage.
+                self.scheduler._gpu_stage = _GpuStage(index + 1, a, "scan_one", 1000)
+                try:
+                    self.assertIsNone(self.scheduler._select(EXPORT_LANE))
+                finally:
+                    self.scheduler._gpu_stage = None
+                self.scheduler.cancel(a)
+                self.scheduler.cancel(b)
+
+    def test_until_the_vram_is_measured_auto_is_the_single_worker_of_before(self):
+        # As shipped before the A1b measurement: no NVML read, no lane event, no export lane.
+        for index, name in enumerate(("NVENC_NEED_MIB", "SCAN_PEAK_MIB", "SAFETY_MARGIN_MIB")):
+            with self.subTest(unmeasured=name), patch(f"biliflow.export_lanes.{name}", None):
+                # (not "a0": job() pads the name with "0" into its fake SHA-256, as "a" below)
+                a, b = self.job(f"u{index}a"), self.job(f"u{index}b")
+                self.start(a)
+                self.export_auto(b)
+                job, _stage, definition = self.scheduler._select()
+                self.assertEqual((job["id"], definition.name), (b, "render"))
+                self.scheduler._gpu_stage = _GpuStage(index + 1, a, "scan_one", 1000)
+                try:
+                    self.assertIsNone(self.scheduler._select(EXPORT_LANE))
+                finally:
+                    self.scheduler._gpu_stage = None
+                self.assertEqual(self.events_of(b, "EXPORT_LANE_SEQUENTIAL"), [])
+                self.scheduler.cancel(a)
+                self.scheduler.cancel(b)
+        with patch.multiple("biliflow.export_lanes", NVENC_NEED_MIB=None, SCAN_PEAK_MIB=None, SAFETY_MARGIN_MIB=None):
+            a, b = self.job("a"), self.job("b")
+            self.start(a)
+            self.export_auto(b)
+            self.scheduler.start()
+            render = self.wait_for(f"render:{b}")
+            self.assertNotIn("env", render.kwargs)
+            time.sleep(0.5)  # nothing starts beside the export
+            self.assertEqual(self.kinds(), [f"render:{b}"])
+            render.finish(0)
+            scan = self.wait_for("a:scan_one")
+            self.assertIsNone(self.scheduler._gpu_stage)
+            scan.finish(0)
+            self.wait_for("a:scan_two").finish(0)
+            self.wait_until(lambda: not self.scheduler.is_busy(a), "the scan job never finished")
+            self.assertEqual(self.kinds(), [f"render:{b}", "a:scan_one", "a:scan_two"])
+        self.scheduler.read_vram.assert_not_called()
+        self.assertEqual(self.events_of(b, "EXPORT_LANE_SEQUENTIAL") + self.events_of(b, "EXPORT_LANE_PARALLEL"), [])
+
+    def test_an_export_never_waits_for_an_export_lane_whose_thread_ended(self):
+        a, b = self.job("a"), self.job("b")
+        self.start(a)
+        self.export_auto(b)
+        job, stage, _definition = self.scheduler._select()
+        self.assertEqual((job["id"], stage["name"]), (a, "scan_one"))  # b would go beside the scan
+        ended = threading.Thread(target=lambda: None)
+        ended.start()
+        ended.join()
+        self.scheduler._threads[EXPORT_LANE] = ended  # an error ended the export lane's thread
+        job, stage, _definition = self.scheduler._select()
+        self.assertEqual((job["id"], stage["name"]), (b, "render"))
+
+    def test_a_scan_stage_on_the_cpu_never_gets_an_export_beside_it(self):
+        self.device = "cpu"
+        a, b = self.job("a"), self.job("b")
+        self.start(a)
+        self.export_auto(b)
+        job, _stage, definition = self.scheduler._select()
+        self.assertEqual((job["id"], definition.name), (b, "render"))
+        self.scheduler.read_vram.assert_not_called()
+        self.assertEqual(self.events_of(b, "EXPORT_LANE_SEQUENTIAL"), [])
+        self.scheduler.cancel(b)
+        # Nor in the scheduler's threads: no VRAM baseline, no export lane.
+        c = self.job("c")
+        self.export_auto(c)
+        self.scheduler.start()
+        self.wait_for(f"render:{c}").finish(0)
+        scan = self.wait_for("a:scan_one")
+        self.assertIsNone(self.scheduler._gpu_stage)
+        scan.finish(0)
+        self.wait_for("a:scan_two").finish(0)
+        self.wait_until(lambda: not self.scheduler.is_busy(a), "the scan job never finished")
+        self.scheduler.read_vram.assert_not_called()
+
+    def test_the_export_lane_runs_only_beside_a_gpu_stage_of_the_main_lane(self):
+        a, b = self.job("a"), self.job("b")
+        self.start(a)
+        self.export_auto(b)
+        self.assertIsNone(self.scheduler._select(EXPORT_LANE))  # nothing on the GPU
+        self.scheduler._gpu_stage = _GpuStage(1, a, "scan_one", 1000)
+        self.store.set_setting("scheduler_paused", True)
+        self.assertIsNone(self.scheduler._select(EXPORT_LANE))  # Tạm dừng hàng đợi stops both lanes
+        self.store.set_setting("scheduler_paused", False)
+        self.scheduler.set_parallel_export_mode("off")
+        self.assertIsNone(self.scheduler._select(EXPORT_LANE))
+        self.scheduler.set_parallel_export_mode("auto")
+        self.scheduler._executing[EXPORT_LANE] = 99  # one export at a time
+        self.assertIsNone(self.scheduler._select(EXPORT_LANE))
+        del self.scheduler._executing[EXPORT_LANE]
+        job, stage, _definition = self.scheduler._select(EXPORT_LANE)
+        self.assertEqual((job["id"], stage["name"]), (b, "render"))
+        self.assertEqual(self.scheduler._parallel_decisions[b].detail["scan_job_id"], a)
+        with self.assertRaises(ValueError):
+            self.scheduler._select("other")
+
+    def test_the_main_lane_runs_the_gpu_scan_when_the_export_will_go_beside_it(self):
+        a, b, c = self.job("a"), self.job("b"), self.job("c")
+        self.start(a)
+        self.export_auto(b)
+        self.export_auto(c)
+        job, stage, _definition = self.scheduler._select()
+        self.assertEqual((job["id"], stage["name"]), (a, "scan_one"))
+        # While the export lane runs b, c waits for it (one render at a time) and the scan goes on.
+        self.scheduler._executing[EXPORT_LANE] = b
+        self.assertTrue(self.store.claim_queued(b, "RENDERING", "render"))
+        job, stage, _definition = self.scheduler._select()
+        self.assertEqual((job["id"], stage["name"]), (a, "scan_one"))
+        self.scheduler.cancel(a)
+        self.assertIsNone(self.scheduler._select())
+        del self.scheduler._executing[EXPORT_LANE]
+        job, stage, _definition = self.scheduler._select()
+        self.assertEqual((job["id"], stage["name"]), (c, "render"))
+
+    def test_a_new_export_request_starts_clean(self):
+        a, b = self.job("a"), self.job("b")
+        self.start(a)
+        self.export_auto(b)
+        record = self.write_deferral(b, "encoder_error")
+        self.scheduler._sequential_exports.add(b)
+        # Handed back, it waits only for the scan job it ran beside (none here).
+        self.assertEqual(self.scheduler._select()[0]["id"], b)
+        self.export_auto(b)  # Xuất video again
+        self.assertFalse(record.exists())
+        self.assertNotIn(b, self.scheduler._sequential_exports)
+        job, stage, _definition = self.scheduler._select()
+        self.assertEqual((job["id"], stage["name"]), (a, "scan_one"))  # NVENC beside the scan again
+
+    def test_a_lane_never_clears_the_other_lanes_wake_up(self):
+        wake = _LaneWake((MAIN_LANE, EXPORT_LANE))
+        wake.set()
+        started = time.monotonic()
+        wake.wait(EXPORT_LANE, 5)  # at once; clears only the export lane's flag
+        wake.wait(MAIN_LANE, 5)  # still set for the main lane: at once too
+        self.assertLess(time.monotonic() - started, 1.0)
+        self.assertFalse(any(event.is_set() for event in wake._events.values()))
+        self.assertIsInstance(self.scheduler._wake, _LaneWake)
+
+    def test_the_switch_is_auto_or_off(self):
+        self.assertEqual(self.scheduler.parallel_export_mode(), "auto")
+        with self.assertRaises(ValueError):
+            self.scheduler.set_parallel_export_mode("fast")
+        self.assertIsNone(self.store.setting("parallel_export"))
+        self.store.set_setting("parallel_export", "sideways")
+        self.assertEqual(self.scheduler.parallel_export_mode(), "auto")
+        self.scheduler.set_parallel_export_mode("off")
+        self.assertEqual(self.scheduler.parallel_export_mode(), "off")
 
 
 class InputWatcherRestoreTests(unittest.TestCase):

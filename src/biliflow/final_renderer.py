@@ -16,13 +16,17 @@ from biliflow.blur_filter import (
     regional_blur_filters,
 )
 from biliflow.export_encoder import (
+    ENCODER_ERROR,
     H264_NVENC,
     LIBX264,
+    SIZE_LIMIT,
     STOP_GRACE_SECONDS,
     VALIDATION_METHOD,
+    EncoderChoice,
     choose_video_encoder,
     error_fallback,
     failed_by_itself,
+    parallel_lane_choice,
     size_fallback,
     video_arguments,
     video_description,
@@ -44,6 +48,27 @@ MAX_CUSTOM_OUTPUT_GB = 1_000.0
 # smaller, so the size limit still holds.
 FFMPEG_MAX_RATE_OPTION = 2**31 - 1
 MAX_VIDEO_MAXRATE = FFMPEG_MAX_RATE_OPTION // 2
+
+# Perf plan A1b (export_lanes): the scheduler sets this variable for a render of
+# its second lane, which runs beside a GPU scan. There a render only ever stops
+# and hands its export back to the main lane (export_deferral_path): it never
+# picks NVENC by itself, never skips a check and never runs x264.
+EXPORT_LANE_ENVIRONMENT = "BILIFLOW_EXPORT_LANE"
+PARALLEL_EXPORT_LANE = "parallel"
+MAIN_EXPORT_LANE = "main"
+DEFERRAL_SCHEMA = 1
+# Why the second lane handed an export back (besides SIZE_LIMIT and ENCODER_ERROR):
+# the export would not encode with NVENC there.
+DEFER_NOT_NVENC = "not_nvenc"
+DEFER_REASONS = (DEFER_NOT_NVENC, SIZE_LIMIT, ENCODER_ERROR)
+DEFERRED_MESSAGE = (
+    "Bản xuất chạy song song dừng lại ({reason}); bản xuất sẽ được làm lại bằng x264 "
+    "sau khi lượt quét đang chạy xong."
+)
+
+
+class ExportDeferred(RuntimeError):
+    """A render of the second lane stopped: the main lane finishes the export (perf plan A1b)."""
 
 
 def normalize_output_size_policy(
@@ -130,6 +155,73 @@ def render_progress_path(project_root: Path, output_path: Path) -> Path:
 def render_graph_path(project_root: Path, output_path: Path) -> Path:
     """Return the file that hands FFmpeg the filter graph of one output's render."""
     return render_progress_path(project_root, output_path).with_suffix(".filtergraph")
+
+
+def export_deferral_path(project_root: Path, output_path: Path) -> Path:
+    """The record a render of the second lane leaves when the main lane must finish its export.
+
+    Beside the progress and graph files, named after the same output. A stop
+    leaves it (Tiếp tục then encodes with x264 as recorded); the export that
+    completes removes it, and so does a new export request (queue_render).
+    """
+    return render_progress_path(project_root, output_path).with_suffix(".deferred.json")
+
+
+def read_export_deferral(project_root: Path, output_path: Path, plan_path: Path) -> dict | None:
+    """The deferral record of this exact export (plan and output), or None.
+
+    A record that cannot be read, or that names another plan or output, is not
+    used: the export then chooses its encoder as usual.
+    """
+    root = project_root.resolve()
+    try:
+        record = json.loads(export_deferral_path(root, output_path).read_text(encoding="utf-8"))
+        same_export = (
+            record["schema"] == DEFERRAL_SCHEMA
+            and record["plan"] == plan_path.resolve().relative_to(root).as_posix()
+            and record["output"] == output_path.resolve().relative_to(root).as_posix()
+            and record["reason"] in DEFER_REASONS
+        )
+    except (OSError, ValueError, TypeError, KeyError):
+        return None
+    if not same_export:
+        return None
+    fallback, choice = record.get("fallback"), record.get("encoder_choice")
+    if fallback is not None and not (
+        isinstance(fallback, dict) and fallback.get("from") == H264_NVENC
+        and fallback.get("reason") == record["reason"]
+        and isinstance(choice, dict) and isinstance(choice.get("requested"), str)
+        and isinstance(choice.get("nvenc_check"), str)
+    ):
+        return None
+    return record
+
+
+def _defer_export(
+    *, root: Path, plan_path: Path, output_path: Path, reason: str,
+    choice: EncoderChoice | None, fallback: dict | None, seconds: float,
+) -> None:
+    """Record why the second lane stops this export, then stop it (ExportDeferred)."""
+    _write_json(export_deferral_path(root, output_path), {
+        "schema": DEFERRAL_SCHEMA, "created_at": _now(),
+        "plan": plan_path.relative_to(root).as_posix(),
+        "output": output_path.relative_to(root).as_posix(),
+        "reason": reason,
+        "encoder_choice": choice.record() if choice is not None else None,
+        "fallback": fallback,
+        "nvenc_elapsed_seconds": round(seconds, 3),
+    })
+    raise ExportDeferred(DEFERRED_MESSAGE.format(reason=reason))
+
+
+def _remove_export_deferral(root: Path, output_path: Path) -> None:
+    # The export is complete and recorded: a record left here (a scanner holding
+    # it) would only make a later export of this output start with x264, and a
+    # new export request removes it first (queue_render).
+    try:
+        export_deferral_path(root, output_path).unlink(missing_ok=True)
+    except OSError:
+        pass
 
 
 def _write_render_graph(root: Path, path: Path, graph: str) -> None:
@@ -600,6 +692,7 @@ def _render_final_output_unlocked(
     ffmpeg_path: Path, ffprobe_path: Path,
     max_output_bytes: int | None = DEFAULT_MAX_OUTPUT_BYTES,
     target_output_bytes: int | None = DEFAULT_TARGET_OUTPUT_BYTES,
+    parallel: bool = False,
 ) -> dict:
     root = project_root.resolve(strict=True)
     plan_path = _inside((root / "work").resolve(strict=True), plan_path, "Edit plan path").resolve(strict=True)
@@ -624,6 +717,18 @@ def _render_final_output_unlocked(
     plan = _read_json(plan_path)
     if plan.get("status") != "READY_FOR_FINAL_RENDER" or not plan.get("final_export_allowed"):
         raise ValueError("Final render is not approved")
+    if parallel:
+        # Perf plan A1b: beside a scan only NVENC as the profile confirms it, decided
+        # before the source is read; an export already handed back stays with the main lane.
+        lane_choice = parallel_lane_choice(project_root=root, ffmpeg_path=ffmpeg_path, plan=plan)
+        if os.path.lexists(export_deferral_path(root, output_path)):
+            raise ExportDeferred(DEFERRED_MESSAGE.format(reason="deferred"))
+        if lane_choice is None:
+            _defer_export(root=root, plan_path=plan_path, output_path=output_path, reason=DEFER_NOT_NVENC,
+                          choice=None, fallback=None, seconds=0.0)
+        deferral = None
+    else:
+        deferral = read_export_deferral(root, output_path, plan_path)
     source = Path(plan["source"]["path"]).resolve(strict=True)
     source_hash_before = _sha256(source)
     if source_hash_before != plan["source"].get("sha256"):
@@ -644,7 +749,16 @@ def _render_final_output_unlocked(
         frame_size=_frame_size(video_stream),
         chroma_rows_divisor=_chroma_rows_divisor(video_stream),
     )
-    choice = choose_video_encoder(project_root=root, ffmpeg_path=ffmpeg_path, plan=plan)
+    deferred_fallback = deferral.get("fallback") if deferral is not None else None
+    if parallel:
+        choice = lane_choice
+    elif deferred_fallback is not None:
+        # Perf plan A1b: NVENC failed or came out too large beside a scan; x264 as A3
+        # would have run it, now that the main lane has the export.
+        recorded = deferral["encoder_choice"]
+        choice = EncoderChoice(LIBX264, recorded["requested"], recorded["nvenc_check"])
+    else:
+        choice = choose_video_encoder(project_root=root, ffmpeg_path=ffmpeg_path, plan=plan)
     audio_bitrate = 384_000 if audio_stream is not None else 0
     overhead_fraction = 0.03
     video_maxrate = None
@@ -679,6 +793,9 @@ def _render_final_output_unlocked(
     encoder = choice.encoder
     fallback = None
     elapsed = 0.0
+    if deferred_fallback is not None:
+        fallback = {**deferred_fallback, "deferred": True}
+        elapsed = float(deferral.get("nvenc_elapsed_seconds") or 0.0)
     while True:
         arguments = video_arguments(encoder, maxrate=video_maxrate, target_bitrate=video_target_bitrate)
         command = _render_command(
@@ -697,6 +814,10 @@ def _render_final_output_unlocked(
             fallback = error_fallback(result.returncode, result.stderr, seconds)
             encoder = LIBX264
             time.sleep(STOP_GRACE_SECONDS)
+            if parallel:
+                # A1b: x264 never runs beside a scan; the main lane encodes it later.
+                _defer_export(root=root, plan_path=plan_path, output_path=output_path, reason=ENCODER_ERROR,
+                              choice=choice, fallback=fallback, seconds=elapsed)
             continue
         size = partial.stat().st_size
         if max_output_bytes is None or size <= max_output_bytes:
@@ -710,6 +831,9 @@ def _render_final_output_unlocked(
         # Perf plan A3: an NVENC export over the size limit is encoded again with x264.
         fallback = size_fallback(size, seconds)
         encoder = LIBX264
+        if parallel:
+            _defer_export(root=root, plan_path=plan_path, output_path=output_path, reason=SIZE_LIMIT,
+                          choice=choice, fallback=fallback, seconds=elapsed)
     output_probe = probe_video(ffprobe_path, partial)
     actual_duration = duration_seconds(output_probe)
     if abs(actual_duration - expected_duration) > 0.25:
@@ -779,6 +903,7 @@ def _render_final_output_unlocked(
             "video_arguments": arguments,
             "encoder_choice": choice.record(),
             "fallback": fallback,
+            "lane": PARALLEL_EXPORT_LANE if parallel else MAIN_EXPORT_LANE,
             "validation_method": VALIDATION_METHOD,
             "video_target_bitrate": video_target_bitrate,
             "video_maxrate": video_maxrate,
@@ -811,6 +936,7 @@ def _render_final_output_unlocked(
         safety["source_modified"] = False
         preview_manifest["final_output_manifest"] = manifest_path.relative_to(root).as_posix()
         _write_json(preview_manifest_path, preview_manifest)
+    _remove_export_deferral(root, output_path)
     return manifest
 
 
@@ -820,11 +946,17 @@ def render_final_output(
     max_output_bytes: int | None = DEFAULT_MAX_OUTPUT_BYTES,
     target_output_bytes: int | None = DEFAULT_TARGET_OUTPUT_BYTES,
 ) -> dict:
-    """Serialize full renders across sessions to bound CPU, heat and disk I/O."""
+    """Serialize full renders across sessions to bound CPU, heat and disk I/O.
+
+    A render of the scheduler's second lane (EXPORT_LANE_ENVIRONMENT, perf plan
+    A1b) runs NVENC only and hands anything else back to the main lane.
+    """
+    parallel = os.environ.get(EXPORT_LANE_ENVIRONMENT) == PARALLEL_EXPORT_LANE
     with project_resource_lock(project_root, "final-render"):
         return _render_final_output_unlocked(
             project_root=project_root, plan_path=plan_path, output_path=output_path,
             ffmpeg_path=ffmpeg_path, ffprobe_path=ffprobe_path,
             max_output_bytes=max_output_bytes,
             target_output_bytes=target_output_bytes,
+            parallel=parallel,
         )

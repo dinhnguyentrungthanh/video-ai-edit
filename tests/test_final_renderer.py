@@ -13,11 +13,15 @@ from biliflow.export_identity import manifest_problem, read_manifest
 from biliflow.final_renderer import (
     DEFAULT_MAX_OUTPUT_BYTES,
     DEFAULT_TARGET_OUTPUT_BYTES,
+    EXPORT_LANE_ENVIRONMENT,
     MAX_VIDEO_MAXRATE,
+    PARALLEL_EXPORT_LANE,
+    ExportDeferred,
     approve_previews,
     authorize_final_from_resolved_review,
     build_final_filter_graph,
     expected_output_duration,
+    export_deferral_path,
     normalize_output_size_policy,
     read_render_progress,
     render_final_output,
@@ -653,6 +657,161 @@ class RenderCompletionTests(unittest.TestCase):
         self.assertEqual(len(self.renders()), 1)
         sleep.assert_not_called()
         self.assertFalse(self.partial.exists())
+
+    # Perf plan A1b: a render of the scheduler's export lane, beside a GPU scan.
+
+    def beside_a_scan(self, *, profile="ok"):
+        """Run as the export lane does: its environment variable, the hardware profile's NVENC answer."""
+        return (
+            patch.dict(os.environ, {EXPORT_LANE_ENVIRONMENT: PARALLEL_EXPORT_LANE}),
+            patch("biliflow.export_encoder.profile_nvenc_trial", return_value=profile),
+        )
+
+    def deferral(self):
+        return json.loads(export_deferral_path(self.root, self.output).read_text(encoding="utf-8"))
+
+    def test_beside_a_scan_an_nvenc_error_hands_the_export_back_without_x264(self):
+        self.write_plan(render_settings=None)
+        self.nvenc_fails(1, "[h264_nvenc @ 0000] OpenEncodeSessionEx failed: out of memory (10)\n")
+        environment, profile = self.beside_a_scan()
+        with environment, profile, patch("biliflow.final_renderer.time.sleep") as sleep, \
+                self.assertRaises(ExportDeferred):
+            self.render()
+        # x264 never runs beside a scan: the main lane encodes it later.
+        self.assertEqual([self.encoder_of(item) for item in self.renders()], ["h264_nvenc"])
+        self.assertFalse(any("lavfi" in item for item in self.commands))  # no trial encode either
+        sleep.assert_called_once_with(STOP_GRACE_SECONDS)  # a stop still wins before the record
+        record = self.deferral()
+        self.assertEqual((record["reason"], record["encoder_choice"]),
+                         ("encoder_error", {"requested": "auto", "nvenc_check": "profile_ok"}))
+        self.assertEqual({key: record["fallback"][key] for key in ("from", "reason", "returncode")},
+                         {"from": "h264_nvenc", "reason": "encoder_error", "returncode": 1})
+        self.assertEqual((record["plan"], record["output"]),
+                         ("work/movie-edit-plan.json", "output/movie-reviewed.mp4"))
+        for path in (self.partial, self.output, self.manifest_path, self.graph_path):
+            self.assertFalse(path.exists(), path)
+
+    def test_beside_a_scan_an_nvenc_export_over_the_size_limit_is_handed_back(self):
+        self.write_plan(render_settings=None)
+        self.output_bytes = lambda command: b"v" * 600_000
+        environment, profile = self.beside_a_scan()
+        with environment, profile, self.assertRaises(ExportDeferred):
+            self.render(max_output_bytes=500_000, target_output_bytes=400_000)
+        self.assertEqual([self.encoder_of(item) for item in self.renders()], ["h264_nvenc"])
+        record = self.deferral()
+        self.assertEqual((record["reason"], record["fallback"]["reason"], record["fallback"]["bytes"]),
+                         ("size_limit", "size_limit", 600_000))
+        self.assertFalse(self.partial.exists())
+        self.assertFalse(self.output.exists())
+
+    def test_beside_a_scan_an_export_that_would_not_use_nvenc_stops_before_any_encode(self):
+        for render_settings, profile in ((FORCED_X264, "ok"), (None, None), (None, "failed")):
+            with self.subTest(render_settings=render_settings, profile=profile):
+                self.commands = []
+                export_deferral_path(self.root, self.output).unlink(missing_ok=True)
+                self.write_plan(render_settings=render_settings)
+                environment, answer = self.beside_a_scan(profile=profile)
+                with environment, answer, patch("biliflow.final_renderer._sha256") as digest, \
+                        self.assertRaises(ExportDeferred):
+                    self.render()
+                self.assertEqual(self.commands, [])  # no x264, no trial, no probe of the output
+                digest.assert_not_called()  # decided before the source is read
+                record = self.deferral()
+                self.assertEqual((record["reason"], record["fallback"], record["encoder_choice"]),
+                                 ("not_nvenc", None, None))
+
+    def test_beside_a_scan_an_export_already_handed_back_is_never_encoded(self):
+        self.write_plan(render_settings=None)
+        self.nvenc_fails(1, "out of memory")
+        environment, profile = self.beside_a_scan()
+        with environment, profile, patch("biliflow.final_renderer.time.sleep"):
+            with self.assertRaises(ExportDeferred):
+                self.render()
+            first = self.deferral()
+            self.commands = []
+            with self.assertRaises(ExportDeferred):
+                self.render()
+        self.assertEqual(self.commands, [])
+        self.assertEqual(self.deferral(), first)
+
+    def test_a_stop_beside_a_scan_leaves_no_record(self):
+        self.write_plan(render_settings=None)
+        self.nvenc_fails(1, "")  # taskkill /T /F: exit code 1, nothing printed
+        environment, profile = self.beside_a_scan()
+        with environment, profile, patch("biliflow.final_renderer.time.sleep"), \
+                self.assertRaisesRegex(RuntimeError, "Final FFmpeg render failed") as raised:
+            self.render()
+        self.assertNotIsInstance(raised.exception, ExportDeferred)
+        self.assertFalse(os.path.lexists(export_deferral_path(self.root, self.output)))
+
+    def test_an_nvenc_export_beside_a_scan_records_its_lane(self):
+        self.write_plan(render_settings=None)
+        environment, profile = self.beside_a_scan()
+        with environment, profile:
+            manifest = self.render()
+        encoding = manifest["encoding"]
+        self.assertEqual((encoding["encoder"], encoding["lane"], encoding["fallback"]),
+                         ("h264_nvenc", "parallel", None))
+        self.assertEqual(encoding["encoder_choice"], {"requested": "auto", "nvenc_check": "profile_ok"})
+        self.assertFalse(any("lavfi" in item for item in self.commands))  # the profile answered
+        self.assertFalse(os.path.lexists(export_deferral_path(self.root, self.output)))
+        self.assertIsNone(manifest_problem(
+            self.root, self.output, read_manifest(self.output), source_sha256=self.sha, render=[],
+        ))
+
+    def test_the_main_lane_finishes_a_handed_back_export_with_the_x264_of_a3(self):
+        # The x264 command of a forced-x264 export of the same plan: the byte-identical path.
+        self.render()
+        (x264_command,) = self.renders()
+        for path in (self.output, self.manifest_path):
+            path.unlink()
+        self.commands = []
+        self.write_plan(render_settings=None)
+        self.nvenc_fails(1, "[h264_nvenc @ 0000] out of memory\n")
+        environment, profile = self.beside_a_scan()
+        with environment, profile, patch("biliflow.final_renderer.time.sleep"), self.assertRaises(ExportDeferred):
+            self.render()
+        nvenc_seconds = self.deferral()["nvenc_elapsed_seconds"]
+        self.commands = []
+        # The main lane: no lane variable. NVENC is not tried again; x264 as A3 would have run it.
+        with patch("biliflow.final_renderer.choose_video_encoder") as choose, \
+                patch("biliflow.final_renderer.time.sleep") as sleep:
+            manifest = self.render()
+        choose.assert_not_called()
+        sleep.assert_not_called()
+        (command,) = self.renders()
+        self.assertEqual(command, x264_command)
+        encoding = manifest["encoding"]
+        self.assertEqual((encoding["encoder"], encoding["lane"], encoding["gpu_used"]), ("libx264", "main", False))
+        self.assertEqual(encoding["encoder_choice"], {"requested": "auto", "nvenc_check": "profile_ok"})
+        self.assertEqual({key: encoding["fallback"][key] for key in ("from", "reason", "returncode", "deferred")},
+                         {"from": "h264_nvenc", "reason": "encoder_error", "returncode": 1, "deferred": True})
+        self.assertGreaterEqual(encoding["elapsed_seconds"], round(nvenc_seconds, 3))
+        self.assertFalse(os.path.lexists(export_deferral_path(self.root, self.output)))
+        self.assertIsNone(manifest_problem(
+            self.root, self.output, read_manifest(self.output), source_sha256=self.sha, render=[],
+        ))
+
+    def test_a_record_of_another_export_is_never_used(self):
+        self.write_plan(render_settings=None)
+        path = export_deferral_path(self.root, self.output)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        fallback = {"from": "h264_nvenc", "reason": "encoder_error", "returncode": 1, "message": "x",
+                    "elapsed_seconds": 1.0}
+        stale = {"schema": 1, "created_at": "2026-10-14T10:00:00+07:00", "plan": "work/other-edit-plan.json",
+                 "output": "output/movie-reviewed.mp4", "reason": "encoder_error",
+                 "encoder_choice": {"requested": "auto", "nvenc_check": "profile_ok"},
+                 "fallback": fallback, "nvenc_elapsed_seconds": 1.0}
+        for record in (stale, {**stale, "plan": "work/movie-edit-plan.json", "schema": 2}, "not json"):
+            with self.subTest(record=record):
+                self.commands = []
+                for leftover in (self.output, self.manifest_path):
+                    leftover.unlink(missing_ok=True)
+                path.write_text(record if isinstance(record, str) else json.dumps(record), encoding="utf-8")
+                with self.nvenc_chosen():
+                    manifest = self.render()
+                self.assertEqual(manifest["encoding"]["encoder"], "h264_nvenc")
+                self.assertIsNone(manifest["encoding"]["fallback"])
 
     def test_when_the_x264_retry_fails_too_its_own_error_is_reported(self):
         self.render_failure = lambda command: (1, f"{self.encoder_of(command)} failed")

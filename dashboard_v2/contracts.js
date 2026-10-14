@@ -16,6 +16,8 @@
     review:['GET','/review/{id}'],queue:['GET','/api/jobs/{id}/review/queue'],reviewSession:['GET','/api/jobs/{id}/review/session'],resources:['GET','/api/jobs/{id}/review/resources'],reviewExport:['GET','/api/jobs/{id}/review/export'],
     evidence:['GET','/api/jobs/{id}/review/evidence'],frame:['GET','/api/jobs/{id}/review/frame'],video:['GET','/api/jobs/{id}/review/video'],media:['GET','/media/{path}'],
     scheduler:['POST','/api/scheduler'],shutdown:['POST','/api/shutdown'],
+    /* "Xuất song song: Tự động / Tắt" (perf plan A1b): PC only, exactly {mode: 'auto'|'off'}. */
+    parallelExport:['POST','/api/scheduler/parallel-export'],
     start:['POST','/api/jobs/{id}/start'],resume:['POST','/api/jobs/{id}/resume'],pause:['POST','/api/jobs/{id}/pause'],stopAfter:['POST','/api/jobs/{id}/stop-after-stage'],cancel:['POST','/api/jobs/{id}/cancel'],retry:['POST','/api/jobs/{id}/retry'],rerun:['POST','/api/jobs/{id}/rerun'],skip:['POST','/api/jobs/{id}/skip'],unskip:['POST','/api/jobs/{id}/unskip'],hide:['POST','/api/jobs/{id}/hide'],unhide:['POST','/api/jobs/{id}/unhide'],audit:['POST','/api/jobs/{id}/ai-audit'],
     finalize:['POST','/api/jobs/{id}/review/finalize'],decision:['POST','/api/jobs/{id}/review/decision'],clear:['POST','/api/jobs/{id}/review/clear'],bulkKeep:['POST','/api/jobs/{id}/review/bulk-keep'],bulkAccept:['POST','/api/jobs/{id}/review/bulk-accept'],
     ai:['GET','/api/ai'],aiConfig:['POST','/api/ai/config'],aiCheck:['POST','/api/ai/check'],aiLogin:['POST','/api/ai/login'],

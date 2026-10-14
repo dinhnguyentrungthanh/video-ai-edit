@@ -87,7 +87,9 @@ PHONE_POSTS_LITERAL = (
 # hardwareProfile, hardwareRemeasure, hardwareCpuOnly and hardwareUntestedFast, all PC only (PHONE_POSTS_LITERAL unchanged).
 # Session T added downloadRetryNetwork, "Thử lại các lượt lỗi mạng" (92, from c3fef73b…; docs/VIDEO_DOWNLOAD_PLAN.md
 # 4.15), also on the phone like the per-task Thử lại.
-ENDPOINTS_SHA256 = "939e32ba2df94996e7699eebf453b09d21610fba9e32b09a2010d08b2ddabdfe"
+# Session A1b added parallelExport, "Xuất song song: Tự động / Tắt" (93, from 939e32ba…; docs/PERF_INSTALL_PLAN.md
+# section 5), PC only (PHONE_POSTS_LITERAL unchanged).
+ENDPOINTS_SHA256 = "49478cf4821a38e0ac71972bf8b0018d4bb2a9990b0b3376b5d9ee61e1179098"
 
 
 def node(script: str) -> str:
