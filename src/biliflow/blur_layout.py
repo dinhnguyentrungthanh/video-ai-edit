@@ -38,6 +38,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 
 from biliflow.blur_filter import (
+    CHROMA_420,
     COVER_MARGIN_PIXELS,
     COVER_METHOD,
     regional_blur_branch,
@@ -57,9 +58,10 @@ SHARED_PATH_BUDGET = 4096
 # (job 134's graph cut down to 10 regions) and 11 did not.
 EXACT_REGION_LIMIT = 10
 # Pixels beyond a region that its branch may read or its overlay change: crop
-# rounds its corner down to whole chroma samples (up to 3 pixels for 4:1:0)
-# and an overlay at an odd position changes the chroma sample it shares with
-# the pixel beside the region.
+# rounds its corner down to whole chroma samples (up to 3 pixels for 4:1:0),
+# an overlay at an odd position changes the chroma sample it shares with the
+# pixel beside the region, and a cover region delogo refused before 2026-10-14
+# is cut and laid from the even pixel left of and above it (blur_filter._cover_patch).
 EDGE_PIXELS = 4
 # Two time ranges closer than this count as meeting: between() includes both
 # ends, and the times are written with 6 decimals.
@@ -117,17 +119,37 @@ def nested_paths(blurs: Sequence[SegmentBlur]) -> int:
 def segment_blur_filters(
     *, index: int, input_label: str, blurs: Sequence[SegmentBlur],
     frame_size: tuple[int, int] | None, chroma_rows_divisor: int,
+    source_chroma_step: tuple[int, int] = CHROMA_420,
 ) -> SegmentLayout:
-    """The filters applying ``blurs`` in order to segment ``index``'s picture ``input_label``."""
+    """The filters applying ``blurs`` in order to segment ``index``'s picture ``input_label``.
+
+    ``source_chroma_step`` is the chroma step of the source's format (chroma_step_of).
+    """
     paths = nested_paths(blurs)
+    steps = branch_chroma_steps(blurs, source_chroma_step)
     if paths <= NESTED_PATH_LIMIT:
-        return _nested(index, input_label, blurs, frame_size, chroma_rows_divisor, paths)
-    return _shared(index, input_label, blurs, frame_size, chroma_rows_divisor)
+        return _nested(index, input_label, blurs, frame_size, chroma_rows_divisor, steps, paths)
+    return _shared(index, input_label, blurs, frame_size, chroma_rows_divisor, steps)
+
+
+def branch_chroma_steps(
+    blurs: Sequence[SegmentBlur], source_chroma_step: tuple[int, int],
+) -> list[tuple[int, int]]:
+    """The chroma step of the picture each blur's branch crops, in either layout.
+
+    The first regional branch crops the segment's input in the source's format (a
+    full-frame blur before it keeps that format); every later one crops a picture
+    after the first regional overlay, whose format is 4:2:0 (measured on FFmpeg
+    9.0.1 for nine source formats, docs/evidence/cover-edge/README.md).
+    """
+    first = next((k for k, blur in enumerate(blurs) if not blur.full_frame), None)
+    return [source_chroma_step if k == first else CHROMA_420 for k in range(len(blurs))]
 
 
 def _nested(
     index: int, input_label: str, blurs: Sequence[SegmentBlur],
-    frame_size: tuple[int, int] | None, chroma_rows_divisor: int, paths: int,
+    frame_size: tuple[int, int] | None, chroma_rows_divisor: int,
+    steps: Sequence[tuple[int, int]], paths: int,
 ) -> SegmentLayout:
     filters: list[str] = []
     current = input_label
@@ -141,7 +163,7 @@ def _nested(
                 prefix=f"v{index}region{blur_index}", region=blur.region,
                 sigma=blur.sigma, feather=blur.feather, feather_mode=blur.feather_mode,
                 enable=blur.enable, method=blur.method, frame_size=frame_size,
-                chroma_rows_divisor=chroma_rows_divisor,
+                chroma_rows_divisor=chroma_rows_divisor, chroma_step=steps[blur_index],
             ))
         current = output
     return SegmentLayout(tuple(filters), current, NESTED_LAYOUT, paths, 0)
@@ -150,6 +172,7 @@ def _nested(
 def _shared(
     index: int, input_label: str, blurs: Sequence[SegmentBlur],
     frame_size: tuple[int, int] | None, chroma_rows_divisor: int,
+    steps: Sequence[tuple[int, int]],
 ) -> SegmentLayout:
     sources, paths, older_reads = shared_sources(blurs)
     readers: dict[int, list[int]] = {}
@@ -181,7 +204,7 @@ def _shared(
                 output_label=output, prefix=f"v{index}region{blur_index}", region=blur.region,
                 sigma=blur.sigma, feather=blur.feather, feather_mode=blur.feather_mode,
                 enable=blur.enable, method=blur.method, frame_size=frame_size,
-                chroma_rows_divisor=chroma_rows_divisor,
+                chroma_rows_divisor=chroma_rows_divisor, chroma_step=steps[blur_index],
             ))
         publish(blur_index + 1, output)
     return SegmentLayout(tuple(filters), main[len(blurs)], SHARED_LAYOUT, paths, older_reads)

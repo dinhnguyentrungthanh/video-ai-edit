@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import re
+from dataclasses import dataclass
+
 # How a regional BLUR hides its region. "gblur" (the default, and every edit plan
 # written before the cover method existed) only blurs the region, so a bright logo
 # on a dark frame stays readable. "delogo_blur_v1" (user decision 2026-10-04, measured
@@ -17,6 +20,14 @@ COVER_SIGMA_FRACTION = 0.6
 # repeating it until the colour branch ends. These are FFmpeg's defaults, written
 # out so that a change of default cannot leave later frames without the mask.
 MASK_REPEAT_ALPHAMERGE = "alphamerge=eof_action=repeat:repeatlast=1:shortest=0"
+# Pixels per chroma sample (across, down) of the picture a branch crops. FFmpeg's
+# crop rounds its size and corner down to whole chroma samples of that picture
+# (FFmpeg 9.0.1, docs/evidence/cover-edge/README.md). A segment's first regional
+# branch crops the source's format; every later branch crops an overlay's, 4:2:0.
+CHROMA_420 = (2, 2)
+_PLANAR_YUV = re.compile(r"yuv[aj]?(4[1-4][0-4])p(?:\d+(?:le|be))?")
+_PLANAR_FULL = re.compile(r"(?:gray|gbrp|gbrap)(?:f?\d+)?(?:le|be)?")
+_SUBSAMPLING = {"444": (1, 1), "422": (2, 1), "420": (2, 2), "440": (1, 2), "411": (4, 1), "410": (4, 4)}
 
 
 def blur_parameters(operation: dict) -> tuple[float, int]:
@@ -34,21 +45,54 @@ def blur_method(operation: dict) -> str:
     return method
 
 
+def chroma_step_of(pixel_format: str | None) -> tuple[int, int]:
+    """The chroma step a source of ``pixel_format`` reaches a segment's first regional branch with.
+
+    Planar YUV, gray and planar RGB keep their own format up to that crop, a full-frame
+    blur before it included. Any other format (packed or semi-planar YUV, packed RGB,
+    pal8, unknown) counts as 4:2:0: packed 4:2:2 is converted before the crop, and
+    after a full-frame blur the others are too (gblur takes none of them). Where such a
+    source still crops its own format, a region that ran is at worst cropped exactly.
+    """
+    name = pixel_format or ""
+    planar = _PLANAR_YUV.fullmatch(name)
+    if planar and planar[1] in _SUBSAMPLING:
+        return _SUBSAMPLING[planar[1]]
+    if _PLANAR_FULL.fullmatch(name):
+        return (1, 1)
+    return CHROMA_420
+
+
 def cover_sigma(region: dict) -> int:
     """Blur strength of the cover method for one region (never below the default)."""
     side = min(int(region["width"]), int(region["height"]))
     return max(DEFAULT_SIGMA, round(side * COVER_SIGMA_FRACTION))
 
 
-def _cover_chain(region: dict, frame_size: tuple[int, int] | None, enable: str) -> str:
-    """Crop the region with a margin of picture, fill it with delogo, crop back to the region.
+@dataclass(frozen=True)
+class _Patch:
+    """Where a branch cuts its picture and lays it back: the region, or the cover's widened one."""
 
-    delogo refuses a rectangle that touches the image edge, so the rectangle keeps one
-    pixel of the margin on every side; where the region touches the frame edge (no
-    margin there) that one pixel row of the region stays and is only blurred.
+    x: int
+    y: int
+    width: int
+    height: int
+    # crop exact=1: no rounding down to whole chroma samples.
+    exact: bool = False
+    # Sides on the frame's edge ("left", "right", "top", "bottom"): the feather never fades them.
+    frame_edges: frozenset[str] = frozenset()
+
+
+def _cover_window(
+    x: int, y: int, width: int, height: int, frame_size: tuple[int, int] | None,
+) -> tuple[int, int, int, int, tuple[int, int, int, int] | None]:
+    """The cover chain's crop (margin left, margin top, width, height) around a box, and delogo's rectangle in it.
+
+    delogo refuses a rectangle that touches the edge of its picture, so the rectangle
+    keeps one pixel of the margin on every side; where the box touches the frame
+    edge (no margin there) that one pixel row of the box stays and is only blurred.
+    No rectangle (None) when the box is too small to keep one.
     """
-    x, y = int(region["x"]), int(region["y"])
-    width, height = int(region["width"]), int(region["height"])
     left, top = min(COVER_MARGIN_PIXELS, x), min(COVER_MARGIN_PIXELS, y)
     if frame_size is None:
         right = bottom = 0
@@ -56,13 +100,80 @@ def _cover_chain(region: dict, frame_size: tuple[int, int] | None, enable: str) 
         right = max(0, min(COVER_MARGIN_PIXELS, int(frame_size[0]) - x - width))
         bottom = max(0, min(COVER_MARGIN_PIXELS, int(frame_size[1]) - y - height))
     crop_width, crop_height = width + left + right, height + top + bottom
-    chain = f"crop={crop_width}:{crop_height}:{x - left}:{y - top},"
     logo_x, logo_y = max(1, left), max(1, top)
     logo_width = min(crop_width - 1, left + width) - logo_x
     logo_height = min(crop_height - 1, top + height) - logo_y
-    if logo_width >= 1 and logo_height >= 1:
+    logo = (logo_x, logo_y, logo_width, logo_height) if logo_width >= 1 and logo_height >= 1 else None
+    return left, top, crop_width, crop_height, logo
+
+
+def _cover_patch(
+    region: dict, frame_size: tuple[int, int] | None, chroma_step: tuple[int, int],
+) -> _Patch:
+    """Where the cover method works on ``region``: the region itself wherever FFmpeg ran it before 2026-10-14.
+
+    crop rounds its size down to whole chroma samples (``chroma_step``) of the
+    picture it crops. Where that cut off the column or row past delogo's rectangle
+    (an odd size with at most one pixel of picture past the region's right or
+    bottom; up to three for 4:1:0), delogo refused the whole graph on every try
+    (job 141). Such a region is widened to the even pixel left of and above it and
+    cropped exactly: overlay lays a patch at even x and y only, and an exact crop at
+    an odd x reads a 10-bit chroma plane from the wrong bytes (FFmpeg 9.0.1). The
+    patch then reaches the region's right and bottom, the frame's edge included,
+    and the feather leaves a side on the frame's edge unfaded.
+    """
+    x, y = int(region["x"]), int(region["y"])
+    width, height = int(region["width"]), int(region["height"])
+    _, _, crop_width, crop_height, logo = _cover_window(x, y, width, height, frame_size)
+    step_x, step_y = chroma_step
+    if logo is None or (
+        logo[0] + logo[2] < crop_width - crop_width % step_x
+        and logo[1] + logo[3] < crop_height - crop_height % step_y
+    ):
+        return _Patch(x, y, width, height)
+    patch_x, patch_y = x - x % 2, y - y % 2
+    patch_width, patch_height = x + width - patch_x, y + height - patch_y
+    edges = {"left"} if patch_x == 0 else set()
+    if patch_y == 0:
+        edges.add("top")
+    if frame_size is not None:
+        if patch_x + patch_width >= int(frame_size[0]):
+            edges.add("right")
+        if patch_y + patch_height >= int(frame_size[1]):
+            edges.add("bottom")
+    return _Patch(patch_x, patch_y, patch_width, patch_height, exact=True, frame_edges=frozenset(edges))
+
+
+def _cover_chain(patch: _Patch, frame_size: tuple[int, int] | None, enable: str) -> str:
+    """Crop the patch with a margin of picture, fill it with delogo, crop back to the patch."""
+    left, top, crop_width, crop_height, logo = _cover_window(
+        patch.x, patch.y, patch.width, patch.height, frame_size,
+    )
+    exact = ":exact=1" if patch.exact else ""
+    chain = f"crop={crop_width}:{crop_height}:{patch.x - left}:{patch.y - top}{exact},"
+    if logo is not None:
+        logo_x, logo_y, logo_width, logo_height = logo
         chain += f"delogo=x={logo_x}:y={logo_y}:w={logo_width}:h={logo_height}:{enable},"
-    return chain + f"crop={width}:{height}:{left}:{top}"
+    return chain + f"crop={patch.width}:{patch.height}:{left}:{top}{exact}"
+
+
+def _feather_distance(feather_mode: str, frame_edges: frozenset[str]) -> str:
+    """geq's distance from a pixel to the nearest side the feather fades ("" when none is faded)."""
+    if feather_mode == "vertical_only":
+        groups = ((("top", "Y"), ("bottom", "H-1-Y")),)
+    elif feather_mode == "all_edges":
+        groups = ((("left", "X"), ("right", "W-1-X")), (("top", "Y"), ("bottom", "H-1-Y")))
+    else:
+        raise ValueError(f"Unsupported blur feather mode: {feather_mode}")
+    parts = [_minimum([term for side, term in group if side not in frame_edges]) for group in groups]
+    return _minimum([part for part in parts if part])
+
+
+def _minimum(terms: list[str]) -> str:
+    """geq's min of one or two terms ("" for none)."""
+    if len(terms) == 2:
+        return f"min({terms[0]}\\,{terms[1]})"
+    return terms[0] if terms else ""
 
 
 def _gblur(sigma: float, height: int, enable: str, chroma_rows_divisor: int = 2) -> str:
@@ -109,6 +220,7 @@ def regional_blur_filters(
     region: dict, sigma: float, feather: int, enable: str,
     feather_mode: str = "all_edges", method: str = GBLUR,
     frame_size: tuple[int, int] | None = None, chroma_rows_divisor: int = 2,
+    chroma_step: tuple[int, int] = CHROMA_420,
 ) -> list[str]:
     """The split/crop/blur/overlay chains hiding one region while ``enable`` holds.
 
@@ -125,7 +237,7 @@ def regional_blur_filters(
         base_label=base, crop_label=crop, output_label=output_label, prefix=prefix,
         region=region, sigma=sigma, feather=feather, enable=enable,
         feather_mode=feather_mode, method=method, frame_size=frame_size,
-        chroma_rows_divisor=chroma_rows_divisor,
+        chroma_rows_divisor=chroma_rows_divisor, chroma_step=chroma_step,
     )
     return [f"[{input_label}]split[{base}][{crop}]", *branch]
 
@@ -135,6 +247,7 @@ def regional_blur_branch(
     region: dict, sigma: float, feather: int, enable: str,
     feather_mode: str = "all_edges", method: str = GBLUR,
     frame_size: tuple[int, int] | None = None, chroma_rows_divisor: int = 2,
+    chroma_step: tuple[int, int] = CHROMA_420,
 ) -> list[str]:
     """regional_blur_filters without its split: the region is cut from ``crop_label`` and laid on ``base_label``.
 
@@ -148,10 +261,13 @@ def regional_blur_branch(
         raise ValueError("Blur region must have positive width and height")
     if method not in BLUR_METHODS:
         raise ValueError(f"Unsupported blur method: {method}")
-    region_chain = (
-        _cover_chain(region, frame_size, enable) if method == COVER_METHOD
-        else f"crop={width}:{height}:{x}:{y}"
-    )
+    if method == COVER_METHOD:
+        patch = _cover_patch(region, frame_size, chroma_step)
+        region_chain = _cover_chain(patch, frame_size, enable)
+        x, y, width, height = patch.x, patch.y, patch.width, patch.height
+    else:
+        patch = _Patch(x, y, width, height)
+        region_chain = f"crop={width}:{height}:{x}:{y}"
     base = base_label
     crop = crop_label
     blurred = f"{prefix}blurred"
@@ -171,12 +287,8 @@ def regional_blur_branch(
     mask = f"{prefix}mask"
     soft = f"{prefix}soft"
     safe_feather = min(feather, max(1, min(width, height) // 3))
-    if feather_mode == "vertical_only":
-        distance = "min(Y\\,H-1-Y)"
-    elif feather_mode == "all_edges":
-        distance = "min(min(X\\,W-1-X)\\,min(Y\\,H-1-Y))"
-    else:
-        raise ValueError(f"Unsupported blur feather mode: {feather_mode}")
+    # A patch on every frame edge is not faded at all.
+    distance = _feather_distance(feather_mode, patch.frame_edges) or str(safe_feather)
     if method == COVER_METHOD:
         # The feathered edge fades into the cleaned region, never into the logo.
         clean = f"{prefix}clean"

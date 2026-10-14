@@ -91,6 +91,7 @@ from biliflow.blur_filter import (
     blur_feather_mode,
     blur_method,
     blur_parameters,
+    chroma_step_of,
     cover_sigma,
     regional_blur_filters,
 )
@@ -5175,6 +5176,7 @@ def render_edit_previews(
                     feather_mode=feather_mode,
                     enable=f"enable='between(t,{relative_start:.3f},{relative_end:.3f})'",
                     method=blur_method(operation), frame_size=(source_width, source_height),
+                    chroma_step=chroma_step_of(video_stream.get("pix_fmt")),
                 ))
                 command = [
                     str(ffmpeg_path), "-hide_banner", "-loglevel", "error", "-y",
