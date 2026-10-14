@@ -270,7 +270,8 @@ def main() -> int:
     finally:
         if not args.keep:
             shutil.rmtree(bench, ignore_errors=True)
-    version = subprocess.run([str(ffmpeg), "-version"], capture_output=True, text=True).stdout.splitlines()[0]
+    banner = subprocess.run([str(ffmpeg), "-version"], capture_output=True, text=True).stdout.split()
+    version = banner[2].split("-")[0]  # the number only: the banner also names the build vendor's site
     commit = subprocess.run(["git", "-C", str(CHECKOUT), "rev-parse", "HEAD"],
                             capture_output=True, text=True).stdout.strip()
     dirty = bool(subprocess.run(["git", "-C", str(CHECKOUT), "status", "--porcelain", "src"],

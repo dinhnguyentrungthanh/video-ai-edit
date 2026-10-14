@@ -1,3 +1,17 @@
+# Exports with many blur regions no longer hang; a watch on the export's FFmpeg — session H (2026-10-14, branch `fix/export-many-regions` from `main` `a63119b`; not merged)
+
+- Cause (job 134): each blur region was nested into the one before it, and FFmpeg 9.0.1's work per frame grows with the paths through the graph (×2 to ×4 per region). Job 134's 25 regions made 4^25 paths: FFmpeg never wrote a frame, and the render stage stayed RUNNING with a fresh heartbeat.
+- `blur_layout.py`: a segment of at most 1024 nested paths keeps today's graph character for character. A larger one shares one split per picture version, and each region reads the earliest picture that already holds every earlier change it can see. Job 134: 292 paths, exact. Past 10 regions in a segment, a path budget may make a region read an older picture: still blurred all over, different pixels only where it overlaps an earlier blur. The manifest records `encoding.filter_graph` (`layout`, `paths`, `regions_reading_older_picture`).
+- `render_watchdog.py`: the render's FFmpeg counts as moving while its `-progress` block changes or its read bytes grow. After `(600 s + 4 s per second of the longest CUT) × 2 in A1b's export lane` without either, FFmpeg is killed and the render stage fails with a Vietnamese message. No x264 retry, no export deferral; the scheduler reports the stall record before any hand-back.
+- Gates (`docs/evidence/export-regions/`):
+  - plans of 1–10 regions: x264 mp4 SHA-256 and framemd5 identical to `a63119b` (12/12, 7 of them in the new layout);
+  - 150 random plans × 4 pixel formats: frames identical in both layouts;
+  - 30 and 60 regions export in seconds, and every region is blurred while on;
+  - job 134's first 60 s exported in a temp root in 49.5 s, with blur placement checked;
+  - the watch stops real FFmpeg in a 24-region nested graph.
+- The stall threshold rests on one measurement: one PC, a synthetic 1080p source, CPU load rather than a GPU scan, no NVENC. Detectors, review decisions, thresholds and the encoder choice are unchanged; scan cache keys are unchanged.
+- Two independent read-only reviews found no critical or high issue; their fixes are in `2922a0a` (the stall record before the partial's removal, FFmpeg's stderr kept, a bounded wait after the kill, UTF-8 output, sturdier tests). Above 10 regions, a region reading an older picture may differ anywhere inside itself, and a plain gblur over a logo region shows the logo blurred there rather than covered (recorded in the evidence).
+
 # G7 merge: A1b export lane (2026-10-14, branch `merge/g7` from `main` `23c9e00`; not yet in the main folder)
 
 - Merged `perf/export-a1b` with `--no-ff` (`docs/handoff/A1b-lanes.md`, evidence in `docs/evidence/a1b/`):

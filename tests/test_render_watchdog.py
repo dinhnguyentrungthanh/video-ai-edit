@@ -263,8 +263,8 @@ class RunWatchedTests(unittest.TestCase):
 
     def test_its_error_text_is_read_as_utf8(self):
         # A Vietnamese file name in FFmpeg's error: bytes the Windows locale cannot decode.
-        result = self.watched("moving", 0.3, 1, "Lỗi: không mở được tập 6.mp4\n")
-        self.assertEqual(result.stderr, "Lỗi: không mở được tập 6.mp4\n")
+        result = self.watched("moving", 0.3, 1, "Lỗi: không mở được phim thử.mp4\n")
+        self.assertEqual(result.stderr, "Lỗi: không mở được phim thử.mp4\n")
 
     def test_reading_the_source_counts_as_moving(self):
         source = self.folder / "source.bin"

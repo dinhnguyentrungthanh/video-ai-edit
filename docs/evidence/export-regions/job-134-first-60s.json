@@ -1,0 +1,152 @@
+{
+ "job": 134,
+ "source_size": [
+  1280,
+  536
+ ],
+ "source_duration": 2657.236,
+ "structure": {
+  "cuts": [
+   [
+    0.0,
+    10.0
+   ]
+  ],
+  "segments": [
+   {
+    "start": 10.0,
+    "end": 2657.236,
+    "regions": 25,
+    "nested_paths": 1125899906842624,
+    "layout": "shared",
+    "paths": 292,
+    "older_reads": 0
+   }
+  ],
+  "blur_operations": 37
+ },
+ "full_expected_seconds": 2647.236,
+ "stall_seconds": 640.0,
+ "render_seconds": 49.5,
+ "manifest": {
+  "status": "COMPLETED",
+  "duration": 60.0,
+  "encoder": "libx264",
+  "filter_graph": {
+   "layout": "shared",
+   "paths": 292,
+   "regions_reading_older_picture": 0
+  },
+  "full_decode_validation_passed": true
+ },
+ "blur_checks": [
+  {
+   "id": "op-8a9e71e9fc8b",
+   "when": "on",
+   "source_seconds": 25.25,
+   "output_seconds": 15.25,
+   "region": {
+    "x": 837,
+    "y": 44,
+    "width": 319,
+    "height": 47
+   },
+   "film_long": true,
+   "retained_detail": -0.0,
+   "source_detail_per_pixel": 685.5
+  },
+  {
+   "id": "op-8a9e71e9fc8b",
+   "when": "on",
+   "source_seconds": 54.75,
+   "output_seconds": 44.75,
+   "region": {
+    "x": 837,
+    "y": 44,
+    "width": 319,
+    "height": 47
+   },
+   "film_long": true,
+   "retained_detail": 0.0,
+   "source_detail_per_pixel": 700.5
+  },
+  {
+   "id": "op-90d16a11a672",
+   "when": "on",
+   "source_seconds": 25.25,
+   "output_seconds": 15.25,
+   "region": {
+    "x": 0,
+    "y": 21,
+    "width": 1280,
+    "height": 32
+   },
+   "film_long": true,
+   "retained_detail": -0.005,
+   "source_detail_per_pixel": 2.4
+  },
+  {
+   "id": "op-90d16a11a672",
+   "when": "on",
+   "source_seconds": 54.75,
+   "output_seconds": 44.75,
+   "region": {
+    "x": 0,
+    "y": 21,
+    "width": 1280,
+    "height": 32
+   },
+   "film_long": true,
+   "retained_detail": 0.007,
+   "source_detail_per_pixel": 2.7
+  },
+  {
+   "id": "op-32480903d32b",
+   "when": "on",
+   "source_seconds": 19.25,
+   "output_seconds": 9.25,
+   "region": {
+    "x": 552,
+    "y": 445,
+    "width": 176,
+    "height": 29
+   },
+   "film_long": false,
+   "retained_detail": -0.001,
+   "source_detail_per_pixel": 1075.2
+  },
+  {
+   "id": "op-32480903d32b",
+   "when": "on",
+   "source_seconds": 36.75,
+   "output_seconds": 26.75,
+   "region": {
+    "x": 552,
+    "y": 445,
+    "width": 176,
+    "height": 29
+   },
+   "film_long": false,
+   "retained_detail": 0.002,
+   "source_detail_per_pixel": 746.2
+  },
+  {
+   "id": "op-32480903d32b",
+   "when": "off-after",
+   "source_seconds": 46.0,
+   "output_seconds": 36.0,
+   "region": {
+    "x": 552,
+    "y": 445,
+    "width": 176,
+    "height": 29
+   },
+   "film_long": false,
+   "retained_detail": 0.966,
+   "source_detail_per_pixel": 833.0
+  }
+ ],
+ "checked_on": "2026-10-14",
+ "how": "job 134's review queue copied into <install>/temp/h-job134; build_edit_plan and the authorization there; the real render_final_output (x264) with job 134's whole filter graph, the output stopped after 60 s (-t 60, expected duration 60 s) and x264 limited to 2 threads at below-normal priority because a scan of the Control Center ran beside it. Source film read only; the temp root was deleted.",
+ "blur_check_measure": "retained_detail: share of the source's fine detail (pixel minus its 3x3 mean, 4 px inside the region) the export keeps; about 0 blurred, about 1 not blurred. source_detail_per_pixel near 0 means a flat area that cannot show either."
+}
