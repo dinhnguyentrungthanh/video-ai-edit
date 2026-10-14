@@ -1,3 +1,9 @@
+# G8 merge: exports with many blur regions (2026-10-14, branch `merge/g8` from `main` `a63119b`; not yet in the main folder)
+
+- Merged `fix/export-many-regions` (session H, entry below) with `--no-ff`.
+- Scan cache keys unchanged (10 stages); full suite 3,331 tests OK, 28 skipped.
+- Not in this merge: the cover blur at the right or bottom frame edge with an odd crop size (job 141, delogo refuses); a separate fix follows.
+
 # Exports with many blur regions no longer hang; a watch on the export's FFmpeg — session H (2026-10-14, branch `fix/export-many-regions` from `main` `a63119b`; not merged)
 
 - Cause (job 134): each blur region was nested into the one before it, and FFmpeg 9.0.1's work per frame grows with the paths through the graph (×2 to ×4 per region). Job 134's 25 regions made 4^25 paths: FFmpeg never wrote a frame, and the render stage stayed RUNNING with a fresh heartbeat.

@@ -1,3 +1,7 @@
+## G8 merge, exports with many blur regions (2026-10-14) — branch `merge/g8`, not yet in the main folder
+
+- Session H merged: exports with many blur regions no longer hang, and a stalled render fails instead of holding the queue. Scan cache keys unchanged; full suite 3,331 OK. Details in `CHANGELOG.md`.
+
 ## Exports with many blur regions, render watch (2026-10-14) — branch `fix/export-many-regions`, not merged
 
 - An export with many blur regions (job 134: 25) no longer hangs FFmpeg; plans of up to 10 regions give byte-identical x264 exports. A render whose FFmpeg stops moving is stopped after 10 minutes (more for long CUTs, twice that beside a scan) and fails with a Vietnamese message instead of holding the queue. Details in `docs/handoff/H-export-regions.md`.

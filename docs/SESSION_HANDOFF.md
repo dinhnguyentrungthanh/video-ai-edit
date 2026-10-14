@@ -1,5 +1,13 @@
 # BiliFlow session handoff
 
+## G8 merge, exports with many blur regions (session H) — 2026-10-14, branch `merge/g8` (worktree `temp\wt-merge-g8`), not yet in the main folder
+
+- **Request:** the user asked to merge H first, as soon as it was done: jobs 134 (25 blur regions) and 136 (20 regions) hung at their render and are PAUSED there.
+- **Merge:** `fix/export-many-regions` (`49fe768`, `2922a0a`, `11a059c`) into `merge/g8` from `main` `a63119b` with `--no-ff`, no conflict.
+- **Gates:** scan cache keys identical to `main` (10 stages); full suite 3,331 tests OK, 28 skipped (2026-10-14 22:19–23:04). H's own gates are in the entry below.
+- **Open, not in this merge:** a cover blur whose region touches the right or bottom frame edge with an odd crop size makes FFmpeg's delogo refuse ("Logo area is outside of the frame"; job 141). It is on `main` too; a separate fix follows. A1b sends a waiting export to the main lane when the next scan job still waits at `preflight` (CPU), so that scan waits for every queued export.
+- **Next:** with the Control Center off and the user's explicit go, fast-forward the main folder to `merge/g8`; the user restarts it and presses "Tiếp tục" on jobs 134 and 136; push only on the user's word.
+
 ## Session H, exports with many blur regions and the render watch — 2026-10-14, branch `fix/export-many-regions` (worktree `temp\wt-export-regions`), not merged
 
 - **Request:** job 134's export hung (25 nested blur regions); fix the graph so at least 60 regions export, keep plans of up to 10 regions byte-identical, and stop a render whose FFmpeg no longer moves (also in A1b's export lane, without an export deferral).

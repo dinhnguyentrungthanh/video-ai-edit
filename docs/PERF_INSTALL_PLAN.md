@@ -998,6 +998,11 @@ Session cloud lập kế hoạch dừng vì hết credit. Một session **điề
 - Chưa chạy thật: NVENC lỗi trong làn song song (trả về làn chính) và kế hoạch có CUT ở làn hai.
 - Sau khi cập nhật thư mục chính: người dùng bấm "Đo lại" để thư mục cài có hồ sơ phần cứng; trước đó Tự động vẫn chạy tuần tự.
 
+### 14.13 G8: H, xuất phim nhiều vùng làm mờ (2026-10-14)
+
+- Gộp `fix/export-many-regions` vào `merge/g8`: phim nhiều vùng làm mờ không còn treo khi xuất; phim tới 10 vùng xuất ra giống từng byte như trước; bản xuất đứng yên quá lâu thì báo lỗi thay vì giữ hàng đợi. Khóa cache quét không đổi; full suite 3.331 OK.
+- Còn lại: vùng làm mờ sát mép phải hoặc mép dưới với khung cắt lẻ làm delogo báo lỗi (job 141), sửa riêng rồi gộp cùng R ở G9.
+
 ### 14.6 Cách session điều phối làm việc
 
 - Làm trong worktree `temp\wt-coord`, nhánh `coord/plan` (từ `origin/main`). **Không sửa thư mục chính** đang chạy Control Center.
