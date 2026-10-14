@@ -986,6 +986,12 @@ Session cloud lập kế hoạch dừng vì hết credit. Một session **điề
 - Gộp `feat/golden-clips` vào `merge/g5`: khóa cache quét không đổi, full suite 3.236 OK. Chưa kích hoạt: chờ cập nhật thư mục chính và khởi động lại Control Center, rồi G kích hoạt. Người dùng tự xóa phim job 39 (khoảng 5,7 GB).
 - Session F (`fix/small-bugs`) sửa 4 lỗi nhỏ: hủy xuất bị lọt, hai test chập chờn, byte lỗi và trích dẫn sai trong tài liệu. Để sau, gom vào đợt quét B3 vì đổi khóa cache: E3 (stage text âm thầm chạy CPU ở họ `standard`), E4, phần còn lại của B1.
 
+### 14.11 G6: các lỗi nhỏ của F (2026-10-14)
+
+- Gộp `fix/small-bugs` vào `merge/g6` (từ `merge/g5`): hủy xuất bị lọt, hàng chờ kết nối 128, hai test chập chờn, byte lỗi và trích dẫn. Khóa cache quét không đổi, full suite 3.241 OK.
+- Golden v2 đã kích hoạt ngày 2026-10-13 (Control Center tắt); chỉ job 37 và 38 còn khóa.
+- Tiếp theo: A1b (tự chọn theo máy: chỉ chạy song song khi có NVENC, đang quét bằng GPU và đủ VRAM), rồi một đợt chất lượng phát hiện và trang duyệt (job 129: đoạn mở đầu toàn khung; job 134: watermark trong dải phụ đề, khung đỏ che chữ, ảnh xem trước của chữ chạy, đầu phim đen khớp nhầm bộ nhớ logo).
+
 ### 14.6 Cách session điều phối làm việc
 
 - Làm trong worktree `temp\wt-coord`, nhánh `coord/plan` (từ `origin/main`). **Không sửa thư mục chính** đang chạy Control Center.

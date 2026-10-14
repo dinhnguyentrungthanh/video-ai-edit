@@ -1,5 +1,13 @@
 # BiliFlow session handoff
 
+## G6 merge, small fixes of session F — 2026-10-14, branch `merge/g6` (worktree `temp\wt-merge-g5`), not yet in the main folder
+
+- **Request:** the user approved session F (four small bugs, then the flaky ticket-page test) going in together with G5 (golden set v2).
+- **Merge:** `merge/g6` starts from `merge/g5` (`eeb4f10`: golden v2 hybrid plus its activation date) and takes `fix/small-bugs` (`939dda9`, then `947c425`) with `--no-ff`, no conflict. Fixes: a Hủy or Dừng ngay landing between the claim and the RUNNING stage never lets the stage start (`JobStore.start_stage`, a conditional write); the local HTTP servers queue 128 connections instead of 5 (`http_guards.LocalHTTPServer`; the phone limits 32/8 are unchanged); two flaky tests wait on real signals or per-case deadlines; the 0x08 bytes in `docs/SCAN_PERFORMANCE.md` and two plan citations are fixed.
+- **Gates:** scan cache keys identical to `ed39653` (10 stages); full suite 3,241 tests OK, 28 skipped (2026-10-14 08:47, before `947c425`, which changes one test file); `test_download_account_sources` on the final tree: 39 tests OK in 297 s. A rare `ERR_NO_BUFFER_SPACE` at page load in `test_download_account_e2e_flows` remains; the user chose to stop there (`docs/handoff/F-fixes.md`).
+- **Golden set:** v2 was activated on 2026-10-13 with the Control Center off; only jobs 37 and 38 stay locked.
+- **Next:** with the Control Center off and the user's explicit go, fast-forward the main folder to `merge/g6`; the user restarts it; push only on the user's word. Then prompts for A1b (automatic per machine) and a detection and review-page quality round (findings on jobs 129 and 134).
+
 ## G5 merge, golden set v2 (hybrid) — 2026-10-13, branch `merge/g5` (worktree `temp\wt-merge-g5`), not yet in the main folder
 
 - **Request:** the user approved the hybrid v2 (clips of job 39, whole films of jobs 37 and 38), its baseline card and the `AGENTS.md` golden-set text.

@@ -1,3 +1,13 @@
+# G6 merge: small fixes of session F (2026-10-14, branch `merge/g6` from `merge/g5`; not yet in the main folder)
+
+- Merged `fix/small-bugs` with `--no-ff` (`docs/handoff/F-fixes.md`):
+  - export cancel race: a Hủy or Dừng ngay between `claim_queued` and the RUNNING write no longer lets the stage start; the stage start is a conditional write (`JobStore.start_stage`) and the process is launched under the scheduler lock after a last state check;
+  - the Control Center, review UI and phone servers queue 128 pending connections (`http_guards.LocalHTTPServer`) instead of 5, which refused bursts of page requests on a busy PC (`ERR_NO_BUFFER_SPACE`, `ERR_CONNECTION_REFUSED`); the phone limits are unchanged;
+  - flaky tests: the rotated-cookie cancel waits for the real ticket request; the ticket-page failure cases get their own deadlines;
+  - docs: the 0x08 bytes in `docs/SCAN_PERFORMANCE.md` are `\b` again; two citations in `docs/PERF_INSTALL_PLAN.md` fixed.
+- Includes G5 (golden set v2, hybrid; activated 2026-10-13).
+- Scan cache keys unchanged (10 stages); full suite 3,241 tests OK, 28 skipped; `test_download_account_sources` on the final tree: 39 tests OK in 297 s.
+
 # G5 merge: golden set v2, hybrid (2026-10-13, branch `merge/g5` from `main` `ed39653`; not yet in the main folder)
 
 - Merged `feat/golden-clips` with `--no-ff` (entry "Golden Set v2, hybrid" below). Not activated: activation runs after the main folder is updated and the Control Center restarted.
