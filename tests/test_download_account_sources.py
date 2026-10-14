@@ -311,14 +311,19 @@ class TicketTest(SiteCase):
 
     def test_ticket_page_failures_keep_their_own_codes(self):
         # A tab that closes itself after it was found as the ticket page (1.5 s; one closing at once is never
-        # found: TICKET_NOT_OPENED, like a ticket page of another file).
-        cases = [("other", "TICKET_NOT_OPENED", 0.2), ("close", "TICKET_TAB_CLOSED", 1.5),
-                 ("gone", "UNAVAILABLE", 0.2), ("challenge", "SOURCE_CHALLENGE", 0.2), ("error", "TICKET_FAILED", 0.2)]
-        for state, code, wait in cases:
+        # found: TICKET_NOT_OPENED, like a ticket page of another file). Only "other" ends with the ticket wait
+        # (4 s); the other codes come from the ticket page itself, so their ticket wait is wide enough for a
+        # loaded machine (on one, a 4 s wait gave TICKET_TIMEOUT instead of SOURCE_CHALLENGE), and so is the
+        # page wait of every case (a 10 s one gave CLICK_FAILED instead of TICKET_FAILED).
+        cases = [("other", "TICKET_NOT_OPENED", 0.2, 4), ("close", "TICKET_TAB_CLOSED", 1.5, 30),
+                 ("gone", "UNAVAILABLE", 0.2, 30), ("challenge", "SOURCE_CHALLENGE", 0.2, 30),
+                 ("error", "TICKET_FAILED", 0.2, 30)]
+        for state, code, wait, ticket_seconds in cases:
             with self.subTest(state=state):
                 site = self.series_site(tickets={"s1e1--v1080": TicketBehaviour(state=state, wait=wait)})
+                provider = self.provider(ticket_seconds=ticket_seconds, run={"browser_options": {"page_seconds": 30}})
                 with self.assertRaises(SourceError) as caught:
-                    self.provider(ticket_seconds=4).resolve(site.url, self.context(self.chosen("s1e1")))
+                    provider.resolve(site.url, self.context(self.chosen("s1e1")))
                 self.assertEqual(caught.exception.code, code)
                 self.assertEqual(self.file_requests(), [])
                 self.assertEqual(self.manager.status("alpha")["state"], "CONNECTED")

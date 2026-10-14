@@ -1,5 +1,5 @@
 # Bàn giao F – sửa lỗi nhỏ
-- Nhánh: fix/small-bugs (từ main ed39653) · Commit cuối: code fe9bf89, rồi commit bàn giao này (xem `git log -1`) · Worktree: `temp\wt-fixes` · Cập nhật: 2026-10-13
+- Nhánh: fix/small-bugs (từ main ed39653) · Commit cuối: commit sửa test mục 5 kèm bàn giao này (xem `git log -1`); code mục 3 là fe9bf89 · Worktree: `temp\wt-fixes` · Cập nhật: 2026-10-14
 - Chạy ở: PC · Trạng thái: **xong, chờ gộp** (điều phối chạy full suite trên bản gộp G6)
 
 ## Đã xong
@@ -118,6 +118,25 @@
 - Quét lại cả hai file: không còn byte điều khiển nào (ngoài tab/xuống dòng), vẫn UTF-8, không CRLF. Số dòng không đổi,
   nên các trích dẫn `path:line` khác vào hai file (ví dụ trong `hardware_table.py`) vẫn đúng.
 
+### 5. Test chập chờn `TicketTest.test_ticket_page_failures_keep_their_own_codes` (commit sửa test kèm bàn giao này)
+- Ngoài 4 mục được giao; người dùng duyệt sửa ngày 2026-10-13, chỉ sửa file test.
+- **Nguyên nhân** (cùng loại với mục 2: hạn cố định trong test gặp lúc máy bận; thấy ở cổng 10 lần, 2 lần trượt):
+  - Test cho cả lượt lấy vé `ticket_seconds=4`; thời gian tìm trang vé và chờ trạng thái chung một hạn đó. Máy
+    chậm thì trang vé `challenge` chưa kịp hiện trạng thái trước 4 s, và lượt chạy trả `TICKET_TIMEOUT` thay vì
+    `SOURCE_CHALLENGE`.
+  - Cú click lấy vé có hạn chờ trang 10 s (`page_seconds` mặc định của test). Máy chậm thì click không xong và trả
+    `CLICK_FAILED` thay vì `TICKET_FAILED`.
+- **Cách sửa** (`tests/test_download_account_sources.py`, không nới điều test kiểm):
+  - chỉ trường hợp `other` giữ hạn vé 4 s, vì kết quả mong đợi `TICKET_NOT_OPENED` chính là hết hạn đó;
+  - `close`, `gone`, `challenge`, `error` có hạn vé 30 s, vì mã lỗi của chúng đến từ trạng thái trang vé chứ không từ
+    hạn;
+  - mọi trường hợp có hạn chờ trang 30 s (`page_seconds`).
+  - Các khẳng định giữ nguyên: đúng mã lỗi của từng trường hợp, không có request tải file, tài khoản vẫn
+    CONNECTED, Edge đã tắt.
+- **Kết quả:** `tests.test_download_account_sources` chạy riêng 5 lần liên tiếp (mỗi lần một tiến trình,
+  `BILIFLOW_REQUIRE_E2E=1`, lúc máy rảnh sau full suite của điều phối, 09:26–09:51 ngày 2026-10-14): **5/5**, mỗi
+  lần 294–302 s.
+
 ## Kết quả cổng
 - **Khóa cache:** `git diff --name-only main...HEAD` (16 file) không có file nào thuộc khóa cache của 10 stage (adult,
   verify_adult, text, visual_logo, localize_logo, confirm_violence, animation_safety, live_safety, gore, violence;
@@ -137,7 +156,7 @@
     các lần khác khoảng 300–330 s):
     - lần 9, trường hợp `challenge`: `TICKET_TIMEOUT` thay vì `SOURCE_CHALLENGE`;
     - lần 10, trường hợp `error`: `CLICK_FAILED` thay vì `TICKET_FAILED`.
-    Xem "Phát hiện cho session khác". F không sửa test này vì nó ngoài 4 mục được giao.
+    Người dùng duyệt sửa test này: xem mục 5 (sau khi sửa: 5/5).
 - **Full suite:** người dùng bỏ bước này (2026-10-13). Điều phối chạy full suite trên bản gộp G6. Lượt full suite đang
   chạy (từ 20:13) được dừng lúc khoảng 20:22, không có kết quả.
 - **Chạy một lần các module liên quan tới file đã sửa** (người dùng đổi cổng; ở fe9bf89; cùng môi trường như trên):
@@ -158,9 +177,8 @@
 - Cổng: như "Kết quả cổng" ở trên.
 
 ## Chờ người dùng
-- Mục 3: người dùng đã chọn dừng ở fe9bf89 (2026-10-13); không còn gì chờ.
-- Có sửa test chập chờn `TicketTest.test_ticket_page_failures_keep_their_own_codes` không (ngoài 4 mục; cách sửa gợi ý
-  ở "Phát hiện cho session khác")?
+- Mục 3: người dùng đã chọn dừng ở fe9bf89 (2026-10-13).
+- Mục 5: người dùng đã duyệt sửa (2026-10-13), đã sửa và chạy 5/5 (2026-10-14). Không còn gì chờ.
 
 ## Lưu ý cho người tiếp quản
 - Đã dọn: clip tổng hợp 1 s trong `input` của worktree, thư mục tạm do test để lại trong `temp` của worktree, các bản
@@ -171,15 +189,7 @@
   `ThreadingHTTPServer` trong `control_center.serve()` và `serve_review_ui()`).
 
 ## Phát hiện cho session khác
-- **Test chập chờn `TicketTest.test_ticket_page_failures_keep_their_own_codes`** (cùng loại với mục 2: hạn cố định
-  trong test gặp lúc máy bận):
-  - Test cho cả lượt lấy vé `ticket_seconds=4`; thời gian tìm trang vé và chờ trạng thái chung một hạn đó. Máy
-    chậm thì trang vé `challenge` chưa kịp hiện trạng thái trước 4 s, và lượt chạy trả `TICKET_TIMEOUT`.
-  - Cú click lấy vé có hạn chờ trang 10 s (`page_seconds`, cắt theo hạn của lượt chạy). Máy chậm thì click không
-    xong và trả `CLICK_FAILED`.
-  - Cách sửa gợi ý (chỉ test, không nới điều test kiểm): chỉ trường hợp `other` giữ hạn 4 s, vì kết quả mong đợi
-    `TICKET_NOT_OPENED` chính là hết hạn. Các trường hợp khác cho hạn rộng hơn, vì mã lỗi của chúng đến từ trạng
-    thái trang chứ không từ hạn.
+- Test chập chờn `TicketTest.test_ticket_page_failures_keep_their_own_codes`: **đã sửa ở mục 5** (người dùng duyệt).
 - `golden_label_app._ExclusiveServer` vẫn nghe với backlog 5. F không sửa vì mọi thứ về golden nằm ngoài phạm vi.
 - Edge của trang test E2E (`account_e2e_fixtures.open_page`) chỉ có `--no-proxy-server`, nên tự kết nối ra dịch vụ
   Microsoft (TCP 443 và QUIC) trong lúc test. Session browser của bản thật thì chặn bằng proxy hố đen.
