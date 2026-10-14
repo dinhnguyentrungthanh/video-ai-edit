@@ -42,16 +42,20 @@ PARALLEL_RENDER_ENVIRONMENT = {EXPORT_LANE_ENVIRONMENT: PARALLEL_EXPORT_LANE}
 
 MIB = 1024 * 1024
 
-# Measured VRAM (MiB, NVML "used", GPU 0). None: not measured yet, so the second
-# lane never opens. Evidence: docs/evidence/a1b/ (filled in by the A1b measurement).
-#   NVENC_NEED_MIB: the NVENC export's own VRAM, measured while Qwen2-VL ran, by the
-#     largest frame (width x height in pixels) it was measured for, smallest first.
+# Measured VRAM (MiB, NVML "used", GPU 0). None would mean not measured: the second
+# lane then never opens. Evidence: docs/evidence/a1b/vram-2026-10-14/ (two runs on a
+# test Control Center, RTX 2060 6 GB, driver 617.42; scripts/a1b_vram_measure.py).
+#   NVENC_NEED_MIB: the NVENC export's own VRAM by the largest frame (width x height
+#     in pixels) it was measured for, smallest first: 169-170 MiB at 1280x640 and
+#     244 MiB at 1920x1080, alone and while Qwen2-VL ran (both runs).
 #   SCAN_PEAK_MIB: the most VRAM a scan stage added above what was in use just
-#     before it started (the Qwen2-VL stage); every scan stage is budgeted at it.
-#   SAFETY_MARGIN_MIB: VRAM left free after both.
-NVENC_NEED_MIB: tuple[tuple[int, int], ...] | None = None
-SCAN_PEAK_MIB: int | None = None
-SAFETY_MARGIN_MIB: int | None = None
+#     before it started: confirm_violence (Qwen2-VL), 4851-4943 MiB; every scan stage
+#     is budgeted at it (visual_logo 4688-4690, localize_logo 1309, text 833 and less).
+#   SAFETY_MARGIN_MIB: VRAM left free after both. Other programs' VRAM moved by 106
+#     MiB during the measurement; the user chose twice that, 256 MiB, on 2026-10-14.
+NVENC_NEED_MIB: tuple[tuple[int, int], ...] | None = ((1280 * 640, 170), (1920 * 1080, 244))
+SCAN_PEAK_MIB: int | None = 4943
+SAFETY_MARGIN_MIB: int | None = 256
 # The long side of a frame NVENC memory was measured for (1080p landscape or portrait).
 MAX_MEASURED_LONG_SIDE = 1920
 

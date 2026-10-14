@@ -1,6 +1,6 @@
 # Bàn giao A1b – xuất song song với quét, tự chọn theo máy
-- Nhánh: perf/export-a1b (từ main 23c9e00) · Commit cuối: xem `git log -1` (bước 1 là commit code, bàn giao này là commit kế) · Worktree: `temp\wt-a1b` · Cập nhật: 2026-10-14
-- Chạy ở: PC · Trạng thái: **code và test xong; chờ người dùng cho phép đo VRAM.** Làn song song chưa mở được trên máy thật vì số đo còn trống (`None`), nên hành vi hiện tại giống hệt tuần tự.
+- Nhánh: perf/export-a1b (từ main 23c9e00) · Commit cuối: xem `git log -1` (bước 1 a079975, bước 2 là commit số đo) · Worktree: `temp\wt-a1b` · Cập nhật: 2026-10-14
+- Chạy ở: PC · Trạng thái: **code, test và số đo VRAM xong (bước 2); đang chạy các cổng 1, 2, 3, 6 trên Control Center thử.** Với số đo đã ghi, "Tự động" mở làn xuất trên máy này khi đủ điều kiện.
 
 ## Đã xong
 
@@ -36,7 +36,7 @@
      `baseline` là VRAM đang dùng ngay trước khi tiến trình GPU của làn chính bắt đầu.
   5. Bản xuất chưa bị trả về lần nào trong lệnh xuất này.
 
-  Các số `NVENC_NEED_MIB`, `SCAN_PEAK_MIB` và `SAFETY_MARGIN_MIB` để `None` cho tới khi đo. Khi còn thiếu một số (`export_lanes.measured()` sai), chế độ "Tự động" **đúng là worker đơn của trước**: không đọc NVML, không ghi sự kiện làn, không có làn xuất.
+  Các số `NVENC_NEED_MIB`, `SCAN_PEAK_MIB` và `SAFETY_MARGIN_MIB` được đo ở bước 2. Nếu một số là `None` (`export_lanes.measured()` sai), chế độ "Tự động" **đúng là worker đơn của trước**: không đọc NVML, không ghi sự kiện làn, không có làn xuất.
 - **Ở ranh giới bước, làn chính đoán trước:**
   - Bản xuất đầu hàng đợi sẽ chạy song song được → làn chính lấy bước quét GPU kế tiếp, và làn xuất nhận bản xuất ngay khi tiến trình quét bắt đầu.
   - Không được → bản xuất chạy ở làn chính trước, như A1a.
@@ -77,20 +77,31 @@
   - Không có lỗi CRITICAL hay HIGH. Agent đã kiểm thứ tự khóa (`job_action_lock` trước `_lock`), các lệnh ghi có điều kiện của F ở cả hai làn, không có đường nào cho x264 chạy ở làn xuất, không có hai bản render chồng nhau, và trả về so với Dừng ngay/Hủy theo mọi thứ tự.
   - Ba điểm LOW đã sửa trong bước này: luồng làn xuất chết thì làn chính không chờ nó; tín hiệu đánh thức theo làn; chưa đo thì "Tự động" giống hệt worker đơn.
 
+### Bước 2: đo VRAM và ghi số đo
+- Người dùng cho phép đo ngay (2026-10-14) và chọn biên an toàn 256 MiB.
+- Script `scripts/a1b_vram_measure.py`:
+  - `run` dựng một root tạm `temp\a1b-measure-<giờ>` có marker riêng. `.venv` là junction; models, tools, runtime và cache mô hình là hard link; src, scripts và config chép từ worktree.
+  - Nó cắt hai clip 10 phút bằng stream copy (1920x1080 và 1280x640) từ video người dùng đưa qua tham số, rồi chạy Control Center thử ở cổng 8791 (`--no-import-existing`).
+  - Nó lấy mẫu NVML 10 lần/giây và đọc `GET /api/status` của Control Center thật mỗi 2 giây. Nó từ chối chạy nếu Control Center thật đang bận hoặc nếu cổng là 8765.
+  - `remove` xóa root tạm: gỡ junction và link mà không đi vào bên trong, chỉ nhận thư mục `a1b-measure-*` nằm trong `temp`.
+- Bằng chứng: `docs/evidence/a1b/vram-2026-10-14/` (README tiếng Việt, `run1`, `run2`: `summary.json`, `samples-1s.csv`, `run.log`; không có tên video).
+- Kết quả trên RTX 2060 6144 MiB, driver 617.42; Control Center thật rảnh suốt hai lượt:
+  - NVENC cần 244 MiB với khung 1080p và 169-170 MiB với khung 1280x640, khi xuất một mình cũng như cạnh Qwen2-VL.
+  - Đỉnh lớn nhất của một bước quét là confirm_violence, 4851-4943 MiB trên nền (visual_logo 4688-4690).
+  - Cạnh confirm_violence, đỉnh tổng là 5678/6144 MiB.
+  - Mọi bản NVENC cạnh bước quét đều thành công, không encode lại, và job quét vẫn về WAITING_REVIEW.
+- Hằng số đã ghi: `NVENC_NEED_MIB = ((1280 * 640, 170), (1920 * 1080, 244))`, `SCAN_PEAK_MIB = 4943`, `SAFETY_MARGIN_MIB = 256`. Máy này mở làn khi VRAM nền không quá 701 MiB (1080p) hoặc 775 MiB (1280x640); nền đo được là 490-596 MiB.
+- Test không phải sửa: các test của làn đều tự đặt số của chúng (`patch.multiple`), còn `UnmeasuredTests` đặt `None`. Bộ tập trung 28 module chạy lại sau khi ghi số đo.
+
 ## Đang dở
-- (trống)
+- Cổng 1, 2, 3, 6 trên Control Center thử (người dùng chọn "Chạy ngay").
 
 ## Bước tiếp theo
-1. **Đo VRAM** (bắt buộc trước khi bật; **hỏi người dùng giờ đo**):
-   - Control Center thử với root tạm trong `E:\DungChung\BiliFlow\temp`, cổng riêng. Control Center thật phải rảnh, vì mutex `Local\BiliFlowGpuInference` và `Local\BiliFlowFinalRender` dùng chung giữa các root.
-   - Lấy mẫu NVML: VRAM lúc rảnh; VRAM từng bước quét (mức tăng lớn nhất so với lúc trước bước, nhất là bước Qwen2-VL); VRAM của NVENC 1080p và 720p **lúc Qwen2-VL đang chạy**.
-   - Dùng bản sao clip, không động vào `input\` thật.
-2. Ghi `NVENC_NEED_MIB`, `SCAN_PEAK_MIB` và `SAFETY_MARGIN_MIB` vào `export_lanes.py`, kèm bằng chứng trong `docs/evidence/a1b/`. Cập nhật `UnmeasuredTests` nếu cần.
-3. Cổng 1: x264 giống hệt từng byte và framemd5 giữa tuần tự và A1b (bản trả về chạy x264 ở làn chính).
-4. Cổng 2: lượt quét chạy cạnh bản xuất cho kết quả giống lượt quét chạy một mình (bỏ qua các trường thời gian).
-5. Cổng 3: bản NVENC chạy song song qua kiểm tra sau xuất (`manifest_problem`).
-6. Cổng 6: đo thời gian xuất cộng quét, song song so với tuần tự.
-7. Mỗi bước: commit, cập nhật bàn giao này, báo hash. Không push, không merge.
+1. Cổng 1: x264 giống hệt từng byte và framemd5 giữa tuần tự và A1b (bản trả về chạy x264 ở làn chính).
+2. Cổng 2: lượt quét chạy cạnh bản xuất cho kết quả giống lượt quét chạy một mình (bỏ qua các trường thời gian).
+3. Cổng 3: bản NVENC chạy song song qua kiểm tra sau xuất (`manifest_problem`).
+4. Cổng 6: đo thời gian xuất cộng quét, song song so với tuần tự.
+5. Mỗi bước: commit, cập nhật bàn giao này, báo hash. Không push, không merge. Xóa root tạm bằng `a1b_vram_measure.py remove` khi xong.
 
 ## Cách kiểm
 - Lệnh test (trong worktree; chỉ các module liên quan):
@@ -99,11 +110,11 @@
   E:\DungChung\BiliFlow\.venv\Scripts\python.exe -m unittest tests.test_scheduler tests.test_job_store tests.test_final_renderer tests.test_export_encoder tests.test_render_graph_file tests.test_control_center tests.test_cache_dependencies tests.test_stage_cache tests.test_dashboard_v2_review tests.test_dashboard_v2_contract tests.test_dashboard_v2_phone tests.test_dashboard_v2_phone_hardening tests.test_dashboard_v2_route tests.test_dashboard_v2_frontend tests.test_dashboard_v2_status tests.test_dashboard_v2_downloads tests.test_hardware_manager tests.test_hardware_routes tests.test_job_import tests.test_skip_export tests.test_export_guards tests.test_job_delete tests.test_source_cleanup tests.test_source_archive tests.test_job_purge tests.test_export_lanes tests.test_export_lane_routes tests.test_phone_tailscale
   ```
 - Cổng 5: script `gate5.py` (so `stage_source_paths` và blob của các file trong khóa cache với một commit gốc), chạy `python -I gate5.py <worktree> 23c9e00`. Script nằm trong scratchpad của session; điều phối có thể viết lại theo mô tả ở trên.
-- Các cổng 1, 2, 3, 6 cần GPU, video thật và Control Center thử; làm sau khi đo.
+- Các cổng 1, 2, 3, 6 cần GPU, video thật và Control Center thử.
+- Đo lại VRAM (máy khác, driver khác): `python scripts\a1b_vram_measure.py run --install <install> --code <checkout> --source-1080 <video> --source-small <video> --evidence <thư mục>`, chỉ khi người dùng cho phép và Control Center thật rảnh. Sau đó chạy `remove`.
 
 ## Chờ người dùng
-- **Cho phép và chọn giờ đo VRAM** (nhiệm vụ ghi "hỏi tôi trước khi đo").
-- **Xác nhận cách hiểu "sau khi lượt quét xong":** bản xuất bị trả về chờ tới khi job quét chạy bên cạnh nó hết bước, rồi chạy trước các job quét khác. Cách khác: chạy ở ranh giới bước kế tiếp (nhanh hơn nhưng chen vào giữa job quét). Hiện làm theo cách thứ nhất.
+- (trống) Người dùng đã cho đo (2026-10-14), đã chọn "sau khi job quét đó xong" cho bản xuất bị trả về, chọn biên 256 MiB và cho chạy các cổng ngay.
 
 ## Lưu ý cho người tiếp quản
 - **Không thêm trường `lanes` vào hồ sơ phần cứng.** Quyết định dựa trên NVML đọc trực tiếp lúc bắt đầu cùng các số đo cố định trong `export_lanes.py`; không tăng `profile_version`. Nếu điều phối muốn có trường `lanes`, đó là một bước riêng của Session E.

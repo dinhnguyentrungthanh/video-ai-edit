@@ -1,0 +1,383 @@
+{
+  "measured_at": "2026-10-14T12:18:50+07:00",
+  "code_commit": "a079975",
+  "test_root": "a1b-measure-20261014-120544",
+  "error": null,
+  "gpu": {
+    "name": "NVIDIA GeForce RTX 2060",
+    "driver": "617.42",
+    "total_mib": 6144
+  },
+  "settings": {
+    "profile": "careful",
+    "fast_scan": true,
+    "ocr_recognition_batch_size": 1,
+    "detectors": [
+      "advertising",
+      "adult",
+      "gore",
+      "violence"
+    ],
+    "scan_alone_style": "live_action",
+    "beside_style": "mixed",
+    "max_output_bytes": 3500000000
+  },
+  "clips": {
+    "1080p": {
+      "width": 1920,
+      "height": 1080,
+      "duration_seconds": 605.707833
+    },
+    "small": {
+      "width": 1280,
+      "height": 640,
+      "duration_seconds": 604.638222
+    }
+  },
+  "jobs": {
+    "1080p": 1,
+    "small": 2
+  },
+  "job_states": {
+    "scan": "WAITING_REVIEW",
+    "beside": "WAITING_REVIEW"
+  },
+  "idle_mib": {
+    "min": 596,
+    "max": 596
+  },
+  "renders_alone": [
+    {
+      "returncode": 0,
+      "seconds": 81.7,
+      "before_max_mib": 596,
+      "before_median_mib": 596,
+      "peak_mib": 840,
+      "encoder": "h264_nvenc",
+      "nvenc_check": "trial_ok",
+      "fallback": null,
+      "encode_seconds": 64.569,
+      "error_tail": null,
+      "tag": "1080p",
+      "frame": {
+        "width": 1920,
+        "height": 1080,
+        "duration_seconds": 605.707833
+      },
+      "start_s": 17.1,
+      "end_s": 98.8,
+      "peak_above_before_mib": 244
+    },
+    {
+      "returncode": 0,
+      "seconds": 80.2,
+      "before_max_mib": 596,
+      "before_median_mib": 596,
+      "peak_mib": 765,
+      "encoder": "h264_nvenc",
+      "nvenc_check": "trial_ok",
+      "fallback": null,
+      "encode_seconds": 73.362,
+      "error_tail": null,
+      "tag": "small",
+      "frame": {
+        "width": 1280,
+        "height": 640,
+        "duration_seconds": 604.638222
+      },
+      "start_s": 103.8,
+      "end_s": 184.0,
+      "peak_above_before_mib": 169
+    }
+  ],
+  "renders_beside_qwen": [
+    {
+      "returncode": 2,
+      "seconds": 0.8,
+      "before_max_mib": 5438,
+      "before_median_mib": 5438.0,
+      "peak_mib": 5438,
+      "encoder": null,
+      "nvenc_check": null,
+      "fallback": null,
+      "encode_seconds": null,
+      "error_tail": "Lá»—i: Final render is not approved\n",
+      "tag": "1080p",
+      "frame": {
+        "width": 1920,
+        "height": 1080,
+        "duration_seconds": 605.707833
+      },
+      "stage": "confirm_violence",
+      "stage_pid": 23480,
+      "stage_baseline_mib": 499,
+      "stage_still_running": true,
+      "start_s": 607.3,
+      "end_s": 608.1,
+      "peak_above_before_mib": 0
+    },
+    {
+      "returncode": 2,
+      "seconds": 0.7,
+      "before_max_mib": 5438,
+      "before_median_mib": 5438,
+      "peak_mib": 5438,
+      "encoder": null,
+      "nvenc_check": null,
+      "fallback": null,
+      "encode_seconds": null,
+      "error_tail": "Lá»—i: Final render is not approved\n",
+      "tag": "small",
+      "frame": {
+        "width": 1280,
+        "height": 640,
+        "duration_seconds": 604.638222
+      },
+      "stage": "confirm_violence",
+      "stage_pid": 23480,
+      "stage_baseline_mib": 499,
+      "stage_still_running": true,
+      "start_s": 608.3,
+      "end_s": 609.0,
+      "peak_above_before_mib": 0
+    }
+  ],
+  "stage_processes": [
+    {
+      "job_id": 1,
+      "stage": "adult",
+      "pid": 13124,
+      "baseline_mib": 596,
+      "peak_mib": 853,
+      "peak_above_baseline_mib": 257,
+      "start_s": 190.2,
+      "end_s": 229.7,
+      "overlaps_render": false
+    },
+    {
+      "job_id": 1,
+      "stage": "verify_adult",
+      "pid": 36764,
+      "baseline_mib": 596,
+      "peak_mib": 1075,
+      "peak_above_baseline_mib": 479,
+      "start_s": 230.0,
+      "end_s": 241.1,
+      "overlaps_render": false
+    },
+    {
+      "job_id": 1,
+      "stage": "live_safety",
+      "pid": 43208,
+      "baseline_mib": 596,
+      "peak_mib": 1313,
+      "peak_above_baseline_mib": 717,
+      "start_s": 241.7,
+      "end_s": 278.1,
+      "overlaps_render": false
+    },
+    {
+      "job_id": 1,
+      "stage": "confirm_violence",
+      "pid": 32876,
+      "baseline_mib": 596,
+      "peak_mib": 5447,
+      "peak_above_baseline_mib": 4851,
+      "start_s": 278.4,
+      "end_s": 322.6,
+      "overlaps_render": false
+    },
+    {
+      "job_id": 1,
+      "stage": "text",
+      "pid": 30424,
+      "baseline_mib": 494,
+      "peak_mib": 1327,
+      "peak_above_baseline_mib": 833,
+      "start_s": 323.3,
+      "end_s": 363.8,
+      "overlaps_render": false
+    },
+    {
+      "job_id": 1,
+      "stage": "visual_logo",
+      "pid": 21344,
+      "baseline_mib": 494,
+      "peak_mib": 5182,
+      "peak_above_baseline_mib": 4688,
+      "start_s": 364.4,
+      "end_s": 402.8,
+      "overlaps_render": false
+    },
+    {
+      "job_id": 1,
+      "stage": "localize_logo",
+      "pid": 18348,
+      "baseline_mib": 493,
+      "peak_mib": 1292,
+      "peak_above_baseline_mib": 799,
+      "start_s": 404.0,
+      "end_s": 442.4,
+      "overlaps_render": false
+    },
+    {
+      "job_id": 1,
+      "stage": "localize_logo",
+      "pid": 11412,
+      "baseline_mib": 493,
+      "peak_mib": 1802,
+      "peak_above_baseline_mib": 1309,
+      "start_s": 442.4,
+      "end_s": 460.5,
+      "overlaps_render": false
+    },
+    {
+      "job_id": 1,
+      "stage": "build_review",
+      "pid": 32608,
+      "baseline_mib": 493,
+      "peak_mib": 499,
+      "peak_above_baseline_mib": 6,
+      "start_s": 460.8,
+      "end_s": 502.2,
+      "overlaps_render": false
+    },
+    {
+      "job_id": 2,
+      "stage": "animation_safety",
+      "pid": 14252,
+      "baseline_mib": 499,
+      "peak_mib": 1253,
+      "peak_above_baseline_mib": 754,
+      "start_s": 508.1,
+      "end_s": 537.4,
+      "overlaps_render": false
+    },
+    {
+      "job_id": 2,
+      "stage": "adult",
+      "pid": 34872,
+      "baseline_mib": 499,
+      "peak_mib": 757,
+      "peak_above_baseline_mib": 258,
+      "start_s": 537.7,
+      "end_s": 554.2,
+      "overlaps_render": false
+    },
+    {
+      "job_id": 2,
+      "stage": "live_safety",
+      "pid": 33716,
+      "baseline_mib": 499,
+      "peak_mib": 1215,
+      "peak_above_baseline_mib": 716,
+      "start_s": 554.2,
+      "end_s": 587.5,
+      "overlaps_render": false
+    },
+    {
+      "job_id": 2,
+      "stage": "confirm_violence",
+      "pid": 23480,
+      "baseline_mib": 499,
+      "peak_mib": 5438,
+      "peak_above_baseline_mib": 4939,
+      "start_s": 587.8,
+      "end_s": 636.5,
+      "overlaps_render": true
+    },
+    {
+      "job_id": 2,
+      "stage": "text",
+      "pid": 32040,
+      "baseline_mib": 494,
+      "peak_mib": 1282,
+      "peak_above_baseline_mib": 788,
+      "start_s": 636.5,
+      "end_s": 672.0,
+      "overlaps_render": false
+    },
+    {
+      "job_id": 2,
+      "stage": "visual_logo",
+      "pid": 38984,
+      "baseline_mib": 494,
+      "peak_mib": 5184,
+      "peak_above_baseline_mib": 4690,
+      "start_s": 672.9,
+      "end_s": 710.3,
+      "overlaps_render": false
+    },
+    {
+      "job_id": 2,
+      "stage": "localize_logo",
+      "pid": 20336,
+      "baseline_mib": 494,
+      "peak_mib": 1300,
+      "peak_above_baseline_mib": 806,
+      "start_s": 711.3,
+      "end_s": 731.3,
+      "overlaps_render": false
+    },
+    {
+      "job_id": 2,
+      "stage": "localize_logo",
+      "pid": 44152,
+      "baseline_mib": 499,
+      "peak_mib": 499,
+      "peak_above_baseline_mib": 0,
+      "start_s": 731.3,
+      "end_s": 732.5,
+      "overlaps_render": false
+    },
+    {
+      "job_id": 2,
+      "stage": "build_review",
+      "pid": 27532,
+      "baseline_mib": 499,
+      "peak_mib": 499,
+      "peak_above_baseline_mib": 0,
+      "start_s": 732.8,
+      "end_s": 758.2,
+      "overlaps_render": false
+    }
+  ],
+  "stage_peak_above_baseline_mib": {
+    "adult": 258,
+    "verify_adult": 479,
+    "live_safety": 717,
+    "confirm_violence": 4851,
+    "text": 833,
+    "visual_logo": 4690,
+    "localize_logo": 1309,
+    "build_review": 6,
+    "animation_safety": 754
+  },
+  "real_control_center_busy": [],
+  "phases": [
+    {
+      "phase": "start",
+      "at_s": 0.0
+    },
+    {
+      "phase": "idle",
+      "at_s": 2.1
+    },
+    {
+      "phase": "alone",
+      "at_s": 17.1
+    },
+    {
+      "phase": "scan",
+      "at_s": 189.0
+    },
+    {
+      "phase": "beside",
+      "at_s": 507.4
+    },
+    {
+      "phase": "end",
+      "at_s": 758.0
+    }
+  ]
+}
