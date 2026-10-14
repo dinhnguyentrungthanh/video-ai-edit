@@ -5,6 +5,7 @@ import json
 import math
 import os
 import subprocess
+import sys
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -76,6 +77,8 @@ DEFERRED_MESSAGE = (
 
 
 STALL_SCHEMA = 1
+# The end of FFmpeg's stderr kept with a stall (the stage log and its record).
+STALL_STDERR_CHARS = 4000
 
 
 class ExportDeferred(RuntimeError):
@@ -325,17 +328,34 @@ def read_render_stall(project_root: Path, output_path: Path) -> str | None:
 
 
 def _record_render_stall(
-    root: Path, plan_path: Path, output_path: Path, stall: RenderStalled, *, lane: str,
+    root: Path, plan_path: Path, output_path: Path, partial: Path, stall: RenderStalled, *, lane: str,
 ) -> None:
-    _write_json(render_stall_path(root, output_path), {
-        "schema": STALL_SCHEMA, "created_at": _now(),
-        "plan": plan_path.relative_to(root).as_posix(),
-        "output": output_path.relative_to(root).as_posix(),
-        "lane": lane,
-        "message": str(stall),
-        "idle_seconds": round(stall.idle_seconds, 1),
-        "encoded_seconds": stall.encoded_seconds,
-    })
+    """Leave the stall's record for the scheduler, then remove the partial output.
+
+    The record comes first and neither step may hide the stall: Windows can
+    hold the killed FFmpeg's file for a moment (an antivirus scan), and the
+    stage must still fail with the stall's message.
+    """
+    stderr_tail = stall.stderr.strip()[-STALL_STDERR_CHARS:]
+    if stderr_tail:
+        print("FFmpeg stderr before the stop:", stderr_tail, sep="\n", file=sys.stderr)
+    try:
+        _write_json(render_stall_path(root, output_path), {
+            "schema": STALL_SCHEMA, "created_at": _now(),
+            "plan": plan_path.relative_to(root).as_posix(),
+            "output": output_path.relative_to(root).as_posix(),
+            "lane": lane,
+            "message": str(stall),
+            "idle_seconds": round(stall.idle_seconds, 1),
+            "encoded_seconds": stall.encoded_seconds,
+            "stderr_tail": stderr_tail,
+        })
+    except OSError as error:
+        print(f"Could not write the stall record: {error}", file=sys.stderr)
+    try:
+        partial.unlink(missing_ok=True)
+    except OSError as error:
+        print(f"Could not remove the partial output: {error}", file=sys.stderr)
 
 
 def read_render_progress(
@@ -892,9 +912,8 @@ def _render_final_output_unlocked(
         except RenderStalled as stall:
             # The stage fails with the stall's message, in either lane: no NVENC
             # fallback and no deferral, which would only run the stalling graph again.
-            partial.unlink(missing_ok=True)
             _record_render_stall(
-                root, plan_path, output_path, stall,
+                root, plan_path, output_path, partial, stall,
                 lane=PARALLEL_EXPORT_LANE if parallel else MAIN_EXPORT_LANE,
             )
             raise

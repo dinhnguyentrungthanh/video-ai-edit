@@ -43,13 +43,11 @@ sys.path.insert(0, str(CHECKOUT / "src"))
 from biliflow.install_paths import install_root  # noqa: E402
 
 WIDTH, HEIGHT, SECONDS, FPS = 320, 180, 3.0, 25
-# Source pixel formats of the self-made clips (static noise over testsrc2: fine
-# detail in every region, so a changed blur shows in the bytes).
-CLIP_FORMATS = ("yuv420p", "yuv420p10le")
 RENDER_TIMEOUT_SECONDS = 3600
 SIDE_PROGRAM = """
 import json, sys
 from pathlib import Path
+import biliflow
 from biliflow.final_renderer import build_final_filter_graph, render_final_output
 job = json.loads(sys.argv[1])
 plan = json.loads(Path(job["plan"]).read_text(encoding="utf-8"))
@@ -59,7 +57,7 @@ graph, _ = build_final_filter_graph(
 manifest = render_final_output(
     project_root=Path(job["root"]), plan_path=Path(job["plan"]), output_path=Path(job["output"]),
     ffmpeg_path=Path(job["ffmpeg"]), ffprobe_path=Path(job["ffprobe"]))
-print(json.dumps({"graph": graph, "status": manifest["status"],
+print(json.dumps({"graph": graph, "status": manifest["status"], "code": biliflow.__file__,
                   "filter_graph": manifest["encoding"].get("filter_graph")}))
 """
 
@@ -144,6 +142,7 @@ def sha256(path: Path) -> str:
 
 
 def make_clip(ffmpeg: Path, target: Path, pixel_format: str) -> None:
+    """Static noise over testsrc2: fine detail in every region, so a changed blur shows in the bytes."""
     subprocess.run(
         [str(ffmpeg), "-hide_banner", "-loglevel", "error", "-y",
          "-f", "lavfi", "-i", f"testsrc2=s={WIDTH}x{HEIGHT}:r={FPS}:d={SECONDS:g},noise=alls=40:allf=u",
@@ -184,12 +183,15 @@ def run_side(side_src: Path, root: Path, clip: Path, operations: list[dict],
     environment = {key: value for key, value in os.environ.items() if not key.startswith("BILIFLOW_")}
     environment.update({"PYTHONPATH": str(side_src), "TEMP": str(root), "TMP": str(root)})
     started = time.monotonic()
-    result = subprocess.run([sys.executable, "-c", SIDE_PROGRAM, json.dumps(job)], env=environment,
+    # Run from the side's own root: `python -c` puts its working folder first on sys.path.
+    result = subprocess.run([sys.executable, "-c", SIDE_PROGRAM, json.dumps(job)], env=environment, cwd=root,
                             capture_output=True, text=True, timeout=RENDER_TIMEOUT_SECONDS)
     seconds = round(time.monotonic() - started, 1)
     if result.returncode:
         return {"error": result.stderr.strip()[-1500:], "seconds": seconds}
     side = json.loads(result.stdout.strip().splitlines()[-1])
+    if side_src not in Path(side.pop("code")).resolve().parents:
+        return {"error": f"biliflow was not imported from {side_src}", "seconds": seconds}
     side.update(seconds=seconds, mp4_sha256=sha256(output), framemd5_sha256=framemd5(ffmpeg, output))
     return side
 
@@ -245,8 +247,12 @@ def main() -> int:
     ffmpeg, ffprobe = (tools / "ffmpeg.exe").resolve(strict=True), (tools / "ffprobe.exe").resolve(strict=True)
     baseline = args.baseline_src.resolve(strict=True)
     candidate = (CHECKOUT / "src").resolve(strict=True)
+    if baseline == candidate:
+        raise SystemExit("The baseline must be another code tree than this checkout's src")
+    if bench.exists():
+        raise SystemExit(f"{bench} exists (a run kept with --keep?): remove it first")
     names = args.only or list(PLANS)
-    bench.mkdir(parents=True, exist_ok=True)
+    bench.mkdir(parents=True)
     records = []
     try:
         clips = {}

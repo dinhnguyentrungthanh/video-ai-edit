@@ -1,4 +1,3 @@
-import json
 import os
 import subprocess
 import sys
@@ -12,9 +11,9 @@ import psutil
 
 from biliflow import render_watchdog
 from biliflow.render_watchdog import (
-    PARALLEL_STALL_SECONDS,
     STALL_SECONDS,
     RenderStalled,
+    _kill,
     _Watch,
     encoded_seconds,
     read_progress_tail,
@@ -53,7 +52,7 @@ if mode == "moving":  # argv[3] seconds of frames, then exit code argv[4] with s
         block(frame)
         time.sleep(0.05)
     block(frame, end=True)
-    sys.stderr.write(sys.argv[5])
+    sys.stderr.buffer.write(sys.argv[5].encode("utf-8"))  # as FFmpeg writes file names
     sys.exit(int(sys.argv[4]))
 if mode == "reads":  # decoding through a CUT: argv[3] seconds of reads of argv[4], no frame
     started = time.monotonic()
@@ -107,7 +106,8 @@ class StallMessageTests(unittest.TestCase):
         self.assertIn("không tiến triển trong 10 phút (chưa xuất được khung hình nào)",
                       stall_message(idle_seconds=STALL_SECONDS, encoded=None, expected_seconds=90))
         self.assertIn("trong 20 phút (đứng ở 1:02:05 / 1:30:00)",
-                      stall_message(idle_seconds=PARALLEL_STALL_SECONDS, encoded=3725.4, expected_seconds=5400))
+                      stall_message(idle_seconds=stall_limit(longest_cut_seconds=0.0, parallel=True),
+                                    encoded=3725.4, expected_seconds=5400))
         message = stall_message(idle_seconds=630, encoded=65, expected_seconds=90)
         self.assertIn("đứng ở 1:05 / 1:30", message)
         self.assertIn("Thử lại bước lỗi", message)
@@ -173,6 +173,44 @@ class WatchClockTests(unittest.TestCase):
         self.now = 5
         self.assertEqual(watch.poll(), 5)
 
+    def test_a_progress_file_that_cannot_be_read_for_a_moment_is_no_progress(self):
+        write_block(self.progress, frame=25, out_time_us=1000000, progress="continue")
+        self.assertEqual(self.poll_at(5), 0)
+        with patch("biliflow.render_watchdog.read_progress_tail", return_value=None):
+            self.assertEqual(self.poll_at(10), 5)
+        self.assertEqual(self.poll_at(15), 10)  # the same block as before the gap
+        self.assertEqual(self.watch.values["frame"], "25")
+
+
+class StallLimitTests(unittest.TestCase):
+    def test_the_limit_grows_with_the_longest_cut_and_doubles_beside_a_scan(self):
+        self.assertEqual(STALL_SECONDS, 600.0)
+        self.assertEqual(stall_limit(longest_cut_seconds=0.0, parallel=False), 600.0)
+        self.assertEqual(stall_limit(longest_cut_seconds=0.0, parallel=True), 1200.0)
+        # A 30 min CUT: FFmpeg decodes it without a frame, 4 s allowed per second of it.
+        self.assertEqual(stall_limit(longest_cut_seconds=1800.0, parallel=False), 7800.0)
+        self.assertEqual(stall_limit(longest_cut_seconds=1800.0, parallel=True), 15600.0)
+        self.assertEqual(stall_limit(longest_cut_seconds=-1.0, parallel=False), 600.0)
+
+
+class KillTests(unittest.TestCase):
+    def test_a_killed_ffmpeg_that_never_ends_is_not_waited_for(self):
+        class Stuck:
+            killed = False
+            timeout = None
+
+            def kill(self):
+                self.killed = True
+
+            def communicate(self, timeout=None):
+                self.timeout = timeout
+                raise subprocess.TimeoutExpired("ffmpeg", timeout)
+
+        stuck = Stuck()
+        self.assertEqual(_kill(stuck), "")
+        self.assertTrue(stuck.killed)
+        self.assertEqual(stuck.timeout, render_watchdog.KILL_WAIT_SECONDS)
+
 
 class RunWatchedTests(unittest.TestCase):
     """run_watched on real child processes (a Python stand-in for FFmpeg)."""
@@ -223,38 +261,36 @@ class RunWatchedTests(unittest.TestCase):
         self.assertEqual((result.returncode, result.stderr), (3, "[libx264 @ 0] broken\n"))
         self.assertIsInstance(result, subprocess.CompletedProcess)
 
+    def test_its_error_text_is_read_as_utf8(self):
+        # A Vietnamese file name in FFmpeg's error: bytes the Windows locale cannot decode.
+        result = self.watched("moving", 0.3, 1, "Lỗi: không mở được tập 6.mp4\n")
+        self.assertEqual(result.stderr, "Lỗi: không mở được tập 6.mp4\n")
+
     def test_reading_the_source_counts_as_moving(self):
         source = self.folder / "source.bin"
         source.write_bytes(os.urandom(256 * 1024))
-        result = self.watched("reads", 4.0, source, stall_seconds=1.5)
+        result = self.watched("reads", 7.0, source)
         self.assertEqual(result.returncode, 0)
-        self.assertGreater(self.elapsed, 4.0)  # no frame for longer than the 1.5 s limit
+        self.assertGreater(self.elapsed, 7.0)  # no frame for longer than the 3 s limit
 
     def test_without_the_read_counter_only_the_progress_counts(self):
         source = self.folder / "source.bin"
         source.write_bytes(os.urandom(64 * 1024))
         with patch("biliflow.render_watchdog.psutil.Process", side_effect=psutil.AccessDenied()):
             with self.assertRaises(RenderStalled):
-                self.watched("reads", 6.0, source, stall_seconds=1.5)
-
-    def test_the_limit_grows_with_the_longest_cut_and_doubles_beside_a_scan(self):
-        self.assertEqual((STALL_SECONDS, PARALLEL_STALL_SECONDS), (600.0, 1200.0))
-        self.assertEqual(stall_limit(longest_cut_seconds=0.0, parallel=False), 600.0)
-        self.assertEqual(stall_limit(longest_cut_seconds=0.0, parallel=True), 1200.0)
-        # A 30 min CUT: FFmpeg decodes it without a frame, 4 s allowed per second of it.
-        self.assertEqual(stall_limit(longest_cut_seconds=1800.0, parallel=False), 7800.0)
-        self.assertEqual(stall_limit(longest_cut_seconds=1800.0, parallel=True), 15600.0)
-        self.assertEqual(stall_limit(longest_cut_seconds=-1.0, parallel=False), 600.0)
+                self.watched("reads", 12.0, source)
+        self.assertLess(self.elapsed, 11.0)
 
     @unittest.skipUnless(FFMPEG.exists(), "project FFmpeg is required")
-    def test_real_ffmpeg_in_a_graph_of_24_nested_regions_is_stopped(self):
-        # The shape that hung job 134's export: each region splits the picture the one before made.
+    def test_real_ffmpeg_in_a_graph_of_32_nested_regions_is_stopped(self):
+        # The shape that hung job 134's export: each region splits the picture the one before
+        # made, 2**32 paths: no PC writes a frame of it.
         parts = ["[0:v]null[c0]"]
-        for k in range(24):
+        for k in range(32):
             x = 8 + 24 * (k % 12)
             parts.append(f"[c{k}]split[b{k}][s{k}];[s{k}]crop=16:16:{x}:40,null[p{k}];"
                          f"[b{k}][p{k}]overlay={x}:40[c{k + 1}]")
-        parts.append("[c24]null[vout]")
+        parts.append("[c32]null[vout]")
         graph = self.folder / "nested.fg"
         graph.write_text(";".join(parts), encoding="utf-8")
         output = self.folder / "out.mp4"
@@ -268,20 +304,21 @@ class RunWatchedTests(unittest.TestCase):
                         stall_seconds=3.0, poll_seconds=0.25)
         self.assertLess(time.monotonic() - started, 60)
         self.assertIn("chưa xuất được khung hình nào", str(raised.exception))
-        # FFmpeg is gone: the output it never finished can be removed.
-        output.unlink(missing_ok=True)
-        self.assertFalse(output.exists())
+        output.unlink(missing_ok=True)  # FFmpeg is gone: this raises while it holds the file
 
     @unittest.skipUnless(FFMPEG.exists(), "project FFmpeg is required")
     def test_real_ffmpeg_that_renders_is_left_alone(self):
         output = self.folder / "out.mp4"
         command = [str(FFMPEG), "-hide_banner", "-loglevel", "error", "-stats_period", "1",
-                   "-progress", str(self.progress), "-nostats", "-f", "lavfi", "-i",
-                   "testsrc2=size=320x180:rate=25:duration=3", "-c:v", "libx264", "-preset", "veryfast",
+                   "-progress", str(self.progress), "-nostats", "-re", "-f", "lavfi", "-i",
+                   "testsrc2=size=320x180:rate=25:duration=6", "-c:v", "libx264", "-preset", "veryfast",
                    str(output)]
-        # A lavfi source reads no file: before its first block only the progress could count.
-        result = run_watched(command, progress_path=self.progress, expected_seconds=3.0,
-                             stall_seconds=10.0, poll_seconds=0.25)
+        # Read in real time (-re): 6 s of polls against a 4 s limit. A lavfi source reads
+        # no file, so only the progress (a block a second) keeps it going.
+        started = time.monotonic()
+        result = run_watched(command, progress_path=self.progress, expected_seconds=6.0,
+                             stall_seconds=4.0, poll_seconds=0.25)
+        self.assertGreater(time.monotonic() - started, 4.0)
         self.assertEqual((result.returncode, result.stderr), (0, ""))
         self.assertGreater(output.stat().st_size, 0)
         self.assertEqual(read_progress_tail(self.progress)["progress"], "end")

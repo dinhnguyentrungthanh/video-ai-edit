@@ -16,6 +16,7 @@ from biliflow.final_renderer import (
     EXPORT_LANE_ENVIRONMENT,
     MAX_VIDEO_MAXRATE,
     PARALLEL_EXPORT_LANE,
+    STALL_STDERR_CHARS,
     ExportDeferred,
     approve_previews,
     authorize_final_from_resolved_review,
@@ -339,6 +340,7 @@ class RenderCompletionTests(unittest.TestCase):
         self.watch_options = []
         # RenderStalled for the render to raise (the watch on FFmpeg stopped it), None for none.
         self.stall = None
+        self.partial_held = False
         self.audio = False
         self.render_fails = False
         # (exit code, stderr) of a render FFmpeg ends without an output, None for one that works.
@@ -387,7 +389,10 @@ class RenderCompletionTests(unittest.TestCase):
         self.watch_options.append(watch)
         if self.stall is not None:
             self.commands.append(command)
-            Path(command[-1]).write_bytes(b"part of a video")  # what FFmpeg wrote before the watch killed it
+            if self.partial_held:
+                Path(command[-1]).mkdir()  # a partial output that cannot be removed
+            else:
+                Path(command[-1]).write_bytes(b"part of a video")  # what FFmpeg wrote before the watch killed it
             raise self.stall
         return self.fake_run(command, capture_output=True, text=True)
 
@@ -778,9 +783,9 @@ class RenderCompletionTests(unittest.TestCase):
 
     # The watch on FFmpeg (render_watchdog): a render that stops moving.
 
-    def stalls(self):
+    def stalls(self, stderr=""):
         message = stall_message(idle_seconds=STALL_SECONDS, encoded=None, expected_seconds=self.duration)
-        self.stall = RenderStalled(message, idle_seconds=STALL_SECONDS, encoded_seconds=None, stderr="")
+        self.stall = RenderStalled(message, idle_seconds=STALL_SECONDS, encoded_seconds=None, stderr=stderr)
 
     def stall_record(self):
         return json.loads(render_stall_path(self.root, self.output).read_text(encoding="utf-8"))
@@ -802,6 +807,25 @@ class RenderCompletionTests(unittest.TestCase):
         for path in (self.partial, self.output, self.manifest_path, self.graph_path):
             self.assertFalse(path.exists(), path)
         self.assertFalse(os.path.lexists(export_deferral_path(self.root, self.output)))
+
+    def test_a_stall_keeps_the_end_of_ffmpegs_stderr_for_the_stage_log(self):
+        self.write_plan()
+        self.stalls(stderr="[h264 @ 0] early line\n" + "x" * 5000 + "\n[libx264 @ 1] last line\n")
+        with patch("sys.stderr") as log, self.assertRaises(RenderStalled):
+            self.render()
+        tail = self.stall_record()["stderr_tail"]
+        self.assertTrue(tail.endswith("[libx264 @ 1] last line"))
+        self.assertEqual(len(tail), STALL_STDERR_CHARS)
+        self.assertIn(tail, "".join(str(call.args[0]) for call in log.write.call_args_list))
+
+    def test_a_partial_output_that_cannot_be_removed_never_hides_the_stall(self):
+        self.write_plan()
+        self.stalls()
+        self.partial_held = True
+        with patch("sys.stderr"), self.assertRaises(RenderStalled) as raised:
+            self.render()
+        self.assertTrue(self.partial.is_dir())
+        self.assertEqual(read_render_stall(self.root, self.output), str(raised.exception))
 
     def test_beside_a_scan_a_render_the_watch_stops_fails_and_is_never_handed_back(self):
         self.write_plan(render_settings=None)

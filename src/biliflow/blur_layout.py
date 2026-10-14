@@ -3,9 +3,11 @@
 Until 2026-10-14 each regional blur split the picture the blur before it had
 made ("nested" layout). FFmpeg 9.0.1's work per frame follows the number of
 paths from the segment's input to its output, and nesting multiplies them by
-every region (×4 for the cover method with a feathered edge): 10 such regions
-cost 0.28 s more per frame, and the 25 regions of job 134 never finished a
-frame (docs/evidence/export-regions/README.md).
+every region (×4 for the cover method with a feathered edge). Measured from
+about 0.1 to 0.6 µs per path and frame, depending on the filters on them: a
+10-region plan of 786,432 paths took 0.46 s per frame, and the 25 regions of
+job 134 (4**25 paths) never finished a frame
+(docs/evidence/export-regions/README.md).
 
 A segment whose nested graph stays within NESTED_PATH_LIMIT paths keeps it,
 character for character. A larger one gets the "shared" layout: one split of a
@@ -22,10 +24,12 @@ yuv422p, yuv444p and yuv410p).
 Long chains of overlapping regions could still multiply the paths. In a
 segment with more than EXACT_REGION_LIMIT regions, past SHARED_PATH_BUDGET a
 branch reads an older picture instead: its region is still blurred all over,
-but where it overlaps an earlier blur it blurs the picture without that blur.
-The export manifest counts such regions. A segment with fewer regions always
-reads exactly: its plan exported before (slowly, when its regions overlap),
-and it keeps its pixels.
+but it blurs a picture without the earlier blur it overlaps, so its pixels may
+differ anywhere inside its own region (never outside it). A plain gblur over a
+cover-method region then shows the logo blurred there, not covered. The export
+manifest counts such regions. A segment of at most
+EXACT_REGION_LIMIT regions always reads exactly: its plan exported before
+(slowly, when its regions overlap, and as slowly now), and it keeps its pixels.
 """
 from __future__ import annotations
 
@@ -47,7 +51,7 @@ SHARED_LAYOUT = "shared"
 # 5 regions with the cover method and a feathered edge (4**5), the most any
 # export had before job 134: about 1 ms per frame more than one region.
 NESTED_PATH_LIMIT = 1024
-# About 4 ms per frame (measured: the cost grows by about 1 µs per path).
+# At most a few ms per frame (0.1 to 0.6 µs per path and frame, as measured).
 SHARED_PATH_BUDGET = 4096
 # Before 2026-10-14 an export had at most 5 regions; 10 nested ones still ran
 # (job 134's graph cut down to 10 regions) and 11 did not.

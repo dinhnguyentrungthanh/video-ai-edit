@@ -41,7 +41,7 @@ from biliflow.final_renderer import (
     render_progress_path,
     render_stall_path,
 )
-from biliflow.render_watchdog import PARALLEL_STALL_SECONDS, STALL_SECONDS, stall_message
+from biliflow.render_watchdog import STALL_SECONDS, stall_limit, stall_message
 
 
 class SchedulerTests(unittest.TestCase):
@@ -1894,7 +1894,7 @@ class ExportLaneTests(SchedulerFixture):
 
     def test_an_export_the_watch_stopped_beside_a_scan_fails_with_its_message_and_is_not_handed_back(self):
         a, b, scan, render = self.both_running()
-        record, message = self.write_stall(b, PARALLEL_STALL_SECONDS)
+        record, message = self.write_stall(b, stall_limit(longest_cut_seconds=0.0, parallel=True))
         self.assertIn("không tiến triển trong 20 phút", message)
         render.finish(2)  # what the renderer's process returns after RenderStalled
         self.assert_failed_by_the_watch(b, message)
@@ -1912,7 +1912,7 @@ class ExportLaneTests(SchedulerFixture):
 
     def test_a_stalled_export_is_never_handed_back_even_beside_a_deferral_record(self):
         a, b, scan, render = self.both_running()
-        _, message = self.write_stall(b, PARALLEL_STALL_SECONDS)
+        _, message = self.write_stall(b, stall_limit(longest_cut_seconds=0.0, parallel=True))
         # A record that would hand it back (the renderer never writes both for one render).
         self.write_deferral(b, "encoder_error")
         render.finish(2)

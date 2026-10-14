@@ -38,8 +38,10 @@ import psutil
 STALL_SECONDS = 600.0
 CUT_DECODE_FACTOR = 4.0
 PARALLEL_FACTOR = 2.0
-PARALLEL_STALL_SECONDS = STALL_SECONDS * PARALLEL_FACTOR
 POLL_SECONDS = 5.0
+# How long a killed FFmpeg may take to end: one stuck in a driver call may not
+# end at all, and the watch must not hang on it in turn.
+KILL_WAIT_SECONDS = 30.0
 # A poll that comes this much later than asked means that this process did not
 # run (the PC slept, or the process was frozen): FFmpeg did not run either, so
 # the gap counts as one poll only.
@@ -158,7 +160,8 @@ class _Watch:
         if gap > SUSPENDED_GAP_SECONDS:
             gap = self._poll_seconds
         values = read_progress_tail(self._progress_path)
-        moving = None if values is None else tuple(values.get(key) for key in _MOVING_KEYS)
+        # A progress file that cannot be read for a moment changes nothing.
+        moving = self._moving if values is None else tuple(values.get(key) for key in _MOVING_KEYS)
         reads = self._reads()
         progressed = moving != self._moving or (
             reads is not None and self._read_bytes is not None and reads > self._read_bytes
@@ -175,34 +178,43 @@ def run_watched(
     command: list[str], *, progress_path: Path, expected_seconds: float, stall_seconds: float,
     poll_seconds: float = POLL_SECONDS, clock: Callable[[], float] = time.monotonic,
 ) -> subprocess.CompletedProcess:
-    """subprocess.run(command, capture_output=True, text=True) for an FFmpeg render, stopped when it stalls.
+    """Run an FFmpeg render as subprocess.run(command, capture_output=True) would, and stop it when it stalls.
 
-    Raises RenderStalled once FFmpeg, ``stall_seconds`` without a sign of
-    progress (stall_limit), is killed.
+    FFmpeg gets no stdin, and its output is read as UTF-8 (FFmpeg writes file
+    names that way; a byte the locale cannot decode must not end the export).
+    After ``stall_seconds`` (stall_limit) without a sign of progress FFmpeg is
+    killed and RenderStalled raised, carrying what FFmpeg wrote to stderr.
     """
-    with subprocess.Popen(
-        command, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
-    ) as process:
-        try:
-            watch = _Watch(process.pid, progress_path, poll_seconds, clock)
-            while True:
-                try:
-                    stdout, stderr = process.communicate(timeout=poll_seconds)
-                    break
-                except subprocess.TimeoutExpired:
-                    pass
-                if watch.poll() >= stall_seconds:
-                    process.kill()
-                    _, stderr = process.communicate()
-                    encoded = encoded_seconds(watch.values)
-                    raise RenderStalled(
-                        stall_message(idle_seconds=watch.idle_seconds, encoded=encoded,
-                                      expected_seconds=expected_seconds),
-                        idle_seconds=watch.idle_seconds, encoded_seconds=encoded, stderr=stderr or "",
-                    )
-        except RenderStalled:
-            raise
-        except BaseException:
-            process.kill()
-            raise
-    return subprocess.CompletedProcess(command, process.returncode, stdout, stderr)
+    process = subprocess.Popen(
+        command, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        encoding="utf-8", errors="replace",
+    )
+    try:
+        watch = _Watch(process.pid, progress_path, poll_seconds, clock)
+        while True:
+            try:
+                stdout, stderr = process.communicate(timeout=poll_seconds)
+                return subprocess.CompletedProcess(command, process.returncode, stdout, stderr)
+            except subprocess.TimeoutExpired:
+                pass
+            if watch.poll() >= stall_seconds:
+                break
+    except BaseException:
+        _kill(process)
+        raise
+    stderr = _kill(process)
+    encoded = encoded_seconds(watch.values)
+    raise RenderStalled(
+        stall_message(idle_seconds=watch.idle_seconds, encoded=encoded, expected_seconds=expected_seconds),
+        idle_seconds=watch.idle_seconds, encoded_seconds=encoded, stderr=stderr,
+    )
+
+
+def _kill(process: subprocess.Popen) -> str:
+    """Kill FFmpeg and return what it wrote to stderr; never wait more than KILL_WAIT_SECONDS for it to end."""
+    process.kill()
+    try:
+        _, stderr = process.communicate(timeout=KILL_WAIT_SECONDS)
+    except subprocess.TimeoutExpired:
+        return ""
+    return stderr or ""

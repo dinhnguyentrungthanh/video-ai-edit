@@ -26,9 +26,10 @@ FFPROBE = FFMPEG.with_name("ffprobe" + FFMPEG.suffix)
 WIDTH, HEIGHT, SECONDS = 640, 360, 12.0
 FPS = 25
 CUTS = ((0.0, 1.0), (6.0, 6.5))
-# Far above the few seconds these exports take; a stall fails sooner (the watch, patched below).
+# Far above the few seconds these exports take; a stall fails sooner (the watch, patched
+# below, still above the 98.3 s a healthy export went quiet with the CPU at 100 %).
 DEADLINE_SECONDS = 180
-TEST_STALL_SECONDS = 60.0
+TEST_STALL_SECONDS = 120.0
 INSET_PIXELS = 4  # past the 2-pixel feather and the chroma rounding
 # The share of the source's fine detail a region keeps (sharpness): 0.945 where
 # it is not blurred. One region exported alone, in the nested layout as before
@@ -94,8 +95,9 @@ def blur_checks(operations):
 class ManyRegionsExportTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        cls.directory = TemporaryDirectory()
-        cls.root = Path(cls.directory.name).resolve()
+        directory = TemporaryDirectory()
+        cls.addClassCleanup(directory.cleanup)
+        cls.root = Path(directory.name).resolve()
         for name in ("input", "work", "output", "state"):
             (cls.root / name).mkdir()
         cls.source = cls.root / "input" / "source.mp4"
@@ -109,14 +111,13 @@ class ManyRegionsExportTests(unittest.TestCase):
             capture_output=True, timeout=120, check=True,
         )
         cls.sha = hashlib.sha256(cls.source.read_bytes()).hexdigest()
-
-    @classmethod
-    def tearDownClass(cls):
-        cls.directory.cleanup()
+        cls.source_frames = cls.gray_frames(cls.source)
 
     def export(self, count):
         operations = many_regions(count)
-        self.assertEqual(sum(item["type"] == "blur" for item in operations), count + count // 5 - 1 + 1)
+        # The strips and the probe, the cards, and every fifth card again later.
+        cards = count - 3
+        self.assertEqual(sum(item["type"] == "blur" for item in operations), 3 + cards + len(range(0, cards, 5)))
         plan_path = self.root / "work" / f"plan-{count}.json"
         plan_path.write_text(json.dumps({
             "status": "READY_FOR_FINAL_RENDER", "final_export_allowed": True,
@@ -172,7 +173,6 @@ class ManyRegionsExportTests(unittest.TestCase):
             self.assertGreater(sharpness, SHARP_ABOVE, (name, source_seconds, region))
 
     def test_30_and_60_regions_export_in_seconds_and_blur_where_and_when_they_should(self):
-        self.source_frames = self.gray_frames(self.source)
         for count in (30, 60):
             with self.subTest(regions=count):
                 manifest, output, seconds = self.export(count)

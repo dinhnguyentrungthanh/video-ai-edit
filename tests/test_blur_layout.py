@@ -4,7 +4,7 @@ import re
 import unittest
 from collections import Counter
 
-from biliflow.blur_filter import COVER_METHOD, GBLUR, regional_blur_filters
+from biliflow.blur_filter import COVER_MARGIN_PIXELS, COVER_METHOD, GBLUR, regional_blur_filters
 from biliflow.blur_layout import (
     EDGE_PIXELS,
     EXACT_REGION_LIMIT,
@@ -32,6 +32,38 @@ def region(x, y, width=40, height=20, *, ranges=(SPAN,), method=COVER_METHOD, fe
 def full_frame(*ranges):
     return SegmentBlur(region=FULL_FRAME, sigma=28, feather=0, feather_mode="all_edges",
                        method=GBLUR, ranges=tuple(ranges))
+
+
+def regions_missing_a_change(blurs, sources):
+    """The blurs whose branch reads a picture without an earlier blur's change that can reach it while both are on.
+
+    Written from the rule itself, apart from blur_layout: picture s holds the
+    changes of blurs 0..s-1, an overlay changes its region and EDGE_PIXELS
+    around it, a branch reads its region, EDGE_PIXELS around it and, with the
+    cover method, COVER_MARGIN_PIXELS more; a full-frame blur changes everything.
+    """
+    def box(blur, margin):
+        r = blur.region
+        return r["x"] - margin, r["y"] - margin, r["x"] + r["width"] + margin, r["y"] + r["height"] + margin
+
+    missing = set()
+    for k, source in enumerate(sources):
+        if source is None:
+            continue
+        cover = blurs[k].method == COVER_METHOD
+        x0, y0, x1, y1 = box(blurs[k], EDGE_PIXELS + (COVER_MARGIN_PIXELS if cover else 0))
+        for earlier in blurs[source:k]:
+            on_together = any(a <= d + 0.001 and c <= b + 0.001
+                              for a, b in earlier.ranges for c, d in blurs[k].ranges)
+            if not on_together:
+                continue
+            if earlier.full_frame:
+                missing.add(k)
+                continue
+            e0, f0, e1, f1 = box(earlier, EDGE_PIXELS)
+            if e0 < x1 and x0 < e1 and f0 < y1 and y0 < f1:
+                missing.add(k)
+    return missing
 
 
 def layout(blurs, frame_size=(1280, 720)):
@@ -208,8 +240,12 @@ class SharedLayoutTests(LayoutAssertions, unittest.TestCase):
                 regions = sum(not blur.full_frame for blur in blurs)
                 expected = NESTED_LAYOUT if nested_paths(blurs) <= NESTED_PATH_LIMIT else SHARED_LAYOUT
                 self.assertEqual(result.layout, expected)
+                sources, _, older_reads = shared_sources(blurs)
+                missing = regions_missing_a_change(blurs, sources)
+                # Exactly the regions the export counts read an older picture than exactness needs.
+                self.assertEqual(len(missing), older_reads)
                 if regions <= EXACT_REGION_LIMIT:
-                    self.assertEqual(result.older_reads, 0)
+                    self.assertEqual((missing, result.older_reads), (set(), 0))
                 else:
                     self.assertLessEqual(result.paths, max(SHARED_PATH_BUDGET, 4 * (1 + 3 * regions)))
 
@@ -226,11 +262,16 @@ class ExportGraphTests(unittest.TestCase):
     def test_each_kept_segment_is_wired_on_its_own_and_the_export_says_how(self):
         operations = [{"id": "cut", "type": "cut", "start_seconds": 0.0, "end_seconds": 10.0},
                       {"id": "mid", "type": "cut", "start_seconds": 50.0, "end_seconds": 55.0}]
-        operations += [self.card(k, 10.0 + k, 90.0) for k in range(12)]  # each over the one before
+        operations += [self.card(k, 10.0 + k, 90.0) for k in range(12)]  # each overlaps its neighbours
         operations += [self.card(100 + k, 60.0 + k, 61.0 + k) for k in range(3)]
         graph, expected, wiring = _final_filter_graph(operations=operations, duration=100.0, has_audio=True,
                                                       frame_size=(1280, 720), chroma_rows_divisor=2)
         self.assertEqual(expected, 85.0)
+        # Of the 12 cards the renderer keeps 6 (the others lie under their two neighbours while
+        # on); the second segment adds the 3 short ones. At most 10 each: both read exactly.
+        self.assertEqual(len(set(re.findall(r"\[v0region\d+crop\]", graph))), 6)
+        self.assertEqual(len(set(re.findall(r"\[v1region\d+crop\]", graph))), 9)
+        self.assertGreater(wiring["paths"], NESTED_PATH_LIMIT)
         self.assertEqual(wiring["layout"], SHARED_LAYOUT)
         self.assertEqual(wiring["regions_reading_older_picture"], 0)
         self.assertIn("concat=n=2:v=1:a=1[vout][aout]", graph)
