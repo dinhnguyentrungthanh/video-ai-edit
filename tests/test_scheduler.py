@@ -39,7 +39,9 @@ from biliflow.final_renderer import (
     export_deferral_path,
     render_graph_path,
     render_progress_path,
+    render_stall_path,
 )
+from biliflow.render_watchdog import PARALLEL_STALL_SECONDS, STALL_SECONDS, stall_message
 
 
 class SchedulerTests(unittest.TestCase):
@@ -141,12 +143,16 @@ class SchedulerTests(unittest.TestCase):
             other_graph.write_text("[0:v]null[vout]", encoding="utf-8")
             outside = root / "work" / "keep.partial.mp4"
             outside.write_bytes(b"keep")
+            stall = render_stall_path(root, output)
             try:
                 scheduler.queue_render(
                     job["id"], plan_path=plan, output_path=output,
                     max_output_bytes=None, target_output_bytes=None,
                 )
+                # The watch on FFmpeg stopped the render: its record goes with the rest.
+                stall.write_text('{"schema": 1, "message": "dừng"}', encoding="utf-8")
                 scheduler._cleanup_interrupted_stage(job["id"], "render")
+                self.assertFalse(stall.exists())
                 self.assertFalse(partial.exists())
                 self.assertFalse(progress.exists())
                 self.assertFalse(graph.exists())
@@ -1862,6 +1868,87 @@ class ExportLaneTests(SchedulerFixture):
         self.wait_for("c:scan_two").finish(0)
         self.wait_until(lambda: not self.scheduler.is_busy(c), "the later scan never finished")
         self.assertEqual(len(self.events_of(b, "EXPORT_LANE_PARALLEL")), 1)
+
+    def write_stall(self, job_id, seconds):
+        """The record the renderer leaves when the watch on FFmpeg stopped its render (render_watchdog)."""
+        message = stall_message(idle_seconds=seconds, encoded=None, expected_seconds=90.0)
+        path = render_stall_path(self.root, self.root / "output" / f"{job_id}.mp4")
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps({
+            "schema": 1, "created_at": "2026-10-14T21:00:00+07:00",
+            "plan": f"work/{job_id}.json", "output": f"output/{job_id}.mp4", "lane": "parallel",
+            "message": message, "idle_seconds": seconds, "encoded_seconds": None,
+        }, ensure_ascii=False), encoding="utf-8")
+        return path, message
+
+    def assert_failed_by_the_watch(self, job_id, message):
+        self.wait_until(lambda: self.store.get_job(job_id)["state"] == "FAILED", "the stalled export never failed")
+        job = self.store.get_job(job_id)
+        self.assertEqual((job["error"], job["current_stage"]), (message, "render"))
+        stage = self.store.stage(job_id, "render")
+        self.assertEqual((stage["state"], stage["error"]), ("FAILED_RETRYABLE", message))
+        (event,) = self.events_of(job_id, "STAGE_FAILED")
+        self.assertEqual((event["level"], event["message"]), ("ERROR", message))
+        self.assertEqual(self.events_of(job_id, "EXPORT_DEFERRED"), [])
+        self.assertNotIn(job_id, self.scheduler._sequential_exports)
+
+    def test_an_export_the_watch_stopped_beside_a_scan_fails_with_its_message_and_is_not_handed_back(self):
+        a, b, scan, render = self.both_running()
+        record, message = self.write_stall(b, PARALLEL_STALL_SECONDS)
+        self.assertIn("không tiến triển trong 20 phút", message)
+        render.finish(2)  # what the renderer's process returns after RenderStalled
+        self.assert_failed_by_the_watch(b, message)
+        # Its record goes with the stage's other files; nothing sends it to the main lane.
+        self.assertFalse(record.exists())
+        self.assertFalse(export_deferral_path(self.root, self.root / "output" / f"{b}.mp4").exists())
+        # The scan beside it runs on, and the export does not start again by itself.
+        self.assertIsNone(scan.poll())
+        scan.finish(0)
+        self.wait_for("a:scan_two").finish(0)
+        self.wait_until(lambda: not self.scheduler.is_busy(a), "the scan job never finished")
+        time.sleep(0.3)
+        self.assertEqual(self.kinds(), ["a:scan_one", f"render:{b}", "a:scan_two"])
+        self.assertEqual(self.store.get_job(b)["state"], "FAILED")
+
+    def test_a_stalled_export_is_never_handed_back_even_beside_a_deferral_record(self):
+        a, b, scan, render = self.both_running()
+        _, message = self.write_stall(b, PARALLEL_STALL_SECONDS)
+        # A record that would hand it back (the renderer never writes both for one render).
+        self.write_deferral(b, "encoder_error")
+        render.finish(2)
+        self.assert_failed_by_the_watch(b, message)
+        scan.finish(0)
+        self.wait_for("a:scan_two").finish(0)
+        self.wait_until(lambda: not self.scheduler.is_busy(a), "the scan job never finished")
+        time.sleep(0.3)
+        self.assertEqual(self.kinds().count(f"render:{b}"), 1)
+
+    def test_an_export_the_watch_stopped_in_the_main_lane_fails_with_its_message(self):
+        self.assertEqual(self.scheduler.set_parallel_export_mode("off"), "off")
+        b = self.job("b")
+        self.export_auto(b)
+        self.scheduler.start()
+        render = self.wait_for(f"render:{b}")
+        self.assertNotIn("env", render.kwargs)
+        record, message = self.write_stall(b, STALL_SECONDS)
+        self.assertIn("không tiến triển trong 10 phút (chưa xuất được khung hình nào)", message)
+        render.finish(2)
+        self.assert_failed_by_the_watch(b, message)
+        self.assertFalse(record.exists())
+
+    def test_a_render_that_fails_without_a_stall_record_keeps_the_generic_error(self):
+        self.assertEqual(self.scheduler.set_parallel_export_mode("off"), "off")
+        b = self.job("b")
+        self.export_auto(b)
+        self.scheduler.start()
+        render = self.wait_for(f"render:{b}")
+        # A record that cannot be read is not a stall.
+        path = render_stall_path(self.root, self.root / "output" / f"{b}.mp4")
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("{not json", encoding="utf-8")
+        render.finish(2)
+        self.wait_until(lambda: self.store.get_job(b)["state"] == "FAILED", "the export never failed")
+        self.assertTrue(self.store.get_job(b)["error"].startswith("Stage process exited with code 2"))
 
     def running_export(self, name, reason):
         """An export the export lane is running (RENDERING, its render stage RUNNING) and its record."""

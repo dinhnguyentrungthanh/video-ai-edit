@@ -420,20 +420,29 @@ class RenderProbe:
     def installed(self) -> Iterator["RenderProbe"]:
         renderer = self.renderer
         original_run = renderer.subprocess.run
+        # Since 2026-10-14 the render itself goes through the watch on FFmpeg
+        # (render_watchdog.run_watched); an older tree runs it with subprocess.run.
+        original_watched = getattr(renderer, "run_watched", None)
         original_sha = renderer._sha256
         original_probe = renderer.probe_video
         probe = self
+
+        def watched(command, **watch):
+            return timed(command, lambda: original_watched(command, **watch))
 
         def run(command, *args, **kwargs):
             # subprocess is one module: ffprobe calls (timed by probe_video below)
             # and this script's own commands pass through here too.
             if Path(str(command[0])).stem.lower() != "ffmpeg":
                 return original_run(command, *args, **kwargs)
+            return timed(command, lambda: original_run(command, *args, **kwargs))
+
+        def timed(command, call):
             # Read before FFmpeg runs: the renderer removes its graph file right after.
             graph = _graph_text(command) if _graph_option(command) is not None else None
             started = time.perf_counter()
             try:
-                return original_run(command, *args, **kwargs)
+                return call()
             finally:
                 elapsed = time.perf_counter() - started
                 kind = (
@@ -463,12 +472,16 @@ class RenderProbe:
                 probe.events.append({"step": "ffprobe", "seconds": round(time.perf_counter() - started, 3)})
 
         renderer.subprocess.run = run
+        if original_watched is not None:
+            renderer.run_watched = watched
         renderer._sha256 = sha
         renderer.probe_video = probe_video
         try:
             yield self
         finally:
             renderer.subprocess.run = original_run
+            if original_watched is not None:
+                renderer.run_watched = original_watched
             renderer._sha256 = original_sha
             renderer.probe_video = original_probe
 
@@ -728,6 +741,7 @@ def _recorded_command(renderer, bench: Path, ffmpeg: Path, ffprobe: Path, tag: s
     """The exact x264 render command render_final_output would run, and its graph, without running it."""
     probe = RenderProbe(renderer)
     original = renderer.subprocess.run
+    original_watched = getattr(renderer, "run_watched", None)
 
     def stop(command, *args, **kwargs):
         if _graph_option(command) is not None:
@@ -736,11 +750,16 @@ def _recorded_command(renderer, bench: Path, ffmpeg: Path, ffprobe: Path, tag: s
             raise _StopBeforeFfmpeg()
         return original(command, *args, **kwargs)
 
+    def stop_watched(command, **watch):
+        return stop(command)
+
     plan = {**_read_json(bench / "work" / "plan.template.json"), "render_settings": FORCED_X264}
     plan_path = bench / "work" / f"plan-record-{tag}.json"
     output_path = bench / "output" / f"record-{tag}.mp4"
     _write_json(plan_path, plan)
     renderer.subprocess.run = stop
+    if original_watched is not None:
+        renderer.run_watched = stop_watched
     try:
         renderer.render_final_output(
             project_root=bench, plan_path=plan_path, output_path=output_path,
@@ -750,6 +769,8 @@ def _recorded_command(renderer, bench: Path, ffmpeg: Path, ffprobe: Path, tag: s
         pass
     finally:
         renderer.subprocess.run = original
+        if original_watched is not None:
+            renderer.run_watched = original_watched
         plan_path.unlink(missing_ok=True)
     if probe.render_command is None:
         raise RuntimeError("render_final_output did not reach its FFmpeg render")

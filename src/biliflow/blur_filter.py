@@ -92,6 +92,18 @@ def blur_feather_mode(operation: dict) -> str:
     return mode
 
 
+def regional_blur_paths(*, feather: int, method: str) -> int:
+    """Paths through one region's branch from its crop input to its overlay (the picture's own path not counted).
+
+    Each is one more way a frame reaches the export's output (blur_layout): the
+    plain blur has one, a feathered edge adds the mask, and the cover method's
+    feathered edge also lays the blur on the cleaned region.
+    """
+    if feather <= 0:
+        return 1
+    return 3 if method == COVER_METHOD else 2
+
+
 def regional_blur_filters(
     *, input_label: str, output_label: str, prefix: str,
     region: dict, sigma: float, feather: int, enable: str,
@@ -107,6 +119,29 @@ def regional_blur_filters(
     is the same as when the branch ran on every frame. The feather mask is made
     once per branch (perf plan phase 2, step 2).
     """
+    base = f"{prefix}base"
+    crop = f"{prefix}crop"
+    branch = regional_blur_branch(
+        base_label=base, crop_label=crop, output_label=output_label, prefix=prefix,
+        region=region, sigma=sigma, feather=feather, enable=enable,
+        feather_mode=feather_mode, method=method, frame_size=frame_size,
+        chroma_rows_divisor=chroma_rows_divisor,
+    )
+    return [f"[{input_label}]split[{base}][{crop}]", *branch]
+
+
+def regional_blur_branch(
+    *, base_label: str, crop_label: str, output_label: str, prefix: str,
+    region: dict, sigma: float, feather: int, enable: str,
+    feather_mode: str = "all_edges", method: str = GBLUR,
+    frame_size: tuple[int, int] | None = None, chroma_rows_divisor: int = 2,
+) -> list[str]:
+    """regional_blur_filters without its split: the region is cut from ``crop_label`` and laid on ``base_label``.
+
+    The filters are those of regional_blur_filters, character for character;
+    blur_layout chooses two labels that carry the same pixels wherever and
+    whenever the branch reads.
+    """
     x, y = int(region["x"]), int(region["y"])
     width, height = int(region["width"]), int(region["height"])
     if width <= 0 or height <= 0:
@@ -117,10 +152,10 @@ def regional_blur_filters(
         _cover_chain(region, frame_size, enable) if method == COVER_METHOD
         else f"crop={width}:{height}:{x}:{y}"
     )
-    base = f"{prefix}base"
-    crop = f"{prefix}crop"
+    base = base_label
+    crop = crop_label
     blurred = f"{prefix}blurred"
-    filters = [f"[{input_label}]split[{base}][{crop}]"]
+    filters: list[str] = []
     if feather <= 0:
         filters.append(
             f"[{crop}]{region_chain},{_gblur(sigma, height, enable, chroma_rows_divisor)}[{blurred}]"
