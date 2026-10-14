@@ -23,11 +23,36 @@ MASK_REPEAT_ALPHAMERGE = "alphamerge=eof_action=repeat:repeatlast=1:shortest=0"
 # Pixels per chroma sample (across, down) of the picture a branch crops. FFmpeg's
 # crop rounds its size and corner down to whole chroma samples of that picture
 # (FFmpeg 9.0.1, docs/evidence/cover-edge/README.md). A segment's first regional
-# branch crops the source's format; every later branch crops an overlay's, 4:2:0.
+# branch crops the source's format (SourceChroma); every later branch crops an
+# overlay's, 4:2:0.
 CHROMA_420 = (2, 2)
-_PLANAR_YUV = re.compile(r"yuv[aj]?(4[1-4][0-4])p(?:\d+(?:le|be))?")
-_PLANAR_FULL = re.compile(r"(?:gray|gbrp|gbrap)(?:f?\d+)?(?:le|be)?")
+# No rounding: the cover chain of every region is the one of before 2026-10-14.
+NO_ROUNDING = (1, 1)
 _SUBSAMPLING = {"444": (1, 1), "422": (2, 1), "420": (2, 2), "440": (1, 2), "411": (4, 1), "410": (4, 4)}
+_PLANAR_YUV = re.compile(r"yuv[aj]?(4[1-4][0-4])p(?:\d+(?:msb)?(?:le|be))?")
+# Semi-planar YUV: nv12/nv21 and p010le…p016be are 4:2:0, nv16/nv20 and p2xx 4:2:2.
+_SEMI_PLANAR = re.compile(r"(?:nv(12|21|16|20le|20be|24|42))|p([024])1[026](?:le|be)")
+_SEMI_PLANAR_STEPS = {
+    "12": (2, 2), "21": (2, 2), "16": (2, 1), "20le": (2, 1), "20be": (2, 1), "24": (1, 1), "42": (1, 1),
+    "0": (2, 2), "2": (2, 1), "4": (1, 1),
+}
+# Converted to 4:2:0 before any crop: crop takes no packed subsampled or bitstream format.
+_CONVERTED_BEFORE_CROP = frozenset({
+    "yuyv422", "uyvy422", "yvyu422", "y210le", "y212le", "y216le", "monow", "monob",
+})
+# Formats a full-frame gblur takes (apart from 4:2:0 ones), so the first regional
+# branch after it still crops the source's own format. Every other format reaches
+# that branch as 4:2:0.
+_KEPT_THROUGH_GBLUR = frozenset({
+    "yuv444p", "yuvj444p", "yuv444p9le", "yuv444p10le", "yuv444p12le", "yuv444p14le", "yuv444p16le",
+    "yuva444p", "yuva444p9le", "yuva444p10le", "yuva444p12le", "yuva444p16le",
+    "gray", "gray9le", "gray10le", "gray12le", "gray14le", "gray16le", "grayf32le",
+    "gbrp", "gbrp9le", "gbrp10le", "gbrp12le", "gbrp14le", "gbrp16le", "gbrpf32le",
+    "gbrap", "gbrap10le", "gbrap12le", "gbrap16le", "gbrapf32le",
+    "yuv422p", "yuvj422p", "yuv422p9le", "yuv422p10le", "yuv422p12le", "yuv422p14le", "yuv422p16le",
+    "yuva422p", "yuva422p9le", "yuva422p10le", "yuva422p12le", "yuva422p16le",
+    "yuv440p", "yuvj440p", "yuv440p12le", "yuv411p", "yuvj411p", "yuv410p",
+})
 
 
 def blur_parameters(operation: dict) -> tuple[float, int]:
@@ -45,22 +70,44 @@ def blur_method(operation: dict) -> str:
     return method
 
 
-def chroma_step_of(pixel_format: str | None) -> tuple[int, int]:
-    """The chroma step a source of ``pixel_format`` reaches a segment's first regional branch with.
+@dataclass(frozen=True)
+class SourceChroma:
+    """The chroma step a segment's first regional branch crops the source with.
 
-    Planar YUV, gray and planar RGB keep their own format up to that crop, a full-frame
-    blur before it included. Any other format (packed or semi-planar YUV, packed RGB,
-    pal8, unknown) counts as 4:2:0: packed 4:2:2 is converted before the crop, and
-    after a full-frame blur the others are too (gblur takes none of them). Where such a
-    source still crops its own format, a region that ran is at worst cropped exactly.
+    ``first`` when no full-frame blur comes before that branch in its segment,
+    ``after_full_frame`` when one does. Measured on FFmpeg 9.0.1 for every pixel
+    format it can make (docs/evidence/cover-edge/crop-steps.jsonl).
     """
-    name = pixel_format or ""
-    planar = _PLANAR_YUV.fullmatch(name)
+
+    first: tuple[int, int] = CHROMA_420
+    after_full_frame: tuple[int, int] = CHROMA_420
+
+    @classmethod
+    def of(cls, pixel_format: str | None) -> SourceChroma:
+        """The steps for a source of the probed ``pixel_format``.
+
+        A format with no probed name gets NO_ROUNDING: its cover chains stay those of
+        before 2026-10-14, so a plan that exported keeps its bytes (a region FFmpeg
+        refused then is refused as before).
+        """
+        if not pixel_format or pixel_format == "unknown":
+            return cls(NO_ROUNDING, NO_ROUNDING)
+        if pixel_format in _CONVERTED_BEFORE_CROP:
+            return cls(CHROMA_420, CHROMA_420)
+        first = _own_chroma_step(pixel_format)
+        kept = first == CHROMA_420 or pixel_format in _KEPT_THROUGH_GBLUR
+        return cls(first, first if kept else CHROMA_420)
+
+
+def _own_chroma_step(pixel_format: str) -> tuple[int, int]:
+    """Pixels per chroma sample of ``pixel_format`` itself; NO_ROUNDING for one without subsampled chroma."""
+    planar = _PLANAR_YUV.fullmatch(pixel_format)
     if planar and planar[1] in _SUBSAMPLING:
         return _SUBSAMPLING[planar[1]]
-    if _PLANAR_FULL.fullmatch(name):
-        return (1, 1)
-    return CHROMA_420
+    semi_planar = _SEMI_PLANAR.fullmatch(pixel_format)
+    if semi_planar:
+        return _SEMI_PLANAR_STEPS[semi_planar[1] or semi_planar[2]]
+    return NO_ROUNDING
 
 
 def cover_sigma(region: dict) -> int:
@@ -90,7 +137,8 @@ def _cover_window(
 
     delogo refuses a rectangle that touches the edge of its picture, so the rectangle
     keeps one pixel of the margin on every side; where the box touches the frame
-    edge (no margin there) that one pixel row of the box stays and is only blurred.
+    edge (no margin there) that one pixel row of the box is not filled: it is only
+    blurred, and where a feather fades that side it shows the source's own pixels.
     No rectangle (None) when the box is too small to keep one.
     """
     left, top = min(COVER_MARGIN_PIXELS, x), min(COVER_MARGIN_PIXELS, y)
@@ -262,11 +310,11 @@ def regional_blur_branch(
     if method not in BLUR_METHODS:
         raise ValueError(f"Unsupported blur method: {method}")
     if method == COVER_METHOD:
-        patch = _cover_patch(region, frame_size, chroma_step)
-        region_chain = _cover_chain(patch, frame_size, enable)
-        x, y, width, height = patch.x, patch.y, patch.width, patch.height
+        cut = _cover_patch(region, frame_size, chroma_step)
+        region_chain = _cover_chain(cut, frame_size, enable)
+        x, y, width, height = cut.x, cut.y, cut.width, cut.height
     else:
-        patch = _Patch(x, y, width, height)
+        cut = _Patch(x, y, width, height)
         region_chain = f"crop={width}:{height}:{x}:{y}"
     base = base_label
     crop = crop_label
@@ -288,7 +336,7 @@ def regional_blur_branch(
     soft = f"{prefix}soft"
     safe_feather = min(feather, max(1, min(width, height) // 3))
     # A patch on every frame edge is not faded at all.
-    distance = _feather_distance(feather_mode, patch.frame_edges) or str(safe_feather)
+    distance = _feather_distance(feather_mode, cut.frame_edges) or str(safe_feather)
     if method == COVER_METHOD:
         # The feathered edge fades into the cleaned region, never into the logo.
         clean = f"{prefix}clean"

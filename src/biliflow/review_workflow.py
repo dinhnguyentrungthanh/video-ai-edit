@@ -88,10 +88,10 @@ from biliflow.platform_names import match_platform_texts
 from biliflow.blur_filter import (
     COVER_METHOD,
     DEFAULT_SIGMA,
+    SourceChroma,
     blur_feather_mode,
     blur_method,
     blur_parameters,
-    chroma_step_of,
     cover_sigma,
     regional_blur_filters,
 )
@@ -5176,7 +5176,7 @@ def render_edit_previews(
                     feather_mode=feather_mode,
                     enable=f"enable='between(t,{relative_start:.3f},{relative_end:.3f})'",
                     method=blur_method(operation), frame_size=(source_width, source_height),
-                    chroma_step=chroma_step_of(video_stream.get("pix_fmt")),
+                    chroma_step=SourceChroma.of(video_stream.get("pix_fmt")).first,
                 ))
                 command = [
                     str(ffmpeg_path), "-hide_banner", "-loglevel", "error", "-y",

@@ -17,12 +17,13 @@ is written but the result file.
 
 fix/cover-edge (job 141) added the "edge-*" plans: cover regions at the right and
 bottom edge that FFmpeg ran on 11a059c, on clips in the plan's own pixel format
-(x264; FFV1 for yuv410p), held to the same bytes; and FIXED_PLANS: regions delogo
-refused there ("Logo area is outside of the frame"). Those must still be refused
-by the baseline and here export, crop exactly, and keep less than BLURRED_BELOW of
-the source's fine detail inside the region and on the frame's last column or row
-(outside the bands where a side not on the frame's edge fades), while an untouched
-box keeps more than SHARP_ABOVE.
+(x264; FFV1 for yuv410p, PNG for rgb24), held to the same bytes; and FIXED_PLANS:
+regions delogo refused there ("Logo area is outside of the frame"). Where the
+baseline refuses one, it must export here, crop exactly, and keep less than
+BLURRED_BELOW of the source's fine detail inside the region and on the frame's last
+column or row (outside the bands where a side not on the frame's edge fades), while
+an untouched box keeps more than SHARP_ABOVE. Where the baseline exports one after
+all, it must give the same bytes here.
 
   python scripts/export_regions_gate.py --baseline-src DIR [--install DIR] [--name N] [--result FILE] [--keep]
 
@@ -63,9 +64,9 @@ plan = json.loads(Path(job["plan"]).read_text(encoding="utf-8"))
 # The graph render_final_output builds from its probe: a tree that rounds by the
 # source's pixel format (fix/cover-edge) gets it; 11a059c's graph does not depend on it.
 by_format = {}
-if "source_chroma_step" in inspect.signature(build_final_filter_graph).parameters:
-    from biliflow.blur_filter import chroma_step_of
-    by_format["source_chroma_step"] = chroma_step_of(job["pix_fmt"])
+if "source_chroma" in inspect.signature(build_final_filter_graph).parameters:
+    from biliflow.blur_filter import SourceChroma
+    by_format["source_chroma"] = SourceChroma.of(job["pix_fmt"])
 graph, _ = build_final_filter_graph(
     operations=plan["approved_operations"], duration=plan["source"]["duration_seconds"],
     has_audio=True, frame_size=tuple(job["frame_size"]),
@@ -152,6 +153,12 @@ PLANS: dict[str, tuple[str, list[dict]]] = {
         blur(0.0, SECONDS, box(256, 40, 64, 32), name="r"), blur(0.0, SECONDS, box(100, 140, 80, 40), name="b")]),
     "edge-right-even-ten-bit": ("yuv420p10le", [blur(0.0, SECONDS, box(260, 40, 60, 30), name="r")]),
     "edge-shared-layout": ("yuv420p", [STRIP, LOGO, *cards(6), blur(0.0, SECONDS, box(260, 100, 60, 30), name="r")]),
+    # An RGB source crops its own format, so this odd crop 1 px from the edge ran.
+    "edge-rgb24-right-1px-odd": ("rgb24", [blur(0.0, SECONDS, box(259, 40, 60, 30), name="r")]),
+    # gblur takes yuv422p10le: after a full-frame blur the crop still rounds rows by 1. (The
+    # renderer orders blurs by start: the full-frame blur comes first in the graph.)
+    "edge-422-ten-bit-after-full-frame": ("yuv422p10le", [
+        blur(0.0, 1.2, "FULL_FRAME", name="full"), blur(1.3, 2.0, box(100, 149, 80, 31), name="b")]),
 }
 
 # Cover regions delogo refused on 11a059c ("Logo area is outside of the frame", job 141):
@@ -174,6 +181,11 @@ FIXED_PLANS: dict[str, tuple[str, list[dict], dict, dict]] = {
                       box(203, 35, 117, 49), CONTROL),
     "fixed-shared-layout": ("yuv420p", [STRIP, LOGO, *cards(6), blur(0.0, SECONDS, box(203, 60, 117, 49), name="r")],
                             box(203, 60, 117, 49), CONTROL),
+    # gblur takes no RGB: after a full-frame blur (first in the graph: it starts first) the
+    # first branch crops 4:2:0. The full-frame blur is off at MIDDLE_FRAME.
+    "fixed-rgb24-after-full-frame": ("rgb24", [
+        blur(0.0, 1.2, "FULL_FRAME", name="full"), blur(1.3, 2.0, box(259, 40, 60, 30), name="r")],
+        box(259, 40, 60, 30), CONTROL),
 }
 # Share of the source's fine detail a blurred box may keep, and an untouched one must (x264 loses a little).
 BLURRED_BELOW, SHARP_ABOVE = 0.05, 0.5
@@ -195,14 +207,18 @@ def sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
+# Lossless codecs in Matroska for the formats x264 does not decode back as such:
+# it has no 4:1:0, and an RGB stream of it decodes as gbrp.
+LOSSLESS_CODECS = {"yuv410p": "ffv1", "rgb24": "png"}
+
+
 def clip_name(pixel_format: str) -> str:
-    # x264 has no 4:1:0: that clip is lossless FFV1 in Matroska.
-    return f"clip-{pixel_format}.mkv" if pixel_format == "yuv410p" else f"clip-{pixel_format}.mp4"
+    return f"clip-{pixel_format}.mkv" if pixel_format in LOSSLESS_CODECS else f"clip-{pixel_format}.mp4"
 
 
 def make_clip(ffmpeg: Path, target: Path, pixel_format: str) -> None:
     """Static noise over testsrc2: fine detail in every region, so a changed blur shows in the bytes."""
-    video = (["-c:v", "ffv1"] if target.suffix == ".mkv"
+    video = (["-c:v", LOSSLESS_CODECS[pixel_format]] if pixel_format in LOSSLESS_CODECS
              else ["-c:v", "libx264", "-preset", "veryfast", "-crf", "18"])
     subprocess.run(
         [str(ffmpeg), "-hide_banner", "-loglevel", "error", "-y",
@@ -344,7 +360,7 @@ def gate_plan(name: str, pixel_format: str, operations: list[dict], *, baseline:
 
 def gate_fixed(name: str, *, baseline: Path, candidate: Path, bench: Path, clips: dict[str, Path],
                ffmpeg: Path, ffprobe: Path) -> dict:
-    """A plan delogo refused on the baseline: it must still be refused there, and export and cover here."""
+    """A plan delogo refused on the baseline: it must export and cover here, or keep its bytes where the baseline exports it."""
     pixel_format, operations, region, control = FIXED_PLANS[name]
     sides = {label: run_side(src, bench / name / label, clips[pixel_format], operations, ffmpeg, ffprobe,
                              pixel_format)
@@ -355,6 +371,12 @@ def gate_fixed(name: str, *, baseline: Path, candidate: Path, bench: Path, clips
               "seconds": {label: side["seconds"] for label, side in sides.items()}}
     if "error" in sides["candidate"]:
         return {**record, "passed": False, "errors": {"candidate": sides["candidate"]["error"]}}
+    if "error" not in sides["baseline"]:
+        identical = all(sides["baseline"][key] == sides["candidate"][key]
+                        for key in ("mp4_sha256", "framemd5_sha256"))
+        return {**record, "baseline_exported": True, "identical_to_baseline": identical, "passed": identical}
+    if not refused:
+        return {**record, "passed": False, "errors": {"baseline": sides["baseline"]["error"]}}
     feather = next(item["blur"]["edge_feather_pixels"] for item in operations
                    if item["type"] == "blur" and item["region_source_pixels"] == region)
     source = luma_frame(ffmpeg, clips[pixel_format], MIDDLE_FRAME)
@@ -367,7 +389,7 @@ def gate_fixed(name: str, *, baseline: Path, candidate: Path, bench: Path, clips
         kept_detail=kept,
     )
     record["passed"] = (
-        refused and sides["candidate"]["status"] == "COMPLETED" and record["candidate_crops_exactly"]
+        sides["candidate"]["status"] == "COMPLETED" and record["candidate_crops_exactly"]
         and kept["untouched_control"] > SHARP_ABOVE
         and all(value < BLURRED_BELOW for key, value in kept.items() if key != "untouched_control")
     )
@@ -413,8 +435,8 @@ def main() -> int:
                                     ffmpeg=ffmpeg, ffprobe=ffprobe)
                 fixed.append(record)
                 print(json.dumps({key: record.get(key) for key in (
-                    "plan", "passed", "baseline_refused_by_delogo", "candidate_status", "kept_detail",
-                    "seconds", "errors")}), flush=True)
+                    "plan", "passed", "baseline_refused_by_delogo", "baseline_exported", "candidate_status",
+                    "kept_detail", "seconds", "errors")}), flush=True)
                 continue
             pixel_format, operations = PLANS[name]
             record = gate_plan(name, pixel_format, operations, baseline=baseline, candidate=candidate,
@@ -438,7 +460,7 @@ def main() -> int:
         "baseline": "git archive of the baseline commit's src (docs/evidence/export-regions/README.md)",
         "ffmpeg": version,
         "clip": (f"lavfi testsrc2 + static noise, {WIDTH}x{HEIGHT}, {SECONDS:g} s, {FPS} fps, with audio; "
-                 "x264 in the plan's source format (FFV1 for yuv410p)"),
+                 "x264 in the plan's source format (FFV1 for yuv410p, PNG for rgb24)"),
         "encoder": "libx264 (render_settings video_encoder)",
         "plans": records,
         "fixed": fixed,

@@ -963,6 +963,7 @@ class RenderCompletionTests(unittest.TestCase):
         # The probe has no size here, so the cover reads nothing past the region's
         # right and bottom: a crop 69 wide is refused by delogo where crop rounds
         # widths to even (job 141, 2026-10-14) and crops exactly from an even corner.
+        # A source of an unknown format keeps the chain of before (no rounding).
         odd = {
             "id": "blur-1", "type": "blur", "start_seconds": 1.0, "end_seconds": 2.0,
             "region_source_pixels": {"x": 41, "y": 30, "width": 61, "height": 20},
@@ -972,7 +973,8 @@ class RenderCompletionTests(unittest.TestCase):
         for pix_fmt, chain in (
             ("yuv444p", b"crop=69:28:33:22,delogo=x=8:y=8:w=60:h=19:"),
             ("yuv420p", b"crop=70:28:32:22:exact=1,delogo=x=8:y=8:w=61:h=19:"),
-            (None, b"crop=70:28:32:22:exact=1,delogo=x=8:y=8:w=61:h=19:"),
+            ("rgb24", b"crop=69:28:33:22,delogo=x=8:y=8:w=60:h=19:"),
+            (None, b"crop=69:28:33:22,delogo=x=8:y=8:w=60:h=19:"),
         ):
             with self.subTest(pix_fmt=pix_fmt):
                 self.pix_fmt = pix_fmt

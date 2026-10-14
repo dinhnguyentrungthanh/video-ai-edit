@@ -10,9 +10,10 @@ frame"), on every try. Job 141: a region x=583 y=35 w=697 h=49 on a 1280 x 534
 yuv420p film.
 
 Measured on FFmpeg 9.0.1 (docs/evidence/cover-edge/README.md): the first
-regional branch of a kept segment crops the source's pixel format, every later
-branch an overlay's (4:2:0); overlay lays a patch at x and y rounded down to
-even; crop exact=1 at an odd x garbles the chroma of a 10-bit picture.
+regional branch of a kept segment crops the source's pixel format (or 4:2:0
+after a full-frame blur gblur cannot take it through), every later branch an
+overlay's (4:2:0); overlay lays a patch at x and y rounded down to even; crop
+exact=1 at an odd x garbles the chroma of a 10-bit picture.
 """
 import json
 import os
@@ -30,7 +31,8 @@ from biliflow.blur_filter import (
     COVER_MARGIN_PIXELS,
     COVER_METHOD,
     GBLUR,
-    chroma_step_of,
+    NO_ROUNDING,
+    SourceChroma,
     cover_sigma,
     regional_blur_filters,
 )
@@ -48,6 +50,12 @@ STEPS = {
 BLURRED_BELOW = 0.05
 JOB_141_FRAME = (1280, 534)
 JOB_141_REGION = {"x": 583, "y": 35, "width": 697, "height": 49}
+CROP_STEPS = ROOT / "docs" / "evidence" / "cover-edge" / "crop-steps.jsonl"
+# Source formats outside STEPS: (step alone, step after a full-frame blur), as measured.
+OTHER_STEPS = {
+    "rgb24": ((1, 1), (2, 2)), "yuv440p10le": ((1, 2), (2, 2)), "yuv422p10le": ((2, 1), (2, 1)),
+    "nv16": ((2, 1), (2, 2)),
+}
 
 
 def old_cover_chain(region: dict, frame_size, enable: str) -> str:
@@ -104,25 +112,30 @@ def edge_regions(frame=FRAME, margins=range(5)):
                          "height": size - 40}
 
 
-class ChromaStepTests(unittest.TestCase):
-    def test_the_step_follows_the_subsampling_of_the_source_pixel_format(self):
-        for pix_fmt, step in (
-            ("yuv420p", (2, 2)), ("yuvj420p", (2, 2)), ("yuv420p10le", (2, 2)), ("yuva420p", (2, 2)),
-            ("yuv422p", (2, 1)), ("yuv422p10le", (2, 1)), ("yuvj422p", (2, 1)),
-            ("yuv444p", (1, 1)), ("yuv444p12le", (1, 1)), ("yuv440p", (1, 2)),
-            ("yuv410p", (4, 4)), ("yuv411p", (4, 1)), ("yuvj411p", (4, 1)),
-            ("gray", (1, 1)), ("gray10le", (1, 1)), ("grayf32le", (1, 1)), ("gbrp", (1, 1)),
-            ("gbrap12be", (1, 1)),
-        ):
+class SourceChromaTests(unittest.TestCase):
+    def test_every_measured_pixel_format_gets_the_steps_ffmpeg_cropped_it_with(self):
+        measured = 0
+        for line in CROP_STEPS.read_text(encoding="utf-8").splitlines():
+            row = json.loads(line)
+            alone, after = row.get("alone", {}), row.get("after_full_frame_blur", {})
+            if "step" not in alone or "step" not in after:
+                continue  # FFmpeg cannot make a picture of that format (hardware, bayer...)
+            with self.subTest(pix_fmt=row["pix_fmt"]):
+                self.assertEqual(SourceChroma.of(row["pix_fmt"]),
+                                 SourceChroma(tuple(alone["step"]), tuple(after["step"])))
+                measured += 1
+        self.assertGreater(measured, 200)
+        for pix_fmt, (alone, after) in {**{name: (step, step) for name, step in STEPS.items()},
+                                        **OTHER_STEPS}.items():
             with self.subTest(pix_fmt=pix_fmt):
-                self.assertEqual(chroma_step_of(pix_fmt), step)
+                self.assertEqual(SourceChroma.of(pix_fmt), SourceChroma(alone, after))
 
-    def test_other_or_unknown_formats_count_as_420(self):
-        # Packed or semi-planar formats, RGB and pal8 reach a crop as 4:2:0 after a
-        # full-frame blur (gblur takes none of them), packed 4:2:2 always.
-        for pix_fmt in (None, "", "nv12", "nv16", "p010le", "yuyv422", "uyvy422", "rgb24", "bgr0", "pal8", "xyz"):
+    def test_a_source_of_unknown_format_keeps_every_chain_of_before(self):
+        for pix_fmt in (None, "", "unknown"):
             with self.subTest(pix_fmt=pix_fmt):
-                self.assertEqual(chroma_step_of(pix_fmt), CHROMA_420)
+                self.assertEqual(SourceChroma.of(pix_fmt), SourceChroma(NO_ROUNDING, NO_ROUNDING))
+        # pal8 (measured from a palette clip, paletteuse): its own step, 4:2:0 after gblur.
+        self.assertEqual(SourceChroma.of("pal8"), SourceChroma(NO_ROUNDING, CHROMA_420))
 
 
 class CoverChainTextTests(unittest.TestCase):
@@ -230,16 +243,37 @@ def cover(start, end, region, *, feather=2):
 EARLIER = {"x": 4, "y": 4, "width": 30, "height": 20}
 
 
-def export_graph(region, *, pix_fmt, feather, later, layout, frame_size=FRAME, duration=0.08):
-    operations = ([cover(0.0, duration, EARLIER, feather=feather)] if later else []) + [
-        cover(0.0, duration, region, feather=feather)]
+# The second frame of run_graph's source (25 fps): the regions of export_graph(after_full_frame=True) are on.
+AFTER_FULL_FRAME_START, AFTER_FULL_FRAME_FRAME = 0.04, 1
+
+
+def full_frame(start, end):
+    return {"id": f"full-{start:g}", "type": "blur", "start_seconds": start, "end_seconds": end,
+            "region_source_pixels": "FULL_FRAME",
+            "blur": {"sigma": 10, "edge_feather_pixels": 0, "edge_feather_mode": "all_edges", "method": GBLUR}}
+
+
+def export_graph(region, *, pix_fmt, feather, later, layout, frame_size=FRAME, duration=0.08,
+                 after_full_frame=False, source_chroma=None):
+    """The export's graph of ``region`` (after EARLIER when ``later``) on a source of ``pix_fmt``.
+
+    ``after_full_frame`` puts a full-frame blur first in the graph (the renderer orders
+    blurs by their start): on for the first frame only, the regions from the second
+    (AFTER_FULL_FRAME_FRAME) on.
+    """
+    start = AFTER_FULL_FRAME_START if after_full_frame else 0.0
+    operations = (([full_frame(0.0, 0.02)] if after_full_frame else [])
+                  + ([cover(start, duration, EARLIER, feather=feather)] if later else [])
+                  + [cover(start, duration, region, feather=feather)])
     limit = 10**18 if layout == blur_layout.NESTED_LAYOUT else 0
     with patch.object(blur_layout, "NESTED_PATH_LIMIT", limit):
         graph, _, wiring = _final_filter_graph(
             operations=operations, duration=duration, has_audio=False, frame_size=frame_size,
-            chroma_rows_divisor=4 if pix_fmt == "yuv410p" else 2, source_chroma_step=chroma_step_of(pix_fmt),
+            chroma_rows_divisor=4 if pix_fmt == "yuv410p" else 2,
+            source_chroma=source_chroma or SourceChroma.of(pix_fmt),
         )
     assert wiring["layout"] == layout, wiring
+    assert not after_full_frame or graph.index("gblur=sigma=10:") < graph.index("crop="), graph
     return graph
 
 
@@ -252,23 +286,31 @@ def source_filter(pix_fmt, width, height, *, noise=True):
             + ("noise=alls=40:allf=u," if noise else "") + f"format={pix_fmt}")
 
 
-def run_graph(graph, pix_fmt, folder, frame_size=FRAME):
-    """One frame of static noise over testsrc2 through ``graph``: (returncode, stderr, source luma, output luma)."""
+def run_graph(graph, pix_fmt, folder, frame_size=FRAME, frame=0):
+    """Frame ``frame`` of static noise over testsrc2 through ``graph``: (returncode, stderr, source luma, output luma).
+
+    The graph's output is yuv420p, as the export's (-pix_fmt yuv420p): the format
+    FFmpeg converts a source to before a full-frame gblur follows from it.
+    """
     width, height = frame_size
     script = folder / "graph.txt"
-    script.write_text(graph, encoding="utf-8")
-    source, output = folder / "source.gray", folder / "output.gray"
+    picked = f";[vout]trim=start_frame={frame}[vpick]" if frame else ""
+    script.write_text(graph + picked, encoding="utf-8")
+    source, output = folder / "source.yuv", folder / "output.yuv"
     done = subprocess.run(
         [str(FFMPEG), "-hide_banner", "-loglevel", "error", "-y", "-f", "lavfi", "-i",
          source_filter(pix_fmt, width, height),
          "-/filter_complex", str(script),
-         "-map", "[vout]", "-frames:v", "1", "-f", "rawvideo", "-pix_fmt", "gray", str(output),
-         "-map", "0:v", "-frames:v", "1", "-f", "rawvideo", "-pix_fmt", "gray", str(source)],
+         "-map", "[vpick]" if frame else "[vout]", "-frames:v", "1", "-f", "rawvideo", "-pix_fmt", "yuv420p",
+         str(output),
+         "-map", "0:v", "-vf", f"trim=start_frame={frame}", "-frames:v", "1", "-f", "rawvideo",
+         "-pix_fmt", "yuv420p", str(source)],
         capture_output=True, text=True, timeout=60,
     )
     if done.returncode:
         return done.returncode, done.stderr, None, None
-    return 0, done.stderr, source.read_bytes(), output.read_bytes()
+    luma = width * height
+    return 0, done.stderr, source.read_bytes()[:luma], output.read_bytes()[:luma]
 
 
 def line_detail(source, output, width, pixels):
@@ -323,23 +365,19 @@ class BranchStepTests(unittest.TestCase):
         with patch.object(blur_layout, "NESTED_PATH_LIMIT", limit):
             graph, _, wiring = _final_filter_graph(
                 operations=operations, duration=4.0, has_audio=False, frame_size=FRAME,
-                chroma_rows_divisor=2, source_chroma_step=chroma_step_of(pix_fmt),
+                chroma_rows_divisor=2, source_chroma=SourceChroma.of(pix_fmt),
             )
         self.assertEqual(wiring["layout"], layout)
         return graph
 
     def test_a_yuv444p_source_rounds_only_its_later_branches(self):
-        full_frame = {"id": "full", "type": "blur", "start_seconds": 0.0, "end_seconds": 4.0,
-                      "region_source_pixels": "FULL_FRAME",
-                      "blur": {"sigma": 10, "edge_feather_pixels": 0, "edge_feather_mode": "all_edges",
-                               "method": GBLUR}}
         for layout in (blur_layout.NESTED_LAYOUT, blur_layout.SHARED_LAYOUT):
             with self.subTest(layout=layout):
                 alone = self.graph([cover(0.0, 4.0, self.EDGE)], layout)
                 self.assertIn("crop=69:36:91:22,delogo", alone)
                 self.assertNotIn("exact", alone)
-                # After a full-frame blur it is still the segment's first regional branch.
-                self.assertNotIn("exact", self.graph([full_frame, cover(0.0, 4.0, self.EDGE)], layout))
+                # After a full-frame blur (gblur keeps yuv444p) it is still the segment's first regional branch.
+                self.assertNotIn("exact", self.graph([full_frame(0.0, 4.0), cover(0.0, 4.0, self.EDGE)], layout))
                 later = self.graph([cover(0.0, 4.0, EARLIER), cover(0.0, 4.0, self.EDGE)], layout)
                 self.assertIn("crop=70:36:90:22:exact=1,delogo", later)
                 self.assertEqual(later.count("exact=1"), 2)  # its two crops; the earlier region ran
@@ -356,6 +394,30 @@ class BranchStepTests(unittest.TestCase):
             with self.subTest(layout=layout):
                 self.assertIn("crop=70:36:90:22:exact=1,delogo",
                               self.graph([cover(0.0, 4.0, self.EDGE)], layout, pix_fmt="yuv420p"))
+
+    def test_an_rgb_source_rounds_its_first_branch_only_after_a_full_frame_blur(self):
+        cut = {"id": "cut", "type": "cut", "start_seconds": 1.0, "end_seconds": 2.0}
+        for layout in (blur_layout.NESTED_LAYOUT, blur_layout.SHARED_LAYOUT):
+            with self.subTest(layout=layout):
+                alone = self.graph([cover(0.0, 4.0, self.EDGE)], layout, pix_fmt="rgb24")
+                self.assertIn("crop=69:36:91:22,delogo", alone)
+                self.assertNotIn("exact", alone)
+                after = self.graph([full_frame(0.0, 4.0), cover(0.0, 4.0, self.EDGE)], layout, pix_fmt="rgb24")
+                self.assertIn("crop=70:36:90:22:exact=1,delogo", after)
+                # The full-frame blur of the first kept segment changes nothing in the second.
+                # (The renderer orders blurs by start, the longer first: the region is on twice, briefly.)
+                segments = self.graph([cut, full_frame(0.0, 0.5), cover(0.0, 0.4, self.EDGE),
+                                       cover(2.5, 2.9, self.EDGE)], layout, pix_fmt="rgb24")
+                self.assertEqual(segments.count("crop=70:36:90:22:exact=1,delogo"), 1)
+                self.assertEqual(segments.count("crop=69:36:91:22,delogo"), 1)
+                self.assertLess(segments.index("exact=1"), segments.index("crop=69:36:91:22,delogo"))
+
+    def test_an_unknown_format_keeps_the_chain_of_before_in_every_branch(self):
+        for layout in (blur_layout.NESTED_LAYOUT, blur_layout.SHARED_LAYOUT):
+            with self.subTest(layout=layout):
+                graph = self.graph([cover(0.0, 4.0, self.EDGE)], layout, pix_fmt=None)
+                self.assertIn("crop=69:36:91:22,delogo", graph)
+                self.assertNotIn("exact", graph)
 
 
 class PreviewStepTests(unittest.TestCase):
@@ -530,6 +592,70 @@ class CoverEdgeExportTests(unittest.TestCase):
                         for y in range(region["y"], region["y"] + region["height"])
                         for x in range(region["x"], FRAME[0]))
             self.assertLessEqual(worst, 6, plane)
+
+
+@unittest.skipUnless(FFMPEG.exists(), "project FFmpeg is required")
+class SourceFormatExportTests(unittest.TestCase):
+    """Real FFmpeg on sources gblur may not take (OTHER_STEPS), alone and after a full-frame blur."""
+
+    def test_the_chain_of_before_runs_exactly_where_the_measured_step_says_and_every_region_exports(self):
+        regions = [region for _, region in edge_regions(margins=range(2))
+                   if region["width"] in (40, 41, 60, 61) and region["height"] in (20, 21)]
+        width, height = FRAME
+        fixed = 0
+        with TemporaryDirectory() as directory:
+            folder = Path(directory)
+            for pix_fmt, after_full_frame, region in product(OTHER_STEPS, (False, True), regions):
+                with self.subTest(pix_fmt=pix_fmt, after_full_frame=after_full_frame, region=region):
+                    step = OTHER_STEPS[pix_fmt][after_full_frame]
+                    graphs = {
+                        name: export_graph(region, pix_fmt=pix_fmt, feather=2, later=False,
+                                           layout=blur_layout.NESTED_LAYOUT, after_full_frame=after_full_frame,
+                                           source_chroma=chroma)
+                        for name, chroma in (("before", SourceChroma(NO_ROUNDING, NO_ROUNDING)), ("now", None))
+                    }
+                    frame = AFTER_FULL_FRAME_FRAME if after_full_frame else 0
+                    code, stderr, _, _ = run_graph(graphs["before"], pix_fmt, folder, frame=frame)
+                    fits = old_chain_fits(region, FRAME, step)
+                    self.assertEqual(code == 0, fits, stderr[-300:])
+                    if fits:
+                        self.assertEqual(graphs["now"], graphs["before"])
+                        continue
+                    fixed += 1
+                    self.assertIn("Logo area is outside of the frame", stderr)
+                    self.assertIn("exact=1", graphs["now"])
+                    code, stderr, source, output = run_graph(graphs["now"], pix_fmt, folder, frame=frame)
+                    self.assertEqual(code, 0, stderr[-1500:])
+                    x0, y0 = region["x"], region["y"]
+                    x1, y1 = x0 + region["width"], y0 + region["height"]
+                    self.assertLess(area_detail(source, output, width, x0 + 4, y0 + 4, x1 - 4, y1 - 4),
+                                    BLURRED_BELOW)
+                    rows, columns = faded_inside(region, 2, FRAME)
+                    if x1 == width:
+                        self.assertLess(line_detail(source, output, width, [(x1 - 1, y) for y in rows]),
+                                        BLURRED_BELOW)
+                    if y1 == height:
+                        self.assertLess(line_detail(source, output, width, [(x, y1 - 1) for x in columns]),
+                                        BLURRED_BELOW)
+        self.assertGreater(fixed, 20)
+
+    def test_a_full_frame_blur_in_one_kept_segment_leaves_the_next_one_its_source_format(self):
+        region = BranchStepTests.EDGE  # 69 wide with its margin: refused only where crop rounds to 4:2:0
+        operations = [{"id": "cut", "type": "cut", "start_seconds": 0.1, "end_seconds": 0.2},
+                      full_frame(0.0, 0.08), cover(0.0, 0.06, region), cover(0.25, 0.31, region)]
+        graph, _, _ = _final_filter_graph(operations=operations, duration=0.4, has_audio=False, frame_size=FRAME,
+                                          chroma_rows_divisor=2, source_chroma=SourceChroma.of("rgb24"))
+        self.assertEqual(graph.count("exact=1"), 2)  # the first segment's two crops
+        with TemporaryDirectory() as directory:
+            script = Path(directory) / "graph.txt"
+            script.write_text(graph, encoding="utf-8")
+            done = subprocess.run(
+                [str(FFMPEG), "-hide_banner", "-loglevel", "error", "-f", "lavfi", "-i",
+                 f"testsrc2=s={FRAME[0]}x{FRAME[1]}:r=25:d=0.4,format=rgb24",
+                 "-/filter_complex", str(script), "-map", "[vout]", "-pix_fmt", "yuv420p", "-f", "null", "-"],
+                capture_output=True, text=True, timeout=60,
+            )
+        self.assertEqual(done.returncode, 0, done.stderr[-1500:])
 
 
 if __name__ == "__main__":

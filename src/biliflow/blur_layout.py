@@ -41,6 +41,7 @@ from biliflow.blur_filter import (
     CHROMA_420,
     COVER_MARGIN_PIXELS,
     COVER_METHOD,
+    SourceChroma,
     regional_blur_branch,
     regional_blur_filters,
     regional_blur_paths,
@@ -119,31 +120,35 @@ def nested_paths(blurs: Sequence[SegmentBlur]) -> int:
 def segment_blur_filters(
     *, index: int, input_label: str, blurs: Sequence[SegmentBlur],
     frame_size: tuple[int, int] | None, chroma_rows_divisor: int,
-    source_chroma_step: tuple[int, int] = CHROMA_420,
+    source_chroma: SourceChroma = SourceChroma(),
 ) -> SegmentLayout:
     """The filters applying ``blurs`` in order to segment ``index``'s picture ``input_label``.
 
-    ``source_chroma_step`` is the chroma step of the source's format (chroma_step_of).
+    ``source_chroma``: the chroma steps of the source's format (SourceChroma.of).
     """
     paths = nested_paths(blurs)
-    steps = branch_chroma_steps(blurs, source_chroma_step)
+    steps = branch_chroma_steps(blurs, source_chroma)
     if paths <= NESTED_PATH_LIMIT:
         return _nested(index, input_label, blurs, frame_size, chroma_rows_divisor, steps, paths)
     return _shared(index, input_label, blurs, frame_size, chroma_rows_divisor, steps)
 
 
 def branch_chroma_steps(
-    blurs: Sequence[SegmentBlur], source_chroma_step: tuple[int, int],
+    blurs: Sequence[SegmentBlur], source_chroma: SourceChroma,
 ) -> list[tuple[int, int]]:
     """The chroma step of the picture each blur's branch crops, in either layout.
 
-    The first regional branch crops the segment's input in the source's format (a
-    full-frame blur before it keeps that format); every later one crops a picture
-    after the first regional overlay, whose format is 4:2:0 (measured on FFmpeg
-    9.0.1 for nine source formats, docs/evidence/cover-edge/README.md).
+    The first regional branch crops the segment's input in the source's format, or
+    in the format a full-frame blur before it in the segment hands on; every later
+    one crops a picture after the first regional overlay, whose format is 4:2:0
+    (measured on FFmpeg 9.0.1, docs/evidence/cover-edge/README.md).
     """
     first = next((k for k, blur in enumerate(blurs) if not blur.full_frame), None)
-    return [source_chroma_step if k == first else CHROMA_420 for k in range(len(blurs))]
+    if first is not None and first > 0:
+        step = source_chroma.after_full_frame
+    else:
+        step = source_chroma.first
+    return [step if k == first else CHROMA_420 for k in range(len(blurs))]
 
 
 def _nested(

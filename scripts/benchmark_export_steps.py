@@ -53,6 +53,7 @@ import argparse
 import contextlib
 import hashlib
 import importlib
+import inspect
 import json
 import os
 import platform
@@ -620,10 +621,18 @@ def _variant_operations(name: str, operations: list[dict], duration: float) -> l
     raise ValueError(name)
 
 
-def _graph(renderer, plan: dict, operations: list[dict], frame_size: tuple[int, int], has_audio: bool) -> str:
+def _graph(renderer, plan: dict, operations: list[dict], frame_size: tuple[int, int], has_audio: bool,
+           pixel_format: str | None) -> str:
+    """The graph render_final_output builds for a source of ``pixel_format``, in the code tree of ``renderer``."""
+    by_format: dict[str, Any] = {}
+    parameters = inspect.signature(renderer.build_final_filter_graph).parameters
+    if "chroma_rows_divisor" in parameters:
+        by_format["chroma_rows_divisor"] = renderer._chroma_rows_divisor({"pix_fmt": pixel_format})
+    if "source_chroma" in parameters:
+        by_format["source_chroma"] = renderer.SourceChroma.of(pixel_format)
     graph, _ = renderer.build_final_filter_graph(
         operations=operations, duration=float(plan["source"]["duration_seconds"]),
-        has_audio=has_audio, frame_size=frame_size,
+        has_audio=has_audio, frame_size=frame_size, **by_format,
     )
     return graph
 
@@ -672,7 +681,7 @@ def command_measure(args: argparse.Namespace) -> int:
             output = bench / "output" / f"encode-only-{tag}.mp4"
             duration = float(plan["source"]["duration_seconds"])
             graph = _graph(renderer, plan, _variant_operations("no_blur", plan["approved_operations"], duration),
-                           frame_size, has_audio)
+                           frame_size, has_audio, prepared["copy"]["pix_fmt"])
             seconds, _ = _run_timed(_without_progress(_with_output(_with_graph(command, graph, bench), output)))
             results["steps"]["encode_only"] = {"seconds": round(seconds, 3), "output_bytes": output.stat().st_size}
             output.unlink()
@@ -713,7 +722,7 @@ def command_measure(args: argparse.Namespace) -> int:
             for variant in VARIANTS:
                 print(f"variant {variant} ...", flush=True)
                 operations = _variant_operations(variant, plan["approved_operations"], duration)
-                graph = _graph(renderer, plan, operations, frame_size, has_audio)
+                graph = _graph(renderer, plan, operations, frame_size, has_audio, prepared["copy"]["pix_fmt"])
                 seconds, _ = _run_timed(_without_progress(_null_command(_with_graph(command, graph, bench))))
                 variants[variant] = {"seconds": round(seconds, 3),
                                      "blur_operations": sum(item["type"] == "blur" for item in operations)}
@@ -805,7 +814,8 @@ def command_gate_side(args: argparse.Namespace) -> int:
     prepared = _read_json(bench / "prepared.json")
     plan = _read_json(bench / "work" / "plan.template.json")
     has_audio = prepared["copy"]["audio_codec"] is not None
-    graph = _graph(renderer, plan, plan["approved_operations"], tuple(prepared["graph_frame_size"]), has_audio)
+    graph = _graph(renderer, plan, plan["approved_operations"], tuple(prepared["graph_frame_size"]), has_audio,
+                   prepared["copy"]["pix_fmt"])
     framemd5 = bench / "results" / f"{args.tag}.framemd5"
     # FFmpeg reads the graph from this file: the same parse as on the command line, at any length.
     graph_file = bench / "results" / f"{args.tag}.graph.txt"
