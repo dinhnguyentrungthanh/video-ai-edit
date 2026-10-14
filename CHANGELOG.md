@@ -1,3 +1,12 @@
+# G7 merge: A1b export lane (2026-10-14, branch `merge/g7` from `main` `23c9e00`; not yet in the main folder)
+
+- Merged `perf/export-a1b` with `--no-ff` (`docs/handoff/A1b-lanes.md`, evidence in `docs/evidence/a1b/`):
+  - a second scheduler lane runs an `auto` NVENC export beside a GPU scan only when the hardware profile confirms NVENC and the measured VRAM leaves room; otherwise everything runs one at a time as before (exports first); never x264 beside a scan, never parallel on a CPU-only machine;
+  - "Xuất song song: Tự động / Tắt" in Cài đặt (`POST /api/scheduler/parallel-export`, PC only); `/api/status` adds `active_lanes` and `parallel_export` and keeps `active`;
+  - pause and cancel stop only the job's own lane; `is_busy` covers both lanes; an export the second lane cannot run returns to the main lane (`JobStore.requeue_running_stage`, conditional).
+- Gates: x264 exports byte-identical with framemd5; scan outputs beside a parallel export identical to a scan alone; parallel NVENC exports pass the post-export check; scan plus 1080p export 278.8 s against 335.2 s (−16.8 %). Scan cache keys unchanged.
+- Full suite 3,285 tests, 28 skipped, 1 known page-network error under load in `test_download_account_e2e` (module alone 3/3 OK).
+
 # G6 merge: small fixes of session F (2026-10-14, branch `merge/g6` from `merge/g5`; not yet in the main folder)
 
 - Merged `fix/small-bugs` with `--no-ff` (`docs/handoff/F-fixes.md`):

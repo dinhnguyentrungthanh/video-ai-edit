@@ -1,3 +1,7 @@
+## G7 merge, A1b export lane (2026-10-14) — branch `merge/g7`, not yet in the main folder
+
+- An NVENC export can run beside a GPU scan when the machine allows it ("Xuất song song: Tự động / Tắt" in Cài đặt); scan plus export about 17 % faster in the gate. Exports and scan outputs unchanged. Needs "Đo lại" on the install root before it takes effect. Details in `CHANGELOG.md`.
+
 ## G6 merge, small fixes (2026-10-14) — branch `merge/g6`, not yet in the main folder
 
 - Session F: export cancel race closed, listen backlog 128 for the local servers, two flaky tests fixed, doc bytes and citations fixed; with G5 (golden set v2, activated 2026-10-13). Scan cache keys unchanged; full suite 3,241 OK. Details in `CHANGELOG.md`.

@@ -1,5 +1,13 @@
 # BiliFlow session handoff
 
+## G7 merge, A1b export lane — 2026-10-14, branch `merge/g7` (worktree `temp\wt-merge-g7`), not yet in the main folder
+
+- **Request:** the user approved A1b with an automatic choice per machine ("Xuất song song: Tự động / Tắt"; never parallel on a CPU-only machine, never x264 beside a scan).
+- **Merge:** `perf/export-a1b` (`a079975`, `962b7f2`, `8464c02`) into `merge/g7` from `main` `23c9e00` with `--no-ff`, no conflict. The scheduler runs a second lane only for an `auto` NVENC export while a GPU scan runs and the measured VRAM allows it; pause and cancel stop only that job's lane; `is_busy` sees both lanes (delete and archive guards); F's conditional `start_stage` holds for both lanes; an export the second lane cannot run is handed back to the main lane.
+- **Gates (session A1b, `docs/handoff/A1b-lanes.md`):** x264 exports byte-identical (with framemd5) across four paths; a scan beside a parallel export identical to a scan alone (309/309 and 250/250 files); four parallel NVENC exports pass the "Xóa video gốc" check; scan plus 1080p export 278.8 s with "Tự động" against 335.2 s with it off (−16.8 %). Scan cache keys identical to `main`; full suite 3,285 tests, 28 skipped, 1 error in `test_download_account_e2e` (`Failed to fetch` in the page under load, the known residual of `ERR_NO_BUFFER_SPACE`); that module alone 3/3 OK.
+- **Not yet run for real:** an NVENC failure inside the export lane (handed back to the main lane, unit tests only) and a plan with CUT in the second lane.
+- **Next:** with the Control Center off and the user's explicit go, fast-forward the main folder to `merge/g7`; the user restarts it, pauses the queue, presses "Đo lại" (the install root has no hardware profile yet, so "Tự động" stays sequential until then) and resumes; push only on the user's word.
+
 ## G6 merge, small fixes of session F — 2026-10-14, branch `merge/g6` (worktree `temp\wt-merge-g5`), not yet in the main folder
 
 - **Request:** the user approved session F (four small bugs, then the flaky ticket-page test) going in together with G5 (golden set v2).

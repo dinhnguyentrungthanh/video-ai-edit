@@ -992,6 +992,12 @@ Session cloud lập kế hoạch dừng vì hết credit. Một session **điề
 - Golden v2 đã kích hoạt ngày 2026-10-13 (Control Center tắt); chỉ job 37 và 38 còn khóa.
 - Tiếp theo: A1b (tự chọn theo máy: chỉ chạy song song khi có NVENC, đang quét bằng GPU và đủ VRAM), rồi một đợt chất lượng phát hiện và trang duyệt (job 129: đoạn mở đầu toàn khung; job 134: watermark trong dải phụ đề, khung đỏ che chữ, ảnh xem trước của chữ chạy, đầu phim đen khớp nhầm bộ nhớ logo).
 
+### 14.12 G7: A1b (2026-10-14)
+
+- Gộp `perf/export-a1b` vào `merge/g7`: làn thứ hai cho bản xuất NVENC chạy cạnh quét GPU khi máy cho phép (Tự động / Tắt). Cổng: x264 giống từng byte, quét giống hệt, quét + xuất nhanh hơn 16,8 %. Khóa cache quét không đổi; full suite 3.285, 1 lỗi mạng trang đã biết (module chạy riêng 3/3 OK).
+- Chưa chạy thật: NVENC lỗi trong làn song song (trả về làn chính) và kế hoạch có CUT ở làn hai.
+- Sau khi cập nhật thư mục chính: người dùng bấm "Đo lại" để thư mục cài có hồ sơ phần cứng; trước đó Tự động vẫn chạy tuần tự.
+
 ### 14.6 Cách session điều phối làm việc
 
 - Làm trong worktree `temp\wt-coord`, nhánh `coord/plan` (từ `origin/main`). **Không sửa thư mục chính** đang chạy Control Center.
