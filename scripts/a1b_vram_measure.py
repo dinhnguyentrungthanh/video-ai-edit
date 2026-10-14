@@ -45,6 +45,8 @@ from golden_trial_root import _junction, _link_tree, _links  # noqa: E402
 from biliflow.final_renderer import DEFAULT_MAX_OUTPUT_BYTES, DEFAULT_TARGET_OUTPUT_BYTES  # noqa: E402
 
 PREFIX = "a1b-measure-"
+# The throw-away roots of the A1b scripts (this one and scripts/a1b_gates.py).
+PREFIXES = (PREFIX, "a1b-gates-")
 MARKER = "biliflow-install.json"
 REAL_PORT = 8765
 MIB = 1024 * 1024
@@ -69,12 +71,12 @@ def log(message: str) -> None:
 # --- the test root ---------------------------------------------------------------------------------
 
 def check_place(install: Path, root: Path) -> None:
-    if root.parent != install / "temp" or not root.name.startswith(PREFIX):
+    if root.parent != install / "temp" or not root.name.startswith(PREFIXES):
         raise ValueError(f"{root} is not an A1b measurement root in {install / 'temp'}")
 
 
-def make_root(install: Path, code: Path) -> Path:
-    root = install / "temp" / (PREFIX + datetime.now().strftime("%Y%m%d-%H%M%S"))
+def make_root(install: Path, code: Path, prefix: str = PREFIX) -> Path:
+    root = install / "temp" / (prefix + datetime.now().strftime("%Y%m%d-%H%M%S"))
     check_place(install, root)
     root.mkdir()
     try:
