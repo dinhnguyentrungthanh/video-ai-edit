@@ -159,8 +159,10 @@ class RepositoryCacheScopeTests(unittest.TestCase):
     # 2026-10-03, batch 2 adds the shared export dialog; 2026-10-03, batch 3 adds
     # source cleanup; 2026-10-03, batch 4 adds source archive; 2026-10-05, the
     # permanent delete flow adds job removal; 2026-10-07, the anime gore triage
-    # settings, read only when a queue is built; 2026-10-11, the hardware profile, E1).
+    # settings, read only when a queue is built; 2026-10-11, the hardware profile, E1;
+    # 2026-10-14, A1b's export lane and the renderer, encoder and phone files it edits).
     CONTROL_PLANE = (
+        "export_lanes.py", "final_renderer.py", "export_encoder.py", "phone_access.py",
         "control_center.py", "scheduler.py", "job_store.py", "job_import.py",
         "review_workflow.py", "export_dialog.py",
         "export_guards.py", "recycle_bin.py", "source_cleanup.py",

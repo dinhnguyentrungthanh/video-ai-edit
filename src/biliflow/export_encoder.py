@@ -140,6 +140,17 @@ def choose_video_encoder(*, project_root: Path, ffmpeg_path: Path, plan: dict) -
     return EncoderChoice(encoder, requested, check)
 
 
+def parallel_lane_choice(*, project_root: Path, ffmpeg_path: Path, plan: dict) -> EncoderChoice | None:
+    """NVENC for an export beside a scan (perf plan A1b), or None when it must wait for the main lane.
+
+    Only an ``auto`` export whose NVENC the hardware profile confirms for this very
+    FFmpeg: the second lane never runs a trial encode and never x264.
+    """
+    if requested_encoder(plan) != AUTO or profile_nvenc_trial(project_root, ffmpeg_path) != "ok":
+        return None
+    return EncoderChoice(H264_NVENC, AUTO, PROFILE_OK)
+
+
 def video_arguments(
     encoder: str, *, maxrate: int | None, target_bitrate: int | None,
     cq: int = NVENC_CQ, preset: str = NVENC_PRESET,

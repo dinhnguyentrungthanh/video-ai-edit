@@ -22,7 +22,7 @@ from biliflow import (
     __version__, job_delete, job_purge, logo_memory_admin, recycle_bin, source_archive, source_archive_restore,
     source_cleanup,
 )
-from biliflow import download_api
+from biliflow import download_api, export_lanes
 from biliflow.codex_supervisor import (
     codex_connection_status,
     collect_visual_evidence,
@@ -962,7 +962,13 @@ class ControlCenter:
                 "length": len(order),
                 "paused": bool(self.store.setting("scheduler_paused", False)),
             },
-            "active": self.scheduler.active, "resources": _resources(self.root),
+            # "active": one running stage (the main lane's first) for the pages that read
+            # one; "active_lanes": every lane's (perf plan A1b, "Xuất song song").
+            "active": self.scheduler.active, "active_lanes": self.scheduler.active_lanes,
+            "parallel_export": export_lanes.stored_mode(
+                self.store.setting(export_lanes.MODE_SETTING, export_lanes.DEFAULT_MODE)
+            ),
+            "resources": _resources(self.root),
             "jobs": shown, "storage": storage_status(self.root).as_dict(),
             "detector_options": [
                 {"id": key, **value} for key, value in DETECTOR_GROUPS.items()
@@ -2270,6 +2276,16 @@ def _handler_class(center: ControlCenter) -> type[BaseHTTPRequestHandler]:
                     center.store.set_setting("scheduler_paused", bool(body.get("paused")))
                     center.scheduler._wake.set()
                     result: Any = {"paused": bool(body.get("paused"))}
+                elif path == "/api/scheduler/parallel-export":
+                    # "Xuất song song: Tự động / Tắt" (perf plan A1b): 127.0.0.1 + token only (the
+                    # phone listener refuses it before the body). An export already running in the
+                    # export lane finishes; the mode decides only what starts from now on.
+                    if not self.loopback_client():
+                        self.send_json(403, {"error": phone_access.PC_ONLY_POSTS[path], "code": "pc_only"})
+                        return
+                    if set(body) != {"mode"}:
+                        raise ValueError('Cần đúng {"mode": "auto"} hoặc {"mode": "off"}')
+                    result = {"mode": center.scheduler.set_parallel_export_mode(body["mode"])}
                 elif path == "/api/ai/config":
                     result = center.update_ai_config(body)
                 elif path == "/api/ai/login":

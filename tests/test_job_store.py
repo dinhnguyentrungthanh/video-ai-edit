@@ -243,6 +243,25 @@ class JobStoreTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "Unsupported stage fields"):
             self.store.start_stage(job_id, "preflight", job_state="PREFLIGHT", state="COMPLETED")
 
+    def test_requeue_running_stage_only_moves_a_running_stage(self):
+        # Perf plan A1b: an export of the export lane handed back to the main lane.
+        job_id = self.job["id"]
+        self.store.replace_stages(job_id, ["render"])
+        self.store.update_stage(job_id, "render", state="RUNNING", pid=4321, heartbeat_at="2026-10-14T10:00:00",
+                                attempt=1)
+        self.assertTrue(self.store.requeue_running_stage(job_id, "render", error="handed back"))
+        stage = self.store.stage(job_id, "render")
+        self.assertEqual((stage["state"], stage["pid"], stage["heartbeat_at"], stage["error"], stage["attempt"]),
+                         ("PENDING", None, None, "handed back", 1))
+        # A Hủy (CANCELLED) or Dừng ngay (PENDING) written first is never overwritten.
+        for state in ("CANCELLED", "PENDING", "COMPLETED", "FAILED_RETRYABLE"):
+            with self.subTest(state=state):
+                self.store.update_stage(job_id, "render", state=state, error="kept")
+                self.assertFalse(self.store.requeue_running_stage(job_id, "render"))
+                stage = self.store.stage(job_id, "render")
+                self.assertEqual((stage["state"], stage["error"]), (state, "kept"))
+        self.assertFalse(self.store.requeue_running_stage(job_id, "missing"))
+
     def test_conditional_update_only_in_the_expected_states(self):
         job_id = self.job["id"]
         self.store.mark_queued(job_id, reseq=True)

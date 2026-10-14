@@ -1,15 +1,18 @@
 from __future__ import annotations
 
+import itertools
 import json
 import os
 import shutil
 import subprocess
 import threading
 import time
+from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterator
 
+from biliflow import export_lanes
 from biliflow.job_import import VIDEO_EXTENSIONS, source_path_key
 from biliflow.codex_supervisor import run_local_queue_audit
 # A skipped video ("Bỏ qua (không xuất)") must be reopened before it can run
@@ -43,6 +46,8 @@ from biliflow.job_store import IN_PROCESS_STATES, JobStore, now_iso, sha256_file
 from biliflow.final_renderer import (
     DEFAULT_MAX_OUTPUT_BYTES,
     DEFAULT_TARGET_OUTPUT_BYTES,
+    export_deferral_path,
+    read_export_deferral,
     render_graph_path,
     render_progress_path,
 )
@@ -96,6 +101,65 @@ SOURCE_RESTORE_WRONG_PATH_MESSAGE = (
 SOURCE_RESTORE_REJECTED_MESSAGE = (
     "File mới ở đường dẫn cũ có SHA-256 khác video gốc; không dùng để chạy lại."
 )
+# Perf plan A1b. The main lane runs every scan stage and every export one at a
+# time, exports first, each kind in click order (A1a). With "Xuất song song: Tự
+# động" a second lane runs ONE NVENC export beside a GPU scan stage of the main
+# lane when export_lanes allows it; with "Tắt" the second lane never starts.
+MAIN_LANE = "main"
+EXPORT_LANE = "export"
+LANES = (MAIN_LANE, EXPORT_LANE)
+# EXPORT_DEFERRED event text by the renderer's reason (final_renderer.DEFER_REASONS).
+EXPORT_DEFERRED_MESSAGES = {
+    "encoder_error": "NVENC lỗi khi xuất song song; bản xuất sẽ được encode lại bằng x264 sau khi lượt quét đang chạy xong.",
+    "size_limit": "Bản NVENC vượt giới hạn dung lượng; bản xuất sẽ được encode lại bằng x264 sau khi lượt quét đang chạy xong.",
+    "not_nvenc": "Bản xuất không chạy được NVENC cạnh bước quét; sẽ xuất sau khi lượt quét đang chạy xong.",
+}
+EXPORT_HANDED_BACK_MESSAGE = "Bản xuất được trả về làn chính sau khi lượt quét đang chạy xong."
+
+
+def runs_on_gpu(definition: PipelineStage) -> bool:
+    """A scan stage whose processes hold the GPU, as run.ps1 decides (no ``--device cpu``)."""
+    if not definition.uses_gpu or not definition.commands:
+        return False
+    for command in definition.commands:
+        argv = [str(value) for value in command.argv]
+        if any(value == "--device" and argv[index + 1:index + 2] == ["cpu"] for index, value in enumerate(argv)):
+            return False
+    return True
+
+
+@dataclass(frozen=True)
+class _GpuStage:
+    """The main lane's GPU stage process the second lane may run beside."""
+    token: int
+    job_id: int
+    stage: str
+    # NVML "used" just before it started (other programs, an export already running).
+    baseline_mib: int | None
+
+
+class _ExportHandedBack(RuntimeError):
+    """A render of the second lane stopped and left its deferral record."""
+
+
+class _LaneWake:
+    """set() wakes every lane; each lane waits on and clears only its own flag.
+
+    With one shared Event a lane could clear a wake-up meant for the other one,
+    which then slept a whole poll before it looked again.
+    """
+
+    def __init__(self, lanes: tuple[str, ...]) -> None:
+        self._events = {lane: threading.Event() for lane in lanes}
+
+    def set(self) -> None:
+        for event in self._events.values():
+            event.set()
+
+    def wait(self, lane: str, timeout: float) -> None:
+        event = self._events[lane]
+        event.wait(timeout)
+        event.clear()
 
 
 def terminate_process_tree(process: subprocess.Popen) -> None:
@@ -121,10 +185,12 @@ def terminate_process_tree(process: subprocess.Popen) -> None:
 
 
 class JobScheduler:
-    """One durable worker for GPU scans and final renders.
+    """Durable workers for GPU scans and final renders: a main lane and an export lane.
 
     Stages are individual subprocesses. A pause or restart repeats only the active
-    stage; completed artifacts and review revisions remain intact.
+    stage; completed artifacts and review revisions remain intact. The export lane
+    (perf plan A1b) only ever runs one NVENC export beside a GPU scan stage of the
+    main lane; every other export runs in the main lane, as before.
     """
 
     def __init__(self, root: Path, store: JobStore, *, poll_seconds: float = 1.0):
@@ -132,7 +198,10 @@ class JobScheduler:
         self.store = store
         self.poll_seconds = poll_seconds
         self._stop = threading.Event()
-        self._wake = threading.Event()
+        # Set by shutdown: no lane starts a new stage; running stages finish or stop.
+        self._draining = threading.Event()
+        # Any change wakes each lane to look again (_wake.set()).
+        self._wake = _LaneWake(LANES)
         self._lock = threading.RLock()
         # One lock for every user action that changes where a job is going:
         # start, rerun, resume, retry, export (queue_render) here, and skip,
@@ -140,56 +209,123 @@ class JobScheduler:
         # state inside it, so two clicks or two pages cannot interleave.
         self.job_action_lock = threading.RLock()
         self._start_lock = self.job_action_lock
-        self._thread: threading.Thread | None = None
-        self._process: subprocess.Popen | None = None
-        self._active: tuple[int, str] | None = None
-        # The job the worker is inside _execute for, including the stage
-        # bookkeeping after its subprocess ended (_active is already None then).
-        self._executing_job_id: int | None = None
-        self._log_handle = None
+        # Per lane, under _lock: its thread, its running stage process, (job_id,
+        # stage) while that process runs, and the process's log file.
+        self._threads: dict[str, threading.Thread] = {}
+        self._process: dict[str, subprocess.Popen] = {}
+        self._active: dict[str, tuple[int, str]] = {}
+        self._log_handle: dict[str, Any] = {}
+        # The job each lane is inside _execute for, including the stage
+        # bookkeeping after its subprocess ended (no _active entry then).
+        self._executing: dict[str, int] = {}
         self._stage_cache = StageArtifactCache(self.root)
+        # Perf plan A1b, under _lock: the main lane's running GPU stage process, the
+        # exports the export lane turned down (each then runs in the main lane), and
+        # the scan job the main lane ran last (an export handed back waits for it).
+        self._gpu_stage: _GpuStage | None = None
+        self._gpu_stage_runs = itertools.count(1)
+        self._sequential_exports: set[int] = set()
+        self._parallel_decisions: dict[int, export_lanes.LaneDecision] = {}
+        self._last_scan_job_id: int | None = None
+        self._frame_probes: dict[tuple[str, int, int], dict] = {}
+        # NVML read of GPU 0 (export_lanes.read_vram); tests give their own.
+        self.read_vram = export_lanes.read_vram
+
+    def _describe(self, lane: str) -> dict[str, Any]:
+        job_id, stage = self._active[lane]
+        process = self._process.get(lane)
+        return {"job_id": job_id, "stage": stage, "pid": process.pid if process else None}
 
     @property
     def active(self) -> dict[str, Any] | None:
+        """The running stage, or None when every lane is idle (the main lane's first).
+
+        Kept as a single dict for the pages and checks that read one (the classic
+        dashboard, "Đo lại"); active_lanes lists every lane.
+        """
         with self._lock:
-            if self._active is None:
-                return None
-            return {"job_id": self._active[0], "stage": self._active[1],
-                    "pid": self._process.pid if self._process else None}
+            lane = next((lane for lane in LANES if lane in self._active), None)
+            return self._describe(lane) if lane is not None else None
+
+    @property
+    def active_lanes(self) -> list[dict[str, Any]]:
+        """Every running stage process: [{"lane", "job_id", "stage", "pid"}], main lane first."""
+        with self._lock:
+            return [{"lane": lane, **self._describe(lane)} for lane in LANES if lane in self._active]
 
     def is_busy(self, job_id: int) -> bool:
-        """The worker is running a stage of this job or still recording its result."""
+        """A lane is running a stage of this job or still recording its result."""
         with self._lock:
             return (
-                (self._active is not None and self._active[0] == job_id)
-                or self._executing_job_id == job_id
+                any(active[0] == job_id for active in self._active.values())
+                or job_id in self._executing.values()
             )
 
+    def _lane_busy(self, lane: str) -> bool:
+        with self._lock:
+            return lane in self._active or lane in self._executing
+
+    def parallel_export_mode(self) -> str:
+        """``auto`` or ``off`` ("Xuất song song" in Cài đặt); ``auto`` when never set."""
+        return export_lanes.stored_mode(
+            self.store.setting(export_lanes.MODE_SETTING, export_lanes.DEFAULT_MODE)
+        )
+
+    def _parallel_allowed(self) -> bool:
+        """"Tự động" on a machine whose VRAM numbers were measured: the export lane may open."""
+        return export_lanes.measured() and self.parallel_export_mode() == export_lanes.MODE_AUTO
+
+    def set_parallel_export_mode(self, mode: Any) -> str:
+        """Store the mode. ``off`` stops only new exports from going to the export
+        lane; an export already running there finishes."""
+        value = export_lanes.normalize_mode(mode)
+        self.store.set_setting(export_lanes.MODE_SETTING, value)
+        self._wake.set()
+        return value
+
     def start(self) -> None:
-        if self._thread and self._thread.is_alive():
+        if any(thread.is_alive() for thread in self._threads.values()):
             return
         self._stop.clear()
-        self._thread = threading.Thread(target=self._run, name="biliflow-scheduler", daemon=False)
-        self._thread.start()
+        self._draining.clear()
+        self._threads = {
+            lane: threading.Thread(
+                target=self._run, args=(lane,), daemon=False,
+                name="biliflow-scheduler" if lane == MAIN_LANE else f"biliflow-scheduler-{lane}",
+            )
+            for lane in LANES
+        }
+        for thread in self._threads.values():
+            thread.start()
 
     def shutdown(self, *, immediate: bool = False, timeout: float = 20.0) -> None:
-        active = self.active
-        if immediate and active:
-            self.pause_now(active["job_id"])
-        elif active:
-            self.store.update_job(active["job_id"], stop_mode="AFTER_STAGE")
-            # Leave the worker alive until the current subprocess reaches its
+        # From now on no lane starts a stage; each lane's running stage stops
+        # (immediate) or reaches its durable boundary.
+        self._draining.set()
+        if immediate:
+            for job_id in sorted({item["job_id"] for item in self.active_lanes}):
+                self.pause_now(job_id)
+        else:
+            marked: set[int] = set()
+            # Leave the workers alive until every lane's subprocess reaches its
             # durable stage boundary. The explicit Stop script may therefore
-            # take as long as that stage, while the browser remains responsive.
-            while self.active is not None:
+            # take as long as those stages, while the browser remains responsive.
+            while lanes := self.active_lanes:
+                for job_id in {item["job_id"] for item in lanes} - marked:
+                    self.store.update_job(job_id, stop_mode="AFTER_STAGE")
+                    marked.add(job_id)
                 time.sleep(0.25)
         self._stop.set()
         self._wake.set()
-        if self._thread and self._thread is not threading.current_thread():
-            self._thread.join(timeout)
-        if self._thread and self._thread.is_alive():
+        current = threading.current_thread()
+        for thread in self._threads.values():
+            if thread is not current:
+                thread.join(timeout)
+        if any(thread.is_alive() for thread in self._threads.values() if thread is not current):
             self._terminate_active("Control Center shutdown timeout")
-            self._thread.join(5)
+            for thread in self._threads.values():
+                if thread is not current:
+                    thread.join(5)
 
     def _pipeline_key(self, job: dict[str, Any]) -> str:
         return str(self.store.setting(f"pipeline_key:{job['id']}") or job["job_key"])
@@ -297,8 +433,7 @@ class JobScheduler:
             job = self.store.get_job(job_id)
             # Before anything is written (render:{id} and skip:{id} below).
             self._refuse_locked(job_id)
-            active = self.active
-            if (active and active["job_id"] == job_id) or job["state"] in IN_PROCESS_STATES:
+            if self.is_busy(job_id) or job["state"] in IN_PROCESS_STATES:
                 raise ValueError("Dừng job hiện tại trước khi chạy lại từ đầu")
             if job["state"] == "QUEUED":
                 raise ValueError(
@@ -442,13 +577,13 @@ class JobScheduler:
                     self.store.update_stage(job_id, stage["name"], state="PENDING", pid=None,
                                             heartbeat_at=None, error="Paused; this stage will restart")
             value = self.store.update_job(job_id, state="PAUSED", stop_mode="PAUSED", error=None)
-            # Read after the write: a stage process the worker launches from
-            # now on sees PAUSED and never starts (_execute checks under _lock).
-            with self._lock:
-                active = self._active
-        # The process tree is stopped outside the action lock so other clicks never wait on it.
-        if active and active[0] == job_id:
-            self._terminate_active("Paused by user")
+            # Read after the write: a stage process a lane launches from now on
+            # sees PAUSED and never starts (_execute checks under _lock).
+            lanes = self._lanes_running(job_id)
+        # The process tree is stopped outside the action lock so other clicks never
+        # wait on it. Only this job's lane: a stage of another job in the other lane runs on.
+        for lane in lanes:
+            self._terminate_lane(lane)
         self.store.add_event(job_id, "JOB_PAUSED", "Paused safely at stage boundary")
         return value
 
@@ -473,14 +608,18 @@ class JobScheduler:
             # neither Tiếp tục nor the worker can start it later. current_stage
             # stays 'render' for the "Đã hủy xuất video" card.
             self.retire_render_request(job_id, "cancel")
-            # Read after the write: a stage process the worker launches from
-            # now on sees CANCELLED and never starts (_execute checks under _lock).
-            with self._lock:
-                active = self._active
-        if active and active[0] == job_id:
-            self._terminate_active("Cancelled by user")
+            # Read after the write: a stage process a lane launches from now on
+            # sees CANCELLED and never starts (_execute checks under _lock).
+            lanes = self._lanes_running(job_id)
+        for lane in lanes:
+            self._terminate_lane(lane)
         self.store.add_event(job_id, "JOB_CANCELLED", "Job cancelled; source was not changed")
         return value
+
+    def _lanes_running(self, job_id: int) -> list[str]:
+        """The lanes whose stage process belongs to this job (read under _lock)."""
+        with self._lock:
+            return [lane for lane, active in self._active.items() if active[0] == job_id]
 
     def retry(self, job_id: int) -> dict:
         with self.job_action_lock:
@@ -558,6 +697,12 @@ class JobScheduler:
             self._refuse_locked(job_id)
             # Finalizing an export that is already waiting keeps its place.
             reseq = self.store.get_job(job_id)["state"] != "QUEUED"
+            # A1b: a new request starts clean, NVENC beside a scan allowed again; a
+            # record an earlier request's render left (handed back to the main lane) goes.
+            export_deferral_path(self.root, output_path).unlink(missing_ok=True)
+            with self._lock:
+                self._sequential_exports.discard(job_id)
+                self._parallel_decisions.pop(job_id, None)
             self.store.ensure_stage(job_id, "render")
             self.store.update_stage(job_id, "render", state="PENDING", error=None, pid=None)
             self.store.set_setting(f"render:{job_id}", {
@@ -698,19 +843,26 @@ class JobScheduler:
         keeps its place among the scans. first_only stops at the job the worker
         takes, so the stage lists of the jobs behind it are not built.
         """
-        # sorted() is stable: equal keys keep queued_jobs()' order.
-        ordered = sorted(
-            self.store.queued_jobs(),
-            key=lambda job: (job["priority"], not self._export_next(job)),
-        )
         waiting = []
-        for job in ordered:
+        for item in self._iter_waiting():
+            waiting.append(item)
+            if first_only:
+                break
+        return waiting
+
+    def _iter_waiting(
+        self, *, exports_only: bool = False,
+    ) -> Iterator[tuple[dict[str, Any], dict[str, Any], PipelineStage]]:
+        """_waiting() one job at a time: the stage lists behind are built only when asked for."""
+        # sorted() is stable: equal keys keep queued_jobs()' order.
+        keyed = [(job, self._export_next(job)) for job in self.store.queued_jobs()]
+        ordered = sorted(keyed, key=lambda pair: (pair[0]["priority"], not pair[1]))
+        for job, export_next in ordered:
+            if exports_only and not export_next:
+                continue
             runnable = self._runnable(job)
             if runnable is not None:
-                waiting.append((job, *runnable))
-                if first_only:
-                    break
-        return waiting
+                yield (job, *runnable)
 
     def queue_order(self) -> list[dict[str, Any]]:
         """Runnable waiting jobs in the exact order the worker will take them."""
@@ -722,28 +874,187 @@ class JobScheduler:
             for position, (job, stage, _definition) in enumerate(self._waiting(), start=1)
         ]
 
-    def _select(self) -> tuple[dict[str, Any], dict[str, Any], PipelineStage] | None:
-        if self.store.setting("scheduler_paused", False):
-            return None
-        waiting = self._waiting(first_only=True)
-        return waiting[0] if waiting else None
+    def _select(
+        self, lane: str = MAIN_LANE,
+    ) -> tuple[dict[str, Any], dict[str, Any], PipelineStage] | None:
+        """The next stage this lane takes, or None.
 
-    def _run(self) -> None:
+        "Tạm dừng hàng đợi" (scheduler_paused) and shutdown stop both lanes from
+        starting a stage; a stage already running in either lane goes on.
+        """
+        if self.store.setting("scheduler_paused", False) or self._draining.is_set():
+            return None
+        if lane == EXPORT_LANE:
+            return self._select_parallel_export()
+        if lane != MAIN_LANE:
+            raise ValueError(f"Unknown scheduler lane: {lane}")
+        return self._select_main()
+
+    def _select_main(self) -> tuple[dict[str, Any], dict[str, Any], PipelineStage] | None:
+        """The main lane: A1a's order, unless an export must wait for the export lane.
+
+        With "Tắt" (or no VRAM measurement yet) and an idle export lane this is
+        exactly the single worker of before. Otherwise, when the first waiting
+        stage is an export, the main lane takes the first waiting scan stage
+        instead while the export lane runs an
+        export (one render at a time), while that export goes to the export lane
+        beside the scan stage the main lane is about to start, and while it was
+        handed back from the export lane and the scan job that ran beside it still
+        has stages to run (perf plan A1b: x264 after the scan, never cutting in).
+        """
+        parallel = self._parallel_allowed()
+        export_lane_busy = self._lane_busy(EXPORT_LANE)
+        if not parallel and not export_lane_busy:
+            waiting = self._waiting(first_only=True)
+            return waiting[0] if waiting else None
+        waiting = self._iter_waiting()
+        first = next(waiting, None)
+        if first is None or first[2].name != "render":
+            return first
+        next_scan = next((item for item in waiting if item[2].name != "render"), None)
+        if next_scan is not None and self._export_waits(
+            first, next_scan, parallel=parallel, export_lane_busy=export_lane_busy,
+        ):
+            return next_scan
+        if export_lane_busy:
+            return None
+        return first
+
+    def _export_waits(
+        self, export: tuple[dict[str, Any], dict[str, Any], PipelineStage],
+        next_scan: tuple[dict[str, Any], dict[str, Any], PipelineStage],
+        *, parallel: bool, export_lane_busy: bool,
+    ) -> bool:
+        """Whether the main lane runs ``next_scan`` before the first waiting ``export``."""
+        if export_lane_busy:
+            return True
+        if not parallel:
+            return False
+        lane = self._threads.get(EXPORT_LANE)
+        if lane is not None and not lane.is_alive():
+            # An error ended the export lane's thread: nothing would take the export
+            # beside the scan, so it never waits for that lane.
+            return False
+        job_id = int(export[0]["id"])
+        if self._handed_back(job_id):
+            with self._lock:
+                last_scan = self._last_scan_job_id
+            return int(next_scan[0]["id"]) == last_scan
+        with self._lock:
+            if job_id in self._sequential_exports:
+                return False
+        if not runs_on_gpu(next_scan[2]):
+            return False
+        # Nothing runs on the GPU now: what is in use is the baseline of the stage to come.
+        decision = self._lane_decision(export, baseline_mib=None)
+        if not decision.parallel:
+            self._turn_down(job_id, decision)
+        return decision.parallel
+
+    def _handed_back(self, job_id: int) -> bool:
+        render = self.store.setting(f"render:{job_id}")
+        if not isinstance(render, dict) or not render.get("output"):
+            return False
+        return os.path.lexists(export_deferral_path(self.root, self.root / str(render["output"])))
+
+    def _probe_frame(self, source: Path) -> dict:
+        """ffprobe's answer for a source, kept per (path, size, mtime) between checks."""
+        stat = source.stat()
+        key = (str(source), stat.st_size, stat.st_mtime_ns)
+        with self._lock:
+            known = self._frame_probes.get(key)
+        if known is None:
+            known = probe_video(self.root / "tools" / "ffmpeg" / "bin" / "ffprobe.exe", source)
+            with self._lock:
+                if len(self._frame_probes) >= 64:
+                    self._frame_probes.clear()
+                self._frame_probes[key] = known
+        return known
+
+    def _lane_decision(
+        self, export: tuple[dict[str, Any], dict[str, Any], PipelineStage], *, baseline_mib: int | None,
+    ) -> export_lanes.LaneDecision:
+        """Whether this export may run in the export lane beside a scan (export_lanes)."""
+        job_id = int(export[0]["id"])
+        candidate = export_lanes.export_candidate(
+            self.root, self.store.setting(f"render:{job_id}"), probe=self._probe_frame,
+        )
+        if not candidate.eligible:
+            return export_lanes.LaneDecision(False, candidate.reason, {
+                key: value for key, value in (("width", candidate.width), ("height", candidate.height))
+                if value is not None
+            })
+        read = self.read_vram()
+        if baseline_mib is None and read is not None:
+            baseline_mib = read.used_mib
+        decision = export_lanes.vram_decision(read, baseline_mib=baseline_mib, need_mib=int(candidate.need_mib))
+        return export_lanes.LaneDecision(decision.parallel, decision.reason, {
+            **decision.detail, "width": candidate.width, "height": candidate.height,
+        })
+
+    def _select_parallel_export(self) -> tuple[dict[str, Any], dict[str, Any], PipelineStage] | None:
+        """The export lane: the first waiting export, beside the main lane's GPU stage, when allowed.
+
+        Each export is judged once: turned down, it runs in the main lane at its
+        next stage boundary (exports first), as with "Tắt".
+        """
+        if not self._parallel_allowed():
+            return None
+        with self._lock:
+            gpu = self._gpu_stage
+            if gpu is None or EXPORT_LANE in self._active or EXPORT_LANE in self._executing:
+                return None
+        export = next((item for item in self._iter_waiting(exports_only=True) if item[2].name == "render"), None)
+        if export is None:
+            return None
+        job_id = int(export[0]["id"])
+        with self._lock:
+            if job_id in self._sequential_exports:
+                return None
+        decision = self._lane_decision(export, baseline_mib=gpu.baseline_mib)
+        if not decision.parallel:
+            self._turn_down(job_id, decision)
+            return None
+        with self._lock:
+            if self._gpu_stage is not gpu:
+                # The scan stage it was judged beside ended meanwhile: judge again.
+                return None
+            self._parallel_decisions[job_id] = export_lanes.LaneDecision(True, decision.reason, {
+                **decision.detail, "scan_job_id": gpu.job_id, "scan_stage": gpu.stage,
+            })
+        return export
+
+    def _turn_down(self, job_id: int, decision: export_lanes.LaneDecision) -> None:
+        """The export runs in the main lane; its events say why, once per export request."""
+        with self._lock:
+            if job_id in self._sequential_exports:
+                return
+            self._sequential_exports.add(job_id)
+        self.store.add_event(
+            job_id, "EXPORT_LANE_SEQUENTIAL", decision.text,
+            payload={"reason": decision.reason, **decision.detail},
+        )
+
+    def _run(self, lane: str = MAIN_LANE) -> None:
         while not self._stop.is_set():
-            selection = self._select()
+            selection = self._select(lane)
             if selection is None:
-                self._wake.wait(self.poll_seconds)
-                self._wake.clear()
+                self._wake.wait(lane, self.poll_seconds)
                 continue
             with self._lock:
-                self._executing_job_id = int(selection[0]["id"])
+                self._executing[lane] = int(selection[0]["id"])
             try:
-                self._execute(*selection)
+                self._execute(*selection, lane=lane)
             finally:
                 with self._lock:
-                    self._executing_job_id = None
+                    self._executing.pop(lane, None)
+                # The other lane looks again at once (a stage boundary, a free export lane).
+                self._wake.set()
 
-    def _execute(self, job: dict[str, Any], stage_row: dict[str, Any], definition: PipelineStage) -> None:
+    def _execute(
+        self, job: dict[str, Any], stage_row: dict[str, Any], definition: PipelineStage,
+        lane: str = MAIN_LANE,
+    ) -> None:
         job_id = int(job["id"])
         name = definition.name
         # A pause, cancel or stop that landed after _select wins: run nothing.
@@ -760,6 +1071,7 @@ class JobScheduler:
             return
         self.store.add_event(job_id, "STAGE_STARTED", f"Stage {name} started",
                              payload={"attempt": attempt, "log": log_path.relative_to(self.root).as_posix()})
+        self._note_lane_start(job_id, name, lane)
         try:
             if name == "preflight":
                 self._run_preflight(job)
@@ -793,37 +1105,7 @@ class JobScheduler:
                     self._register_artifact(job_id, name, artifact)
             else:
                 for command in definition.commands:
-                    # Checked and published under _lock. cancel and pause_now
-                    # write the job state first and read _active under _lock
-                    # after, so either this check sees their write or they see
-                    # the process and stop it.
-                    with self._lock:
-                        if self.store.get_job(job_id)["state"] in STOPPED_BY_USER_STATES:
-                            raise RuntimeError(f"Stage {name} was stopped before its process started")
-                        log_handle = log_path.open("ab")
-                        kwargs: dict[str, Any] = {"cwd": self.root, "stdout": log_handle,
-                                                  "stderr": subprocess.STDOUT}
-                        if os.name == "nt":
-                            kwargs["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
-                        process = subprocess.Popen(command.argv, **kwargs)
-                        self._process = process
-                        self._active = (job_id, name)
-                        self._log_handle = log_handle
-                    self.store.update_stage(job_id, name, pid=process.pid, heartbeat_at=now_iso())
-                    while process.poll() is None:
-                        if self._stop.wait(1.0):
-                            break
-                        self.store.update_stage(job_id, name, heartbeat_at=now_iso())
-                    if process.poll() is None:
-                        self._terminate_process(process)
-                    code = process.wait()
-                    log_handle.close()
-                    with self._lock:
-                        self._process = None
-                        self._active = None
-                        self._log_handle = None
-                    if code != 0:
-                        raise RuntimeError(f"Stage process exited with code {code}; see {log_path}")
+                    self._run_process(job_id, definition, command, log_path, lane)
                     for artifact in command.expected_artifacts:
                         self._register_artifact(job_id, name, artifact)
                 try:
@@ -866,23 +1148,125 @@ class JobScheduler:
             self._after_success(job_id, name, definition)
         except Exception as error:
             with self._lock:
-                process = self._process
+                process = self._process.get(lane)
             if process and process.poll() is None:
                 self._terminate_process(process)
-            if self._log_handle and not self._log_handle.closed:
-                self._log_handle.close()
-            with self._lock:
-                self._process = None
-                self._active = None
-                self._log_handle = None
+            self._release_lane(lane)
             self._cleanup_interrupted_stage(job_id, name)
             current = self.store.get_job(job_id)
-            if current["state"] not in STOPPED_BY_USER_STATES:
-                self.store.update_stage(job_id, name, state="FAILED_RETRYABLE", pid=None,
-                                        completed_at=now_iso(), error=str(error))
-                self.store.update_job(job_id, state="FAILED", error=str(error), current_stage=name)
-                self.store.add_event(job_id, "STAGE_FAILED", str(error), level="ERROR",
-                                     payload={"stage": name})
+            if current["state"] in STOPPED_BY_USER_STATES:
+                return
+            if isinstance(error, _ExportHandedBack):
+                self._hand_back_export(job_id)
+                return
+            self.store.update_stage(job_id, name, state="FAILED_RETRYABLE", pid=None,
+                                    completed_at=now_iso(), error=str(error))
+            self.store.update_job(job_id, state="FAILED", error=str(error), current_stage=name)
+            self.store.add_event(job_id, "STAGE_FAILED", str(error), level="ERROR",
+                                 payload={"stage": name})
+
+    def _note_lane_start(self, job_id: int, name: str, lane: str) -> None:
+        """Remember the main lane's scan job; record why an export runs beside a scan."""
+        with self._lock:
+            decision = self._parallel_decisions.pop(job_id, None)
+            if lane == MAIN_LANE and name != "render":
+                self._last_scan_job_id = job_id
+        if lane == EXPORT_LANE and decision is not None:
+            self.store.add_event(
+                job_id, "EXPORT_LANE_PARALLEL", decision.text,
+                payload={"reason": decision.reason, **decision.detail},
+            )
+
+    def _run_process(
+        self, job_id: int, definition: PipelineStage, command: StageCommand, log_path: Path, lane: str,
+    ) -> None:
+        """Run one command of a stage in its lane; RuntimeError when it fails."""
+        name = definition.name
+        gpu = lane == MAIN_LANE and runs_on_gpu(definition) and self._parallel_allowed()
+        # A1b: what the GPU holds before this scan process starts, for the export lane.
+        baseline = self.read_vram() if gpu else None
+        # Checked and published under _lock. cancel and pause_now write the job
+        # state first and read _active under _lock after, so either this check
+        # sees their write or they see the process and stop it.
+        with self._lock:
+            if self.store.get_job(job_id)["state"] in STOPPED_BY_USER_STATES:
+                raise RuntimeError(f"Stage {name} was stopped before its process started")
+            log_handle = log_path.open("ab")
+            kwargs: dict[str, Any] = {"cwd": self.root, "stdout": log_handle, "stderr": subprocess.STDOUT}
+            if os.name == "nt":
+                kwargs["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
+            if lane == EXPORT_LANE:
+                kwargs["env"] = {**os.environ, **export_lanes.PARALLEL_RENDER_ENVIRONMENT}
+            try:
+                process = subprocess.Popen(command.argv, **kwargs)
+            except BaseException:
+                log_handle.close()
+                raise
+            self._process[lane] = process
+            self._active[lane] = (job_id, name)
+            self._log_handle[lane] = log_handle
+            if gpu:
+                self._gpu_stage = _GpuStage(
+                    next(self._gpu_stage_runs), job_id, name,
+                    baseline.used_mib if baseline is not None else None,
+                )
+        if gpu:
+            self._wake.set()  # the export lane may now judge a waiting export
+        self.store.update_stage(job_id, name, pid=process.pid, heartbeat_at=now_iso())
+        while process.poll() is None:
+            if self._stop.wait(1.0):
+                break
+            self.store.update_stage(job_id, name, heartbeat_at=now_iso())
+        if process.poll() is None:
+            self._terminate_process(process)
+        code = process.wait()
+        self._release_lane(lane)
+        if code != 0:
+            if lane == EXPORT_LANE and name == "render" and self._handed_back(job_id):
+                raise _ExportHandedBack(f"Stage process exited with code {code}; see {log_path}")
+            raise RuntimeError(f"Stage process exited with code {code}; see {log_path}")
+
+    def _release_lane(self, lane: str) -> None:
+        """The lane's stage process ended: forget it and close its log."""
+        with self._lock:
+            self._process.pop(lane, None)
+            self._active.pop(lane, None)
+            log_handle = self._log_handle.pop(lane, None)
+            if lane == MAIN_LANE:
+                self._gpu_stage = None
+        if log_handle is not None and not log_handle.closed:
+            log_handle.close()
+
+    def _hand_back_export(self, job_id: int) -> None:
+        """The export lane's render stopped and left its record: the main lane finishes it.
+
+        The render stage waits again (RUNNING to PENDING, never over a pause or a
+        cancel) and the job keeps its place; the main lane runs it with x264 once
+        the scan job that ran beside it has no stage left to run (_select_main).
+        """
+        render = self.store.setting(f"render:{job_id}") or {}
+        record = None
+        if render.get("output") and render.get("plan"):
+            record = read_export_deferral(
+                self.root, self.root / str(render["output"]), self.root / str(render["plan"]),
+            )
+        if not self.store.requeue_running_stage(job_id, "render"):
+            return
+        with self._lock:
+            self._sequential_exports.add(job_id)
+        job = self.store.get_job(job_id)
+        if job.get("stop_mode") == "AFTER_STAGE" or self._stop.is_set():
+            self.store.update_job_if(job_id, states=IN_PROCESS_STATES, state="PAUSED",
+                                     stop_mode="PAUSED", current_stage="render")
+        else:
+            # Conditional: a pause or cancel landing right now still wins.
+            self.store.update_job_if(job_id, states=IN_PROCESS_STATES, state="QUEUED",
+                                     current_stage="render")
+        reason = record["reason"] if record is not None else None
+        self.store.add_event(
+            job_id, "EXPORT_DEFERRED", EXPORT_DEFERRED_MESSAGES.get(reason, EXPORT_HANDED_BACK_MESSAGE),
+            level="WARNING", payload={"reason": reason, "fallback": record.get("fallback") if record else None},
+        )
 
     def _register_artifact(self, job_id: int, stage_name: str, artifact: Path) -> None:
         validate_json_artifact(artifact)
@@ -1005,9 +1389,15 @@ class JobScheduler:
         render_graph_path(self.root, output).unlink(missing_ok=True)
 
     def _terminate_active(self, reason: str) -> None:
+        """Stop the stage process of every lane (shutdown timeout)."""
+        for lane in LANES:
+            self._terminate_lane(lane)
+
+    def _terminate_lane(self, lane: str) -> None:
+        """Stop this lane's stage process only; the other lane's stage runs on."""
         with self._lock:
-            process = self._process
-            active = self._active
+            process = self._process.get(lane)
+            active = self._active.get(lane)
         if process and process.poll() is None:
             self._terminate_process(process)
         if active:

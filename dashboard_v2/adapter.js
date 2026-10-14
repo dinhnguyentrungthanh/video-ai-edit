@@ -317,6 +317,9 @@
       version: status.version,
       jobs: (status.jobs || []).map(normalizeJob),
       active: status.active || null,
+      // Every running stage (main lane, export lane); an older server sends only "active".
+      active_lanes: Array.isArray(status.active_lanes) ? status.active_lanes : (status.active ? [{lane: 'main', ...status.active}] : []),
+      parallel_export: status.parallel_export === 'off' ? 'off' : 'auto',
       queue: status.queue || {length: 0, paused: false},
       scheduler_paused: !!status.scheduler_paused,
       resources: {cpu_percent: 0, memory: {percent: 0}, disk: {}, gpu: null, ...(status.resources || {})},
@@ -361,7 +364,7 @@
   /* Live store: same interface as BFDemoStore, backed by the adapter. */
   function createLiveStore(adapter, options) {
     options = options || {};
-    let snap = {mode: 'live', jobs: [], logos: [], active: null, queue: {length: 0, paused: false}, resources: {cpu_percent: 0, memory: {percent: 0}, disk: {}, gpu: null}, ai: {ready: false, config: {}, message: 'Đang tải…'}, offline: false, loading: true, requests: [], device: null, device_checking: false, device_error: null};
+    let snap = {mode: 'live', jobs: [], logos: [], active: null, active_lanes: [], parallel_export: 'auto', queue: {length: 0, paused: false}, resources: {cpu_percent: 0, memory: {percent: 0}, disk: {}, gpu: null}, ai: {ready: false, config: {}, message: 'Đang tải…'}, offline: false, loading: true, requests: [], device: null, device_checking: false, device_error: null};
     const listeners = new Set();
     let ai = null, memory = null, timer = null, phone = null, paused = false, downloadTimer = null, statusPolling = null;
     let phoneRequest = null, phoneRetries = 0;

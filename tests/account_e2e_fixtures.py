@@ -677,6 +677,7 @@ class E2EBase(unittest.TestCase):
         self.scheduler = mock.create_autospec(JobScheduler, instance=True)  # never started; /api/status reads it
         self.scheduler.queue_order.return_value = []
         self.scheduler.active = None
+        self.scheduler.active_lanes = []
         center.scheduler = self.scheduler
         center.recovered = 0
         center.downloads = self.service

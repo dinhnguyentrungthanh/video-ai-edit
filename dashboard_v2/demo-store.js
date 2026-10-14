@@ -156,6 +156,7 @@
         else if (operation === 'recheck') { if (body.kind === 'source_cleanup') j.source_cleanup.verified = true; else j.source_archive.export_verified = true; }
         j.updated_at = new Date().toISOString();
       } else if (operation === 'scheduler') { state.scheduler_paused = body.paused; state.queue.paused = body.paused; }
+      else if (operation === 'parallelExport') state.parallel_export = body.mode === 'off' ? 'off' : 'auto';
       else if (operation === 'aiConfig') { state.ai.config = {...body}; state.ai.ready = body.enabled; }
       else if (operation === 'aiCheck') { state.ai.ready = state.ai.config.enabled; state.ai.message = state.ai.ready ? 'Kết nối mẫu sẵn sàng' : 'AI đang tắt'; }
       else if (operation === 'aiLogin') state.ai.message = 'Đăng nhập được mô phỏng; không mở tài khoản thật.';
