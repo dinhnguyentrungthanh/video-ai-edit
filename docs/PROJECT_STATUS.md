@@ -1,3 +1,7 @@
+## Cover regions at the frame edge (2026-10-15) — branch `fix/cover-edge`, not merged
+
+- A cover region touching the right or bottom frame edge with an odd crop size (job 141) no longer makes FFmpeg refuse the export; it is blurred up to the frame's edge. Plans that exported keep their bytes. Details in `docs/handoff/H2-cover-edge.md`.
+
 ## G8 merge, exports with many blur regions (2026-10-14) — branch `merge/g8`, not yet in the main folder
 
 - Session H merged: exports with many blur regions no longer hang, and a stalled render fails instead of holding the queue. Scan cache keys unchanged; full suite 3,331 OK. Details in `CHANGELOG.md`.

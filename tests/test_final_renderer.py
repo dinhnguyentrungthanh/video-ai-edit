@@ -959,6 +959,31 @@ class RenderCompletionTests(unittest.TestCase):
         self.render()
         self.assertEqual(self.graph_seen, expected.encode("utf-8"))
 
+    def test_the_cover_chain_rounds_by_the_probed_pixel_format(self):
+        # The probe has no size here, so the cover reads nothing past the region's
+        # right and bottom: a crop 69 wide is refused by delogo where crop rounds
+        # widths to even (job 141, 2026-10-14) and crops exactly from an even corner.
+        # A source of an unknown format keeps the chain of before (no rounding).
+        odd = {
+            "id": "blur-1", "type": "blur", "start_seconds": 1.0, "end_seconds": 2.0,
+            "region_source_pixels": {"x": 41, "y": 30, "width": 61, "height": 20},
+            "blur": {"sigma": 28, "edge_feather_pixels": 0, "edge_feather_mode": "all_edges",
+                     "method": "delogo_blur_v1"},
+        }
+        for pix_fmt, chain in (
+            ("yuv444p", b"crop=69:28:33:22,delogo=x=8:y=8:w=60:h=19:"),
+            ("yuv420p", b"crop=70:28:32:22:exact=1,delogo=x=8:y=8:w=61:h=19:"),
+            ("rgb24", b"crop=69:28:33:22,delogo=x=8:y=8:w=60:h=19:"),
+            (None, b"crop=69:28:33:22,delogo=x=8:y=8:w=60:h=19:"),
+        ):
+            with self.subTest(pix_fmt=pix_fmt):
+                self.pix_fmt = pix_fmt
+                self.write_plan(operations=[odd])
+                self.render()
+                self.output.unlink()
+                self.manifest_path.unlink()
+                self.assertIn(chain, self.graph_seen)
+
     def test_a_short_output_stays_within_the_encoder_limits(self):
         # FFmpeg takes -maxrate and -bufsize as 32-bit numbers: the size budget of
         # a 6 s or 20 s output exceeded them and FFmpeg refused to start.

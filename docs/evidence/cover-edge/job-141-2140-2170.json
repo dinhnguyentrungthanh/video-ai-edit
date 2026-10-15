@@ -1,0 +1,374 @@
+{
+ "job": 141,
+ "created": "2026-10-14, branch fix/cover-edge at 5cb52c4's code (uncommitted then; same src as the commit), baseline 11a059c",
+ "how": "job 141's review-queue.json copied into <install>/temp/ce-job141; build_edit_plan and the authorization there; the source film only read; nothing written to the real output, reports or state; the temp root deleted afterwards. Scripts: docs/evidence/cover-edge/README.md, section 5.",
+ "source": {
+  "codec": "h264",
+  "width": 1280,
+  "height": 534,
+  "pix_fmt": "yuv420p",
+  "fps": "2997/125",
+  "duration_seconds": 4397.204
+ },
+ "plan": {
+  "operations": 1,
+  "cuts": 0,
+  "the_operation": {
+   "id": "op-8176655c1d86",
+   "type": "blur",
+   "film_seconds": [
+    2151.0,
+    2157.5
+   ],
+   "region_source_pixels": {
+    "x": 583,
+    "y": 35,
+    "width": 697,
+    "height": 49
+   },
+   "blur": {
+    "sigma": 29,
+    "edge_feather_pixels": 2,
+    "edge_feather_mode": "all_edges",
+    "method": "delogo_blur_v1"
+   }
+  }
+ },
+ "whole_film_graph_through_ffmpeg_for_1_s": {
+  "baseline_11a059c": {
+   "ffmpeg_exit_code": 4294967274,
+   "refused_by_delogo": true,
+   "cover_chain": "[v0region0crop]crop=705:65:575:27,delogo=x=8:y=8:w=696:h=49:enable='between(t,2151.000000,2157.500000)',crop=697:49:8:8,split[v0region0clean][v0region0blursource]"
+  },
+  "branch": {
+   "ffmpeg_exit_code": 0,
+   "refused_by_delogo": false,
+   "cover_chain": "[v0region0crop]crop=706:66:574:26:exact=1,delogo=x=8:y=8:w=697:h=50:enable='between(t,2151.000000,2157.500000)',crop=698:50:8:8:exact=1,split[v0region0clean][v0region0blursource]"
+  }
+ },
+ "window_2140_2170": {
+  "how": "lossless x264 copy (qp 0, yuv420p) of 2140-2170 s; the blur moved by -2140 s (11.0-17.5 s); the real render_final_output of each code tree, x264 with 2 threads, below-normal priority",
+  "exports": {
+   "baseline_11a059c": {
+    "error": "[aost#0:1/aac @ 00000267e17a3d80] Task finished with error code: -22 (Invalid argument)\n[aost#0:1/aac @ 00000267e17a3d80] Terminating thread with return code -22 (Invalid argument)\n[vost#0:0/libx264 @ 00000267e134fe00] [enc:libx264 @ 00000267e12e7880] Could not open encoder before EOF\n[vost#0:0/libx264 @ 00000267e134fe00] Task finished with error code: -22 (Invalid argument)\n[vost#0:0/libx264 @ 00000267e134fe00] Terminating thread with return code -22 (Invalid argument)\n[out#0/mp4 @ 00000267e12c3b80] Nothing was written into output file, because at least one of its streams received no packets.",
+    "seconds": 0.5
+   },
+   "branch": {
+    "status": "COMPLETED",
+    "duration": 30.03,
+    "encoder": "libx264",
+    "filter_graph": {
+     "layout": "nested",
+     "paths": 4,
+     "regions_reading_older_picture": 0
+    },
+    "full_decode_validation_passed": true,
+    "seconds": 6.2
+   }
+  },
+  "kept_detail_x264_export": [
+   {
+    "seconds_in_window": 12.0,
+    "film_seconds": 2152.0,
+    "blur": "on",
+    "inside_4px_in": {
+     "kept": -0.0,
+     "source_detail_per_pixel": 137.7
+    },
+    "frame_columns": {
+     "1279": {
+      "kept": -0.009,
+      "source_detail_per_pixel": 0.5
+     },
+     "1278": {
+      "kept": -0.016,
+      "source_detail_per_pixel": 0.8
+     },
+     "1277": {
+      "kept": 0.023,
+      "source_detail_per_pixel": 0.5
+     },
+     "1276": {
+      "kept": 0.0,
+      "source_detail_per_pixel": 43.4
+     },
+     "1272": {
+      "kept": 0.0,
+      "source_detail_per_pixel": 124.4
+     }
+    },
+    "column_581_left_of_region": {
+     "kept": 0.0,
+     "source_detail_per_pixel": 0.1
+    },
+    "row_32_above_region": {
+     "kept": 0.548,
+     "source_detail_per_pixel": 0.1
+    }
+   },
+   {
+    "seconds_in_window": 14.25,
+    "film_seconds": 2154.25,
+    "blur": "on",
+    "inside_4px_in": {
+     "kept": 0.0,
+     "source_detail_per_pixel": 436.4
+    },
+    "frame_columns": {
+     "1279": {
+      "kept": -0.003,
+      "source_detail_per_pixel": 119.2
+     },
+     "1278": {
+      "kept": -0.002,
+      "source_detail_per_pixel": 107.2
+     },
+     "1277": {
+      "kept": 0.001,
+      "source_detail_per_pixel": 103.8
+     },
+     "1276": {
+      "kept": 0.001,
+      "source_detail_per_pixel": 98.1
+     },
+     "1272": {
+      "kept": -0.0,
+      "source_detail_per_pixel": 62.3
+     }
+    },
+    "column_581_left_of_region": {
+     "kept": -0.292,
+     "source_detail_per_pixel": 0.1
+    },
+    "row_32_above_region": {
+     "kept": 0.104,
+     "source_detail_per_pixel": 0.1
+    }
+   },
+   {
+    "seconds_in_window": 16.5,
+    "film_seconds": 2156.5,
+    "blur": "on",
+    "inside_4px_in": {
+     "kept": 0.0,
+     "source_detail_per_pixel": 417.6
+    },
+    "frame_columns": {
+     "1279": {
+      "kept": 0.0,
+      "source_detail_per_pixel": 0.2
+     },
+     "1278": {
+      "kept": 0.0,
+      "source_detail_per_pixel": 2.3
+     },
+     "1277": {
+      "kept": 0.0,
+      "source_detail_per_pixel": 4.3
+     },
+     "1276": {
+      "kept": 0.0,
+      "source_detail_per_pixel": 18.2
+     },
+     "1272": {
+      "kept": 0.0,
+      "source_detail_per_pixel": 124.0
+     }
+    },
+    "column_581_left_of_region": {
+     "kept": 1.139,
+     "source_detail_per_pixel": 79.9
+    },
+    "row_32_above_region": {
+     "kept": 0.608,
+     "source_detail_per_pixel": 1.6
+    }
+   },
+   {
+    "seconds_in_window": 8.0,
+    "film_seconds": 2148.0,
+    "blur": "off",
+    "inside_4px_in": {
+     "kept": 0.401,
+     "source_detail_per_pixel": 0.1
+    },
+    "frame_columns": {
+     "1279": {
+      "kept": 0.833,
+      "source_detail_per_pixel": 0.0
+     },
+     "1278": {
+      "kept": 0.167,
+      "source_detail_per_pixel": 0.1
+     },
+     "1277": {
+      "kept": 0.064,
+      "source_detail_per_pixel": 0.1
+     },
+     "1276": {
+      "kept": -0.143,
+      "source_detail_per_pixel": 0.1
+     },
+     "1272": {
+      "kept": 0.25,
+      "source_detail_per_pixel": 0.0
+     }
+    },
+    "column_581_left_of_region": {
+     "kept": 0.543,
+     "source_detail_per_pixel": 0.4
+    },
+    "row_32_above_region": {
+     "kept": 0.101,
+     "source_detail_per_pixel": 0.1
+    }
+   },
+   {
+    "seconds_in_window": 20.5,
+    "film_seconds": 2160.5,
+    "blur": "off",
+    "inside_4px_in": {
+     "kept": 0.981,
+     "source_detail_per_pixel": 633.2
+    },
+    "frame_columns": {
+     "1279": {
+      "kept": 0.995,
+      "source_detail_per_pixel": 298.0
+     },
+     "1278": {
+      "kept": 0.985,
+      "source_detail_per_pixel": 381.1
+     },
+     "1277": {
+      "kept": 0.953,
+      "source_detail_per_pixel": 422.7
+     },
+     "1276": {
+      "kept": 0.935,
+      "source_detail_per_pixel": 481.2
+     },
+     "1272": {
+      "kept": 0.962,
+      "source_detail_per_pixel": 503.6
+     }
+    },
+    "column_581_left_of_region": {
+     "kept": 1.025,
+     "source_detail_per_pixel": 147.4
+    },
+    "row_32_above_region": {
+     "kept": 0.986,
+     "source_detail_per_pixel": 2.2
+    }
+   }
+  ],
+  "raw_graph_output_branch": [
+   {
+    "film_seconds": 2152.0,
+    "changed_pixels_outside_the_region_and_its_even_pixel_left_and_above": 0,
+    "changed_box": [
+     582,
+     34,
+     1280,
+     84
+    ],
+    "region_pixels_changed": "32170/34153",
+    "frame_last_columns": {
+     "1279": {
+      "rows_36_81_unchanged": 0,
+      "of": 46
+     },
+     "1278": {
+      "rows_36_81_unchanged": 0,
+      "of": 46
+     },
+     "1277": {
+      "rows_36_81_unchanged": 1,
+      "of": 46
+     },
+     "1276": {
+      "rows_36_81_unchanged": 1,
+      "of": 46
+     }
+    }
+   },
+   {
+    "film_seconds": 2154.25,
+    "changed_pixels_outside_the_region_and_its_even_pixel_left_and_above": 0,
+    "changed_box": [
+     582,
+     34,
+     1280,
+     84
+    ],
+    "region_pixels_changed": "31941/34153",
+    "frame_last_columns": {
+     "1279": {
+      "rows_36_81_unchanged": 0,
+      "of": 46
+     },
+     "1278": {
+      "rows_36_81_unchanged": 2,
+      "of": 46
+     },
+     "1277": {
+      "rows_36_81_unchanged": 2,
+      "of": 46
+     },
+     "1276": {
+      "rows_36_81_unchanged": 5,
+      "of": 46
+     }
+    }
+   },
+   {
+    "film_seconds": 2156.5,
+    "changed_pixels_outside_the_region_and_its_even_pixel_left_and_above": 0,
+    "changed_box": [
+     582,
+     34,
+     1280,
+     84
+    ],
+    "region_pixels_changed": "31765/34153",
+    "frame_last_columns": {
+     "1279": {
+      "rows_36_81_unchanged": 11,
+      "of": 46
+     },
+     "1278": {
+      "rows_36_81_unchanged": 11,
+      "of": 46
+     },
+     "1277": {
+      "rows_36_81_unchanged": 9,
+      "of": 46
+     },
+     "1276": {
+      "rows_36_81_unchanged": 11,
+      "of": 46
+     }
+    }
+   }
+  ]
+ },
+ "rerun_2026_10_15_on_20584f3": {
+  "how": "job141_check.py again on the committed 20584f3 (the measured per-format model), the same temp root, plan and baseline; the lossless window copy made again",
+  "whole_film_graph_through_ffmpeg_for_1_s": "the same two cover chains as above: 11a059c refused by delogo (exit -22), the branch runs (exit 0)",
+  "window_copy_sha256_same_as_before": true,
+  "window_exports": {
+   "baseline_11a059c": "fails while FFmpeg sets the graph up (error -22, nothing written), as above",
+   "branch": {
+    "status": "COMPLETED",
+    "encoder": "libx264",
+    "full_decode_validation_passed": true,
+    "seconds": 5.4
+   }
+  },
+  "branch_export_mp4_sha256": "5c5ed0a8620f1642c8284c0c20d41dbe630befd2eb77f523adeb5bf559a99000",
+  "branch_export_identical_to_5cb52c4": true,
+  "runs_of_20584f3_identical": 2,
+  "kept_detail_x264_export": "identical to window_2140_2170.kept_detail_x264_export"
+ }
+}

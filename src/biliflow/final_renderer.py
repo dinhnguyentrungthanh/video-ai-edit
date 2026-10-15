@@ -11,6 +11,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from biliflow.blur_filter import (
+    SourceChroma,
     blur_feather_mode,
     blur_method,
     blur_parameters,
@@ -573,14 +574,18 @@ def _chroma_rows_divisor(video_stream: dict) -> int:
 def build_final_filter_graph(
     *, operations: list[dict], duration: float, has_audio: bool,
     frame_size: tuple[int, int] | None = None, chroma_rows_divisor: int = 2,
+    source_chroma: SourceChroma = SourceChroma(),
 ) -> tuple[str, float]:
     """frame_size (source width, height) lets the cover method read picture on every side of a region.
 
     chroma_rows_divisor caps each regional gblur's threads at its chroma rows (4 for yuv410p).
+    source_chroma (SourceChroma.of_stream of the probed video stream) is what FFmpeg's
+    crop rounds the first regional branch of each segment to.
     """
     graph, expected_duration, _ = _final_filter_graph(
         operations=operations, duration=duration, has_audio=has_audio,
         frame_size=frame_size, chroma_rows_divisor=chroma_rows_divisor,
+        source_chroma=source_chroma,
     )
     return graph, expected_duration
 
@@ -620,6 +625,7 @@ def _segment_blurs(
 def _final_filter_graph(
     *, operations: list[dict], duration: float, has_audio: bool,
     frame_size: tuple[int, int] | None, chroma_rows_divisor: int,
+    source_chroma: SourceChroma = SourceChroma(),
 ) -> tuple[str, float, dict]:
     """build_final_filter_graph's graph and duration, and how its blurs were wired (for the manifest)."""
     cuts = _merge_cuts(operations, duration)
@@ -641,6 +647,7 @@ def _final_filter_graph(
             index=index, input_label=trimmed,
             blurs=_segment_blurs(blurs, segment_start, segment_end),
             frame_size=frame_size, chroma_rows_divisor=chroma_rows_divisor,
+            source_chroma=source_chroma,
         )
         layouts.append(layout)
         graph.extend(layout.filters)
@@ -841,6 +848,7 @@ def _render_final_output_unlocked(
         has_audio=audio_stream is not None,
         frame_size=_frame_size(video_stream),
         chroma_rows_divisor=_chroma_rows_divisor(video_stream),
+        source_chroma=SourceChroma.of_stream(video_stream),
     )
     # The watch on FFmpeg (render_watchdog): FFmpeg decodes a CUT without a frame,
     # and beside a scan the export shares the CPU.

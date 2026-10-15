@@ -1,5 +1,13 @@
 # BiliFlow session handoff
 
+## Session H2, cover regions at the frame edge — 2026-10-15, branch `fix/cover-edge` (worktree `temp\wt-cover-edge`), not merged
+
+- **Request:** job 141's export failed on every try (delogo "Logo area is outside of the frame"): fix the cover chain for regions at the right or bottom edge, keep every plan that exports today byte-identical to `11a059c`, check job 141's 2140–2170 s in a temp root.
+- **Done:** `5cb52c4` (exact crop from an even corner where FFmpeg refused), `20584f3` (review: `blur_filter.SourceChroma`, the measured crop step of every source pixel format, alone and after a full-frame blur), `e8b52d9` (review: sources FFmpeg turns by their display matrix and the review previews crop 4:2:0; uyyvyy411). Handoff `docs/handoff/H2-cover-edge.md`; evidence `docs/evidence/cover-edge/`.
+- **Gates:** 24/24 plans byte-identical (x264 + framemd5) to `11a059c`; 10/10 refused plans now export and are blurred to the frame's edge; job 141's window exported in a temp root (COMPLETED; its graph is the same on `e8b52d9`); focused tests OK (382); scan cache keys unchanged.
+- **Separate task (not in this branch):** a source turned by 90 or 270 degrees reaches every graph with width and height swapped, while the renderer, the previews and the scanners take the probe's coded size.
+- **Next:** coordinator merges it with R as G9 and runs the full suite. After the merge and a Control Center restart the user presses "Thử lại" on job 141.
+
 ## G8 merge, exports with many blur regions (session H) — 2026-10-14, branch `merge/g8` (worktree `temp\wt-merge-g8`), not yet in the main folder
 
 - **Request:** the user asked to merge H first, as soon as it was done: jobs 134 (25 blur regions) and 136 (20 regions) hung at their render and are PAUSED there.
