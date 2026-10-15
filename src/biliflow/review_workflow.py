@@ -85,6 +85,12 @@ from biliflow.platform_memory import (
     source_box,
 )
 from biliflow.platform_names import match_platform_texts
+from biliflow.review_decision_carry import carry_review_decisions
+from biliflow.scrolling_text import (
+    SCROLLING_CANDIDATE_TYPE,
+    promote_scrolling_text,
+    promote_web_address_tracks,
+)
 from biliflow.blur_filter import (
     CHROMA_420,
     COVER_METHOD,
@@ -2744,11 +2750,16 @@ def _text_items(root: Path, report_path: Path, payload: dict) -> list[dict]:
         item_category = "text"
         start = float(track["start_seconds"])
         end = float(track.get("recommended_blur_end_seconds", track["end_seconds"]))
-        preview_images = []
-        if track.get("preview"):
-            preview_images.append(
-                _relative(root, report_path.parent / str(track["preview"]))
-            )
+        scrolling = track.get("candidate_type") == SCROLLING_CANDIDATE_TYPE
+        # A scrolling line's card shows every piece (entry, wide, exit) and cites every track.
+        previews = track.get("member_previews") if scrolling else None
+        previews = previews or ([track["preview"]] if track.get("preview") else [])
+        preview_images = [
+            _relative(root, report_path.parent / str(preview)) for preview in previews
+        ]
+        track_refs = (
+            track.get("grouped_track_ids") if scrolling else None
+        ) or [track.get("track_id", track_index)]
         region = None
         box = track.get("union_box")
         if isinstance(box, list) and len(box) == 4:
@@ -2795,13 +2806,18 @@ def _text_items(root: Path, report_path: Path, payload: dict) -> list[dict]:
                     if str(track.get("suggested_decision", "")).upper() in DECISIONS
                     else None
                 ),
-                "source_candidate_refs": [
-                    f"{evidence}#track:{track.get('track_id', track_index)}"
-                ],
+                "source_candidate_refs": [f"{evidence}#track:{value}" for value in track_refs],
                 **({"fixed_text_overlay": {
                     key: list(value) if isinstance(value, list) else value
                     for key, value in track["fixed_text_overlay"].items()
                 }} if isinstance(track.get("fixed_text_overlay"), dict) else {}),
+                **{
+                    key: {
+                        name: list(value) if isinstance(value, list) else value
+                        for name, value in track[key].items()
+                    }
+                    for key in ("scrolling_text", "web_address") if isinstance(track.get(key), dict)
+                },
                 "detected_intervals": [{
                     "start_seconds": round(start, 3),
                     "end_seconds": round(end, 3),
@@ -3336,8 +3352,15 @@ def build_review_queue(
     use_studio_logo_memory: bool = False,
     ffmpeg_path: Path | None = None,
     gore_triage_level: str | None = None,
+    keep_decisions: bool = False,
 ) -> dict:
     """Build one review queue from scan reports.
+
+    ``keep_decisions`` rebuilds an existing queue of the same source without
+    losing a decision (``carry_review_decisions``): each decided card's decision
+    moves to the matching new card, a carried BLUR widens to the new card's
+    time and box, and a decided card matching none comes back unchanged. Off by
+    default: the pipeline's own build and the measurements start fresh as before.
 
     ``content_style`` is the job's confirmed style; only ``live_action`` lets
     ``triage_adult_items`` move weak 18+ candidates to the optional list. Callers
@@ -3362,6 +3385,8 @@ def build_review_queue(
     reports_root = (root / "reports").resolve(strict=True)
     queue_path = _inside(reports_root, queue_path, "Queue path")
     previous_queue = None
+    decided_previous_items: list[dict] | None = None
+    decision_carry: dict | None = None
     if queue_path.is_file():
         try:
             candidate_previous = _read_json(queue_path)
@@ -3435,8 +3460,11 @@ def build_review_queue(
             platform_payloads[relative_report] = text_payload
             title_references.extend(_title_overlay_references(text_payload))
             in_film_text_references.extend(_in_film_text_references(text_payload))
-            items.extend(_text_items(root, report_path, text_payload))
-            advisory_items.extend(_advisory_text_items(root, report_path, text_payload))
+            # Cards only: one card per crossing of a scrolling line, and every web
+            # address in the main list. The guards and previews keep the tracks.
+            card_payload = promote_web_address_tracks(promote_scrolling_text(text_payload))
+            items.extend(_text_items(root, report_path, card_payload))
+            advisory_items.extend(_advisory_text_items(root, report_path, card_payload))
         else:
             platform_payloads[relative_report] = payload
             items.extend(_scan_items(root, report_path, payload))
@@ -3498,6 +3526,8 @@ def build_review_queue(
                 or str(previous_source.get("sha256")) == source_sha256
             )
         )
+        if same_source and keep_decisions:
+            decided_previous_items = list(previous_queue.get("items") or [])
         if same_source:
             items = preserve_unresolved_review_items(
                 list(previous_queue.get("items") or []), items,
@@ -3541,6 +3571,16 @@ def build_review_queue(
         item["start_seconds"], item["category"],
     ))
     ensure_unique_review_item_ids([*items, *advisory_items])
+    if decided_previous_items is not None:
+        # On the final IDs, so an unchanged card keeps its decision by its ID; a
+        # decided card carried nowhere returns with its own ID and decision.
+        items, advisory_items, decision_carry = carry_review_decisions(
+            decided_previous_items, items, advisory_items,
+        )
+        items = sorted(items, key=lambda item: (
+            _PRIORITY_RANK.get(item.get("priority", "normal"), 2),
+            float(item.get("start_seconds") or 0.0), str(item.get("category") or ""),
+        ))
     # After every reconciliation (preserved items included) and the final IDs.
     link_platform_cards(items, advisory_items)
     link_full_scene_logo_evidence(items, advisory_items)
@@ -3654,6 +3694,12 @@ def build_review_queue(
             "edit_plan_requires_all_items_resolved": True,
         },
     }
+    if decision_carry is not None:
+        payload["decision_carry"] = decision_carry
+        payload["audit_log"] = list((previous_queue or {}).get("audit_log") or []) + [{
+            "at": payload["created_at"], "action": "REBUILD_KEEP_DECISIONS", **decision_carry,
+        }]
+        payload["audit_log"] = payload["audit_log"][-1000:]
     _write_json(queue_path, payload)
     _render_queue_html(root, queue_path, payload)
     return payload

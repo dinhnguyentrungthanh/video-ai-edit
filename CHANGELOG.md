@@ -1,3 +1,20 @@
+# The source site's scrolling line is one blurred card from before its first reading; web addresses without their dot — session D, part 1 (2026-10-15, branch `fix/ticker-subtitle` from `main` `bd0a7b8`; not merged)
+
+- Cause (jobs 101–103, 107, 108, 112, 118, 128, 140, 147): the text scan reads every 3 s, so one crossing of the line came out as several short tracks (an entry piece read once, wide pieces, exit pieces), often with the domain's dot lost. Each was judged alone: job 107 blurred from its second reading (about 4 s visible), job 108's wide piece was only an optional card suggesting KEEP.
+- `scrolling_text.py` (review build only):
+  - `promote_scrolling_text` joins the pieces of one crossing (top or bottom band, readings that continue each other, from one frame edge to the other or a wide reading moved on) into one main card for the whole band, suggested BLUR, from one read interval before the first reading (two when it was not at the edge) to after the last, one interval more when the last reading was still wide;
+  - `web_address_tokens` finds web addresses also when OCR lost the dot or added a space (`NAMECOM`, `NAME COM`, `NAME. COM`, `NAME,COM` in capitals for COM/NET/ORG/VN/TV), a general rule with a stop list of ordinary words;
+  - `promote_web_address_tracks`: a track with a web address is a main-list card suggesting BLUR, never only optional.
+- `review_decision_carry.py` and `build_review_queue(keep_decisions=True)`: a rebuilt queue keeps every decision; an old BLUR is widened onto the longer card, a decision matching no new card comes back unchanged. Off by default; no Control Center action calls it yet.
+- Gates (`docs/evidence/scrolling-text/`):
+  - 24 unit tests and a self-made clip with real OCR (fails on `bd0a7b8`);
+  - rebuilt on copies of jobs 107, 108, 128, 140, 147: each crossing one main BLUR card (job 107 from 2922 s), every old decision kept; cards 7 → 7, 5 → 6, 4 → 4, 3 → 3, 8 → 8;
+  - Golden Set v2: 1 newly caught (T3), 0 missed, 0 new trap hits, main-list false positives unchanged;
+  - the bottom band (20 jobs with BLUR there): suggested BLUR there never fewer; cards equal or one fewer in 16 jobs, more in the four with the site watermark in the subtitle band (134 42 → 56, 136 38 → 48, 143 64 → 66, 145 50 → 53: sightings with a web address the old build showed nowhere or only as optional; part 2 groups them);
+  - window exports of jobs 107 and 108 in a temp root: the old exports still read the line, the new ones read no letter;
+  - scan cache keys unchanged (10 stages).
+- Not changed: the text scan's 250-track cap (it keeps every review candidate; jobs 107 and 108 dropped only end-credit tracks) waits for the coordinator and the user; old jobs need a rebuild action that waits for the coordinator.
+
 # G10 merge: export lane beside a film at preflight (2026-10-15, branch `merge/g10` from `main` `dc9d294`; not yet in the main folder)
 
 - Merged `perf/a1c-preflight-lane` (session A1c, entry below) with `--no-ff`.

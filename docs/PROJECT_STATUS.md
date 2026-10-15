@@ -1,3 +1,7 @@
+## The source site's scrolling line and dot-less web addresses, session D part 1 (2026-10-15) — branch `fix/ticker-subtitle`, not merged
+
+- The source site's scrolling line in the top band is now one main card suggesting BLUR over the whole band, from before its first reading to after its last (job 107's leak at 2922–2928 s and job 108's unblurred line are covered); web addresses read without their dot are found and always reach the main list. Review build only: scan cache keys unchanged, old jobs need no rescan. A rebuild that keeps decisions exists in code but has no Control Center action yet. Details in `docs/handoff/D-ticker.md`.
+
 ## G10 merge, export lane beside a film at preflight (2026-10-15) — branch `merge/g10`, not yet in the main folder
 
 - Session A1c: an export queued ahead of a film that has not started its scan now runs in the export lane beside that film's first GPU stage, instead of making the whole scan wait. Scan cache keys unchanged; full suite 3,382 OK. Details in `CHANGELOG.md`.

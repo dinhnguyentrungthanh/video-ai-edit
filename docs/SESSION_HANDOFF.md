@@ -1,5 +1,13 @@
 # BiliFlow session handoff
 
+## Session D part 1, the source site's scrolling line and dot-less web addresses — 2026-10-15, branch `fix/ticker-subtitle` (worktree `temp\wt-detect`), not merged
+
+- **Request:** the source site's scrolling ad line leaked into exports (fully in jobs 101, 102, 108, 140; at its edges in 103, 112, 118, 128, 147; its first seconds in 107). Fix it at review-build time so old jobs need no rescan; then (part 2) the watermark in the subtitle band (jobs 134, 143).
+- **Done:** `scrolling_text.py` (one card per crossing, whole band, one read interval before the first reading; web addresses without their dot), `review_decision_carry.py` with `build_review_queue(keep_decisions=True)`, the hooks in `review_workflow.py`; tests `tests/test_scrolling_text.py`, `tests/test_scrolling_text_clip.py`; gates `docs/evidence/scrolling-text/`. Handoff `docs/handoff/D-ticker.md` (Vietnamese).
+- **Gates:** unit and clip tests OK; rebuilt copies of jobs 107, 108, 128, 140, 147 give one main BLUR card per crossing and keep every decision; Golden Set v2 +1 caught, 0 missed, 0 new trap hits; suggested BLUR in the bottom band never fewer (20 jobs), but jobs 134, 136, 143, 145 get 14, 10, 2, 3 more cards: watermark sightings with a web address the old build showed nowhere or only as optional, which part 2 groups; window exports of jobs 107 and 108 no longer readable; scan cache keys unchanged.
+- **Waiting for the coordinator and the user:** the 250-track cap of the text scan (item 6, a text-stage cache key change); a "Dựng lại danh sách duyệt (giữ quyết định)" action for old jobs (item 7).
+- **Next:** item 5 (remember the user's BLUR on a web-address or ticker card) in its own commit, then part 2. The coordinator runs the full suite at merge.
+
 ## G10 merge, export lane beside a film at preflight (A1c) — 2026-10-15, branch `merge/g10` (worktree `temp\wt-merge-g10`), not yet in the main folder
 
 - **Request:** on 2026-10-14 a film waiting at `preflight` waited for two queued exports with VRAM free; the user asked for the fix (session A1c) and for it to be merged.
