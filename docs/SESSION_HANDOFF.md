@@ -1,5 +1,13 @@
 # BiliFlow session handoff
 
+## Session D, the fixed site logo under the top line (job 145) — 2026-10-15, branch `fix/top-logo-box` from `de91261` (worktree `temp\wt-top-logo`), not merged
+
+- **Request (coordinator):** job 145's fixed top-right site logo leaked through the whole export. Find why the film-long fixed-text card's region missed it; (a) make that region cover a fixed logo at the same place when there is evidence; (b) a visual-logo card at the same place with the same text takes the film-long card's time; (c) no scan cache key change (stop and report if needed). No commits on `fix/ticker-subtitle`.
+- **Why:** the text scan's consensus box of 12 joined top-right tracks kept the scrolling line's box and dropped the logo's taller box; the top band was not cut. Fixing that is a text-stage (cache key) change: not done, left to the coordinator.
+- **Done:** `fixed_text_logo.py` and its call in `build_review_queue`; tests `tests/test_fixed_text_logo.py`; gates `docs/evidence/top-logo-box/` (`export_logo.py`, `reach.py`, `gate-summary.json`, and `../scrolling-text/gate_rebuild.py` now lists the joined cards); fixes from a read-only review (no persistent visual logos, BLUR text cards only, no KEEP logo cards).
+- **Gates:** 11 + 485 tests OK; jobs gate (25 jobs) weakened 0, lost 0, only job 145's card count changes (8 → 7); reach over 72 queues: jobs 145, 70, 72, 130; window exports of job 145: logo read 0 of 400 samples after one BLUR; Golden Set v2 identical to `de91261`; scan cache keys unchanged.
+- **Next:** the coordinator merges `fix/top-logo-box` after G11 and runs the full suite. The user re-runs job 145 ("Chạy lại", BLUR, export).
+
 ## Session D part 2, the site watermark in the subtitle band — 2026-10-15, branch `fix/ticker-subtitle` (worktree `temp\wt-detect`), not merged
 
 - **Request:** jobs 134 and 143 (also 130, 136, 145): the source site's watermark in the subtitle band flickers into dozens of cards and subtitle lines are caught as ads. Group one watermark into one card with intervals suggesting BLUR; separate subtitle lines from ad text without ever weakening ad detection in the subtitle band.

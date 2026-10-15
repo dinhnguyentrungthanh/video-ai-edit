@@ -122,6 +122,32 @@ def _watermark_card(item: dict) -> dict:
     }
 
 
+def _covers(outer: object, inner: object) -> bool:
+    if outer == "FULL_FRAME":
+        return True
+    if not isinstance(outer, dict) or not isinstance(inner, dict):
+        return False
+    return (outer["x"] <= inner["x"] and outer["y"] <= inner["y"]
+            and outer["x"] + outer["width"] >= inner["x"] + inner["width"]
+            and outer["y"] + outer["height"] >= inner["y"] + inner["height"])
+
+
+def _fixed_text_logo_card(item: dict) -> dict:
+    """A fixed-text card whose region took in a visual-logo box (fix/top-logo-box)."""
+    details = item["fixed_text_logo"]
+    logos = details.get("logo_regions") or []
+    supports = [record for record in item.get("supporting_detections") or [] if record.get("category") == "visual_logo"]
+    return {
+        "start": item["start_seconds"], "end": item["end_seconds"], "candidate_type": item.get("candidate_type"),
+        "previous_region": details.get("previous_region"), "region": item.get("suggested_region_source_pixels"),
+        "logo_regions": logos,
+        "visual_logo_supports": [(record.get("start_seconds"), record.get("end_seconds")) for record in supports],
+        "suggested": item.get("suggested_decision"), "decision": item.get("decision"),
+        "decision_covers_logos": (item.get("decision") == "BLUR" and all(
+            _covers(item.get("decision_region_source_pixels"), logo) for logo in logos)),
+    }
+
+
 def _cited_tracks(items: list[dict]) -> set[str]:
     """``<report>#track:<id>`` of every track a card cites, also through absorbed supporting cards."""
     refs: set[str] = set()
@@ -163,6 +189,9 @@ def summarize(queue: dict, ad_tracks: list[str] | None = None) -> dict:
         "main_list": sorted(ref for ref in ad_tracks or [] if ref in main_refs),
     }
     return {
+        "fixed_text_logo_cards": [_fixed_text_logo_card(item) for item in items
+                                  if isinstance(item.get("fixed_text_logo"), dict)
+                                  and item.get("category") == "text"],
         "repeated_watermark_cards": [_watermark_card(item) for item in sorted(watermarks, key=lambda v: v["start_seconds"])],
         "subtitle_line_cards": sum(1 for item in advisory if isinstance(item.get("subtitle_line"), dict)),
         "subtitle_band_ads": band_ads,
@@ -311,8 +340,12 @@ def jobs_command(args) -> None:
               f"{len(cand['repeated_watermark_cards'])}, subtitle lines moved {cand['subtitle_line_cards']}, "
               f"subtitle-band ad tracks in main list {len(base['subtitle_band_ads']['main_list'])} -> "
               f"{len(cand['subtitle_band_ads']['main_list'])} of {cand['subtitle_band_ads']['tracks']} "
-              f"(weakened {len(cand['subtitle_band_ads']['weakened'])})"
-              + (f", rebuild pending {rebuild['pending']}, lost {len(rebuild['decisions_kept']['lost'])}"
+              f"(weakened {len(cand['subtitle_band_ads']['weakened'])}), "
+              f"fixed-text cards with a logo {len(cand['fixed_text_logo_cards'])}"
+              + (f", rebuild pending {rebuild['pending']}, lost {len(rebuild['decisions_kept']['lost'])}, "
+                 f"logo covered by a carried BLUR "
+                 f"{sum(card['decision_covers_logos'] for card in rebuild['fixed_text_logo_cards'])} of "
+                 f"{len(rebuild['fixed_text_logo_cards'])}"
                  if rebuild else ""), flush=True)
 
 

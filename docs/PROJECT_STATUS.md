@@ -1,3 +1,7 @@
+## The fixed site logo under the top line, session D (2026-10-15) — branch `fix/top-logo-box`, not merged
+
+- Job 145's fixed site logo at the top right, just under the site's scrolling line, was outside the film-long card's blur (the text scan's consensus box kept the line and dropped the logo). When a visual-logo card reads the same text right beside a fixed-text card, the card's region now takes the logo's box in and the logo card takes the card's time: one BLUR covers line and logo all film. Review build only: scan cache keys unchanged, no rescan ("Chạy lại", then BLUR). Details in `docs/handoff/D-top-logo.md`.
+
 ## The site watermark in the subtitle band, session D part 2 (2026-10-15) — branch `fix/ticker-subtitle`, not merged
 
 - The source site's address under the subtitles (jobs 130, 134, 136, 143, 145) is now one main card suggesting BLUR over every time it shows, in its own box, instead of dozens of cards that merged into boxes over the dialogue: main cards 134 42 → 6, 143 64 → 22, 136 38 → 9, 145 50 → 8. Subtitle lines with no ad evidence go to the optional cards; every line with a web address, phone number, @handle, policy hit or ad score keeps its main card (0 weakened in 25 jobs). Review build only: scan cache keys unchanged, old jobs need no rescan ("Chạy lại", then one BLUR on the watermark card). Details in `docs/handoff/D-ticker.md`.

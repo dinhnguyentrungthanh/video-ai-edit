@@ -88,6 +88,7 @@ from biliflow.platform_names import match_platform_texts
 from biliflow.ad_text_memory import AD_TEXT_MEMORY_PATH, remember_blurred_addresses, remembered_keys
 from biliflow.ad_text_patterns import AD_TEXT_PATTERNS as _AD_TEXT_PATTERNS
 from biliflow.ad_text_patterns import ad_text_tokens
+from biliflow.fixed_text_logo import join_fixed_text_logos
 from biliflow.review_decision_carry import carry_review_decisions
 from biliflow.scrolling_text import (
     SCROLLING_CANDIDATE_TYPE,
@@ -3531,6 +3532,10 @@ def build_review_queue(
     items = _guard_in_film_text(items, in_film_text_references)
     items = refine_persistent_logo_regions(items)
     items = corroborate_fixed_text_overlays(items)
+    # A visual-logo box reading what a fixed text card read, right beside it, is the
+    # same mark: the text card's region takes it in and the logo card takes the text
+    # card's time, before the reconciliation joins them.
+    items = join_fixed_text_logos(items, generic_label=_generic_label)
     items = reconcile_persistent_overlay_items(
         items, source_duration=source_duration,
     )
