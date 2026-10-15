@@ -1,3 +1,7 @@
+## Cover regions at the frame edge (2026-10-15) — branch `fix/cover-edge`, not merged
+
+- A cover region touching the right or bottom frame edge with an odd crop size (job 141) no longer makes FFmpeg refuse the export; it is blurred up to the frame's edge. Plans that exported keep their bytes. Details in `docs/handoff/H2-cover-edge.md`.
+
 ## Exports with many blur regions, render watch (2026-10-14) — branch `fix/export-many-regions`, not merged
 
 - An export with many blur regions (job 134: 25) no longer hangs FFmpeg; plans of up to 10 regions give byte-identical x264 exports. A render whose FFmpeg stops moving is stopped after 10 minutes (more for long CUTs, twice that beside a scan) and fails with a Vietnamese message instead of holding the queue. Details in `docs/handoff/H-export-regions.md`.
