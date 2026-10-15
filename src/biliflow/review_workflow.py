@@ -85,6 +85,7 @@ from biliflow.platform_memory import (
     source_box,
 )
 from biliflow.platform_names import match_platform_texts
+from biliflow.ad_text_memory import AD_TEXT_MEMORY_PATH, remember_blurred_addresses, remembered_keys
 from biliflow.review_decision_carry import carry_review_decisions
 from biliflow.scrolling_text import (
     SCROLLING_CANDIDATE_TYPE,
@@ -3396,6 +3397,14 @@ def build_review_queue(
             previous_queue = None
     if not report_paths:
         raise ValueError("At least one report is required")
+    ad_text_keys: tuple[str, ...] = ()
+    ad_text_memory_error = None
+    if use_studio_logo_memory:
+        try:
+            ad_text_keys = remembered_keys(root)
+        except (OSError, ValueError) as error:
+            # An unreadable memory only means no remembered address is suggested.
+            ad_text_memory_error = str(error)
     source_path: Path | None = None
     source_sha256: str | None = None
     source_duration: float | None = None
@@ -3461,8 +3470,9 @@ def build_review_queue(
             title_references.extend(_title_overlay_references(text_payload))
             in_film_text_references.extend(_in_film_text_references(text_payload))
             # Cards only: one card per crossing of a scrolling line, and every web
-            # address in the main list. The guards and previews keep the tracks.
-            card_payload = promote_web_address_tracks(promote_scrolling_text(text_payload))
+            # address (also one the user blurred before) in the main list. The
+            # guards and previews keep the tracks.
+            card_payload = promote_web_address_tracks(promote_scrolling_text(text_payload), ad_text_keys)
             items.extend(_text_items(root, report_path, card_payload))
             advisory_items.extend(_advisory_text_items(root, report_path, card_payload))
         else:
@@ -3654,6 +3664,14 @@ def build_review_queue(
             "applies_to": "detected_intervals_only",
         },
         "platform_logos": platform_summary,
+        "ad_text_memory": {
+            "used": bool(use_studio_logo_memory),
+            "remembered_addresses": len(ad_text_keys),
+            "cards_matched": sum(
+                1 for item in items if isinstance(item.get("web_address"), dict) and item["web_address"].get("remembered")
+            ),
+            **({"error": ad_text_memory_error} if ad_text_memory_error else {}),
+        },
         "studio_logo_memory": {
             "used": bool(use_studio_logo_memory),
             "confirmed_logos": sum(
@@ -3866,6 +3884,7 @@ def record_review_decision(
     item["decided_at"] = _now()
     item.pop("studio_logo_memory", None)
     item.pop("platform_logo_memory", None)
+    item.pop("ad_text_memory", None)
     if remember_platform_logo and platform_frames is not None:
         item["platform_logo_memory"] = {
             "remembered": True, "at": item["decided_at"], "platform": platform,
@@ -3908,6 +3927,7 @@ def record_review_decision(
             studio_window_text=studio_window_text, studio_frames=studio_frames,
             platform_frames=platform_frames, platform=platform,
         )
+    _remember_blurred_ad_text(root, item)
     _write_json(queue_path, payload)
     remember_review_item(root, payload, item)
     if not (remember_studio_logo or remember_platform_logo):
@@ -3918,6 +3938,22 @@ def record_review_decision(
         _refresh_studio_logo_masks_after_write(root, queue_path, payload, entry)
     _render_queue_html(root, queue_path, payload)
     return payload
+
+
+def _remember_blurred_ad_text(root: Path, item: dict) -> None:
+    """A text BLUR's web addresses into ad_text_memory, before the decision is saved.
+
+    An unreadable memory refuses the decision; a remembered address is never removed.
+    """
+    try:
+        remembered = remember_blurred_addresses(root, item)
+    except (OSError, ValueError) as error:
+        raise ValueError(
+            f"Không ghi được bộ nhớ địa chỉ web đã làm mờ ({AD_TEXT_MEMORY_PATH.as_posix()}); "
+            f"chưa ghi quyết định: {error}"
+        ) from error
+    if remembered:
+        item["ad_text_memory"] = {"remembered": remembered, "at": item["decided_at"]}
 
 
 MEMORY_WRITE_ATTEMPTS = 3  # a remembered-logo write reads the memory again when another writer changed it
@@ -4231,6 +4267,7 @@ def clear_review_decision(
     item["decided_at"] = None
     item.pop("studio_logo_memory", None)
     item.pop("platform_logo_memory", None)
+    item.pop("ad_text_memory", None)  # the card's flag only; the memory keeps the address
     payload["updated_at"] = _now()
     payload["status"] = _queue_status(payload["items"])
     payload["counts"] = _counts(payload["items"])
@@ -4348,8 +4385,11 @@ def bulk_accept_suggested_decisions(
     }
     payload.setdefault("audit_log", []).append(entry)
     payload["audit_log"] = payload["audit_log"][-1000:]
-    _write_json(queue_path, payload)
     accepted_ids = {value["item_id"] for value in accepted}
+    for item in changed:
+        if item.get("id") in accepted_ids:
+            _remember_blurred_ad_text(root, item)
+    _write_json(queue_path, payload)
     for item in changed:
         if item.get("id") in accepted_ids:
             remember_review_item(root, payload, item)

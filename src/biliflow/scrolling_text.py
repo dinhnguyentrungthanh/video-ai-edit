@@ -85,35 +85,43 @@ _MAIN_LIST_ROUTINGS = frozenset({
 })
 
 
-def promote_web_address_tracks(payload: dict) -> dict:
+def promote_web_address_tracks(payload: dict, remembered: Iterable[str] = ()) -> dict:
     """A track with a web address is a main-list card suggesting BLUR, never only optional.
 
     Its routing becomes ``REVIEW_WEB_ADDRESS`` unless it is already a main-list
-    routing (an ad routing keeps its own). The payload is returned unchanged (the
-    same object) when no track has a web address; untouched tracks stay the same objects.
+    routing (an ad routing keeps its own). ``remembered``: folded addresses the
+    reviewer blurred before (``ad_text_memory``); a track whose folded reading
+    holds one counts as having a web address. The payload is returned unchanged
+    (the same object) when no track has a web address; untouched tracks stay the
+    same objects.
     """
+    remembered = tuple(remembered)
     output_tracks = []
     changed = False
     for track in payload.get("tracks") or []:
-        tokens = (
-            _track_web_addresses(track)
-            if isinstance(track, dict) and track.get("candidate_type") != SCROLLING_CANDIDATE_TYPE
-            else []
-        )
-        if not tokens:
+        eligible = isinstance(track, dict) and track.get("candidate_type") != SCROLLING_CANDIDATE_TYPE
+        tokens = _track_web_addresses(track) if eligible else []
+        folded = [fold_alnum(text) for text in track.get("sample_text") or []] if eligible and remembered else []
+        known = [key for key in remembered if any(key in reading for reading in folded)]
+        if not tokens and not known:
             output_tracks.append(track)
             continue
         routing = str(track.get("routing") or "")
         promoted = dict(track)
+        web = {"tokens": tokens[:5], "previous_routing": routing or None}
+        if known:
+            web["remembered"] = known[:5]
         promoted.update({
             "review_candidate": True,
             "review_priority": "high",
             "routing": routing if routing in _MAIN_LIST_ROUTINGS else WEB_ADDRESS_ROUTING,
             "suggested_decision": "BLUR",
-            "web_address": {"tokens": tokens[:5], "previous_routing": routing or None},
+            "web_address": web,
             "reason": " ".join(filter(None, [
                 str(track.get("reason") or "").strip(),
-                f"Có địa chỉ web ({', '.join(tokens[:3])}) — đề xuất làm mờ, chờ bạn duyệt.",
+                f"Có địa chỉ web ({', '.join(tokens[:3])}) — đề xuất làm mờ, chờ bạn duyệt." if tokens else
+                f"Giống địa chỉ web bạn đã làm mờ trước đây ({', '.join(known[:3])}) — đề xuất làm mờ, "
+                "chờ bạn duyệt.",
             ])),
         })
         if promoted.get("candidate_type") == "title_overlay":
