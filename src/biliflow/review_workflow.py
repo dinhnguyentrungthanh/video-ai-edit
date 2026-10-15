@@ -86,9 +86,9 @@ from biliflow.platform_memory import (
 )
 from biliflow.platform_names import match_platform_texts
 from biliflow.blur_filter import (
+    CHROMA_420,
     COVER_METHOD,
     DEFAULT_SIGMA,
-    SourceChroma,
     blur_feather_mode,
     blur_method,
     blur_parameters,
@@ -5176,7 +5176,9 @@ def render_edit_previews(
                     feather_mode=feather_mode,
                     enable=f"enable='between(t,{relative_start:.3f},{relative_end:.3f})'",
                     method=blur_method(operation), frame_size=(source_width, source_height),
-                    chroma_step=SourceChroma.of(video_stream.get("pix_fmt")).first,
+                    # -ss/-t before -i put a trim in front of the graph: FFmpeg then crops
+                    # 4:2:0 whatever the source (docs/evidence/cover-edge/crop-steps-preview.jsonl).
+                    chroma_step=CHROMA_420,
                 ))
                 command = [
                     str(ffmpeg_path), "-hide_banner", "-loglevel", "error", "-y",

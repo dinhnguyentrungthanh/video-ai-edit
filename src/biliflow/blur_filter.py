@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 import re
 from dataclasses import dataclass
 
@@ -38,8 +39,13 @@ _SEMI_PLANAR_STEPS = {
 }
 # Converted to 4:2:0 before any crop: crop takes no packed subsampled or bitstream format.
 _CONVERTED_BEFORE_CROP = frozenset({
-    "yuyv422", "uyvy422", "yvyu422", "y210le", "y212le", "y216le", "monow", "monob",
+    "yuyv422", "uyvy422", "yvyu422", "y210le", "y212le", "y216le", "uyyvyy411", "monow", "monob",
 })
+# A display matrix: 3 x 3 entries, 16.16 fixed point but the last column (2.30).
+_DISPLAY_MATRIX_ENTRIES = 9
+_FIXED_ONE = 1 << 16
+# ffprobe prints a display matrix as three rows, each after its byte offset ("00000001:").
+_DISPLAY_MATRIX_OFFSET = re.compile(r"^\s*[0-9a-fA-F]{8}:", re.MULTILINE)
 # Formats a full-frame gblur takes (apart from 4:2:0 ones), so the first regional
 # branch after it still crops the source's own format. Every other format reaches
 # that branch as 4:2:0.
@@ -84,19 +90,81 @@ class SourceChroma:
 
     @classmethod
     def of(cls, pixel_format: str | None) -> SourceChroma:
-        """The steps for a source of the probed ``pixel_format``.
+        """The steps for a source of the probed ``pixel_format`` that FFmpeg neither turns nor flips.
 
-        A format with no probed name gets NO_ROUNDING: its cover chains stay those of
-        before 2026-10-14, so a plan that exported keeps its bytes (a region FFmpeg
-        refused then is refused as before).
+        A format with no probed name gets NO_ROUNDING: the cover chain of each
+        segment's first regional branch stays the one of before 2026-10-14. (Every
+        later branch crops 4:2:0 whatever the source, as it did then.)
         """
-        if not pixel_format or pixel_format == "unknown":
+        if not _known_format(pixel_format):
             return cls(NO_ROUNDING, NO_ROUNDING)
         if pixel_format in _CONVERTED_BEFORE_CROP:
             return cls(CHROMA_420, CHROMA_420)
         first = _own_chroma_step(pixel_format)
         kept = first == CHROMA_420 or pixel_format in _KEPT_THROUGH_GBLUR
         return cls(first, first if kept else CHROMA_420)
+
+    @classmethod
+    def of_stream(cls, video_stream: dict) -> SourceChroma:
+        """The steps for the probed video stream (``pix_fmt`` and its side data).
+
+        The export leaves FFmpeg's autorotate on: a stream whose display matrix
+        FFmpeg applies (display_transform) reaches the graph through transpose,
+        hflip, vflip or rotate, and its first regional branch then crops 4:2:0
+        whatever the format (docs/evidence/cover-edge/crop-steps-transformed.jsonl).
+        A display matrix the probe does not show plainly, or an applied one on a
+        stream of unknown format, gets NO_ROUNDING.
+        """
+        pixel_format = video_stream.get("pix_fmt")
+        transformed = display_transform(video_stream)
+        if transformed is None or (transformed and not _known_format(pixel_format)):
+            return cls(NO_ROUNDING, NO_ROUNDING)
+        if transformed:
+            return cls(CHROMA_420, CHROMA_420)
+        return cls.of(pixel_format)
+
+
+def _known_format(pixel_format: str | None) -> bool:
+    return bool(pixel_format) and pixel_format != "unknown"
+
+
+def display_transform(video_stream: dict) -> bool | None:
+    """Whether FFmpeg turns or flips the probed stream's pictures before the export's graph (None: the probe cannot tell).
+
+    As fftools 9.0.1 decides it from the stream's (first) display matrix: transpose
+    at 90 and 270 degrees, hflip and/or vflip at 180, rotate beyond 1 degree, vflip
+    for a flipped matrix at 0, nothing otherwise (a matrix that only moves or
+    scales, an angle that rounds to 0 or 1 degree). FFmpeg 9 reads no "rotate" tag.
+    """
+    item = next((item for item in video_stream.get("side_data_list") or []
+                 if item.get("side_data_type") == "Display Matrix"), None)
+    if item is None:
+        return False
+    entries = re.findall(r"-?\d+", _DISPLAY_MATRIX_OFFSET.sub("", str(item.get("displaymatrix", ""))))
+    if len(entries) != _DISPLAY_MATRIX_ENTRIES:
+        return None
+    matrix = [int(entry) for entry in entries]
+    theta = _ffmpeg_rotation(matrix)
+    if abs(theta - 90) < 1 or abs(theta - 270) < 1:
+        return True
+    if abs(theta - 180) < 1:
+        return matrix[0] < 0 or matrix[4] < 0
+    if abs(theta) > 1:
+        return True
+    if abs(theta) < 1:
+        return matrix[4] < 0
+    return False  # 1 degree exactly, or a matrix without a scale (NaN): FFmpeg inserts nothing
+
+
+def _ffmpeg_rotation(matrix: list[int]) -> float:
+    """fftools' get_rotation: av_display_rotation_get rounded to whole degrees, in [-0.9, 359.1) (NaN without a scale)."""
+    scale_x = math.hypot(matrix[0] / _FIXED_ONE, matrix[3] / _FIXED_ONE)
+    scale_y = math.hypot(matrix[1] / _FIXED_ONE, matrix[4] / _FIXED_ONE)
+    if scale_x == 0 or scale_y == 0:
+        return math.nan
+    rotation = -math.degrees(math.atan2(matrix[1] / _FIXED_ONE / scale_y, matrix[0] / _FIXED_ONE / scale_x))
+    theta = -math.copysign(math.floor(abs(rotation) + 0.5), rotation)  # C round(): half away from zero
+    return theta - 360 * math.floor(theta / 360 + 0.9 / 360)
 
 
 def _own_chroma_step(pixel_format: str) -> tuple[int, int]:

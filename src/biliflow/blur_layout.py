@@ -124,7 +124,7 @@ def segment_blur_filters(
 ) -> SegmentLayout:
     """The filters applying ``blurs`` in order to segment ``index``'s picture ``input_label``.
 
-    ``source_chroma``: the chroma steps of the source's format (SourceChroma.of).
+    ``source_chroma``: the chroma steps of the probed source (SourceChroma.of_stream).
     """
     paths = nested_paths(blurs)
     steps = branch_chroma_steps(blurs, source_chroma)

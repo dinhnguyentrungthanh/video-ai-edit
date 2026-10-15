@@ -13,11 +13,15 @@ Measured on FFmpeg 9.0.1 (docs/evidence/cover-edge/README.md): the first
 regional branch of a kept segment crops the source's pixel format (or 4:2:0
 after a full-frame blur gblur cannot take it through), every later branch an
 overlay's (4:2:0); overlay lays a patch at x and y rounded down to even; crop
-exact=1 at an odd x garbles the chroma of a 10-bit picture.
+exact=1 at an odd x garbles the chroma of a 10-bit picture. A source with a
+display matrix (a rotation or a flip) reaches the graph turned, and a review
+preview (-ss/-t before -i) through a trim: both crop 4:2:0 in every format.
 """
 import json
+import math
 import os
 import re
+import struct
 import subprocess
 import unittest
 from itertools import product
@@ -37,9 +41,14 @@ from biliflow.blur_filter import (
     regional_blur_filters,
 )
 from biliflow.final_renderer import _final_filter_graph
+from biliflow.probe import probe_video
 
 ROOT = Path(__file__).resolve().parents[1]
-FFMPEG = Path(os.environ.get("BILIFLOW_FFMPEG") or ROOT / "tools/ffmpeg/bin/ffmpeg.exe")
+# This checkout, or the BiliFlow install around it (a worktree lives in <install>\temp).
+INSTALL = next((folder for folder in (ROOT, *ROOT.parents)
+                if (folder / "tools" / "ffmpeg" / "bin" / "ffmpeg.exe").is_file()), ROOT)
+FFMPEG = Path(os.environ.get("BILIFLOW_FFMPEG") or INSTALL / "tools/ffmpeg/bin/ffmpeg.exe")
+FFPROBE = FFMPEG.with_name("ffprobe.exe")
 FRAME = (160, 90)  # 90 rows: not a whole number of 4:1:0 chroma rows, as job 141's 534
 ENABLE = "enable='between(t,0.000000,0.080000)'"
 STEPS = {
@@ -51,11 +60,61 @@ BLURRED_BELOW = 0.05
 JOB_141_FRAME = (1280, 534)
 JOB_141_REGION = {"x": 583, "y": 35, "width": 697, "height": 49}
 CROP_STEPS = ROOT / "docs" / "evidence" / "cover-edge" / "crop-steps.jsonl"
+CROP_STEPS_TRANSFORMED = CROP_STEPS.with_name("crop-steps-transformed.jsonl")
+CROP_STEPS_PREVIEW = CROP_STEPS.with_name("crop-steps-preview.jsonl")
 # Source formats outside STEPS: (step alone, step after a full-frame blur), as measured.
 OTHER_STEPS = {
     "rgb24": ((1, 1), (2, 2)), "yuv440p10le": ((1, 2), (2, 2)), "yuv422p10le": ((2, 1), (2, 1)),
     "nv16": ((2, 1), (2, 2)),
 }
+
+
+def display_matrix(*entries: int) -> str:
+    """A Display Matrix as the project's ffprobe prints it in JSON: 3 rows of 3, each after its offset."""
+    return "".join(f"\n{row:08x}: " + "".join(f"{value:12d}" for value in entries[3 * row:3 * row + 3])
+                   for row in range(3)) + "\n"
+
+
+ONE = 1 << 16
+
+
+def rotation_entries(degrees: float) -> tuple[int, ...]:
+    """The matrix -display_rotation writes (checked against the project's ffprobe for 0.4 to 179.6 degrees)."""
+    cos, sin = math.cos(math.radians(degrees)), math.sin(math.radians(degrees))
+    return int(cos * ONE), int(-sin * ONE), 0, int(sin * ONE), int(cos * ONE), 0, 0, 0, 1 << 30
+
+
+ANGLES = {"rotate-90": 90, "rotate-180": 180, "rotate-270": 270, "rotate-30": 30, "rotate-0.4": 0.4,
+          "rotate-1": 1, "rotate-minus-1": -1, "rotate-2": 2, "rotate-89.6": 89.6}
+# What -display_rotation / -display_hflip / -display_vflip write (the clip's size is not in it): the
+# transforms of crop-steps-transformed.jsonl.
+MATRICES = {
+    **{name: display_matrix(*rotation_entries(angle)) for name, angle in ANGLES.items()},
+    "hflip": display_matrix(-ONE, 0, 0, 0, ONE, 0, 0, 0, 1 << 30),
+    "vflip": display_matrix(ONE, 0, 0, 0, -ONE, 0, 0, 0, 1 << 30),
+}
+# fftools turns these (transpose, hflip/vflip, rotate); it rounds the angle to whole degrees and
+# leaves 0 and +1 alone, while -1 degree (a display rotation of 1) reads as 359 and is rotated.
+TURNED_BY_FFMPEG = {"rotate-90", "rotate-180", "rotate-270", "rotate-30", "rotate-1", "rotate-2", "rotate-89.6",
+                    "hflip", "vflip"}
+IDENTITY_MATRIX = display_matrix(ONE, 0, 0, 0, ONE, 0, 0, 0, 1 << 30)
+# Matrices a container may carry that only move or scale the picture: FFmpeg applies neither.
+MOVED_MATRIX = (ONE, 0, 0, 0, ONE, 0, ONE, 0, 1 << 30)
+SCALED_MATRIX = (2 * ONE, 0, 0, 0, ONE, 0, 0, 0, 1 << 30)
+TRANSFORM_ARGUMENTS = {"rotate-180": ["-display_rotation", "180"], "hflip": ["-display_hflip"]}
+
+
+def stream(pix_fmt, matrix=None, **extra) -> dict:
+    """A probed video stream as ffprobe -of json gives it; ``matrix`` is its Display Matrix."""
+    probed = {"codec_type": "video", "width": FRAME[0], "height": FRAME[1], "pix_fmt": pix_fmt, **extra}
+    if matrix is not None:
+        probed["side_data_list"] = [{"side_data_type": "Display Matrix", "displaymatrix": matrix, "rotation": 0}]
+    return probed
+
+
+def measured_rows(path: Path) -> list[dict]:
+    """The rows measure_crop_steps.py wrote: one per pixel format."""
+    return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
 
 
 def old_cover_chain(region: dict, frame_size, enable: str) -> str:
@@ -115,8 +174,7 @@ def edge_regions(frame=FRAME, margins=range(5)):
 class SourceChromaTests(unittest.TestCase):
     def test_every_measured_pixel_format_gets_the_steps_ffmpeg_cropped_it_with(self):
         measured = 0
-        for line in CROP_STEPS.read_text(encoding="utf-8").splitlines():
-            row = json.loads(line)
+        for row in measured_rows(CROP_STEPS):
             alone, after = row.get("alone", {}), row.get("after_full_frame_blur", {})
             if "step" not in alone or "step" not in after:
                 continue  # FFmpeg cannot make a picture of that format (hardware, bayer...)
@@ -130,12 +188,89 @@ class SourceChromaTests(unittest.TestCase):
             with self.subTest(pix_fmt=pix_fmt):
                 self.assertEqual(SourceChroma.of(pix_fmt), SourceChroma(alone, after))
 
-    def test_a_source_of_unknown_format_keeps_every_chain_of_before(self):
+    def test_a_source_of_unknown_format_keeps_the_chain_of_before_in_its_first_branch(self):
+        # (Its later branches crop 4:2:0, as every source's: BranchStepTests.)
         for pix_fmt in (None, "", "unknown"):
             with self.subTest(pix_fmt=pix_fmt):
                 self.assertEqual(SourceChroma.of(pix_fmt), SourceChroma(NO_ROUNDING, NO_ROUNDING))
         # pal8 (measured from a palette clip, paletteuse): its own step, 4:2:0 after gblur.
         self.assertEqual(SourceChroma.of("pal8"), SourceChroma(NO_ROUNDING, CHROMA_420))
+
+    def test_a_source_with_a_display_matrix_gets_the_steps_ffmpeg_cropped_it_with(self):
+        """crop-steps-transformed.jsonl: each display matrix on every format FFmpeg can make."""
+        measured = 0
+        self.assertEqual(set(measured_rows(CROP_STEPS_TRANSFORMED)[0]) - {"pix_fmt", "flags", "source"},
+                         set(MATRICES))
+        for row in measured_rows(CROP_STEPS_TRANSFORMED):
+            for transform, matrix in MATRICES.items():
+                runs = row.get(transform, {})
+                alone, after = runs.get("alone", {}), runs.get("after_full_frame_blur", {})
+                if "step" not in alone or "step" not in after:
+                    continue
+                with self.subTest(pix_fmt=row["pix_fmt"], transform=transform):
+                    self.assertEqual(SourceChroma.of_stream(stream(row["pix_fmt"], matrix)),
+                                     SourceChroma(tuple(alone["step"]), tuple(after["step"])))
+                    measured += 1
+        self.assertGreater(measured, 2400)
+
+    def test_a_review_preview_crops_420_in_every_measured_format(self):
+        """crop-steps-preview.jsonl: render_edit_previews' command, whose branch rounds by CHROMA_420."""
+        steps = [tuple(row["preview"]["step"]) for row in measured_rows(CROP_STEPS_PREVIEW)
+                 if "step" in row.get("preview", {})]
+        self.assertGreater(len(steps), 200)
+        self.assertEqual(set(steps), {CHROMA_420})
+
+    def test_the_matrices_are_written_as_the_project_ffprobe_prints_them(self):
+        # -display_rotation 90 and 1 on a clip, ffprobe 9.0.1 -show_streams -of json.
+        self.assertEqual(MATRICES["rotate-90"],
+                         "\n00000000:            0      -65536           0\n00000001:        65536           0"
+                         "           0\n00000002:            0           0  1073741824\n")
+        self.assertEqual(rotation_entries(1), (65526, -1143, 0, 1143, 65526, 0, 0, 0, 1 << 30))
+        self.assertEqual(rotation_entries(-1), (65526, 1143, 0, -1143, 65526, 0, 0, 0, 1 << 30))
+
+
+class SourceStreamTests(unittest.TestCase):
+    """SourceChroma.of_stream: the export keeps FFmpeg's autorotate, which turns the picture before the graph."""
+
+    TURNED = SourceChroma(CHROMA_420, CHROMA_420)
+
+    def test_a_stream_ffmpeg_shows_as_coded_rounds_by_its_format(self):
+        coded = [None, IDENTITY_MATRIX, display_matrix(*MOVED_MATRIX), display_matrix(*SCALED_MATRIX),
+                 MATRICES["rotate-0.4"], MATRICES["rotate-minus-1"],
+                 display_matrix(0, 0, 0, 0, 0, 0, 0, 0, 1 << 30)]  # no scale: FFmpeg's angle is NaN
+        for pix_fmt, matrix in product(("yuv420p", "yuv444p", "yuv411p", "rgb24", None), coded):
+            with self.subTest(pix_fmt=pix_fmt, matrix=matrix):
+                self.assertEqual(SourceChroma.of_stream(stream(pix_fmt, matrix)), SourceChroma.of(pix_fmt))
+        # FFmpeg 9 reads no "rotate" tag (a NUT or an older probe may still show one).
+        for rotate in ("0", "90", "ninety"):
+            with self.subTest(rotate=rotate):
+                self.assertEqual(SourceChroma.of_stream(stream("yuv444p", tags={"rotate": rotate})),
+                                 SourceChroma.of("yuv444p"))
+
+    def test_a_stream_ffmpeg_turns_or_flips_crops_420_whatever_its_format(self):
+        for transform, pix_fmt in product(sorted(TURNED_BY_FFMPEG), ("yuv444p", "yuv422p", "yuv411p", "rgb24")):
+            with self.subTest(transform=transform, pix_fmt=pix_fmt):
+                self.assertEqual(SourceChroma.of_stream(stream(pix_fmt, MATRICES[transform])), self.TURNED)
+        # Side data of other kinds first; FFmpeg's own 180 degrees of a flip in both directions.
+        other = {"side_data_type": "Content light level metadata", "max_content": 1000}
+        turned = stream("yuv444p", MATRICES["rotate-180"])
+        turned["side_data_list"].insert(0, other)
+        self.assertEqual(SourceChroma.of_stream(turned), self.TURNED)
+        self.assertEqual(SourceChroma.of_stream(stream("yuv444p", display_matrix(-ONE, 0, 0, 0, -ONE, 0, 0, 0,
+                                                                                 1 << 30))), self.TURNED)
+
+    def test_a_display_the_probe_does_not_show_plainly_keeps_the_chain_of_before(self):
+        before = SourceChroma(NO_ROUNDING, NO_ROUNDING)
+        unclear = [
+            stream("yuv444p", "\n00000000:        65536           0           0\n"),  # a row only
+            stream("yuv444p", ""),
+            # Turned, but of no known format.
+            stream(None, MATRICES["rotate-180"]),
+            stream("unknown", MATRICES["hflip"]),
+        ]
+        for probed in unclear:
+            with self.subTest(probed=probed):
+                self.assertEqual(SourceChroma.of_stream(probed), before)
 
 
 class CoverChainTextTests(unittest.TestCase):
@@ -286,20 +421,21 @@ def source_filter(pix_fmt, width, height, *, noise=True):
             + ("noise=alls=40:allf=u," if noise else "") + f"format={pix_fmt}")
 
 
-def run_graph(graph, pix_fmt, folder, frame_size=FRAME, frame=0):
+def run_graph(graph, pix_fmt, folder, frame_size=FRAME, frame=0, clip=None):
     """Frame ``frame`` of static noise over testsrc2 through ``graph``: (returncode, stderr, source luma, output luma).
 
     The graph's output is yuv420p, as the export's (-pix_fmt yuv420p): the format
     FFmpeg converts a source to before a full-frame gblur follows from it.
+    ``clip``: a file to read instead (FFmpeg turns it by its display matrix, as the export).
     """
     width, height = frame_size
     script = folder / "graph.txt"
     picked = f";[vout]trim=start_frame={frame}[vpick]" if frame else ""
     script.write_text(graph + picked, encoding="utf-8")
     source, output = folder / "source.yuv", folder / "output.yuv"
+    inputs = ["-i", str(clip)] if clip else ["-f", "lavfi", "-i", source_filter(pix_fmt, width, height)]
     done = subprocess.run(
-        [str(FFMPEG), "-hide_banner", "-loglevel", "error", "-y", "-f", "lavfi", "-i",
-         source_filter(pix_fmt, width, height),
+        [str(FFMPEG), "-hide_banner", "-loglevel", "error", "-y", *inputs,
          "-/filter_complex", str(script),
          "-map", "[vpick]" if frame else "[vout]", "-frames:v", "1", "-f", "rawvideo", "-pix_fmt", "yuv420p",
          str(output),
@@ -360,12 +496,12 @@ class BranchStepTests(unittest.TestCase):
 
     EDGE = {"x": 99, "y": 30, "width": 61, "height": 20}  # 69 wide with its margin: refused at 4:2:0
 
-    def graph(self, operations, layout, pix_fmt="yuv444p"):
+    def graph(self, operations, layout, pix_fmt="yuv444p", source_chroma=None):
         limit = 10**18 if layout == blur_layout.NESTED_LAYOUT else 0
         with patch.object(blur_layout, "NESTED_PATH_LIMIT", limit):
             graph, _, wiring = _final_filter_graph(
                 operations=operations, duration=4.0, has_audio=False, frame_size=FRAME,
-                chroma_rows_divisor=2, source_chroma=SourceChroma.of(pix_fmt),
+                chroma_rows_divisor=2, source_chroma=source_chroma or SourceChroma.of(pix_fmt),
             )
         self.assertEqual(wiring["layout"], layout)
         return graph
@@ -412,12 +548,22 @@ class BranchStepTests(unittest.TestCase):
                 self.assertEqual(segments.count("crop=69:36:91:22,delogo"), 1)
                 self.assertLess(segments.index("exact=1"), segments.index("crop=69:36:91:22,delogo"))
 
-    def test_an_unknown_format_keeps_the_chain_of_before_in_every_branch(self):
+    def test_an_unknown_format_keeps_the_chain_of_before_in_its_first_branch(self):
         for layout in (blur_layout.NESTED_LAYOUT, blur_layout.SHARED_LAYOUT):
             with self.subTest(layout=layout):
                 graph = self.graph([cover(0.0, 4.0, self.EDGE)], layout, pix_fmt=None)
                 self.assertIn("crop=69:36:91:22,delogo", graph)
                 self.assertNotIn("exact", graph)
+                # A later branch crops 4:2:0 whatever the source: refused there before, exact now.
+                later = self.graph([cover(0.0, 4.0, EARLIER), cover(0.0, 4.0, self.EDGE)], layout, pix_fmt=None)
+                self.assertIn("crop=70:36:90:22:exact=1,delogo", later)
+
+    def test_a_turned_source_rounds_its_first_branch_to_420(self):
+        turned = SourceChroma.of_stream(stream("yuv444p", MATRICES["rotate-180"]))
+        for layout in (blur_layout.NESTED_LAYOUT, blur_layout.SHARED_LAYOUT):
+            with self.subTest(layout=layout):
+                self.assertIn("crop=70:36:90:22:exact=1,delogo",
+                              self.graph([cover(0.0, 4.0, self.EDGE)], layout, source_chroma=turned))
 
 
 class PreviewStepTests(unittest.TestCase):
@@ -452,9 +598,42 @@ class PreviewStepTests(unittest.TestCase):
         (command,) = commands
         return command[command.index("-filter_complex") + 1]
 
-    def test_the_preview_rounds_by_the_probed_pixel_format(self):
-        self.assertIn("crop=69:36:91:22,delogo", self.preview_chain("yuv444p"))
-        self.assertIn("crop=70:36:90:22:exact=1,delogo", self.preview_chain("yuv420p"))
+    def test_the_preview_crops_420_whatever_the_probed_format(self):
+        # -ss/-t before -i put a trim in front of the preview's graph (crop-steps-preview.jsonl).
+        for pix_fmt in ("yuv444p", "rgb24", "yuv420p", None):
+            with self.subTest(pix_fmt=pix_fmt):
+                self.assertIn("crop=70:36:90:22:exact=1,delogo", self.preview_chain(pix_fmt))
+
+
+@unittest.skipUnless(FFMPEG.exists() and FFPROBE.exists(), "project FFmpeg is required")
+class PreviewExportTests(unittest.TestCase):
+    """render_edit_previews on FFmpeg itself, on a 4:4:4 source."""
+
+    def render(self, root, source, name):
+        plan = root / f"plan-{name}.json"
+        plan.write_text(json.dumps({
+            "status": "READY_FOR_PREVIEW", "source": {"path": str(source), "duration_seconds": 0.08},
+            "approved_operations": [cover(0.0, 0.04, BranchStepTests.EDGE)],
+        }), encoding="utf-8")
+        from biliflow.review_workflow import render_edit_previews
+
+        render_edit_previews(project_root=root, plan_path=plan, output_dir=root / "previews" / name,
+                             ffmpeg_path=FFMPEG, ffprobe_path=FFPROBE)
+        return root / "previews" / name / f"{cover(0.0, 0.04, BranchStepTests.EDGE)['id']}-blur.mp4"
+
+    def test_a_region_refused_at_420_previews_and_the_chain_of_its_own_format_would_not(self):
+        with TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            (root / "previews").mkdir()
+            source = root / "source.mp4"
+            subprocess.run([str(FFMPEG), "-hide_banner", "-loglevel", "error", "-f", "lavfi", "-i",
+                            source_filter("yuv444p", *FRAME), "-c:v", "libx264", "-pix_fmt", "yuv444p", str(source)],
+                           check=True, capture_output=True, timeout=60)
+            self.assertGreater(self.render(root, source, "now").stat().st_size, 0)
+            # 20584f3 rounded a preview by the source's own format (1 x 1 for 4:4:4): delogo refused it.
+            with patch("biliflow.review_workflow.CHROMA_420", NO_ROUNDING), \
+                    self.assertRaisesRegex(RuntimeError, "Logo area is outside of the frame"):
+                self.render(root, source, "before")
 
 
 @unittest.skipUnless(FFMPEG.exists(), "project FFmpeg is required")
@@ -491,12 +670,19 @@ class CoverEdgeExportTests(unittest.TestCase):
         """True when 11a059c refused the region (now checked for its blur), False when it ran (same text)."""
         width, height = FRAME
         step = CHROMA_420 if later else STEPS[pix_fmt]
+        fits = old_chain_fits(region, FRAME, step)
+        # 11a059c's graph: every branch's chain as if crop never rounded. FFmpeg ran it exactly where it fits.
+        with patch.object(blur_layout, "branch_chroma_steps", lambda blurs, _: [NO_ROUNDING] * len(blurs)):
+            before = export_graph(region, pix_fmt=pix_fmt, feather=feather, later=later, layout=layout)
+        code, stderr, _, _ = run_graph(before, pix_fmt, folder)
+        self.assertEqual(code == 0, fits, stderr[-300:])
         graph = export_graph(region, pix_fmt=pix_fmt, feather=feather, later=later, layout=layout)
+        if fits:
+            self.assertEqual(graph, before)
+            return False
+        self.assertIn("Logo area is outside of the frame", stderr)
         code, stderr, source, output = run_graph(graph, pix_fmt, folder)
         self.assertEqual(code, 0, stderr[-1500:])
-        if old_chain_fits(region, FRAME, step):
-            self.assertNotIn("exact", graph)
-            return False
         self.assertIn("exact=1", graph)
         x0, y0 = region["x"], region["y"]
         x1, y1 = x0 + region["width"], y0 + region["height"]
@@ -656,6 +842,108 @@ class SourceFormatExportTests(unittest.TestCase):
                 capture_output=True, text=True, timeout=60,
             )
         self.assertEqual(done.returncode, 0, done.stderr[-1500:])
+
+
+@unittest.skipUnless(FFMPEG.exists() and FFPROBE.exists(), "project FFmpeg is required")
+class TurnedSourceExportTests(unittest.TestCase):
+    """A source FFmpeg turns before the export's graph (display matrix): its first branch crops 4:2:0."""
+
+    BEFORE = SourceChroma(NO_ROUNDING, NO_ROUNDING)  # 11a059c's chains
+
+    def turned_clip(self, folder, pix_fmt, transform):
+        """Lossless (FFV1) noise over testsrc2 in ``pix_fmt``, stream-copied with a display matrix; and its probe."""
+        plain, turned = folder / f"plain-{pix_fmt}.mkv", folder / f"{transform}-{pix_fmt}.mkv"
+        for command in (
+            ["-f", "lavfi", "-i", source_filter(pix_fmt, *FRAME), "-c:v", "ffv1", str(plain)],
+            [*TRANSFORM_ARGUMENTS[transform], "-i", str(plain), "-c", "copy", str(turned)],
+        ):
+            subprocess.run([str(FFMPEG), "-hide_banner", "-loglevel", "error", "-y", *command],
+                           check=True, capture_output=True, timeout=60)
+        probed = probe_video(FFPROBE, turned)
+        return turned, next(item for item in probed["streams"] if item.get("codec_type") == "video")
+
+    def graph(self, region, pix_fmt, source_chroma):
+        return export_graph(region, pix_fmt=pix_fmt, feather=2, later=False, layout=blur_layout.NESTED_LAYOUT,
+                            source_chroma=source_chroma)
+
+    def test_a_turned_411_source_keeps_the_chain_its_420_crop_ran(self):
+        # 1 pixel from the right edge: 38 columns with the margin, whole at 4:2:0, 36 at 4:1:1.
+        region = {"x": 130, "y": 40, "width": 29, "height": 8}
+        with TemporaryDirectory() as directory:
+            folder = Path(directory)
+            for transform in TRANSFORM_ARGUMENTS:
+                with self.subTest(transform=transform):
+                    clip, video = self.turned_clip(folder, "yuv411p", transform)
+                    chroma = SourceChroma.of_stream(video)
+                    self.assertEqual(chroma, SourceChroma(CHROMA_420, CHROMA_420))
+                    graph = self.graph(region, "yuv411p", chroma)
+                    self.assertEqual(graph, self.graph(region, "yuv411p", self.BEFORE))
+                    code, stderr, _, _ = run_graph(graph, "yuv411p", folder, clip=clip)
+                    self.assertEqual(code, 0, stderr[-1500:])
+                    # The source's own step (20584f3's rule) would have changed a chain that ran.
+                    self.assertIn("exact=1", self.graph(region, "yuv411p", SourceChroma.of("yuv411p")))
+
+    def test_a_display_ffmpeg_does_not_apply_keeps_the_source_format_step(self):
+        """A 4:4:4 MP4 whose track matrix only moves or scales, and a NUT with a rotate tag: no turn, no rounding."""
+        region = BranchStepTests.EDGE  # 69 columns with the margin: refused only where crop rounds to 4:2:0
+        with TemporaryDirectory() as directory:
+            folder = Path(directory)
+            plain = folder / "plain.mp4"
+            subprocess.run([str(FFMPEG), "-hide_banner", "-loglevel", "error", "-f", "lavfi", "-i",
+                            source_filter("yuv444p", *FRAME), "-c:v", "libx264", "-pix_fmt", "yuv444p", str(plain)],
+                           check=True, capture_output=True, timeout=60)
+            written = {"moved": MOVED_MATRIX, "scaled": SCALED_MATRIX}
+            clips = {name: self.with_track_matrix(plain, folder / f"{name}.mp4", matrix)
+                     for name, matrix in written.items()}
+            clips["rotate-tag"] = folder / "rotate-tag.nut"
+            subprocess.run([str(FFMPEG), "-hide_banner", "-loglevel", "error", "-f", "lavfi", "-i",
+                            source_filter("yuv444p", *FRAME), "-c:v", "ffv1", "-metadata:s:v:0", "rotate=90",
+                            str(clips["rotate-tag"])], check=True, capture_output=True, timeout=60)
+            for name, clip in clips.items():
+                with self.subTest(clip=name):
+                    video = next(item for item in probe_video(FFPROBE, clip)["streams"]
+                                 if item.get("codec_type") == "video")
+                    if name == "rotate-tag":
+                        self.assertEqual((video.get("tags") or {}).get("rotate"), "90")
+                    else:
+                        (item,) = video["side_data_list"]
+                        self.assertEqual(item["displaymatrix"], display_matrix(*written[name]))
+                    graph = self.graph(region, "yuv444p", SourceChroma.of_stream(video))
+                    self.assertEqual(graph, self.graph(region, "yuv444p", self.BEFORE))
+                    code, stderr, _, _ = run_graph(graph, "yuv444p", folder, clip=clip)
+                    self.assertEqual(code, 0, stderr[-1500:])  # FFmpeg did not round the crop to 4:2:0
+
+    @staticmethod
+    def with_track_matrix(plain: Path, target: Path, matrix: tuple[int, ...]) -> Path:
+        """``plain`` (one video track) with ``matrix`` in its tkhd box instead of the identity."""
+        data = bytearray(plain.read_bytes())
+        box = data.index(b"tkhd") + 4  # the box's payload: version, flags, ...
+        offset = box + (52 if data[box] == 1 else 40)  # the matrix after the times, ids, layer and volume
+        assert data[offset:offset + 36] == struct.pack(">9i", ONE, 0, 0, 0, ONE, 0, 0, 0, 1 << 30)
+        data[offset:offset + 36] = struct.pack(">9i", *matrix)
+        target.write_bytes(bytes(data))
+        return target
+
+    def test_a_turned_422_source_refused_at_420_now_exports_blurred(self):
+        # 1 pixel above the bottom edge: 39 rows with the margin, whole at 4:2:2, 38 at 4:2:0.
+        region = {"x": 50, "y": 59, "width": 40, "height": 30}
+        x0, y0, x1, y1 = 50, 59, 90, 89
+        with TemporaryDirectory() as directory:
+            folder = Path(directory)
+            for transform in TRANSFORM_ARGUMENTS:
+                with self.subTest(transform=transform):
+                    clip, video = self.turned_clip(folder, "yuv422p", transform)
+                    before = self.graph(region, "yuv422p", self.BEFORE)
+                    self.assertEqual(self.graph(region, "yuv422p", SourceChroma.of("yuv422p")), before)
+                    code, stderr, _, _ = run_graph(before, "yuv422p", folder, clip=clip)
+                    self.assertNotEqual(code, 0)
+                    self.assertIn("Logo area is outside of the frame", stderr)
+                    graph = self.graph(region, "yuv422p", SourceChroma.of_stream(video))
+                    self.assertIn("exact=1", graph)
+                    code, stderr, source, output = run_graph(graph, "yuv422p", folder, clip=clip)
+                    self.assertEqual(code, 0, stderr[-1500:])
+                    self.assertLess(area_detail(source, output, FRAME[0], x0 + 4, y0 + 4, x1 - 4, y1 - 4),
+                                    BLURRED_BELOW)
 
 
 if __name__ == "__main__":

@@ -17,7 +17,9 @@ is written but the result file.
 
 fix/cover-edge (job 141) added the "edge-*" plans: cover regions at the right and
 bottom edge that FFmpeg ran on 11a059c, on clips in the plan's own pixel format
-(x264; FFV1 for yuv410p, PNG for rgb24), held to the same bytes; and FIXED_PLANS:
+(x264; FFV1 for yuv410p and yuv411p, PNG for rgb24; "<format>@rotate-180" is that
+clip stream-copied with a display matrix of 180 degrees, which FFmpeg turns before
+the graph), held to the same bytes; and FIXED_PLANS:
 regions delogo refused there ("Logo area is outside of the frame"). Where the
 baseline refuses one, it must export here, crop exactly, and keep less than
 BLURRED_BELOW of the source's fine detail inside the region and on the frame's last
@@ -58,19 +60,26 @@ SIDE_PROGRAM = """
 import inspect, json, sys
 from pathlib import Path
 import biliflow
+from biliflow import final_renderer
 from biliflow.final_renderer import build_final_filter_graph, render_final_output
+from biliflow.probe import probe_video
 job = json.loads(sys.argv[1])
 plan = json.loads(Path(job["plan"]).read_text(encoding="utf-8"))
-# The graph render_final_output builds from its probe: a tree that rounds by the
-# source's pixel format (fix/cover-edge) gets it; 11a059c's graph does not depend on it.
-by_format = {}
+# The graph render_final_output builds from its probe of the source: a tree that rounds
+# by the probed stream, pixel format and display matrix (fix/cover-edge), gets it;
+# 11a059c's graph does not depend on it.
+video = next(item for item in probe_video(Path(job["ffprobe"]), Path(plan["source"]["path"]))["streams"]
+             if item.get("codec_type") == "video")
+by_stream = {}
 if "source_chroma" in inspect.signature(build_final_filter_graph).parameters:
     from biliflow.blur_filter import SourceChroma
-    by_format["source_chroma"] = SourceChroma.of(job["pix_fmt"])
+    # 20584f3 rounded by the pixel format alone.
+    by_stream["source_chroma"] = (SourceChroma.of_stream(video) if hasattr(SourceChroma, "of_stream")
+                                  else SourceChroma.of(video.get("pix_fmt")))
 graph, _ = build_final_filter_graph(
     operations=plan["approved_operations"], duration=plan["source"]["duration_seconds"],
-    has_audio=True, frame_size=tuple(job["frame_size"]),
-    chroma_rows_divisor=4 if job["pix_fmt"] == "yuv410p" else 2, **by_format)
+    has_audio=True, frame_size=final_renderer._frame_size(video),
+    chroma_rows_divisor=final_renderer._chroma_rows_divisor(video), **by_stream)
 manifest = render_final_output(
     project_root=Path(job["root"]), plan_path=Path(job["plan"]), output_path=Path(job["output"]),
     ffmpeg_path=Path(job["ffmpeg"]), ffprobe_path=Path(job["ffprobe"]))
@@ -159,6 +168,9 @@ PLANS: dict[str, tuple[str, list[dict]]] = {
     # renderer orders blurs by start: the full-frame blur comes first in the graph.)
     "edge-422-ten-bit-after-full-frame": ("yuv422p10le", [
         blur(0.0, 1.2, "FULL_FRAME", name="full"), blur(1.3, 2.0, box(100, 149, 80, 31), name="b")]),
+    # FFmpeg turns a rotated source before the graph, so its first branch crops 4:2:0: the
+    # crop of 38 columns this region asks fits there (4:1:1 itself would round it to 36).
+    "edge-411-rotated-180": ("yuv411p@rotate-180", [blur(0.0, SECONDS, box(290, 40, 29, 8), name="r")]),
 }
 
 # Cover regions delogo refused on 11a059c ("Logo area is outside of the frame", job 141):
@@ -186,6 +198,9 @@ FIXED_PLANS: dict[str, tuple[str, list[dict], dict, dict]] = {
     "fixed-rgb24-after-full-frame": ("rgb24", [
         blur(0.0, 1.2, "FULL_FRAME", name="full"), blur(1.3, 2.0, box(259, 40, 60, 30), name="r")],
         box(259, 40, 60, 30), CONTROL),
+    # 39 rows fit a crop of 4:2:2 itself; turned before the graph, the source crops 4:2:0 (38).
+    "fixed-rotated-422-bottom": ("yuv422p@rotate-180", [blur(0.0, SECONDS, box(100, 149, 80, 30), name="b")],
+                                 box(100, 149, 80, 30), CONTROL),
 }
 # Share of the source's fine detail a blurred box may keep, and an untouched one must (x264 loses a little).
 BLURRED_BELOW, SHARP_ABOVE = 0.05, 0.5
@@ -208,25 +223,37 @@ def sha256(path: Path) -> str:
 
 
 # Lossless codecs in Matroska for the formats x264 does not decode back as such:
-# it has no 4:1:0, and an RGB stream of it decodes as gbrp.
-LOSSLESS_CODECS = {"yuv410p": "ffv1", "rgb24": "png"}
+# it has no 4:1:0 or 4:1:1, and an RGB stream of it decodes as gbrp.
+LOSSLESS_CODECS = {"yuv410p": "ffv1", "yuv411p": "ffv1", "rgb24": "png"}
+# A clip's display matrix, as "<format>@<name>" in a plan: stream-copied with it.
+DISPLAY_TRANSFORMS = {"rotate-180": ["-display_rotation", "180"]}
 
 
-def clip_name(pixel_format: str) -> str:
-    return f"clip-{pixel_format}.mkv" if pixel_format in LOSSLESS_CODECS else f"clip-{pixel_format}.mp4"
+def clip_name(source: str) -> str:
+    pixel_format, _, transform = source.partition("@")
+    stem = f"clip-{pixel_format}-{transform}" if transform else f"clip-{pixel_format}"
+    return f"{stem}.mkv" if pixel_format in LOSSLESS_CODECS else f"{stem}.mp4"
 
 
-def make_clip(ffmpeg: Path, target: Path, pixel_format: str) -> None:
+def make_clip(ffmpeg: Path, target: Path, source: str) -> None:
     """Static noise over testsrc2: fine detail in every region, so a changed blur shows in the bytes."""
+    pixel_format, _, transform = source.partition("@")
     video = (["-c:v", LOSSLESS_CODECS[pixel_format]] if pixel_format in LOSSLESS_CODECS
              else ["-c:v", "libx264", "-preset", "veryfast", "-crf", "18"])
+    encoded = target.with_name(f"plain-{target.name}") if transform else target
     subprocess.run(
         [str(ffmpeg), "-hide_banner", "-loglevel", "error", "-y",
          "-f", "lavfi", "-i", f"testsrc2=s={WIDTH}x{HEIGHT}:r={FPS}:d={SECONDS:g},noise=alls=40:allf=u",
          "-f", "lavfi", "-i", f"sine=frequency=440:sample_rate=48000:d={SECONDS:g}",
-         "-map", "0:v", "-map", "1:a", *video, "-pix_fmt", pixel_format, "-c:a", "aac", str(target)],
+         "-map", "0:v", "-map", "1:a", *video, "-pix_fmt", pixel_format, "-c:a", "aac", str(encoded)],
         capture_output=True, timeout=300, check=True,
     )
+    if transform:
+        subprocess.run(
+            [str(ffmpeg), "-hide_banner", "-loglevel", "error", "-y", *DISPLAY_TRANSFORMS[transform],
+             "-i", str(encoded), "-c", "copy", str(target)],
+            capture_output=True, timeout=300, check=True,
+        )
 
 
 def luma_frame(ffmpeg: Path, video: Path, index: int) -> bytes:
@@ -294,7 +321,7 @@ def framemd5(ffmpeg: Path, video: Path) -> str:
 
 
 def run_side(side_src: Path, root: Path, clip: Path, operations: list[dict],
-             ffmpeg: Path, ffprobe: Path, pixel_format: str) -> dict:
+             ffmpeg: Path, ffprobe: Path) -> dict:
     """One code tree's graph and export of one plan, in a root of its own."""
     for folder in ("input", "work", "output", "state"):
         (root / folder).mkdir(parents=True, exist_ok=True)
@@ -309,7 +336,7 @@ def run_side(side_src: Path, root: Path, clip: Path, operations: list[dict],
     }), encoding="utf-8")
     output = root / "output" / "export.mp4"
     job = {"plan": str(plan), "root": str(root), "output": str(output), "ffmpeg": str(ffmpeg),
-           "ffprobe": str(ffprobe), "frame_size": [WIDTH, HEIGHT], "pix_fmt": pixel_format}
+           "ffprobe": str(ffprobe)}
     # No BILIFLOW_* setting of the caller (an export lane, a test key) reaches either side.
     environment = {key: value for key, value in os.environ.items() if not key.startswith("BILIFLOW_")}
     environment.update({"PYTHONPATH": str(side_src), "TEMP": str(root), "TMP": str(root)})
@@ -329,8 +356,7 @@ def run_side(side_src: Path, root: Path, clip: Path, operations: list[dict],
 
 def gate_plan(name: str, pixel_format: str, operations: list[dict], *, baseline: Path, candidate: Path,
               bench: Path, clips: dict[str, Path], ffmpeg: Path, ffprobe: Path) -> dict:
-    sides = {label: run_side(src, bench / name / label, clips[pixel_format], operations, ffmpeg, ffprobe,
-                             pixel_format)
+    sides = {label: run_side(src, bench / name / label, clips[pixel_format], operations, ffmpeg, ffprobe)
              for label, src in (("baseline", baseline), ("candidate", candidate))}
     record = {"plan": name, "source_pixel_format": pixel_format, "regions": region_count(operations),
               "operations": len(operations)}
@@ -362,8 +388,7 @@ def gate_fixed(name: str, *, baseline: Path, candidate: Path, bench: Path, clips
                ffmpeg: Path, ffprobe: Path) -> dict:
     """A plan delogo refused on the baseline: it must export and cover here, or keep its bytes where the baseline exports it."""
     pixel_format, operations, region, control = FIXED_PLANS[name]
-    sides = {label: run_side(src, bench / name / label, clips[pixel_format], operations, ffmpeg, ffprobe,
-                             pixel_format)
+    sides = {label: run_side(src, bench / name / label, clips[pixel_format], operations, ffmpeg, ffprobe)
              for label, src in (("baseline", baseline), ("candidate", candidate))}
     refused = "Logo area is outside of the frame" in sides["baseline"].get("error", "")
     record = {"plan": name, "source_pixel_format": pixel_format, "regions": region_count(operations),
@@ -426,9 +451,9 @@ def main() -> int:
     records, fixed = [], []
     try:
         clips = {}
-        for pixel_format in sorted({(PLANS.get(name) or FIXED_PLANS[name])[0] for name in names}):
-            clips[pixel_format] = bench / clip_name(pixel_format)
-            make_clip(ffmpeg, clips[pixel_format], pixel_format)
+        for source in sorted({(PLANS.get(name) or FIXED_PLANS[name])[0] for name in names}):
+            clips[source] = bench / clip_name(source)
+            make_clip(ffmpeg, clips[source], source)
         for name in names:
             if name in FIXED_PLANS:
                 record = gate_fixed(name, baseline=baseline, candidate=candidate, bench=bench, clips=clips,
@@ -460,7 +485,8 @@ def main() -> int:
         "baseline": "git archive of the baseline commit's src (docs/evidence/export-regions/README.md)",
         "ffmpeg": version,
         "clip": (f"lavfi testsrc2 + static noise, {WIDTH}x{HEIGHT}, {SECONDS:g} s, {FPS} fps, with audio; "
-                 "x264 in the plan's source format (FFV1 for yuv410p, PNG for rgb24)"),
+                 "x264 in the plan's source format (FFV1 for yuv410p and yuv411p, PNG for rgb24; "
+                 "@rotate-180: stream-copied with a display matrix of 180 degrees)"),
         "encoder": "libx264 (render_settings video_encoder)",
         "plans": records,
         "fixed": fixed,
