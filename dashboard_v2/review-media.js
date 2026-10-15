@@ -263,5 +263,23 @@
     };
   }
 
-  root.BFReviewMedia = {createImageLoader, createPlayer};
+  /* Session R: the magnifier under a card's image. view: BFReviewDetail.magnifier(); the crop of the loaded <img>
+   * (same origin, no blob:) at its CSS size in device pixels (≤ 4096 a side), and unless the card is shown bare a red
+   * line 2 px outside the region, so it never covers what is inside. */
+  const MAG_CANVAS_MAX = 4096, MAG_LINE = 2, MAG_GAP = 2;
+  function drawMagnifier(canvas, img, view, bare, dpr) {
+    const ratio = Math.max(1, Number(dpr) || 1), fit = Math.min(1, MAG_CANVAS_MAX / Math.max(view.cssW * ratio, view.cssH * ratio));
+    canvas.width = Math.max(1, Math.round(view.cssW * ratio * fit)); canvas.height = Math.max(1, Math.round(view.cssH * ratio * fit));
+    canvas.style.width = view.cssW.toFixed(1) + 'px'; canvas.style.height = view.cssH.toFixed(1) + 'px';
+    const g = canvas.getContext('2d'), k = canvas.width / view.cssW;
+    g.imageSmoothingEnabled = true; g.imageSmoothingQuality = 'high';
+    g.drawImage(img, view.sx, view.sy, view.sw, view.sh, 0, 0, canvas.width, canvas.height);
+    if (!bare) {
+      const out = (MAG_GAP + MAG_LINE / 2) * k, r = view.red;
+      g.strokeStyle = '#ff304f'; g.lineWidth = MAG_LINE * k;
+      g.strokeRect(r.x * k - out, r.y * k - out, r.w * k + 2 * out, r.h * k + 2 * out);
+    }
+  }
+
+  root.BFReviewMedia = {createImageLoader, createPlayer, drawMagnifier};
 })(window);

@@ -1,0 +1,112 @@
+{
+  "queue_sha256": {
+    "before": "fad40874062d8828208402fc40698c0b93e92ad05bdeb43f648bbcae23ed34d3",
+    "after": "dff65e5aef75dc88fa8c9cf8ca617130d2487626271516e77177e6b776aaf8ff"
+  },
+  "files": [
+    "before-390-light-logo.jpg",
+    "before-390-light-band.jpg",
+    "before-390-light-ticker.jpg",
+    "before-390-light-band-read.jpg",
+    "before-390-light-ticker-read.jpg",
+    "before-390-dark-band.jpg",
+    "before-1440-light-dialog.jpg",
+    "after-390-light-logo.jpg",
+    "after-390-light-band.jpg",
+    "after-390-light-ticker.jpg",
+    "after-390-light-band-read.jpg",
+    "after-390-light-ticker-read.jpg",
+    "after-390-light-band-bare.jpg",
+    "after-390-dark-band.jpg",
+    "after-1440-light-dialog.jpg"
+  ],
+  "checks": [
+    {
+      "size": "390×844 light",
+      "mags": {
+        "logo": {
+          "hidden": false,
+          "zoom": 3,
+          "height": 66,
+          "cap": "Vùng phát hiện phóng to ×3"
+        },
+        "band": {
+          "hidden": false,
+          "zoom": 3,
+          "height": 41,
+          "cap": "Vùng phát hiện phóng to ×3"
+        },
+        "ticker": {
+          "hidden": false,
+          "zoom": 3,
+          "height": 42,
+          "cap": "Vùng phát hiện phóng to ×3 · vuốt ngang để xem hết"
+        }
+      },
+      "ocr": {
+        "logo": "Máy đọc:“LOGO.EXAMPLE”3 cách đọc gần giống",
+        "band": "Máy đọc:“TRANG.EXAMPLE”4 cách đọc gần giống“Ngày mai chúng ta lên đường sớm.”",
+        "ticker": "Máy đọc:“Phim cập nhật nhanh nhất tại TRANG.EXAMPLE. Phim chỉ đăng trên trang…”3 cách đọc gần giống"
+      },
+      "note": "Nhãn “REVIEW 58 | subtitle” trên ảnh do máy quét chữ in: “subtitle” chỉ là tên vùng (vùng phụ đề), không có nghĩa đây là phụ đề."
+    },
+    {
+      "size": "390×844 dark",
+      "mags": {
+        "logo": {
+          "hidden": false,
+          "zoom": 3,
+          "height": 66,
+          "cap": "Vùng phát hiện phóng to ×3"
+        },
+        "band": {
+          "hidden": false,
+          "zoom": 3,
+          "height": 41,
+          "cap": "Vùng phát hiện phóng to ×3"
+        },
+        "ticker": {
+          "hidden": false,
+          "zoom": 3,
+          "height": 42,
+          "cap": "Vùng phát hiện phóng to ×3 · vuốt ngang để xem hết"
+        }
+      },
+      "ocr": {
+        "logo": "Máy đọc:“LOGO.EXAMPLE”3 cách đọc gần giống",
+        "band": "Máy đọc:“TRANG.EXAMPLE”4 cách đọc gần giống“Ngày mai chúng ta lên đường sớm.”",
+        "ticker": "Máy đọc:“Phim cập nhật nhanh nhất tại TRANG.EXAMPLE. Phim chỉ đăng trên trang…”3 cách đọc gần giống"
+      },
+      "note": "Nhãn “REVIEW 58 | subtitle” trên ảnh do máy quét chữ in: “subtitle” chỉ là tên vùng (vùng phụ đề), không có nghĩa đây là phụ đề."
+    },
+    {
+      "size": "1440×900 light",
+      "mags": {
+        "logo": {
+          "hidden": false,
+          "zoom": 3,
+          "height": 110,
+          "cap": "Vùng phát hiện phóng to ×3"
+        },
+        "band": {
+          "hidden": false,
+          "zoom": 3,
+          "height": 69,
+          "cap": "Vùng phát hiện phóng to ×3"
+        },
+        "ticker": {
+          "hidden": false,
+          "zoom": 3,
+          "height": 71,
+          "cap": "Vùng phát hiện phóng to ×3 · vuốt ngang để xem hết"
+        }
+      },
+      "ocr": {
+        "logo": "Máy đọc:“LOGO.EXAMPLE”3 cách đọc gần giống",
+        "band": "Máy đọc:“TRANG.EXAMPLE”4 cách đọc gần giống“Ngày mai chúng ta lên đường sớm.”",
+        "ticker": "Máy đọc:“Phim cập nhật nhanh nhất tại TRANG.EXAMPLE. Phim chỉ đăng trên trang…”3 cách đọc gần giống"
+      },
+      "note": "Nhãn “REVIEW 58 | subtitle” trên ảnh do máy quét chữ in: “subtitle” chỉ là tên vùng (vùng phụ đề), không có nghĩa đây là phụ đề."
+    }
+  ]
+}

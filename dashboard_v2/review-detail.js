@@ -131,15 +131,94 @@
     if (approved) legend.push(`Khung đỏ: vùng ${readingLabel(approved, 'logo/watermark')} đã được duyệt làm mờ ở thẻ riêng`);
     return {mode: 'boxes', marks, size, legend: legend.join(' · ')};
   }
-  /* Crop rectangle of the 360 px crop, in image pixels (classic drawRegionPreviews: letterboxed source frame,
-   * 12 % / 18 % padding around the region), and where the red rectangle falls inside it. */
-  function cropRect(region, sourceSize, imageW, imageH) {
-    const sw = Number(sourceSize[0]), sh = Number(sourceSize[1]), scale = Math.min(imageW / sw, imageH / sh);
-    const offsetX = (imageW - sw * scale) / 2, offsetY = (imageH - sh * scale) / 2;
+  /* Session R (job 134 on a phone): the magnifier under a card's image, always shown for a card with a red region
+   * (evidenceView mode 'region'). The region with room around it (text just outside a tight OCR box stays in view)
+   * at 3× its size on the card; when 3× is wider than `avail`, the largest zoom down to 2× that fits; a region wider
+   * than `avail` even at 2× (a ticker) stays at 3× and the box scrolls sideways (it scrolls anyway, and its small
+   * letters read best at 3×); a region taller than MAG.maxHeight at that zoom is fitted to it; one shown at under
+   * 1.5× is left out (null). The source
+   * frame may be letterboxed in the image. In: the region and frame size in source pixels, the image's natural size,
+   * the image box on the card and the width the magnifier may use (CSS px). Out: the crop in image pixels, its CSS
+   * size and where the region falls in it (CSS px). */
+  /* Room around the region: 12 % of its size, at least its smaller side across and 0.6 of it up and down (a text line
+   * keeps a line height of context; that side counts up to sideMax of the image), never under padMin image pixels.
+   * A region already filling `large` of the card image both ways needs no magnifier. */
+  const MAG = {zoom: 3, min: 2, skip: 1.5, maxHeight: 300, pad: .12, padAcross: 1, padUpDown: .6, sideMax: .15, padMin: 6, large: .5};
+  function magnifier(region, sourceSize, imageW, imageH, boxW, boxH, avail) {
+    const sw = Number(sourceSize && sourceSize[0]), sh = Number(sourceSize && sourceSize[1]);
+    if (!(sw > 0 && sh > 0 && imageW > 0 && imageH > 0 && boxW > 0 && boxH > 0 && avail > 0)) return null;
+    const scale = Math.min(imageW / sw, imageH / sh), offsetX = (imageW - sw * scale) / 2, offsetY = (imageH - sh * scale) / 2;
     const rx = Number(region.x) * scale + offsetX, ry = Number(region.y) * scale + offsetY, rw = Number(region.width) * scale, rh = Number(region.height) * scale;
-    const padX = rw * .12, padY = rh * .18, x = Math.max(0, rx - padX), y = Math.max(0, ry - padY), w = Math.min(imageW - x, rw + padX * 2), h = Math.min(imageH - y, rh + padY * 2);
-    const width = 360, height = Math.max(100, Math.round(360 * h / w));
-    return {x, y, w, h, width, height, red: {x: (rx - x) / w * width, y: (ry - y) / h * height, w: rw / w * width, h: rh / h * height}};
+    if (!(rw > 0 && rh > 0) || (rw >= MAG.large * sw * scale && rh >= MAG.large * sh * scale)) return null;
+    const side = Math.min(rw, rh, MAG.sideMax * Math.min(imageW, imageH)), padX = Math.max(rw * MAG.pad, side * MAG.padAcross, MAG.padMin), padY = Math.max(rh * MAG.pad, side * MAG.padUpDown, MAG.padMin);
+    const x = Math.max(0, rx - padX), y = Math.max(0, ry - padY), w = Math.min(imageW, rx + rw + padX) - x, h = Math.min(imageH, ry + rh + padY) - y;
+    if (!(w > 0 && h > 0)) return null;
+    const shown = Math.min(boxW / imageW, boxH / imageH), cardW = w * shown, cardH = h * shown;
+    let zoom = MAG.zoom;
+    if (cardW * zoom > avail && cardW * MAG.min <= avail) zoom = avail / cardW;
+    if (cardH * zoom > MAG.maxHeight) zoom = MAG.maxHeight / cardH;
+    if (zoom < MAG.skip) return null;
+    const cssW = cardW * zoom, cssH = cardH * zoom, k = cssW / w;
+    return {sx: x, sy: y, sw: w, sh: h, cssW, cssH, zoom, scroll: cssW > avail + .5, red: {x: (rx - x) * k, y: (ry - y) * k, w: rw * k, h: rh * k}};
+  }
+
+  /* Session R: "Máy đọc: …" on a card. The OCR readings (text cards: every label; logo cards: the readings among
+   * their labels, as readingLabel) grouped when one is nearly inside another (character pairs; short ones as
+   * substrings), the group read in most forms first, then the longer; each group shows its longest reading, cut at
+   * `chars`. Out: {lines: [{text, forms}], more: groups not shown} or null (safety cards, no reading). */
+  const READ = {lines: 3, chars: 70, overlap: .6, tiny: 3, shortPairs: 5, long: 20};
+  /* Labels review_workflow.py writes around a reading ("OCR nội dung phim: X", "Có khả năng là tiêu đề phim: X")
+   * give X; a platform card's name ("Logo nền tảng iQIYI", platform_cards.py) is not a reading. */
+  const READ_PREFIX = /^(?:OCR nội dung phim|Có khả năng là tiêu đề phim):\s*/, NOT_READ = /^Logo nền tảng\b/;
+  function readings(x, limit, chars) {
+    if (!x || R.isSafety(x)) return null;
+    limit = limit || READ.lines; chars = chars || READ.chars;
+    const clean = (x.labels || []).map(v => String(v ?? '').replace(/<\/?s>/g, '').replace(/\s+/g, ' ').trim()).filter(l => l && !NOT_READ.test(l)).map(l => l.replace(READ_PREFIX, '')).filter(Boolean);
+    const texts = [...new Set(clean.filter(l => !SCANNER_LABELS.includes(l) && !VI[l] && (x.category === 'text' || !(l === l.toLowerCase() && /^[\p{L} ]+$/u.test(l)))))];
+    const read = texts.map((text, i) => {
+      const c = text.toLowerCase().normalize('NFC').replace(/[^\p{L}\p{N}]+/gu, ''), g = new Set();
+      for (let k = 0; k + 1 < c.length; k++) g.add(c.slice(k, k + 2));
+      return {text, i, c, g};
+    }).filter(r => r.c).sort((a, b) => b.c.length - a.c.length || a.i - b.i);
+    const overlap = (a, b) => {
+      if (Math.min(a.c.length, b.c.length) < READ.tiny) return a.c === b.c ? 1 : 0;
+      if (Math.min(a.g.size, b.g.size) < READ.shortPairs) return a.c.includes(b.c) || b.c.includes(a.c) ? 1 : 0;
+      let shared = 0;
+      for (const pair of b.g) if (a.g.has(pair)) shared++;
+      return shared / Math.min(a.g.size, b.g.size);
+    };
+    const groups = [];
+    for (const r of read) { const group = groups.find(g => overlap(g[0], r) >= READ.overlap); if (group) group.push(r); else groups.push([r]); }
+    if (!groups.length) return null;
+    groups.sort((a, b) => b.length - a.length || b[0].c.length - a[0].c.length || a[0].i - b[0].i);
+    // The group read in most forms, then each time the line least like those shown (a line under READ.long letters
+    // counts less), so a card mixing a watermark with subtitle lines shows both.
+    const shown = [groups.shift()];
+    while (shown.length < limit && groups.length) {
+      const score = g => (1 - Math.max(...shown.map(s => overlap(s[0], g[0])))) * Math.min(1, g[0].c.length / READ.long);
+      let best = 0;
+      groups.forEach((g, k) => { if (score(g) > score(groups[best])) best = k; });
+      shown.push(groups.splice(best, 1)[0]);
+    }
+    const cut = text => text.length > chars ? text.slice(0, chars - 1).trimEnd() + '…' : text;
+    return {lines: shown.map(g => ({text: cut(g[0].text), forms: g.length})), more: groups.length};
+  }
+
+  /* Session R: the text scanner prints "REVIEW <track> | <zone>" on its previews (textscan._annotate); the card
+   * says that the zone is a place in the frame, not a verdict. The zone comes from the queue (text_preview_zones,
+   * queues built since session R); an older queue gets the general sentence. Plain text (escape it); '' when
+   * `path` is not a text preview. */
+  const ZONE_NAMES = {subtitle:'vùng phụ đề','top-left':'góc trên bên trái','top-center':'giữa cạnh trên','top-right':'góc trên bên phải','middle-left':'giữa cạnh trái',
+    'middle-center':'giữa khung hình','middle-right':'giữa cạnh phải','bottom-left':'góc dưới bên trái','bottom-center':'giữa cạnh dưới','bottom-right':'góc dưới bên phải'};
+  const TEXT_PREVIEW = /(?:^|\/)text-previews\/track-0*(\d+)\.(?:jpe?g|png)$/i;
+  function zoneNote(x, path) {
+    const m = TEXT_PREVIEW.exec(String(path || ''));
+    if (!m) return '';
+    const zones = x && x.text_preview_zones && typeof x.text_preview_zones === 'object' ? x.text_preview_zones : {};
+    const zone = Object.prototype.hasOwnProperty.call(zones, path) ? String(zones[path] || '') : '', track = Number(m[1]);
+    if (!zone) return `Nhãn “REVIEW ${track} | …” trên ảnh do máy quét chữ in: phần sau dấu | chỉ là tên vùng trong khung (subtitle = vùng phụ đề, top-right = góc trên bên phải…), không phải kết luận.`;
+    const name = Object.prototype.hasOwnProperty.call(ZONE_NAMES, zone) ? ZONE_NAMES[zone] : '';
+    return `Nhãn “REVIEW ${track} | ${zone}” trên ảnh do máy quét chữ in: “${zone}” chỉ là tên vùng${name ? ` (${name})` : ' trong khung'}${zone === 'subtitle' ? ', không có nghĩa đây là phụ đề' : ', không phải kết luận'}.`;
   }
 
   /* R2: notes of the region buttons and of "Đây là logo hãng phim — giữ & nhớ" / "Đây là logo nền tảng — làm mờ & nhớ",
@@ -216,6 +295,6 @@
   }
 
   return {esc, clock, viText, readingLabel, memoryMatch, memoryBrandName, boxesFromMemory, trackCoversFullVideo, regionOverlap, regionName, decisionScope, scopeBlock,
-    overlapCoverage, regionDetailHtml, labelsReasonsHtml, visualAiHtml, evidenceHtml, aiModelLine, techBody, evidenceView, cropRect,
+    overlapCoverage, regionDetailHtml, labelsReasonsHtml, visualAiHtml, evidenceHtml, aiModelLine, techBody, evidenceView, magnifier, readings, zoneNote, ZONE_NAMES,
     regionControls, borrowedRegion, studioCompareLine, studioTextsNote, studioFramesNote, studioMaskNote, studioNote, platformNote};
 });

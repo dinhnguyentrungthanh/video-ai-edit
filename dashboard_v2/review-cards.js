@@ -43,10 +43,24 @@
   const mmssTenth = s => { const v = Math.max(0, Number(s) || 0), m = Math.floor(v / 60); return `${m}:${(v - m * 60).toFixed(1).padStart(4, '0')}`; };
 
   /* Media of a card. m: {ev (undefined = loading, null = none), hasKey, playable, reason, frameUrl(t), mediaUrl(path)}. */
+  const remoteMain = (m, x) => !!(m.ev && m.hasKey && m.ev.strongest && R.stripFrames(x, m.ev, true).some(f => f.remote));
   function mainImage(m, x) {
-    if (m.ev && m.hasKey && m.ev.strongest && R.stripFrames(x, m.ev, true).some(f => f.remote)) return m.frameUrl(m.ev.strongest.t);
+    if (remoteMain(m, x)) return m.frameUrl(m.ev.strongest.t);
     const src = (x.preview_images || [])[0];
     return src ? m.mediaUrl(src) : '';
+  }
+  /* The report preview shown as the main image ('' for an evidence frame or no image). */
+  const mainPreview = (m, x) => remoteMain(m, x) ? '' : String((x.preview_images || [])[0] || '');
+  /* Session R: under the image, the magnifier (review.js draws it once the image loaded) and the note on the
+   * scanner's "REVIEW n | zone" label of a text preview. */
+  function zoneNoteHtml(x, path) { const text = D.zoneNote(x, path); return '<p class="rv-zone-note"' + (text ? '' : ' hidden') + '>' + esc(text) + '</p>'; }
+  const magHtml = () => '<figure class="rv-mag" hidden><div class="rv-mag-view"><canvas class="rv-mag-canvas" role="img" aria-label="Vùng phát hiện, phóng to"></canvas></div><figcaption class="rv-mag-cap"></figcaption></figure>';
+  /* Session R: what the OCR read, a few lines that differ most (D.readings), escaped. */
+  function readingsHtml(x) {
+    const r = D.readings(x);
+    if (!r) return '';
+    return '<div class="rv-ocr"><b>Máy đọc:</b>' + r.lines.map(l => '<span class="rv-ocr-line">“' + esc(l.text) + '”' + (l.forms > 1 ? '<small>' + esc(l.forms + ' cách đọc gần giống') + '</small>' : '') + '</span>').join('') +
+      (r.more ? '<small class="rv-ocr-more">' + esc('+' + r.more + ' dòng khác trong Chi tiết kỹ thuật') + '</small>' : '') + '</div>';
   }
   function strip(m, x) {
     if (m.ev === undefined) return '<span class="rv-thumb ghost"></span>'.repeat(8);
@@ -55,17 +69,24 @@
     return frames.map((f, i) => {
       const k = ms && f.t != null ? R.momentIndex(f.t, ms) : -1, url = f.remote ? m.frameUrl(f.t) : m.mediaUrl(f.path);
       return '<button class="rv-thumb' + (f.kind === 'strongest' ? ' peak' : f.kind === 'seed' ? ' hit' : '') + '" type="button" data-review="thumb" data-i="' + i + '" data-t="' + (f.t == null ? '' : Number(f.t)) + '"' +
-        (f.remote ? ' data-remote="1"' : '') + ' aria-label="' + esc('Khung ' + (f.t == null ? i + 1 : label(f.t))) + '"><img alt="" decoding="async" data-src="' + esc(url) + '">' +
+        (f.remote ? ' data-remote="1"' : ' data-path="' + esc(f.path) + '"') + ' aria-label="' + esc('Khung ' + (f.t == null ? i + 1 : label(f.t))) + '"><img alt="" decoding="async" data-src="' + esc(url) + '">' +
         (f.kind === 'strongest' ? '<b>Rõ nhất</b>' : '') + (f.t == null ? '' : '<span>' + esc(label(f.t)) + '</span>') + (k >= 0 ? '<i>' + (k + 1) + '</i>' : '') + '</button>';
     }).join('');
   }
-  function bar(m, x) {
+  /* Session R: "Ẩn khung / Hiện khung" shows the image as it is, without the red box, its label, the AI boxes and the
+   * blur or cut illustration (ctx.bare: the cards shown bare; the scanner's own marks are part of a text preview). */
+  function framesButton(ctx, x) {
+    const bare = !!(ctx.bare && ctx.bare.has(x.id));
+    return '<button class="small secondary rv-frames-btn" type="button" data-review="frames" aria-pressed="' + bare + '" title="' + (bare ? 'Vẽ lại khung đỏ và phần minh họa lên ảnh' : 'Ẩn khung đỏ và phần minh họa của trang duyệt (khung và nhãn do máy quét in sẵn trong ảnh vẫn còn)') + '">' + (bare ? 'Hiện khung' : 'Ẩn khung') + '</button>';
+  }
+  function bar(ctx, m, x) {
     const scene = R.isScene(x), n = scene ? R.momentsOf(x).length : 0;
     const play = !R.hasPlayer(x) ? '' : m.playable
       ? (scene ? '<button class="small secondary" type="button" data-review="seq" title="Phát từng khoảnh khắc theo thứ tự, bỏ qua khoảng trống giữa chúng">▶ Phát lần lượt ' + n + ' khoảnh khắc</button>'
         : '<button class="small secondary" type="button" data-review="play">▶ Phát đoạn này</button>')
       : '<small class="rv-reason">' + esc(m.reason) + '</small>';
-    return play + '<span class="rv-time"></span><button class="icon-button rv-zoom-btn" type="button" data-review="zoom" aria-pressed="false" aria-label="Phóng to thẻ" title="Phóng to thẻ (Esc để thu nhỏ)">⤢</button>';
+    return play + '<span class="rv-time"></span>' + (mainImage(m, x) ? framesButton(ctx, x) : '') +
+      '<button class="icon-button rv-zoom-btn" type="button" data-review="zoom" aria-pressed="false" aria-label="Phóng to thẻ" title="Phóng to thẻ (Esc để thu nhỏ)">⤢</button>';
   }
   function moments(x) {
     if (!R.isScene(x)) return '';
@@ -85,10 +106,10 @@
       return '<span class="rv-aibox' + (b.a ? ' approved' : '') + place.cls + '" style="left:' + pct(b.x / sw) + ';top:' + pct(b.y / sh) + ';width:' + pct(b.w / sw) + ';height:' + pct(b.h / sh) + place.room + '">' + (tag ? '<em>' + esc(tag) + '</em>' : '') + '</span>';
     }).join('') + '</span>';
   }
+  /* The zoomed card's legend of its AI boxes (the region magnifier is under every card's image since session R). */
   function zoomExtra(ctx, x) {
     const view = D.evidenceView(ctx.queue, x);
-    return (view.legend ? '<p class="rv-legend">' + esc(view.legend) + '</p>' : '') +
-      (view.mode === 'region' ? '<figure class="rv-crop-box"><canvas class="rv-crop" width="360" height="120" aria-label="Ảnh cắt quanh vùng khoanh đỏ"></canvas><figcaption>Vùng khoanh đỏ, phóng to</figcaption></figure>' : '');
+    return view.legend ? '<p class="rv-legend">' + esc(view.legend) + '</p>' : '';
   }
   function tech(ctx, x, ev) { return '<details class="rv-tech"' + (ctx.techOpen && ctx.techOpen.has(x.id) ? ' open' : '') + '><summary>Chi tiết kỹ thuật</summary><div class="tech-body">' + techHtml(ctx, x, ev) + '</div></details>'; }
 
@@ -148,28 +169,30 @@
   function techHtml(ctx, x, ev) { return D.techBody(ctx.queue, x, ev || null, R.isSafety(x) ? regionBlock(ctx, x) : ''); }
 
   function card(ctx, x) {
-    const m = ctx.media(x), src = mainImage(m, x), tip = suggestion(x), zoomed = ctx.zoomId === x.id;
-    return '<article class="scene rv-card' + (x.id === ctx.focusId ? ' on' : '') + (x.decision ? ' decided' : '') + (zoomed ? ' zoom' : '') + (x.decision === 'CUT' ? ' d-cut' : '') + (fullBlur(x) ? ' d-blur-full' : '') + '" data-item="' + esc(x.id) + '">' +
+    const m = ctx.media(x), src = mainImage(m, x), tip = suggestion(x), zoomed = ctx.zoomId === x.id, bare = !!(ctx.bare && ctx.bare.has(x.id));
+    return '<article class="scene rv-card' + (x.id === ctx.focusId ? ' on' : '') + (x.decision ? ' decided' : '') + (zoomed ? ' zoom' : '') + (x.decision === 'CUT' ? ' d-cut' : '') + (fullBlur(x) ? ' d-blur-full' : '') + (bare ? ' bare' : '') + '" data-item="' + esc(x.id) + '">' +
       '<div class="rv-art" data-review="select" style="aspect-ratio:' + esc(R.frameAspect(x)) + '">' +
         (src ? '<img alt="" decoding="async" data-src="' + esc(src) + '">' : '') +
         regionHtml(ctx, x) +
         aiBoxes(ctx, x) + '<span class="rv-cut-label">Đã chọn cắt</span>' +
         '<span class="rv-art-note">' + (src ? 'Không tải được ảnh' : 'Không có ảnh xem trước cho mục này.') + '</span>' +
       '</div>' +
-      '<div class="rv-bar">' + bar(m, x) + '</div>' +
+      (src ? magHtml() + zoneNoteHtml(x, mainPreview(m, x)) : '') +
+      '<div class="rv-bar">' + bar(ctx, m, x) + '</div>' +
       '<div class="rv-timeline" data-review="seek" title="Bấm để tua">' + R.timelineHtml(x, m.ev || null) + '<div class="head" hidden></div></div>' +
       '<div class="rv-strip">' + strip(m, x) + '</div>' + moments(x) +
       '<p class="rv-note" role="status" hidden></p><div class="rv-zoom-slot">' + (zoomed ? zoomExtra(ctx, x) : '') + '</div>' +
       '<div class="scene-content"><div class="rv-card-top"><h3><button class="rv-name" type="button" data-review="select" aria-label="' + esc('Chọn ' + R.sceneName(x) + ' ' + R.span(x)) + '">' + esc(R.sceneName(x)) + '</button></h3>' + pill(x) + '</div>' +
-        '<small class="rv-meta">' + esc(R.span(x) + ' · ' + groupOf(x) + ' · ' + regionLine(ctx.queue, x)) + '</small>' +
+        '<small class="rv-meta">' + esc(R.span(x) + ' · ' + groupOf(x) + ' · ' + regionLine(ctx.queue, x)) + '</small>' + readingsHtml(x) +
         (tip ? '<p class="rv-hint">' + esc(tip) + '</p>' : '') + '<div class="rv-actions">' + actions(ctx, x) + '</div>' + tech(ctx, x, m.ev) +
       '</div></article>';
   }
   /* Evidence arrived (or the video became unavailable): media parts of one card, without touching its
    * image box (which may hold the playing <video>). Returns the new main image URL. */
   function refreshMedia(el, ctx, x) {
-    const m = ctx.media(x), head = el.querySelector('.rv-timeline .head');
-    el.querySelector('.rv-bar').innerHTML = bar(m, x);
+    const m = ctx.media(x), head = el.querySelector('.rv-timeline .head'), note = el.querySelector('.rv-zone-note');
+    el.querySelector('.rv-bar').innerHTML = bar(ctx, m, x);
+    if (note) note.outerHTML = zoneNoteHtml(x, mainPreview(m, x));
     const timeline = el.querySelector('.rv-timeline');
     timeline.innerHTML = R.timelineHtml(x, m.ev || null);
     if (head) timeline.appendChild(head);
@@ -260,5 +283,5 @@
     return patched;
   }
 
-  root.BFReviewCards = {BATCH, esc, card, refreshMedia, zoomExtra, mainImage, header, progressHtml, chips, empty, patchCard, patchCards, actions};
+  root.BFReviewCards = {BATCH, esc, card, refreshMedia, zoomExtra, mainImage, zoneNoteHtml, framesButton, header, progressHtml, chips, empty, patchCard, patchCards, actions};
 })(window);

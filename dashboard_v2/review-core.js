@@ -15,6 +15,10 @@
  *   S4 the resources line says "Ổ đĩa còn trống" (the classic page: "Ổ E còn trống", contracts.resourceItems);
  *   S10 a gore card's hint line adds what the tagger saw (gore_hint, docs/ANIME_GORE_PLAN.md step 1); the classic
  *      page stays byte-identical (D2) and has no such line.
+ *   S11 (session R, docs/handoff/R-review-ui.md) the red box is a line outside its region, "Ẩn khung / Hiện khung"
+ *      shows the image without it, a magnifier under every card image replaces the zoomed card's 360 px crop, the
+ *      card shows "Máy đọc: …" and a note on the text scanner's "REVIEW n | zone" label; the classic page is
+ *      unchanged (D2). Decisions and POST bodies are unchanged.
  * R3 bulk and export follow the classic bulkKeep(), bulkAccept(), runBlocking() and finalizeExport(): same filter map,
  * same confirm words (count as the server selects, S1), the export gate and the export_dialog.py sentence.
  * R2 decisions follow the classic decide(), undo() and writeFailureMessage(): same confirms (S5 shows them in

@@ -115,8 +115,11 @@ async function check(name, fn) { await fn(); passed++; process.stderr.write('OK 
     });
 
     await check('× closes the dialog back to Video; no blob:, no console or CSP error, no request outside the listener', async () => {
+      // Closing refreshes /api/status at once: wait until it is answered, so closing the browser cannot cut it off.
+      const refreshed = page.waitForResponse(r => new URL(r.url()).pathname === '/api/status');
       await dialog().locator('.rv-head [data-review="close"]').tap();
       await page.waitForFunction(() => !document.getElementById('review-dialog').open && location.hash === '#videos');
+      await (await refreshed).finished();
       assert.deepEqual(problems, []);
     });
   } finally {

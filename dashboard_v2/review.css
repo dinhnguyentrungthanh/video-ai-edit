@@ -37,9 +37,11 @@
 .rv-art.revealed .rv-region, .rv-art.revealed .rv-boxes { z-index: 2; }
 .rv-boxes { position: absolute; inset: 0; display: none; pointer-events: none; }
 .rv-card.zoom .rv-boxes { display: block; }
-.rv-aibox { position: absolute; box-sizing: border-box; border: 3px dashed #ffc233; }
-.rv-aibox.approved { border: 4px solid #ff304f; }
-.rv-aibox em { position: absolute; left: 0; top: calc(100% + 2px); font: 600 12px system-ui, sans-serif; font-style: normal; color: #ffc233; text-shadow: 0 1px 2px #000; }
+/* Session R: every box is a line 2 px outside its region (outline-offset), never a fill or a border over it, so the
+ * text it marks stays readable; a dark halo keeps the line visible on bright or red frames. */
+.rv-aibox { position: absolute; box-sizing: border-box; outline: 2px dashed #ffc233; outline-offset: 2px; filter: drop-shadow(0 0 1px #000c); }
+.rv-aibox.approved { outline: 3px solid #ff304f; }
+.rv-aibox em { position: absolute; left: 0; top: calc(100% + 5px); font: 600 12px system-ui, sans-serif; font-style: normal; color: #ffc233; text-shadow: 0 1px 2px #000; }
 .rv-aibox.approved em { color: #ff304f; }
 .rv-bar { display: flex; align-items: center; gap: 8px; padding: 8px 12px 0; flex-wrap: wrap; }
 .rv-bar .rv-zoom-btn { margin-left: auto; }
@@ -75,9 +77,24 @@
 .rv-zoom-slot:empty { display: none; }
 .rv-zoom-slot { display: flex; flex-wrap: wrap; gap: 12px; align-items: flex-start; padding: 10px 12px 0; }
 .rv-legend { margin: 0; flex: 1 1 260px; font-size: 12px; color: var(--muted); }
-.rv-crop-box { margin: 0; }
-.rv-crop { display: block; width: 360px; max-width: 100%; height: auto; border-radius: 6px; border: 1px solid var(--line); background: #e3e9f2; }
-.rv-crop-box figcaption { font-size: 12px; color: var(--muted); margin-top: 4px; }
+/* Session R: the magnifier under the image (review.js drawMag; its 12 px side margins are the 24 px it subtracts),
+ * scrolling sideways inside itself when 2× is wider than the card; the note on the scanner's "REVIEW n | zone". */
+.rv-mag { margin: 8px 12px 0; min-width: 0; }
+.rv-mag-view { width: fit-content; max-width: 100%; box-sizing: border-box; overflow-x: auto; overscroll-behavior-x: contain; border-radius: 6px; border: 1px solid var(--line); background: #e3e9f2; line-height: 0; }
+.rv-mag-canvas { display: block; max-width: none; }
+.rv-mag figcaption { margin-top: 4px; font-size: 12px; color: var(--muted); }
+.rv-zone-note { margin: 6px 12px 0; font-size: 12px; line-height: 1.45; color: var(--muted); overflow-wrap: anywhere; }
+/* Session R: "Máy đọc: …", one reading a line. */
+.rv-ocr { display: grid; gap: 2px; margin-top: 8px; font-size: 13px; line-height: 1.4; overflow-wrap: anywhere; }
+.rv-ocr b { font-size: 12px; color: var(--muted); }
+.rv-ocr-line small, .rv-ocr-more { margin-left: 6px; font-size: 12px; color: var(--muted); }
+.rv-ocr-more { margin-left: 0; }
+/* Session R "Ẩn khung": the image as it is (the scanner's own marks are part of a text preview). */
+.rv-card.bare .rv-region, .rv-card.bare .rv-boxes, .rv-card.bare.d-cut .rv-cut-label { display: none; }
+/* "Ẩn khung" only where the page draws something over the image (a red box, AI boxes, the cut or blur illustration). */
+.rv-card:not(.d-cut):not(.d-blur-full):not(:has(.rv-region, .rv-aibox)) .rv-frames-btn { display: none; }
+.rv-card.bare.d-blur-full .rv-art img, .rv-card.bare.d-cut .rv-art img { filter: none; }
+.rv-card .rv-frames-btn[aria-pressed="true"] { background: #e9f1ff; color: #194faf; border-color: #8eafe5; }
 .rv-card.zoom { grid-column: 1 / -1; }
 .rv-card.zoom .rv-art { max-width: calc(70vh * 16 / 9); margin: 0 auto; }
 .rv-name { min-height: 0; padding: 0; border: 0; background: none; font: inherit; color: inherit; text-align: left; cursor: pointer; }
@@ -86,7 +103,7 @@
 .rv-tech summary { cursor: pointer; color: var(--muted); }
 .rv-tech .tech-body { display: grid; gap: 6px; margin-top: 6px; color: var(--muted); overflow-wrap: anywhere; }
 .rv-tech .scope-detail strong { display: block; color: var(--text); }
-.rv-region { position: absolute; box-sizing: border-box; border: 3px solid #ff304f; background: #ff304f26; pointer-events: none; }
+.rv-region { position: absolute; box-sizing: border-box; outline: 2px solid #ff304f; outline-offset: 2px; filter: drop-shadow(0 0 1px #000c); pointer-events: none; }
 .rv-art-note { position: absolute; inset: 0; display: none; align-items: center; justify-content: center; padding: 12px; font-size: 12px; color: var(--muted); text-align: center; }
 .rv-art.failed .rv-art-note { display: flex; }
 .rv-card .scene-content { padding: 12px 14px 14px; }
@@ -100,7 +117,8 @@
 .st-blur { color: #194faf; background: #e9f1ff; border-color: #bed2f5; }
 .st-cut { color: #aa263e; background: #fff0f2; border-color: #efc4cd; }
 .st-more { color: #8a5307; background: #fff5e3; border-color: #f0d5a4; }
-[data-theme="dark"] .rv-art, [data-theme="dark"] .rv-thumb, [data-theme="dark"] .rv-crop { background: #202c41; }
+[data-theme="dark"] .rv-art, [data-theme="dark"] .rv-thumb, [data-theme="dark"] .rv-mag-view { background: #202c41; }
+[data-theme="dark"] .rv-card .rv-frames-btn[aria-pressed="true"] { background: #293f64; color: #c3dcff; border-color: #5278ae; }
 [data-theme="dark"] .rv-timeline { --rv-track: #2b3a52; }
 [data-theme="dark"] .rv-timeline .gapline { background: #4d5f7a; }
 [data-theme="dark"] .rv-timeline .mo.on { background: #8bb8ff; }
@@ -125,16 +143,15 @@
  * PC). Illustration only: the export hides the logo with delogo, then a blur. */
 .rv-region.blurred { background: #ffffffb3; }
 /* S9: a red box borrowed from another logo card: dashed, with the time it applies. */
-.rv-region.borrowed { border-style: dashed; }
-.rv-region em { position: absolute; left: -3px; top: calc(100% + 2px); padding: 1px 5px; border-radius: 4px; font: 600 11px system-ui, sans-serif; font-style: normal; color: #fff; background: #c4243d; }
+.rv-region.borrowed { outline-style: dashed; }
+.rv-region em { position: absolute; left: 0; top: calc(100% + 5px); padding: 1px 5px; border-radius: 4px; font: 600 11px system-ui, sans-serif; font-style: normal; color: #fff; background: #c4243d; }
 /* R4-B1: a box label never leaves the image (review-cards.js labelPlace): right-aligned for a box in the right half,
  * above when there is more room above, inside the box when neither side has room; it wraps within the image width
- * left on that side: --room box widths (100% + 6px: the box's border box, the label's containing block being its
- * padding box). R4-B3: no size container on every card image (it was 100cqw). */
-.rv-region em, .rv-aibox em { box-sizing: border-box; width: max-content; max-width: calc(var(--room, 1) * (100% + 6px) - 4px); overflow-wrap: anywhere; }
-.rv-region.lr em { left: auto; right: -3px; }
-.rv-aibox.lr em { left: auto; right: 0; }
-.rv-region.up em, .rv-aibox.up em { top: auto; bottom: calc(100% + 2px); }
+ * left on that side: --room box widths (session R: the box has no border, so 100% is the region's width; the label
+ * hangs 5 px off it, just past the outline). R4-B3: no size container on every card image (it was 100cqw). */
+.rv-region em, .rv-aibox em { box-sizing: border-box; width: max-content; max-width: calc(var(--room, 1) * 100% - 2px); overflow-wrap: anywhere; }
+.rv-region.lr em, .rv-aibox.lr em { left: auto; right: 0; }
+.rv-region.up em, .rv-aibox.up em { top: auto; bottom: calc(100% + 5px); }
 .rv-region.lin em, .rv-aibox.lin em { top: 2px; bottom: auto; }
 .rv-region-block.borrowed { grid-template-columns: minmax(0, 1fr) auto; align-items: center; }
 .rv-card.d-blur-full .rv-art img { filter: blur(14px); }

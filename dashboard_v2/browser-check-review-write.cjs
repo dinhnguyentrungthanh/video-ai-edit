@@ -478,9 +478,15 @@ async function until(fn, label, timeout = 8000) {
         assert.equal(await e.locator('[data-review="region"]').count(), 0, 'no region buttons on the borrowing card');
         assert.equal(await l.locator('[data-review="region"]').count(), 2, 'the owner card keeps them');
         assert.match(await e.locator('.rv-region-block.borrowed small').textContent(), /^Khung đỏ là vùng logo của thẻ “Logo nền tảng Nền tảng mẫu” \(\d\d:\d\d\.\d–\d\d:\d\d\.\d\) — đang: Làm mờ logo$/);
-        const box = await e.locator('.rv-region').evaluate(r => ({style: getComputedStyle(r).borderTopStyle, label: r.querySelector('em') && r.querySelector('em').textContent}));
+        const box = await e.locator('.rv-region').evaluate(r => ({style: getComputedStyle(r).outlineStyle, label: r.querySelector('em') && r.querySelector('em').textContent}));
         assert.equal(box.style, 'dashed'); assert.match(box.label, /^áp dụng \d\d:\d\d\.\d–\d\d:\d\d\.\d$/);
-        assert.equal(await l.locator('.rv-region').evaluate(r => getComputedStyle(r).borderTopStyle), 'solid');
+        assert.equal(await l.locator('.rv-region').evaluate(r => getComputedStyle(r).outlineStyle), 'solid'); // session R: a line outside the region, not a border
+        // Session R: the magnifier only on the card that owns the region (images load near the view, 2 at a time).
+        const loaded = async (el, id) => { await el.scrollIntoViewIfNeeded(); await p.waitForFunction(id => { const i = document.querySelector(`article.rv-card[data-item="${id}"] .rv-art img`); return i && i.complete && i.naturalWidth > 0; }, id); };
+        await loaded(l, logo.id);
+        await p.waitForFunction(id => document.querySelector(`article.rv-card[data-item="${id}"] .rv-mag canvas`).dataset.drawn === '1', logo.id);
+        await loaded(e, end.id);
+        assert.deepEqual([await e.locator('.rv-mag').evaluate(f => f.hidden), await l.locator('.rv-mag').evaluate(f => f.hidden)], [true, false], 'no magnifier on the borrowing card');
         // The owner card's buttons change only the owner card; the borrowing card follows with its line only.
         const start = posts.length;
         await l.locator('[data-review="region"][data-decision="KEEP"]').click();

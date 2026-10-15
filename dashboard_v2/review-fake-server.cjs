@@ -171,6 +171,9 @@ function create() {
     if (p === '/api/status') { counters.status++; return send(res, 200, {version: 't', jobs, queue: {length: 0, paused: false}, active: null, resources: {disk: {}}}); }
     if (p === '/api/phone-mode') return send(res, 200, {remote: false, enabled: false});
     if (p === '/api/ai') return send(res, 200, {ready: false, config: {enabled: false}, message: 'tắt'});
+    // The live page asks for Cài đặt → Tailscale at start (as browser-check.cjs serves it): not installed.
+    if (p === '/api/tailscale') return send(res, 200, {installed: false, cli: null, install_dir: 'C:\\Program Files\\Tailscale',
+      service: 'missing', backend: null, peers: [], auth_url: null, firewall_rule: 'missing', task: null});
     const review = p.match(/^\/api\/jobs\/(\d+)\/review\/(queue|export|session|resources)$/);
     if (review) {
       const id = Number(review[1]), j = jobs.find(x => x.id === id);

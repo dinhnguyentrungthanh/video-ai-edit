@@ -64,8 +64,10 @@ const job101 = jobs.find(j => j.id === 101), saved101 = JSON.stringify({state: j
     assert.deepEqual(result.clipped, [], label + ': text cut by a box with overflow hidden (R4-B1)');
     assert.deepEqual(result.overlap, [], label + ': box labels over one image cover each other (R4-B2)');
     assert.equal(result.page, false, label + ': the page scrolls sideways');
-    if (size.w <= 820) assert.deepEqual(result.scrolling.filter(x => !x.includes('rv-chips')), [], label + ': only the chip row scrolls sideways');
-    else assert.deepEqual(result.scrolling, [], label + ': nothing scrolls sideways');
+    // Session R: the magnifier of a wide region (a ticker) shows it 2× and scrolls sideways, said in its caption.
+    const scrolling = result.scrolling.filter(x => !/^div\.rv-mag-view$/.test(x));
+    if (size.w <= 820) assert.deepEqual(scrolling.filter(x => !x.includes('rv-chips')), [], label + ': only the chip row and a magnifier scroll sideways');
+    else assert.deepEqual(scrolling, [], label + ': only a magnifier scrolls sideways');
     if (size.w <= 820) assert.deepEqual(result.small, [], label + ': text under 12 px');
     if (size.touch) assert.deepEqual(result.tiny, [], label + ': touch targets under 44 px');
   };

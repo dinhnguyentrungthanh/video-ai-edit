@@ -19,7 +19,7 @@ const pw = loadPlaywright();
 if (!pw) { process.stdout.write('SKIP browser-check-review: Playwright is not installed\n'); process.exit(0); }
 
 // The fake Control Center (shared with browser-check-review-write.cjs): synthetic queues, frames, a test clip.
-const {server, Mock, jobs, queues, queueFor, counters, server_state, posts, requests, VIDEO} = require('./review-fake-server.cjs').create();
+const {server, Mock, jobs, queues, queueFor, counters, server_state, posts, VIDEO} = require('./review-fake-server.cjs').create();
 
 let passed = 0;
 async function check(name, fn) { await fn(); passed++; process.stdout.write('OK ' + name + '\n'); }
@@ -288,12 +288,15 @@ async function check(name, fn) { await fn(); passed++; process.stdout.write('OK 
       assert.match(await gore.locator('.rv-tech .tech-body').textContent(), /Phạm vi áp dụng: CHỈ ĐOẠN HIỆN TẠI/);
       await waitVideo(page, end => { const v = document.querySelector('#review-dialog video'); return v.paused && v.currentTime >= end - 0.4; }, GORE.end, 15000);
     });
-    await check('Zoomed evidence: the 360 px crop of the red region; yellow AI boxes and their legend', async () => {
+    await check('Zoomed evidence: the magnifier of the red region is redrawn for the wide card (session R); yellow AI boxes and their legend', async () => {
       const logo = card(page, 'visual_logo-101-0001');
       await logo.scrollIntoViewIfNeeded();
+      const before = await logo.locator('canvas.rv-mag-canvas').evaluate(c => c.dataset.drawn === '1' ? c.getBoundingClientRect().width : 0);
       await logo.locator('[data-review="zoom"]').click();
-      await page.waitForFunction(() => { const c = document.querySelector('article.rv-card[data-item="visual_logo-101-0001"] canvas.rv-crop'); return c && c.dataset.drawn === '1'; });
-      assert.equal(await logo.locator('canvas.rv-crop').evaluate(c => c.width), 360);
+      await page.waitForFunction(w => { const c = document.querySelector('article.rv-card[data-item="visual_logo-101-0001"].zoom canvas.rv-mag-canvas'); return c && c.dataset.drawn === '1' && c.getBoundingClientRect().width > w; }, before);
+      const mag = await logo.locator('.rv-mag').evaluate(f => ({hidden: f.hidden, zoom: Number(f.querySelector('canvas').dataset.zoom), cap: f.querySelector('figcaption').textContent}));
+      assert.ok(!mag.hidden && mag.zoom >= 2 && /^Vùng phát hiện phóng to ×/.test(mag.cap), JSON.stringify(mag));
+      assert.equal(await logo.locator('canvas.rv-crop').count(), 0, 'no old crop');
       const boxes = card(page, 'visual_logo-101-0002');
       await boxes.locator('[data-review="zoom"]').click();
       assert.equal(await logo.evaluate(el => el.classList.contains('zoom')), false, 'one zoomed card at a time');
@@ -305,6 +308,57 @@ async function check(name, fn) { await fn(); passed++; process.stdout.write('OK 
       assert.equal(await page.evaluate(() => document.getElementById('review-dialog').open), true);
       await page.keyboard.press('Escape');
       await page.waitForFunction(() => !document.getElementById('review-dialog').open);
+    });
+    await check('Session R: "Ẩn khung / Hiện khung" shows the image without the red box, "Đã chọn cắt" and the illustration, and redraws the magnifier; only where something is drawn; keeps focus; "Máy đọc" lines; no POST', async () => {
+      const before = posts.length, q = queueFor(101);
+      // For this check only (restored below): a text card decided Cắt, in the in-memory queue of the fake server.
+      const cut = q.items.find(x => x.category === 'text' && (x.preview_images || []).length), saved = {decision: cut.decision, region: cut.decision_region_source_pixels};
+      Object.assign(cut, {decision: 'CUT', decision_region_source_pixels: null});
+      try {
+      await page.goto(base + '/dashboard-v2/#review/101/videos'); await page.waitForSelector('#review-dialog[open] article.rv-card');
+      await showAll(page);
+      const logo = card(page, 'visual_logo-101-0001'), button = logo.locator('[data-review="frames"]');
+      await logo.scrollIntoViewIfNeeded();
+      await page.waitForFunction(() => { const c = document.querySelector('article.rv-card[data-item="visual_logo-101-0001"] canvas.rv-mag-canvas'); return c && c.dataset.drawn === '1'; });
+      const state = () => logo.evaluate(el => ({bare: el.classList.contains('bare'), text: el.querySelector('[data-review="frames"]').textContent,
+        pressed: el.querySelector('[data-review="frames"]').getAttribute('aria-pressed'), region: getComputedStyle(el.querySelector('.rv-region')).display,
+        fill: getComputedStyle(el.querySelector('.rv-region')).backgroundColor}));
+      assert.deepEqual(await state(), {bare: false, text: 'Ẩn khung', pressed: 'false', region: 'block', fill: 'rgba(0, 0, 0, 0)'}, 'a line only, no fill');
+      const pixels = () => logo.locator('canvas.rv-mag-canvas').evaluate(c => c.toDataURL());
+      const framed = await pixels();
+      await button.click();
+      assert.deepEqual(await state(), {bare: true, text: 'Hiện khung', pressed: 'true', region: 'none', fill: 'rgba(0, 0, 0, 0)'});
+      assert.notEqual(await pixels(), framed, 'the magnifier is redrawn without its red line');
+      await logo.locator('[data-review="frames"]').click();
+      assert.deepEqual(await state(), {bare: false, text: 'Ẩn khung', pressed: 'false', region: 'block', fill: 'rgba(0, 0, 0, 0)'});
+      assert.equal(await pixels(), framed);
+      const ocr = await page.locator('article.rv-card .rv-ocr').evaluateAll(list => list.map(d => ({text: d.textContent, size: parseFloat(getComputedStyle(d).fontSize)})));
+      assert.ok(ocr.length && ocr.every(o => /^Máy đọc:“/.test(o.text) && o.size >= 12), JSON.stringify(ocr));
+      assert.ok(ocr.some(o => o.text.includes('TRANG.EXAMPLE')), 'the ticker card reads the site name');
+      // The button only where the page draws over the image: a red box, AI boxes, the cut or blur illustration.
+      const frames = await page.locator('#review-dialog article.rv-card').evaluateAll(list => list.filter(el => el.querySelector('[data-review="frames"]')).map(el => ({id: el.dataset.item,
+        drawn: el.classList.contains('d-cut') || el.classList.contains('d-blur-full') || !!el.querySelector('.rv-region, .rv-aibox'), shown: getComputedStyle(el.querySelector('[data-review="frames"]')).display !== 'none'})));
+      assert.ok(frames.some(f => f.drawn) && frames.some(f => !f.drawn), JSON.stringify(frames));
+      assert.deepEqual(frames.filter(f => f.drawn !== f.shown), [], '"Ẩn khung" only where something is drawn over the image');
+      // "Đã chọn cắt" goes with the rest.
+      const c = card(page, cut.id), label = () => c.locator('.rv-cut-label').evaluate(l => getComputedStyle(l).display);
+      await c.scrollIntoViewIfNeeded();
+      assert.equal(await label(), 'block');
+      await c.locator('[data-review="frames"]').click();
+      assert.equal(await label(), 'none', 'bare hides "Đã chọn cắt"');
+      await c.locator('[data-review="frames"]').click();
+      assert.equal(await label(), 'block');
+      // Enter on the button of a card not selected yet (its evidence starts loading and its bar is rebuilt): focus stays on it.
+      const safety = card(page, 'adult-101-0000');
+      await safety.scrollIntoViewIfNeeded();
+      assert.equal(await safety.evaluate(el => el.classList.contains('on')), false, 'not selected yet');
+      await safety.locator('[data-review="frames"]').focus(); await page.keyboard.press('Enter');
+      assert.deepEqual(await safety.evaluate(el => [el.classList.contains('bare'), document.activeElement === el.querySelector('[data-review="frames"]')]), [true, true]);
+      await page.keyboard.press('Enter');
+      assert.deepEqual(await safety.evaluate(el => [el.classList.contains('bare'), document.activeElement === el.querySelector('[data-review="frames"]')]), [false, true]);
+      await page.keyboard.press('Escape'); await page.waitForFunction(() => !document.getElementById('review-dialog').open);
+      assert.equal(posts.length, before, 'no POST');
+      } finally { Object.assign(cut, {decision: saved.decision, decision_region_source_pixels: saved.region}); }
     });
     if (VIDEO) await check('Media key: after a restart (new key) the video and the frames get a new key once, then play and load', async () => {
       // A fresh page: the shared <video> of the other checks keeps the old-key clip in Chromium's media cache.
@@ -362,7 +416,9 @@ async function check(name, fn) { await fn(); passed++; process.stdout.write('OK 
       await page.keyboard.press('Escape'); await page.waitForFunction(() => !document.getElementById('review-dialog').open);
     });
     await check('Demo page: the same dialog on synthetic posters, no API request', async () => {
-      const demo = await newPage(1440, 900, 'dark'), apiBefore = requests.filter(r => r.includes('/api/')).length;
+      // Only the demo page's own requests: the live page of the other checks keeps polling /api/status meanwhile.
+      const demo = await newPage(1440, 900, 'dark'), api = [];
+      demo.on('request', r => { if (new URL(r.url()).pathname.startsWith('/api/')) api.push(r.url()); });
       await demo.goto(base + '/demo/#videos'); await demo.waitForSelector('#search');
       await openFromDrawer(demo, 101);
       assert.equal(await demo.locator('.rv-progress-text').textContent(), '5 / 30 cảnh cần quyết định cuối');
@@ -370,7 +426,7 @@ async function check(name, fn) { await fn(); passed++; process.stdout.write('OK 
       assert.equal(await demo.locator('a.rv-old').count(), 0, 'no old-page link without a Control Center');
       assert.equal(await demo.locator('[data-review="play"], [data-review="seq"]').count(), 0, 'the demo has no video');
       assert.match(await demo.locator('.rv-reason').first().textContent(), /Trang này chỉ có ảnh xem trước, không phát video\./);
-      assert.equal(requests.filter(r => r.includes('/api/')).length, apiBefore);
+      assert.deepEqual(api, [], 'no API request from the demo page');
       await demo.close();
     });
     await check('No POST, no blob:, no console or CSP error, no request outside the origin', async () => {

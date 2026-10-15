@@ -32,14 +32,15 @@
    * logo, an opening check, Visual AI advice, NEEDS_MORE_CONTEXT, advisory candidates, a card without image. */
   const KINDS = [
     {category:'adult',review_kind:'adult',priority:'high',suggested:'CUT',moments:3,label:'Cảnh nhạy cảm'},
-    {category:'visual_logo',review_kind:'logo_overlay',priority:'high',suggested:'BLUR',region:[60,40,260,96],label:'Logo góc trái',model:{vlm_confirmation:'CONFIRMED',vlm_answer:'YES | logo góc trái',vlm_source:'qwen'},reason:'Visual brand/logo candidate'},
-    {category:'visual_logo',review_kind:'logo_candidate',candidate_type:null,priority:'normal',suggested:'KEEP',label:'Logo toàn khung',boxes:[[120,60,220,90,''],[1500,70,300,100,'covered']],reason:'Full-frame promotional material'},
-    {category:'text',review_kind:'in_film_text',priority:'normal',suggested:'KEEP',region:[420,880,1080,120],label:'Chữ trong phim'},
+    {category:'visual_logo',review_kind:'logo_overlay',priority:'high',suggested:'BLUR',region:[60,40,260,96],label:'Logo góc trái',ocr:['Visual brand/logo candidate','LOGO.EXAMPLE','LOGOEXAMPLE'],model:{vlm_confirmation:'CONFIRMED',vlm_answer:'YES | logo góc trái',vlm_source:'qwen'},reason:'Visual brand/logo candidate'},
+    {category:'visual_logo',review_kind:'logo_candidate',candidate_type:null,priority:'normal',suggested:'KEEP',label:'Logo toàn khung',ocr:['Full-frame promotional material'],boxes:[[120,60,220,90,''],[1500,70,300,100,'covered']],reason:'Full-frame promotional material'},
+    {category:'text',review_kind:'in_film_text',priority:'normal',suggested:'KEEP',region:[420,880,1080,120],label:'Chữ trong phim',ocr:['CỬA HÀNG HOA BÊN SÔNG','CUA HANG HOA','Mở cửa 7 giờ sáng']},
     {category:'gore',review_kind:'gore',priority:'high',suggested:'BLUR',label:'Cảnh máu'},
     {category:'violence',review_kind:'violence',priority:'normal',suggested:'KEEP',moments:2,label:'Cảnh đánh nhau'},
-    {category:'text',review_kind:'logo_overlay',priority:'normal',suggested:'BLUR',region:[1500,60,360,110],label:'Chữ quảng cáo góc phải'},
-    {category:'visual_logo',review_kind:'platform_logo',candidate_type:'platform_logo',platform_logo:{name:'Nền tảng mẫu'},priority:'high',suggested:'BLUR',region:[1620,940,250,90],label:'Logo nền tảng mẫu'},
-    {category:'visual_logo',review_kind:'opening_promotion',candidate_type:'opening_boundary',priority:'context',suggested:null,label:'Đoạn mở đầu',reason:'The first video window is retained once so external intros are not silently missed'},
+    {category:'text',review_kind:'logo_overlay',priority:'normal',suggested:'BLUR',region:[1500,60,360,110],label:'Chữ quảng cáo góc phải',
+      ocr:['Phim cập nhật nhanh nhất tại TRANG.EXAMPLE, không đăng lại ở trang khác','TRANG.EXAMPLE','TRANGEXAMPLE','TRANG EXAMPLE','ủng hộ-']},
+    {category:'visual_logo',review_kind:'platform_logo',candidate_type:'platform_logo',platform_logo:{name:'Nền tảng mẫu'},priority:'high',suggested:'BLUR',region:[1620,940,250,90],label:'Logo nền tảng mẫu',ocr:['Logo nền tảng Nền tảng mẫu','NEN TANG MAU']},
+    {category:'visual_logo',review_kind:'opening_promotion',candidate_type:'opening_boundary',priority:'context',suggested:null,label:'Đoạn mở đầu',ocr:['Opening boundary review'],reason:'The first video window is retained once so external intros are not silently missed'},
     {category:'adult',review_kind:'adult',priority:'normal',suggested:'KEEP',ai:{suggested_decision:'BLUR',confidence:0.93,classification:'logo thương hiệu'},label:'Cảnh cần xem lại'}
   ];
   const PALETTES = ['sage','amber','blue','rose','violet'];
@@ -50,7 +51,7 @@
     const moments = k.moments || 1, intervals = Array.from({length: moments}, (_, m) => ({start_seconds: start + m * (end - start) / moments, end_seconds: start + (m + 0.6) * (end - start) / moments}));
     return {id: (advisory ? 'advisory-' : k.category + '-') + job.id + '-' + String(i).padStart(4, '0'), category: k.category, review_kind: k.review_kind,
       candidate_type: k.candidate_type === undefined ? null : k.candidate_type, priority: advisory ? 'context' : k.priority, start_seconds: start, end_seconds: end,
-      labels: [k.label], reasons: k.reason ? [k.reason] : [], max_score: Math.round((0.5 + (i % 7) * 0.06) * 1000) / 1000, preview_images: (i % 13 === 12 && !advisory) ? [] : ['demo/poster-' + PALETTES[i % PALETTES.length] + '.svg'],
+      labels: k.ocr ? k.ocr.slice() : [k.label], reasons: k.reason ? [k.reason] : [], max_score: Math.round((0.5 + (i % 7) * 0.06) * 1000) / 1000, preview_images: (i % 13 === 12 && !advisory) ? [] : ['demo/poster-' + PALETTES[i % PALETTES.length] + '.svg'],
       suggested_decision: k.suggested, suggested_region_source_pixels: k.region ? {x: k.region[0], y: k.region[1], width: k.region[2], height: k.region[3]} : null,
       source_frame_size: [1920, 1080], temporal_policy: moments > 1 ? 'discrete_detected_intervals' : null, detected_intervals: intervals,
       ...(k.platform_logo ? {platform_logo: k.platform_logo} : {}), ...(k.ai ? {ai_visual_audit: {...k.ai, region_assessment: 'vùng chữ', reasoning: 'Dữ liệu mẫu: chữ trong khung giống logo thương hiệu.'}} : {}), ...(advisory ? {advisory: true} : {}),

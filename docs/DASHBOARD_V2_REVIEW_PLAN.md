@@ -182,6 +182,13 @@ Các điểm dưới đây là chỗ trang cũ hiển thị chưa đúng (A7). S
   - Gợi ý không quyết định gì và không chuyển thẻ.
   - Trang cũ không có dòng này, vì trang cũ phải giữ nguyên từng byte để dự phòng (D2).
   - `verify-review.cjs` kiểm S10: dòng gợi ý được escape, chỉ hiện trên thẻ máu me, và trang cũ không đổi.
+- **S11 (2026-10-14, session R, nhánh `feat/review-ui-clarity`, `docs/handoff/R-review-ui.md`).** Người dùng duyệt job 134 trên điện thoại và không đọc được chữ trong khung.
+  - Khung đỏ và khung vàng AI chỉ là một nét 2 px nằm ngay ngoài vùng, không tô, không đè lên chữ. Nút "Ẩn khung / Hiện khung" bỏ mọi thứ vẽ đè (khung, nhãn, khung AI, lớp "Làm mờ", phần minh họa cắt) để xem ảnh gốc.
+  - Dưới ảnh có ô phóng to vùng phát hiện: 3 lần; nếu 3 lần rộng hơn thẻ thì lấy mức lớn nhất từ 2 đến 3 lần còn vừa; nếu 2 lần vẫn không vừa (dòng chữ chạy) thì giữ 3 lần và vuốt ngang. Vẽ từ chính ảnh đang hiện (không blob:).
+  - Thẻ chữ và logo có dòng "Máy đọc: …": cách đọc gặp nhiều nhất, rồi các dòng khác nó nhất, tối đa 3 dòng, mỗi dòng 70 ký tự.
+  - Dưới ảnh xem trước của máy quét chữ có câu giải thích nhãn "REVIEW n | subtitle": "subtitle" chỉ là tên vùng (vùng phụ đề), không phải kết luận.
+  - Trang cũ không đổi (D2). Thứ tự ảnh xem trước của thẻ chữ do `review_workflow.py` xếp khi dựng thẻ (chỉ hiển thị), nên trang cũ của hàng đợi dựng mới cũng thấy thứ tự mới.
+  - `verify-review.cjs` kiểm S11 (mục "Session R").
 
 ## 6. Thiết kế
 

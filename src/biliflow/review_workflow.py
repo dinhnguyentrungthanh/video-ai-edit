@@ -1837,6 +1837,51 @@ def _advisory_text_items(root: Path, report_path: Path, payload: dict) -> list[d
     return items
 
 
+def _text_preview_tracks(root: Path, payloads: dict[str, dict]) -> dict[str, dict]:
+    """Display only: each text preview → the zone printed on it and its track's longest OCR line.
+
+    The text scanner draws "REVIEW <track> | <zone>" on every preview it keeps
+    (one per track, its most confident frame). ``payloads`` maps a report path
+    relative to ``root`` to its (promoted) payload; reports without tracks are skipped.
+    """
+    tracks: dict[str, dict] = {}
+    for relative_report, payload in payloads.items():
+        if "tracks" not in payload:
+            continue
+        report_dir = (root / relative_report).parent
+        for track in payload.get("tracks") or []:
+            if not isinstance(track, dict) or not track.get("preview"):
+                continue
+            tracks[_relative(root, report_dir / str(track["preview"]))] = {
+                "zone": str(track.get("zone") or ""),
+                "longest": max((len(_fold_alnum(text)) for text in track.get("sample_text") or []), default=0),
+            }
+    return tracks
+
+
+def order_text_previews(items: list[dict], tracks: dict[str, dict]) -> list[dict]:
+    """Display only (session R): new cards, never a new decision, suggestion, region or card.
+
+    A text card whose previews are all text previews shows first the one whose
+    track read the longest OCR line (a scrolling line's other previews often
+    caught only its tail); equal lines keep their order. Every card naming text
+    previews gets ``text_preview_zones`` (preview → zone name) so the review page
+    can say that "subtitle" on the image is a zone, not a verdict.
+    """
+    ordered = []
+    for item in items:
+        previews = list(item.get("preview_images") or [])
+        known = [path for path in previews if path in tracks]
+        card = dict(item)
+        zones = {path: tracks[path]["zone"] for path in known if tracks[path]["zone"]}
+        if zones:
+            card["text_preview_zones"] = zones
+        if card.get("category") == "text" and len(previews) > 1 and len(known) == len(previews):
+            card["preview_images"] = sorted(previews, key=lambda path: -tracks[path]["longest"])
+        ordered.append(card)
+    return ordered
+
+
 # Opening studio idents (user decision 2026-10-01, R3a/R3b). Ad evidence is any
 # website / phone / @handle token, ad-routed text, or a brand region that is not
 # the film's persistent watermark (that watermark is its own card).
@@ -3499,6 +3544,10 @@ def build_review_queue(
     # After every reconciliation (preserved items included) and the final IDs.
     link_platform_cards(items, advisory_items)
     link_full_scene_logo_evidence(items, advisory_items)
+    # Display only, last: the order of a text card's previews and the zone names on them.
+    preview_tracks = _text_preview_tracks(root, platform_payloads)
+    items = order_text_previews(items, preview_tracks)
+    advisory_items = order_text_previews(advisory_items, preview_tracks)
     represented_candidate_refs = sorted({
         str(reference)
         for item in [*items, *advisory_items]

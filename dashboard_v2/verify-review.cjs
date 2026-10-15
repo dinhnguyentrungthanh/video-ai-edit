@@ -320,7 +320,7 @@ check('R1 "Chi tiết kỹ thuật" and evidence texts equal the classic markup'
   assert.equal(D.aiModelLine(memory), old.fn.aiModelLine(memory));
   assert.match(D.aiModelLine(memory), /&lt;b&gt;A&lt;\/b&gt;/, 'queue strings are escaped');
 });
-check('R1 zoomed evidence: yellow AI boxes, red approved boxes and the legend match evidenceMediaHtml; 360 px crop', () => {
+check('R1 zoomed evidence: yellow AI boxes, red approved boxes and the legend match evidenceMediaHtml (session R: no crop in the zoomed card)', () => {
   const unescape = t => t.replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&');
   let boxes = 0;
   for (const q of [QUEUES.mixed30, QUEUES.edge]) {
@@ -340,9 +340,8 @@ check('R1 zoomed evidence: yellow AI boxes, red approved boxes and the legend ma
     }
   }
   assert.ok(boxes >= 4, 'boxes compared: ' + boxes);
-  const crop = D.cropRect({x: 60, y: 40, width: 260, height: 96}, [1920, 1080], 640, 360);
-  assert.equal(crop.width, 360); assert.ok(crop.height >= 100);
-  assert.ok(crop.red.x > 0 && crop.red.y > 0 && crop.red.x + crop.red.w < 360, JSON.stringify(crop));
+  // Session R: the 360 px crop of the zoomed card became the magnifier under every card's image (checked below).
+  assert.equal(D.cropRect, undefined);
   assert.ok(!/document\.|fetch\(|innerHTML|setTimeout/.test(fs.readFileSync(path.join(__dirname, 'review-detail.js'), 'utf8')), 'review-detail.js is pure');
 });
 
@@ -677,6 +676,136 @@ check('R4-B2: a zoomed card borrowing a logo card\'s red box has one label on th
   assert.equal(labels.filter(t => t === 'watermark — đã có thẻ riêng').length, 1, 'only the yellow box covered by another card has a label: ' + JSON.stringify(labels));
   assert.equal((html.match(/class="rv-aibox(?: (?!approved)[^"]*)?"/g) || []).length, 2, 'both yellow boxes are drawn');
   assert.ok(view.legend.includes('Khung đỏ: vùng') && view.legend.includes('đã được duyệt làm mờ ở thẻ riêng'), 'the legend still says the red box is approved on its own card');
+});
+/* Session R (job 134 on a phone, docs/handoff/R-review-ui.md): the red box hid the faint text it marked; small text
+ * was unreadable; nobody knew what the OCR read; "subtitle" on a preview read as a verdict. V2 only (S11): the
+ * classic page stays byte-identical (D2). */
+const cardCtx = (q, extra) => ({queue: q, map: R.itemMap(q), focusId: null, zoomId: null, readonly: false, techOpen: new Set(),
+  media: () => ({ev: null, hasKey: false, playable: false, reason: '', frameUrl: () => '', mediaUrl: p => '/media/' + p}), ...(extra || {})});
+const cssRules = () => {
+  const css = fs.readFileSync(path.join(__dirname, 'review.css'), 'utf8').replace(/\/\*[\s\S]*?\*\//g, '');
+  return [...css.matchAll(/([^{}]+)\{([^{}]*)\}/g)].map(m => ({selector: m[1].trim(), body: m[2]}));
+};
+check('Session R (1): the red box and the AI boxes are a line 2 px outside their region, never a fill or a border over it; dashed when borrowed; the veil only on "Làm mờ"', () => {
+  const rules = cssRules(), rule = sel => rules.find(r => r.selector === sel);
+  assert.match(rule('.rv-region').body, /outline: 2px solid #ff304f;.*outline-offset: 2px;/);
+  assert.match(rule('.rv-aibox').body, /outline: 2px dashed #ffc233;.*outline-offset: 2px;/);
+  assert.match(rule('.rv-aibox.approved').body, /^\s*outline: 3px solid #ff304f;\s*$/);
+  assert.match(rule('.rv-region.borrowed').body, /^\s*outline-style: dashed;\s*$/);
+  // Every rule that paints a box itself (not its label): no border and no background, except the "Làm mờ" veil.
+  const boxRules = rules.filter(r => r.selector.split(',').some(s => /\.rv-(region|aibox)(?![\w-])(?![^,]*\bem\b)/.test(s)));
+  assert.ok(boxRules.length >= 5, 'box rules found: ' + boxRules.length);
+  for (const r of boxRules) {
+    assert.ok(!/(^|[;\s])border(-(top|right|bottom|left|width|style|color))?\s*:/.test(r.body), r.selector + ' has no border');
+    if (r.selector === '.rv-region.blurred') assert.match(r.body, /^\s*background: #ffffffb3;\s*$/);
+    else assert.ok(!/background/.test(r.body), r.selector + ' has no fill');
+  }
+  // The labels hang off the line (5 px) and wrap within the image left on their side (R4-B1, --room box widths).
+  assert.match(rule('.rv-region em').body, /left: 0; top: calc\(100% \+ 5px\);/);
+  assert.match(rule('.rv-region em, .rv-aibox em').body, /max-width: calc\(var\(--room, 1\) \* 100% - 2px\);/);
+});
+check('Session R (1): "Ẩn khung / Hiện khung" shows a card\'s image without the red box, its label, the AI boxes, the veil and the cut illustration', () => {
+  const Cards = cardsModule(), q = Mock.reviewQueue(job101, {count: 30}), logo = q.items.find(x => x.id === 'visual_logo-101-0001');
+  Object.assign(logo, {decision: 'CUT', decision_region_source_pixels: null});
+  const shown = Cards.card(cardCtx(q), logo), bare = Cards.card(cardCtx(q, {bare: new Set([logo.id])}), logo);
+  assert.match(shown, /<button class="small secondary rv-frames-btn" type="button" data-review="frames" aria-pressed="false" title="Ẩn khung đỏ và phần minh họa của trang duyệt \(khung và nhãn do máy quét in sẵn trong ảnh vẫn còn\)">Ẩn khung<\/button>/);
+  assert.match(bare, /<button class="small secondary rv-frames-btn" type="button" data-review="frames" aria-pressed="true" title="Vẽ lại khung đỏ và phần minh họa lên ảnh">Hiện khung<\/button>/);
+  assert.match(bare, /^<article class="scene rv-card decided d-cut bare" /);
+  assert.ok(!/^<article[^>]* bare/.test(shown), 'not bare by default');
+  const noImage = q.items.find(x => !(x.preview_images || []).length);
+  assert.ok(noImage && !Cards.card(cardCtx(q), noImage).includes('data-review="frames"'), 'no image, no button');
+  // "Đã chọn cắt" shows through `.rv-card.d-cut .rv-cut-label` (3 classes): the bare rule needs 4 to win.
+  const hidden = cssRules().find(r => r.selector === '.rv-card.bare .rv-region, .rv-card.bare .rv-boxes, .rv-card.bare.d-cut .rv-cut-label');
+  assert.ok(hidden && /^\s*display: none;\s*$/.test(hidden.body), 'bare hides the boxes, their labels and "Đã chọn cắt"');
+  assert.ok(cssRules().some(r => r.selector === '.rv-card.d-cut .rv-cut-label'), 'the rule it must beat');
+  const only = cssRules().find(r => r.selector === '.rv-card:not(.d-cut):not(.d-blur-full):not(:has(.rv-region, .rv-aibox)) .rv-frames-btn');
+  assert.ok(only && /^\s*display: none;\s*$/.test(only.body), 'no "Ẩn khung" where nothing is drawn over the image');
+  const plain = cssRules().find(r => r.selector === '.rv-card.bare.d-blur-full .rv-art img, .rv-card.bare.d-cut .rv-art img');
+  assert.ok(plain && /^\s*filter: none;\s*$/.test(plain.body), 'bare shows the image without the blur or cut illustration');
+});
+check('Session R (2): the magnifier: 3× its size on the card, else the largest zoom down to 2× that fits, 3× scrolling sideways when not even 2× fits; tall regions fit 300 px; room around the region; letterboxed images', () => {
+  const near = (a, b, label) => assert.ok(Math.abs(a - b) < 1e-6, label + ': ' + a + ' ≠ ' + b);
+  // The faint watermark of job 134 on a 390 px phone: 171 × 23 px of a 1280 × 536 frame, its 960 × 402 preview in a 366 px card.
+  const small = D.magnifier({x: 556, y: 448, width: 171, height: 23}, [1280, 536], 960, 402, 366, 153.3, 342);
+  assert.equal(small.zoom, 3); assert.equal(small.scroll, false); assert.ok(small.cssW <= 342);
+  const k = 366 / 960; // CSS px per image px on the card
+  near(small.red.w, 171 * .75 * k * 3, 'region width at 3×'); near(small.red.h, 23 * .75 * k * 3, 'region height at 3×');
+  assert.ok(small.sy <= 448 * .75 - 23 * .75 * .6 + 1e-9 && small.sy + small.sh >= (448 + 23 * 1.6) * .75 - 1e-9, 'text just above or below the box stays in view');
+  assert.ok(small.red.x > 0 && small.red.y > 0 && small.red.x + small.red.w < small.cssW && small.red.y + small.red.h < small.cssH, 'the region is inside the crop');
+  // A full-width line at the top: wider than the card even at 2×, so it stays at 3× and scrolls.
+  const wide = D.magnifier({x: 0, y: 21, width: 1280, height: 32}, [1280, 536], 960, 402, 366, 153.3, 342);
+  assert.equal(wide.zoom, 3); assert.equal(wide.scroll, true); near(wide.cssW, 960 * k * 3, 'three times the card width');
+  // Wider than the card at 3× but not at 2×: the largest zoom that fits, no scrolling.
+  const fits2 = D.magnifier({x: 300, y: 300, width: 470, height: 40}, [1280, 536], 1280, 536, 366, 153.3, 342);
+  assert.ok(fits2.zoom >= 2 && fits2.zoom < 2.2 && fits2.scroll === false, JSON.stringify(fits2));
+  // Between: the largest zoom (2–3×) that still fits.
+  const mid = D.magnifier({x: 400, y: 300, width: 400, height: 40}, [1280, 536], 1280, 536, 366, 153.3, 342);
+  assert.ok(mid.zoom > 2 && mid.zoom < 3 && mid.scroll === false && Math.abs(mid.cssW - 342) < 1e-6, JSON.stringify(mid));
+  // A tall logo on a PC card: fitted to 300 px; a region already large on the card (under 1.5×): no magnifier.
+  const tall = D.magnifier({x: 1700, y: 100, width: 80, height: 300}, [1920, 1080], 1920, 1080, 620, 348.75, 596);
+  assert.ok(tall && Math.abs(tall.cssH - 300) < 1e-6 && tall.zoom > 2 && tall.zoom < 3 && tall.sx >= 1700 - 80 - 1e-9, JSON.stringify(tall));
+  assert.equal(D.magnifier({x: 1700, y: 100, width: 120, height: 600}, [1920, 1080], 1920, 1080, 620, 348.75, 596), null, 'already ≥ 190 px tall on the card');
+  assert.equal(D.magnifier({x: 200, y: 100, width: 800, height: 400}, [1280, 536], 1280, 536, 366, 153.3, 342), null);
+  // A 16:9 frame letterboxed in a 4:3 image: the crop follows the picture, not the bars.
+  const box = D.magnifier({x: 60, y: 40, width: 260, height: 96}, [1920, 1080], 640, 480, 600, 450, 576), offsetY = (480 - 1080 / 3) / 2;
+  assert.ok(box.sy <= 40 / 3 + offsetY && box.sy + box.sh >= (40 + 96) / 3 + offsetY && box.sx <= 20, JSON.stringify(box));
+  for (const bad of [[0, 0, 366, 153, 342], [960, 402, 0, 0, 342], [960, 402, 366, 153, 0]]) assert.equal(D.magnifier({x: 1, y: 1, width: 5, height: 5}, [1280, 536], ...bad), null);
+  // Markup: every card with an image has one hidden magnifier (review.js draws it); none has the old crop.
+  const Cards = cardsModule(), q = Mock.reviewQueue(job101, {count: 30});
+  for (const x of q.items) {
+    const html = Cards.card(cardCtx(q, {zoomId: x.id}), x), mags = (html.match(/<figure class="rv-mag" hidden>/g) || []).length;
+    assert.equal(mags, (x.preview_images || []).length ? 1 : 0, x.id);
+    assert.ok(!/rv-crop/.test(html), x.id + ': no zoom crop');
+  }
+  assert.ok(!/drawCrop|rv-crop/.test(fs.readFileSync(path.join(__dirname, 'review.js'), 'utf8') + fs.readFileSync(path.join(__dirname, 'review.css'), 'utf8')));
+});
+check('Session R (3): "Máy đọc": the group read in most forms, then the lines least like it; cut at 70; escaped; readings only', () => {
+  const lines = x => { const r = D.readings(x); return r && r.lines.map(l => l.text + (l.forms > 1 ? ' ×' + l.forms : '')); };
+  // A subtitle band holding a faint site name in many OCR forms: the site name, then two different subtitle lines.
+  const band = {category: 'text', labels: ['TRANG.EXAMPLE', 'TRANGEXAMPLE', 'TRANG EXAMPLE', 'TRAN6.EXAMPLE', 'Anh có nghe thấy tôi nói không?',
+    'Ngày mai chúng ta lên đường sớm.', 'Ngày mai chúng ta lên đường', 'Được.', 'Ừ.', 'Tôi biết rồi, đừng nhắc nữa.']};
+  const shown = lines(band), subtitles = ['Ngày mai chúng ta lên đường sớm. ×2', 'Anh có nghe thấy tôi nói không?', 'Tôi biết rồi, đừng nhắc nữa.'];
+  assert.equal(shown[0], 'TRANG.EXAMPLE ×4');
+  assert.ok(shown.length === 3 && shown.slice(1).every(l => subtitles.includes(l)) && shown[1] !== shown[2], JSON.stringify(shown));
+  assert.equal(D.readings(band).more, 3, 'one subtitle line, "Được." and "Ừ." are not shown');
+  // A scrolling line read in pieces: the longest piece first, cut at 70 characters.
+  const long = 'Phim cập nhật nhanh nhất tại TRANG.EXAMPLE, phim chỉ đăng trên trang này, trang khác đều là bản chép lại.';
+  const ticker = {category: 'text', labels: ['Vie', 'cập nhật nhanh nhất tại TRANG.EXAMPLE', long, 'ủng hộ-']};
+  const t = D.readings(ticker);
+  assert.equal(t.lines[0].text, long.slice(0, 69).trimEnd() + '…'); assert.ok(t.lines[0].text.length <= 70); assert.equal(t.lines[0].forms, 2, 'the long line and the piece inside it');
+  // Logo cards: scanner labels, lowercase prompts and platform names are not readings; wrapped readings are unwrapped.
+  assert.deepEqual(lines({category: 'visual_logo', labels: ['Persistent external logo / watermark', 'a company logo', 'Logo nền tảng iQIYI', 'OCR nội dung phim: GREECE', 'Có khả năng là tiêu đề phim: TÊN PHIM']}), ['TÊN PHIM', 'GREECE']);
+  assert.equal(D.readings({category: 'visual_logo', labels: ['Opening boundary review', 'Visual brand/logo candidate']}), null);
+  assert.equal(D.readings({category: 'gore', labels: ['Cảnh máu']}), null);
+  assert.deepEqual(lines({category: 'text', labels: ['dừng', 'quấn']}).sort(), ['dừng', 'quấn'], 'lowercase OCR words stay on text cards');
+  // On the card, escaped, after the time line.
+  const Cards = cardsModule(), q = Mock.reviewQueue(job101, {count: 30}), x = q.items.find(i => i.category === 'text');
+  x.labels = ['<img src=x onerror=alert(1)>', 'TRANG.EXAMPLE'];
+  const html = Cards.card(cardCtx(q), x);
+  assert.match(html, /<\/small><div class="rv-ocr"><b>Máy đọc:<\/b><span class="rv-ocr-line">“&lt;img src=x onerror=alert\(1\)&gt;”<\/span><span class="rv-ocr-line">“TRANG.EXAMPLE”<\/span><\/div>/);
+  assert.ok(!/<img src=x/.test(html));
+  const safety = q.items.find(i => i.category === 'adult');
+  assert.ok(!Cards.card(cardCtx(q), safety).includes('rv-ocr'), 'no line on a safety card');
+});
+check('Session R (3): the note under a text preview says "subtitle" / "top-right" on the image is a zone name; it follows the image shown', () => {
+  const p = n => 'reports/jobs/demo/text/text-previews/track-' + String(n).padStart(5, '0') + '.jpg';
+  const x = {category: 'text', text_preview_zones: {[p(58)]: 'subtitle', [p(689)]: 'top-right', [p(7)]: 'edge-strip'}};
+  assert.equal(D.zoneNote(x, p(58)), 'Nhãn “REVIEW 58 | subtitle” trên ảnh do máy quét chữ in: “subtitle” chỉ là tên vùng (vùng phụ đề), không có nghĩa đây là phụ đề.');
+  assert.equal(D.zoneNote(x, p(689)), 'Nhãn “REVIEW 689 | top-right” trên ảnh do máy quét chữ in: “top-right” chỉ là tên vùng (góc trên bên phải), không phải kết luận.');
+  assert.equal(D.zoneNote(x, p(7)), 'Nhãn “REVIEW 7 | edge-strip” trên ảnh do máy quét chữ in: “edge-strip” chỉ là tên vùng trong khung, không phải kết luận.');
+  assert.match(D.zoneNote({category: 'text'}, p(275)), /^Nhãn “REVIEW 275 \| …” trên ảnh do máy quét chữ in: phần sau dấu \| chỉ là tên vùng trong khung \(subtitle = vùng phụ đề, top-right = góc trên bên phải…\)/);
+  for (const path of ['demo/poster-blue.svg', 'reports/jobs/demo/logo-0001-0.000s.jpg', '']) assert.equal(D.zoneNote(x, path), '');
+  assert.deepEqual(Object.keys(D.ZONE_NAMES).sort(), ['bottom-center', 'bottom-left', 'bottom-right', 'middle-center', 'middle-left', 'middle-right', 'subtitle', 'top-center', 'top-left', 'top-right']);
+  // The card: the note for its first preview, escaped; preview frames of the strip carry their path for review.js.
+  const Cards = cardsModule(), q = Mock.reviewQueue(job101, {count: 30}), card = q.items.find(i => i.category === 'text');
+  card.preview_images = [p(58), p(689)]; card.text_preview_zones = {[p(58)]: 'subtitle"><b>', [p(689)]: 'top-right'};
+  const html = Cards.card(cardCtx(q), card);
+  assert.ok(html.includes('<p class="rv-zone-note">Nhãn “REVIEW 58 | subtitle&quot;&gt;&lt;b&gt;” trên ảnh'), 'escaped note');
+  assert.equal((html.match(/data-path="reports\/jobs\/demo\/text\/text-previews\/track-00\d{3}\.jpg"/g) || []).length, 2);
+  const other = q.items.find(i => i.category === 'visual_logo' && (i.preview_images || []).length);
+  assert.match(Cards.card(cardCtx(q), other), /<p class="rv-zone-note" hidden><\/p>/);
+  assert.ok(fs.readFileSync(path.join(__dirname, 'review-core.js'), 'utf8').slice(0, 3600).includes('S11'), 'review-core.js lists S11');
+  assert.ok(!/rv-zone-note|rv-ocr|rv-mag|text_preview_zones/.test(script), 'D2: the classic page is unchanged');
 });
 check('R4-B3: no backdrop-filter in V2 (dialog backdrops, the top bar and the "Làm mờ" region made Chrome blink on the user\'s PC); no size container on card images', () => {
   const files = fs.readdirSync(__dirname).filter(f => /\.(css|js|html)$/.test(f));

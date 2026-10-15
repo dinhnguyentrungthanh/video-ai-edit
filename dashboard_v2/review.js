@@ -60,7 +60,7 @@
       return {ev, hasKey, playable, reason, frameUrl: t => s.api.frameUrl(x.id, t, s.mediaKey), mediaUrl: p => s.api.mediaUrl(p)};
     }
     function ctx() {
-      return {job: s.job, queue: s.queue, map: s.map, filter: s.filter, list: s.list, focusId: s.focusId, zoomId: s.zoomId, lock: s.lock, techOpen: s.techOpen,
+      return {job: s.job, queue: s.queue, map: s.map, filter: s.filter, list: s.list, focusId: s.focusId, zoomId: s.zoomId, lock: s.lock, techOpen: s.techOpen, bare: s.bare,
         offline: s.offline, busy: s.busy, exporting: s.exporting, exp: s.exp, readonly: s.lock.readonly || s.offline || s.busy,
         canExport: R.canExport(s.queue, s.lock) && !s.offline && !s.busy && !s.exporting, oldUrl: deps.oldUrl(s.id, s.view), media};
     }
@@ -91,6 +91,7 @@
       const x = s.map.get(el.dataset.item);
       if (!x) return;
       const art = el.querySelector('.rv-art'), img = art.querySelector('img'), m = media(x), remote = m.ev && m.hasKey && m.ev.strongest && img && img.dataset.src.includes('/frame?');
+      if (img && !img.__mag) { img.__mag = true; img.addEventListener('load', () => drawMag(el)); } // every image it shows: the magnifier follows
       loader.watch(art, img ? img.dataset.src : '', priority, remote ? frameRefresher(x, m.ev.strongest.t) : null);
       for (const thumb of el.querySelectorAll('.rv-thumb:not(.ghost)')) {
         loader.watch(thumb, thumb.querySelector('img').dataset.src, priority ? 5 : 0, thumb.dataset.remote ? frameRefresher(x, Number(thumb.dataset.t)) : null);
@@ -118,7 +119,6 @@
       rootEl.querySelector('.rv-body').scrollTop = 0;
       const focus = box.querySelector('article.rv-card.on');
       if (focus && at >= Cards.BATCH) focus.scrollIntoView({block: 'nearest'});
-      if (s.zoomId) drawCrop(cardEl(s.zoomId));
       focusEvidence();
     }
     function renderMore() {
@@ -172,6 +172,7 @@
       if (ids.length !== shown.length || ids.some((id, i) => id !== shown[i])) { renderCards(); return; }
       s.list = R.listItems(s.queue, s.filter, s.sticky);
       stats.patches += Cards.patchCards(rootEl.querySelector('.rv-cards'), ctx()) ? 1 : 0;
+      for (const el of rootEl.querySelectorAll('article.rv-card')) { const x = s.map.get(el.dataset.item); if (x && el.__magKey !== undefined && el.__magKey !== magKey(x)) drawMag(el); }
       tools();
     }
     /* force: a write result or a resync always applies. R2-B1: s.unsynced marks a local (optimistic) change the
@@ -184,7 +185,7 @@
       if (rebuild) {
         if (!s.identity) s.filter = R.initialFilter(queue);
         else { player.release(); player.reset(); s.evidence.clear(); s.evidenceLoading.clear(); } // a new scan revision
-        s.identity = identity; s.sticky.clear(); s.focusId = null; s.zoomId = null; s.undo.length = 0;
+        s.identity = identity; s.sticky.clear(); s.bare.clear(); s.focusId = null; s.zoomId = null; s.undo.length = 0;
         renderAll();
       } else {
         // As the classic applyQueueUpdate: a card of "Chưa duyệt" decided meanwhile stays in view (sticky).
@@ -292,7 +293,7 @@
       const url = Cards.refreshMedia(el, ctx(), x), img = el.querySelector('.rv-art img');
       if (img && url && img.dataset.src !== url) img.dataset.src = url;
       watchCard(el, el.classList.contains('on') ? 10 : 0);
-      if (el.classList.contains('zoom')) drawCrop(el);
+      drawMag(el);
       syncPlay(el, id);
     }
     /* The ▶ button of a rebuilt bar shows what the shared video is doing for this card. */
@@ -323,33 +324,53 @@
     function hideNote(el) { const note = el && el.querySelector('.rv-note'); if (note) note.hidden = true; }
     function attachPlayer(x) { const el = cardEl(x.id); select(x.id); hideNote(el); player.attach(el.querySelector('.rv-art'), x); return el; }
 
-    /* ⤢: the card spans the dialog, with the 360 px crop of its red region or the AI boxes; Esc unzooms first. */
+    /* ⤢: the card spans the dialog, with the AI boxes and their legend; Esc unzooms first. Its magnifier is redrawn
+     * at the new width. */
     function zoom(id) {
       const was = s.zoomId;
-      if (was) { const old = cardEl(was); if (old) { old.classList.remove('zoom'); old.querySelector('.rv-zoom-btn').setAttribute('aria-pressed', 'false'); old.querySelector('.rv-zoom-slot').innerHTML = ''; } }
+      if (was) { const old = cardEl(was); if (old) { old.classList.remove('zoom'); old.querySelector('.rv-zoom-btn').setAttribute('aria-pressed', 'false'); old.querySelector('.rv-zoom-slot').innerHTML = ''; drawMag(old); } }
       s.zoomId = was === id ? null : id;
       if (!s.zoomId) return;
       const el = cardEl(id), x = s.map.get(id);
       select(id);
       el.classList.add('zoom'); el.querySelector('.rv-zoom-btn').setAttribute('aria-pressed', 'true');
       el.querySelector('.rv-zoom-slot').innerHTML = Cards.zoomExtra(ctx(), x);
-      drawCrop(el);
+      drawMag(el);
       el.scrollIntoView({block: 'nearest'});
     }
-    function drawCrop(el) {
-      const canvas = el && el.querySelector('canvas.rv-crop'), x = el && s.map.get(el.dataset.item);
-      if (!canvas || !x) return;
-      const owner = R.regionOwner(s.queue, x), region = owner && (owner.suggested_region_source_pixels || owner.decision_region_source_pixels), img = el.querySelector('.rv-art img');
-      if (!region || region === 'FULL_FRAME' || !img) return;
-      const draw = () => {
-        if (!canvas.isConnected || !img.naturalWidth) return;
-        const c = D.cropRect(region, owner.source_frame_size, img.naturalWidth, img.naturalHeight), g = canvas.getContext('2d');
-        canvas.width = c.width; canvas.height = c.height;
-        g.drawImage(img, c.x, c.y, c.w, c.h, 0, 0, c.width, c.height);
-        g.strokeStyle = '#ff304f'; g.lineWidth = 5; g.strokeRect(c.red.x, c.red.y, c.red.w, c.red.h);
-        canvas.dataset.drawn = '1';
-      };
-      if (img.complete && img.naturalWidth) draw(); else img.addEventListener('load', draw, {once: true});
+    /* Session R: the magnifier under the image (D.magnifier, Media.drawMagnifier) of a card's own red region (one only
+     * borrowed, S9, gets none: the caption says "detected"), from the image loaded now. __magKey: patch redraws on change. */
+    const magKey = x => { const owner = R.regionOwner(s.queue, x); return JSON.stringify([D.evidenceView(s.queue, x).mode, owner && owner.id, owner && (owner.suggested_region_source_pixels || owner.decision_region_source_pixels)]); };
+    function drawMag(el) {
+      const fig = el && el.querySelector('.rv-mag'), x = el && s && s.map.get(el.dataset.item);
+      if (!fig || !x) return;
+      el.__magKey = magKey(x);
+      const owner = R.regionOwner(s.queue, x), region = owner && (owner.suggested_region_source_pixels || owner.decision_region_source_pixels), art = el.querySelector('.rv-art'), img = art.querySelector('img');
+      const view = D.evidenceView(s.queue, x).mode === 'region' && owner.id === x.id && img && img.naturalWidth && region && region !== 'FULL_FRAME'
+        ? D.magnifier(region, owner.source_frame_size, img.naturalWidth, img.naturalHeight, art.clientWidth, art.clientHeight, el.clientWidth - 26) : null; // 26: .rv-mag margins and its view's border
+      fig.hidden = !view;
+      if (!view) return;
+      const canvas = fig.querySelector('canvas');
+      Media.drawMagnifier(canvas, img, view, el.classList.contains('bare'), window.devicePixelRatio);
+      canvas.dataset.drawn = '1'; canvas.dataset.zoom = view.zoom.toFixed(2);
+      fig.classList.toggle('scroll', view.scroll);
+      fig.querySelector('.rv-mag-cap').textContent = 'Vùng phát hiện phóng to ×' + String(Math.round(view.zoom * 10) / 10).replace('.', ',') + (view.scroll ? ' · vuốt ngang để xem hết' : '');
+    }
+    let magFrame = 0;
+    function redrawMags() {
+      if (magFrame) return;
+      magFrame = requestAnimationFrame(() => { magFrame = 0; if (s) for (const el of rootEl.querySelectorAll('article.rv-card')) if (el.__magKey !== undefined) drawMag(el); });
+    }
+    /* Session R "Ẩn khung / Hiện khung": the image of this card without the red box, the AI boxes and the illustration. */
+    function toggleBare(el, x) {
+      const bare = !s.bare.has(x.id), focused = document.activeElement === el.querySelector('[data-review="frames"]');
+      if (bare) s.bare.add(x.id); else s.bare.delete(x.id);
+      el.classList.toggle('bare', bare);
+      select(x.id); // may rebuild the card's bar (its evidence starts loading): the button and its focus come after
+      const button = el.querySelector('[data-review="frames"]');
+      if (button && button.getAttribute('aria-pressed') !== String(bare)) button.outerHTML = Cards.framesButton(ctx(), x);
+      if (focused && el.querySelector('[data-review="frames"]')) el.querySelector('[data-review="frames"]').focus({preventScroll: true});
+      drawMag(el);
     }
 
     /* R2. S5: the classic confirm texts in a V2 dialog above the review dialog. Enter confirms; Esc only
@@ -646,7 +667,7 @@
       const job = deps.getJob(id);
       s = {id, view, job: job || {id, name: ''}, api: null, queue: null, map: new Map(), identity: '', version: '', list: [], rendered: 0, mediaKey: null,
         filter: 'pending', sticky: new Set(), focusId: null, zoomId: null, exp: null, lock: R.lockState(job, null), timer: null, loading: false,
-        evidence: new Map(), evidenceLoading: new Map(), techOpen: new Set(), undo: [], confirming: false, offline: false, wrote: false, saveTimer: null, unsynced: false,
+        evidence: new Map(), evidenceLoading: new Map(), techOpen: new Set(), bare: new Set(), undo: [], confirming: false, offline: false, wrote: false, saveTimer: null, unsynced: false,
         busy: false, exporting: false, resources: null, refreshTimer: null, leaving: false};
       stats.opens++;
       player.reset();
@@ -701,6 +722,7 @@
       else if (action === 'seq') { attachPlayer(x); player.playSequence(); }
       else if (action === 'moment') { attachPlayer(x); player.playMoment(Number(el.dataset.i), false); }
       else if (action === 'zoom') zoom(x.id);
+      else if (action === 'frames') toggleBare(card, x);
       else if (action === 'seek') {
         const box = el.getBoundingClientRect();
         if (!box.width) return;
@@ -712,7 +734,11 @@
         el.classList.add('on'); select(x.id);
         const t = el.dataset.t === '' ? null : Number(el.dataset.t), img = el.querySelector('img');
         if (t != null && Number.isFinite(t) && media(x).playable) { attachPlayer(x); player.seek(t, R.isScene(x) ? R.momentIndex(t, R.momentsOf(x)) : -1); }
-        else if (img && img.getAttribute('src')) { const main = card.querySelector('.rv-art img'); if (main) { main.src = img.getAttribute('src'); main.closest('.rv-art').classList.add('loaded'); } }
+        else if (img && img.getAttribute('src')) {
+          const main = card.querySelector('.rv-art img'), note = card.querySelector('.rv-zone-note');
+          if (main) { main.src = img.getAttribute('src'); main.closest('.rv-art').classList.add('loaded'); }
+          if (note) note.outerHTML = Cards.zoneNoteHtml(x, el.dataset.path || ''); // the scanner's label on the frame now shown
+        }
       }
     });
     rootEl.addEventListener('change', event => {
@@ -745,7 +771,7 @@
       if (back) back.focus({preventScroll: true});
     }
     rootEl.addEventListener('scroll', event => { if (event.target.classList && event.target.classList.contains('rv-chips')) chipHint(); }, true);
-    window.addEventListener('resize', () => { if (s) chipHint(); });
+    window.addEventListener('resize', () => { if (s) { chipHint(); redrawMags(); } });
     document.addEventListener('keydown', onKey);
     document.addEventListener('visibilitychange', () => { if (document.hidden) player.pause(); });
     window.addEventListener('pagehide', () => player.release());
