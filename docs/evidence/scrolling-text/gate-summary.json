@@ -2,7 +2,7 @@
  "branch": "fix/ticker-subtitle",
  "baseline": "bd0a7b8",
  "date": "2026-10-15",
- "note": "Fresh review builds of copied scan reports by both trees; rebuild = branch with keep_decisions over the copy of the user's queue. Job ids, counts and seconds only.",
+ "note": "Fresh review builds of copied scan reports by both trees (bd0a7b8 and c230029); rebuild = c230029 with keep_decisions over the copy of the user's queue. Window exports: 220d25f (its ticker cards are the same as c230029's). Job ids, counts and seconds only.",
  "jobs": {
   "107": {
    "source_present": true,
@@ -912,5 +912,6 @@
    ],
    "scrolling_cards": []
   }
- }
+ },
+ "candidate": "c230029"
 }

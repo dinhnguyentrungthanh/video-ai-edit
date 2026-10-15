@@ -1,6 +1,7 @@
 # Bàn giao D – dòng chữ chạy của trang nguồn và địa chỉ web mất dấu chấm (phần 1)
 - Nhánh: fix/ticker-subtitle (từ main bd0a7b8) · Worktree: `temp\wt-detect` · Cập nhật: 2026-10-15
-- Chạy ở: PC · Trạng thái: **phần 1 xong, mọi cổng đạt; chờ điều phối gộp và chạy full suite.** Chưa push, chưa merge.
+- Chạy ở: PC · Trạng thái: **phần 1 xong (commit 220d25f, e6daeb5 mục 5, 16a4469 và c230029 sửa theo một lượt
+  review đọc mã), mọi cổng đạt, chạy lại trên c230029; chờ điều phối gộp và chạy full suite.** Chưa push, chưa merge.
   Phần 2 (watermark trong dải phụ đề, job 134/143) làm tiếp trên cùng nhánh.
 - Bằng chứng: `docs/evidence/scrolling-text/README.md` (quy tắc, số đo, cổng). Kết quả có chữ OCR thật chỉ nằm trong
   `reports\evidence\ticker-d\` (không vào Git).
@@ -23,9 +24,17 @@
     trang nào;
   - `promote_web_address_tracks`: track có địa chỉ web luôn vào danh sách chính, đề xuất BLUR.
 - `src/biliflow/review_decision_carry.py` (mới) + `build_review_queue(..., keep_decisions=True)`: dựng lại danh sách
-  mà giữ mọi quyết định cũ; BLUR cũ được nới theo thẻ dài hơn (job 107: 2928 → 2922 s); quyết định không khớp thẻ
-  mới nào thì được giữ nguyên thẻ cũ. Mặc định tắt.
-- `src/biliflow/review_workflow.py`: gọi hai hàm trên khi dựng thẻ chữ; thẻ gộp ghi mọi track và ảnh xem trước.
+  mà giữ mọi quyết định cũ; BLUR cũ được nới theo thẻ dài hơn (job 107: 2928 → 2922 s); KEEP/CUT/CẦN THÊM NGỮ CẢNH
+  chỉ chuyển sang thẻ không cho thấy gì hơn thẻ cũ (thời gian và khung nằm trong thẻ đã duyệt): KEEP một mảnh không
+  thành KEEP cả dải, CUT không lan ra thời gian chưa ai xem; quyết định không khớp thẻ mới nào thì được giữ nguyên
+  thẻ cũ. Danh sách cũ không đọc được, hoặc của video nguồn khác, thì dừng chứ không ghi đè. Mặc định tắt.
+- `src/biliflow/ad_text_memory.py` (mới, mục 5): BLUR trên thẻ có địa chỉ web (hay dòng chữ chạy) ghi địa chỉ đó
+  (chữ thường, bỏ dấu, bỏ chấm và khoảng trắng) vào `state/ad-text-memory.json` trước khi lưu quyết định; không ghi
+  được thì từ chối BLUR, không ghi gì. Không gì xóa một địa chỉ đã nhớ. Lần dựng sau (khi bật bộ nhớ của người dùng,
+  như Control Center) đề xuất BLUR, ở danh sách chính, cho track có địa chỉ đã nhớ, kể cả dạng quy tắc không đọc
+  được ("examplecom", "EXAMPLE - COM").
+- `src/biliflow/review_workflow.py`: gọi các hàm trên khi dựng thẻ chữ và khi ghi quyết định; thẻ gộp ghi mọi
+  track và ảnh xem trước.
 
 ### 3. Cổng (chi tiết: `docs/evidence/scrolling-text/README.md`)
 - Test đơn vị `tests/test_scrolling_text.py` 24 OK; test clip tự làm `tests/test_scrolling_text_clip.py` (OCR thật,
@@ -44,9 +53,16 @@
   thấy watermark có địa chỉ web mà bản cũ không hiện ở đâu cả (134: 13, 136: 8, 143: 2, 145: 3) hoặc chỉ là ứng viên
   phụ (134: 1, 136: 2). Phần 2 sẽ gộp các lần thấy của một watermark thành một thẻ. Dựng lại giữ quyết định: mất 0;
   thẻ mới chờ duyệt 0, 14, 2, 2, 3.
+- Chạy lại trên c230029 (sau mục 5 và các sửa theo review): test `test_scrolling_text` 25, `test_ad_text_memory` 12,
+  `test_review_decision_carry` 11, clip OCR thật, cùng 13 module duyệt khác đều OK; cổng 25 job cho đúng các số trên
+  (thẻ dòng chữ chạy giữ nguyên thời gian và số mảnh), mất 0 ở cả mười job còn gốc, thẻ mới chờ duyệt: 108 1 (thẻ dòng
+  chữ chạy, trước đây chưa ai trả lời), 134 14, 136 2, 143 2, 145 3; golden v2: bắt thêm 1, mất 0, bẫy mới 0; khóa
+  cache quét không đổi. Quy tắc địa chỉ web thu hẹp (bỏ "SMART TV", "Saigon, VN", "Wait.Me"…) giữ đủ 1.125 lần bắt
+  thật, không thêm lần nào.
 
 ### 4. Chưa làm / cần quyết định
-- **Mục 5 (học từ BLUR của người dùng):** làm sau 1–4, commit riêng (xem mục bên dưới khi xong).
+- **Mục 5 (học từ BLUR của người dùng):** xong ở e6daeb5 (mục 2 ở trên). Bộ nhớ chỉ thêm, không tự xóa; muốn quên
+  một địa chỉ thì hiện phải sửa tay `state/ad-text-memory.json` (chưa có nút).
 - **Mục 6 (giới hạn 250 track):** không đổi. Giới hạn giữ mọi ứng viên duyệt (mọi định tuyến quảng cáo), chỉ bỏ track
   không phải ứng viên muộn nhất. Job 107 bỏ 115 (đều LIKELY_CREDITS từ 3954 s), job 108 bỏ 237 (235 credits, 2 scene
   text, từ 3666 s); không track quảng cáo nào bị bỏ. Sửa thì đổi khóa cache stage text: chờ điều phối và người dùng.
