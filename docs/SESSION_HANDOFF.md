@@ -1,5 +1,13 @@
 # BiliFlow session handoff
 
+## Session A1c, an export beside a new film's first GPU stage — 2026-10-15, branch `perf/a1c-preflight-lane` (worktree `temp\wt-a1c`), not merged
+
+- **Request:** close A1b's gap: an export queued ahead of a film that waits at `preflight` took the main lane, so the scan waited for every queued export (job 131, about 15 minutes, 2026-10-14). Keep every A1b safety condition; no change to detectors, thresholds, scan results or export bytes.
+- **Done:** `scheduler.py` judges such an export for the film's first GPU stage, reached through short CPU stages only (`SHORT_CPU_STAGES`, `_first_gpu_stage`); 14 new tests in `tests/test_scheduler.py`; the check script `scripts/a1c_check.py` (test Control Center, real database read with `mode=ro` only, below-normal priority). Handoff `docs/handoff/A1c-preflight-lane.md` (Vietnamese).
+- **Gates:** focused 28 modules OK; scan cache keys identical to `dc9d294` (10 stages); a read-only review found no CRITICAL or HIGH issue, and its MEDIUM test gaps are covered.
+- **Waiting for the user:** the GPU check on a test Control Center (clips from job 142's source). The user pauses the real queue, which must be empty; the script refuses otherwise.
+- **Next:** run the check and record its evidence in `docs/evidence/a1c/<date>/`; then the coordinator runs the full suite and merges. No push or merge by the session.
+
 ## G9 merge, cover regions at the frame edge (H2) and clearer review cards (R) — 2026-10-15, branch `merge/g9` (worktree `temp\wt-merge-g9`), not yet in the main folder
 
 - **Request:** job 141's export failed on every try (a cover region at the right frame edge); the user chose to merge it together with session R, R squashed ("Squash R") so that R's first commit, whose test held an OCR reading of a real watermark, stays out of `main`'s history.

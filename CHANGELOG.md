@@ -1,3 +1,10 @@
+# An export goes beside the first GPU stage of a film still at preflight — session A1c (2026-10-15, branch `perf/a1c-preflight-lane` from `main` `dc9d294`; not merged)
+
+- Cause (seen on the real install on 2026-10-14 at 20:42, job 131): A1b let a waiting export wait for the export lane only when the next scan stage itself ran on the GPU. A film that has not started waits at `preflight` (CPU, no process), so the export took the main lane and the scan waited behind every queued export (about 15 minutes behind 2 exports, with about 5 GB of VRAM free).
+- `scheduler.py`: when the first waiting stage is an export and the next waiting scan job has only short CPU stages (`SHORT_CPU_STAGES`: `preflight`) before its first GPU stage, the export is judged for that GPU stage (`_first_gpu_stage`). The main lane runs preflight and then the GPU stage; the export lane takes the NVENC export once that stage's process runs, judged again there with a fresh VRAM read. Otherwise the export goes first, as before, with one `EXPORT_LANE_SEQUENTIAL` event when it was turned down.
+- Unchanged: "Tắt" and unmeasured VRAM (the single worker), NVENC "auto" only in the export lane, the VRAM decision, the hand-back to the main lane, H's render watch, detectors, thresholds, scan results and export bytes.
+- Gates: 14 new scheduler tests (the new behaviour fails on `dc9d294`); 28 focused modules OK; scan cache keys unchanged (10 stages). The check on a test Control Center (`scripts/a1c_check.py`) is written but not run: the user chose to run it later.
+
 # G9 merge: cover regions at the frame edge (H2) and clearer review cards (R) (2026-10-15, branch `merge/g9` from `main` `20adbc5`; not yet in the main folder)
 
 - Merged `fix/cover-edge` (session H2, entry below) with `--no-ff`, and `feat/review-ui-clarity` (session R) squashed into one commit at the user's choice: R's first commit had a test string read from a real watermark, which stays out of `main`'s history.
