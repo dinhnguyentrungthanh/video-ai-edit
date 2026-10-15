@@ -384,24 +384,23 @@ def _crossings(pieces: list[_Piece], width: float, sample_every: float) -> list[
 
 
 def _absorb_band_pieces(
-    group: list[_Piece], pieces: list[_Piece], taken: set[int], width: float, sample_every: float,
+    group: list[_Piece], pieces: list[_Piece], taken: set[int], sample_every: float,
 ) -> list[_Piece]:
-    """Other pieces of the line in the band while it crosses: short readings, or at a frame edge.
+    """Other pieces in the band while the line crosses it (short or unlinked readings).
 
-    A piece read in full that did not link and stays clear of both edges is other
-    text, and a subtitle line is never part of the line: both keep their tracks.
+    OCR splits the line into pieces whose text links to nothing (a stretch in the
+    middle of the frame read once). Anything else inside the band then is under the
+    band's blur anyway; only a subtitle line keeps its own track.
     """
     band = (0.0, min(p.box[1] for p in group), 1.0, max(p.box[3] for p in group))
     window_start = min(p.start for p in group) - sample_every - 0.001
     window_end = max(p.end for p in group) + sample_every + 0.001
-    edge = SCROLLING_EDGE * width
     members = list(group)
     grouped = {piece.index for piece in group}
     for piece in pieces:
         if (
             piece.index in taken or piece.index in grouped
             or piece.track.get("routing") == "LIKELY_SUBTITLE"
-            or piece.readings and edge < piece.box[0] and piece.box[2] < width - edge
             or piece.start < window_start or piece.end > window_end
             or piece.height < SCROLLING_PIECE_HEIGHT * (band[3] - band[1])
             or _vertical_overlap(piece.box, band) < SCROLLING_BAND_OVERLAP
@@ -512,7 +511,7 @@ def promote_scrolling_text(payload: dict) -> dict:
         for group in _crossings(pieces, width, sample_every):
             if any(piece.index in absorbed for piece in group):
                 continue
-            members = _absorb_band_pieces(group, pieces, absorbed, width, sample_every)
+            members = _absorb_band_pieces(group, pieces, absorbed, sample_every)
             absorbed.update(piece.index for piece in members)
             promoted.append(_scrolling_track(
                 members, side=side, width=width, sample_every=sample_every, scan_start=scan_start,

@@ -224,8 +224,9 @@ class ScrollingTextGroupTests(unittest.TestCase):
         for ticker in _scrolling(output):
             self.assertNotIn(159, ticker["grouped_track_ids"])
 
-    def test_subtitle_lines_and_other_text_in_the_band_keep_their_own_tracks(self):
-        # A crossing of the bottom band with two subtitle lines and a centred sign inside it.
+    def test_subtitle_lines_in_the_band_keep_their_own_tracks(self):
+        # A crossing of the bottom band with two subtitle lines inside it. A sign read
+        # there joins the crossing: it is under the band's blur anyway.
         tracks = [dict(track, union_box=[track["union_box"][0], 400 + track["union_box"][1] - 26,
                                          track["union_box"][2], 400 + track["union_box"][3] - 26],
                        zone="subtitle")
@@ -240,9 +241,9 @@ class ScrollingTextGroupTests(unittest.TestCase):
         output = promote_scrolling_text(_payload(tracks))
         [ticker] = _scrolling(output)
         self.assertEqual(ticker["scrolling_text"]["band"], "bottom")
-        self.assertEqual(sorted(ticker["grouped_track_ids"]), [158, 159, 160, 161, 162, 163])
+        self.assertEqual(sorted(ticker["grouped_track_ids"]), [158, 159, 160, 161, 162, 163, 502])
         self.assertEqual(sorted(track["track_id"] for track in output["tracks"]
-                                if track.get("candidate_type") != "scrolling_text"), [500, 501, 502])
+                                if track.get("candidate_type") != "scrolling_text"), [500, 501])
 
     def test_end_credits_whose_reading_only_grows_are_not_scrolling_text(self):
         # Job 128 at 3813 s and job 108 at 3657 s: a credit read short, then whole.
