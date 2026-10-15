@@ -1,5 +1,12 @@
 # BiliFlow session handoff
 
+## G9 merge, cover regions at the frame edge (H2) and clearer review cards (R) — 2026-10-15, branch `merge/g9` (worktree `temp\wt-merge-g9`), not yet in the main folder
+
+- **Request:** job 141's export failed on every try (a cover region at the right frame edge); the user chose to merge it together with session R, R squashed ("Squash R") so that R's first commit, whose test held an OCR reading of a real watermark, stays out of `main`'s history.
+- **Merge:** from `main` `20adbc5`: `fix/cover-edge` (`5cb52c4`, `20584f3`, `e8b52d9`, `508a8fc`) with `--no-ff` (`f9a4126`; the prepended entries of `CHANGELOG.md`, `docs/PROJECT_STATUS.md` and `docs/SESSION_HANDOFF.md` conflicted and keep both, H2 on top), then `feat/review-ui-clarity` squashed (`050fc82`; `be38171` + `2474429`). The real OCR string is not in the tree.
+- **Gates:** scan cache keys identical to `main` (10 stages); full suite 3,368 tests OK, 28 skipped (2026-10-15 09:21–10:02); on the merged tree `node dashboard_v2/verify-review.cjs` 37/0 and `verify.cjs` 50/0, `node --check` of every dashboard script OK. H2's and R's own gates are in their entries below.
+- **Next:** with the Control Center off and the user's explicit go, fast-forward the main folder to `merge/g9`; the user restarts it, presses "Thử lại" on job 141 and tries the review page on the phone; push only on the user's word. Branch `feat/review-ui-clarity` is never pushed (it holds the string).
+
 ## Session H2, cover regions at the frame edge — 2026-10-15, branch `fix/cover-edge` (worktree `temp\wt-cover-edge`), not merged
 
 - **Request:** job 141's export failed on every try (delogo "Logo area is outside of the frame"): fix the cover chain for regions at the right or bottom edge, keep every plan that exports today byte-identical to `11a059c`, check job 141's 2140–2170 s in a temp root.

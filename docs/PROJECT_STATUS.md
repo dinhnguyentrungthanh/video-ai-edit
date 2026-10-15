@@ -1,3 +1,7 @@
+## G9 merge, cover regions at the frame edge and clearer review cards (2026-10-15) — branch `merge/g9`, not yet in the main folder
+
+- Session H2: a cover region at the right or bottom frame edge no longer fails the export (job 141). Session R (squashed): outlined boxes, "Ẩn khung", a magnifier, "Máy đọc" lines and zone names on the review page. Scan cache keys unchanged; full suite 3,368 OK. Details in `CHANGELOG.md`.
+
 ## Cover regions at the frame edge (2026-10-15) — branch `fix/cover-edge`, not merged
 
 - A cover region touching the right or bottom frame edge with an odd crop size (job 141) no longer makes FFmpeg refuse the export; it is blurred up to the frame's edge. Plans that exported keep their bytes. Details in `docs/handoff/H2-cover-edge.md`.

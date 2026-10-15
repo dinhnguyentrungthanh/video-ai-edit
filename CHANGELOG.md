@@ -1,3 +1,8 @@
+# G9 merge: cover regions at the frame edge (H2) and clearer review cards (R) (2026-10-15, branch `merge/g9` from `main` `20adbc5`; not yet in the main folder)
+
+- Merged `fix/cover-edge` (session H2, entry below) with `--no-ff`, and `feat/review-ui-clarity` (session R) squashed into one commit at the user's choice: R's first commit had a test string read from a real watermark, which stays out of `main`'s history.
+- Scan cache keys unchanged (10 stages); full suite 3,368 tests OK, 28 skipped; review page checks on the merged tree: `verify-review` 37/0, `verify` 50/0.
+
 # Cover regions at the right or bottom frame edge no longer fail the export — session H2 (2026-10-15, branch `fix/cover-edge` from `fix/export-many-regions` `11a059c`; not merged)
 
 - Cause (job 141): FFmpeg's crop rounds its size down to whole chroma samples of the picture it crops. A cover region touching the right edge of a 1280 × 534 yuv420p frame asked an odd crop of 705, got 704, and delogo's rectangle then touched the picture's edge: FFmpeg refused the whole graph while setting it up ("Logo area is outside of the frame"), so "Thử lại" never passed.

@@ -1003,6 +1003,12 @@ Session cloud lập kế hoạch dừng vì hết credit. Một session **điề
 - Gộp `fix/export-many-regions` vào `merge/g8`: phim nhiều vùng làm mờ không còn treo khi xuất; phim tới 10 vùng xuất ra giống từng byte như trước; bản xuất đứng yên quá lâu thì báo lỗi thay vì giữ hàng đợi. Khóa cache quét không đổi; full suite 3.331 OK.
 - Còn lại: vùng làm mờ sát mép phải hoặc mép dưới với khung cắt lẻ làm delogo báo lỗi (job 141), sửa riêng rồi gộp cùng R ở G9.
 
+### 14.14 G9: H2 (vùng phủ sát mép) và R (thẻ duyệt rõ hơn) (2026-10-15)
+
+- Gộp `fix/cover-edge` vào `merge/g9`: vùng làm mờ sát mép phải/dưới không còn làm hỏng bản xuất (job 141); kế hoạch đang xuất được giữ nguyên từng byte. Gộp R kiểu squash theo lựa chọn của người dùng: khung đỏ không che chữ, "Ẩn khung", ô phóng to, dòng "Máy đọc", tên vùng trên ảnh xem trước.
+- Khóa cache quét không đổi; full suite 3.368 OK.
+- Còn lại: chỗ hở của A1b (lượt quét chưa bắt đầu chờ hết các bản xuất), lỗi cũ với nguồn xoay 90°/270° (H2 ghi lại), đợt chất lượng phát hiện.
+
 ### 14.6 Cách session điều phối làm việc
 
 - Làm trong worktree `temp\wt-coord`, nhánh `coord/plan` (từ `origin/main`). **Không sửa thư mục chính** đang chạy Control Center.
