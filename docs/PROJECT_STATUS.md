@@ -1,3 +1,7 @@
+## G10 merge, export lane beside a film at preflight (2026-10-15) — branch `merge/g10`, not yet in the main folder
+
+- Session A1c: an export queued ahead of a film that has not started its scan now runs in the export lane beside that film's first GPU stage, instead of making the whole scan wait. Scan cache keys unchanged; full suite 3,382 OK. Details in `CHANGELOG.md`.
+
 ## Export beside a new film's first GPU stage, A1c (2026-10-15) — branch `perf/a1c-preflight-lane`, not merged
 
 - An export queued ahead of a film still waiting at preflight now runs in the export lane beside the film's first GPU stage instead of holding the whole scan back. Unit tests, scan cache keys and the check on a test Control Center passed (scan identical to a scan alone, export passes the post-export check). Details in `docs/handoff/A1c-preflight-lane.md`.

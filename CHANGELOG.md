@@ -1,3 +1,8 @@
+# G10 merge: export lane beside a film at preflight (2026-10-15, branch `merge/g10` from `main` `dc9d294`; not yet in the main folder)
+
+- Merged `perf/a1c-preflight-lane` (session A1c, entry below) with `--no-ff`.
+- Scan cache keys unchanged (10 stages); full suite 3,382 tests OK, 28 skipped.
+
 # An export goes beside the first GPU stage of a film still at preflight — session A1c (2026-10-15, branch `perf/a1c-preflight-lane` from `main` `dc9d294`; not merged)
 
 - Cause (seen on the real install on 2026-10-14 at 20:42, job 131): A1b let a waiting export wait for the export lane only when the next scan stage itself ran on the GPU. A film that has not started waits at `preflight` (CPU, no process), so the export took the main lane and the scan waited behind every queued export (about 15 minutes behind 2 exports, with about 5 GB of VRAM free).

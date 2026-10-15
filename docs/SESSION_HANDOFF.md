@@ -1,5 +1,12 @@
 # BiliFlow session handoff
 
+## G10 merge, export lane beside a film at preflight (A1c) — 2026-10-15, branch `merge/g10` (worktree `temp\wt-merge-g10`), not yet in the main folder
+
+- **Request:** on 2026-10-14 a film waiting at `preflight` waited for two queued exports with VRAM free; the user asked for the fix (session A1c) and for it to be merged.
+- **Merge:** `perf/a1c-preflight-lane` (`640ca7a`, `420b567`, `566ff4f`, `264fab5`) into `merge/g10` from `main` `dc9d294` with `--no-ff`, no conflict.
+- **Gates:** scan cache keys identical to `main` (10 stages); full suite 3,382 tests OK, 28 skipped (2026-10-15 14:17–14:58). A1c's real check on a test Control Center passed 9/9 (`docs/evidence/a1c/check-2026-10-15/`; its export had no blur region).
+- **Next:** with the Control Center's queue empty and the user's explicit go, stop it and fast-forward the main folder to `merge/g10`; the user restarts it; push only on the user's word.
+
 ## Session A1c, an export beside a new film's first GPU stage — 2026-10-15, branch `perf/a1c-preflight-lane` (worktree `temp\wt-a1c`), not merged
 
 - **Request:** close A1b's gap: an export queued ahead of a film that waits at `preflight` took the main lane, so the scan waited for every queued export (job 131, about 15 minutes, 2026-10-14). Keep every A1b safety condition; no change to detectors, thresholds, scan results or export bytes.

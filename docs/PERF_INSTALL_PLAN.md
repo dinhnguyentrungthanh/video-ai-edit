@@ -1009,6 +1009,11 @@ Session cloud lập kế hoạch dừng vì hết credit. Một session **điề
 - Khóa cache quét không đổi; full suite 3.368 OK.
 - Còn lại: chỗ hở của A1b (lượt quét chưa bắt đầu chờ hết các bản xuất), lỗi cũ với nguồn xoay 90°/270° (H2 ghi lại), đợt chất lượng phát hiện.
 
+### 14.15 G10: A1c, xuất song song cạnh phim còn ở bước kiểm tra đầu vào (2026-10-15)
+
+- Gộp `perf/a1c-preflight-lane` vào `merge/g10`: bản xuất xếp trước một phim chưa quét giờ chạy ở làn xuất cạnh bước GPU đầu tiên của phim đó, thay vì bắt cả lượt quét chờ. Mọi điều kiện an toàn của A1b giữ nguyên. Khóa cache quét không đổi; full suite 3.382 OK; kiểm thật 9/9 trên Control Center thử.
+- Tiếp theo: đợt chất lượng phát hiện (watermark chập chờn ở dải phụ đề thành một thẻ, tách phụ đề khỏi quảng cáo mà không làm yếu việc bắt quảng cáo ở dải phụ đề), lỗi nguồn xoay 90°/270°.
+
 ### 14.6 Cách session điều phối làm việc
 
 - Làm trong worktree `temp\wt-coord`, nhánh `coord/plan` (từ `origin/main`). **Không sửa thư mục chính** đang chạy Control Center.
