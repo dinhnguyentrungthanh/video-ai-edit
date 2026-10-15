@@ -1,3 +1,7 @@
+## The fixed site logo under the top line, session D (2026-10-15) — branch `fix/top-logo-box`, not merged
+
+- Job 145's fixed site logo at the top right, just under the site's scrolling line, was outside the film-long card's blur (the text scan's consensus box kept the line and dropped the logo). When a visual-logo card reads the same text right beside a fixed-text card, the card's region now takes the logo's box in and the logo card takes the card's time: one BLUR covers line and logo all film. Review build only: scan cache keys unchanged, no rescan ("Chạy lại", then BLUR). Details in `docs/handoff/D-top-logo.md`.
+
 ## G11 merge, the source site's scrolling line and the watermark in the subtitle band (2026-10-15) — branch `merge/g11`, not yet in the main folder
 
 - Session D, parts 1 and 2 (entries below): one main card per crossing of the site's scrolling line, web addresses without their dot, one card for the site's mark under the subtitles, subtitle lines without ad evidence moved to the optional cards. Scan cache keys unchanged; full suite 3,447 OK. Open: job 145's top-right logo box. Details in `CHANGELOG.md`.
