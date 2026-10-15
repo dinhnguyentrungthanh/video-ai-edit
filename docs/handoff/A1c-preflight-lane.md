@@ -1,6 +1,6 @@
 # Bàn giao A1c – bản xuất sang làn xuất khi phim mới còn chờ preflight
 - Nhánh: perf/a1c-preflight-lane (từ main dc9d294) · Worktree: `temp\wt-a1c` · Cập nhật: 2026-10-15
-- Chạy ở: PC · Trạng thái: **code và test xong; cổng đơn vị, test A1b/scheduler và khóa cache đều đạt. Phần kiểm thật trên Control Center thử chưa chạy** (người dùng chọn "Để sau"; nguồn clip đã chọn: video gốc của job 142). Chưa push, chưa merge.
+- Chạy ở: PC · Trạng thái: **xong; mọi cổng đều đạt, kể cả kiểm thật trên Control Center thử (2026-10-15, 9/9 kiểm tra, `docs/evidence/a1c/check-2026-10-15/`). Chờ điều phối chạy full suite và gộp.** Chưa push, chưa merge.
 
 ## Vấn đề (điều phối thấy trên máy thật, 2026-10-14 20:42)
 - Trong A1b, `_select_main` / `_export_waits` chỉ để bản xuất chờ làn xuất khi **chính** bước kế tiếp của phim chờ quét chạy trên GPU (`if not runs_on_gpu(next_scan[2]): return False`).
@@ -46,7 +46,20 @@
 - **Khóa cache quét không đổi so với dc9d294:** CLEAN. Script so từng bước trong `CACHEABLE_STAGES`: danh sách file (`stage_source_paths`) và SHA-256 từng file, cộng các file cố định của khóa (config, `run.ps1`, `env.ps1`, `pyproject.toml`). 10 bước, 34 file, 7 file cố định; `scheduler.py` không thuộc khóa nào.
 - **Review độc lập** (một agent, chỉ đọc): không có CRITICAL hay HIGH. Nó xác nhận không điều kiện an toàn nào của A1b bị vượt và không có chờ vô hạn. MEDIUM: thiếu test cho các ca phim rời hàng, cache hit, FAILED_RETRYABLE, bước mất định nghĩa, luồng làn xuất chết; đã thêm 4 test (14 ca). LOW không sửa: xem "Lưu ý".
 
-### Script kiểm thật `scripts/a1c_check.py` (chưa chạy)
+### Kiểm thật trên Control Center thử: đạt (2026-10-15 13:29–14:06)
+- Người dùng cho chạy và bấm "Tạm dừng hàng đợi" trên Control Center thật (hàng đợi trống). Script đọc database thật `mode=ro`: suốt bốn bước hàng đợi thật vẫn trống và tạm dừng. Không gọi route nào của nó.
+- Clip 6 phút, 1280x534, cắt bằng stream copy từ video gốc của job 142 (chỉ đọc). Quét live action, nhóm quảng cáo.
+- "Đo lại" của root thử cho NVENC `ok`. E1 được quét và duyệt: ba mục đều KEEP, nên bản xuất là encode lại không che.
+- Lượt `run` (bản xuất E1 xếp trước phim S1 đang chờ `preflight`):
+  - `preflight` 0,0–0,1 s, `text` bắt đầu ở 0,1 s, bản xuất bắt đầu ở 0,5 s và chỉ chạy ở làn `export`;
+  - `EXPORT_LANE_PARALLEL` một lần, `scan_stage: text`, VRAM còn dư 622 MiB;
+  - chạy chồng 60,4 s (cạnh `text` 28,0 s, cạnh `visual_logo` 32,4 s).
+- Quét S1 cạnh bản xuất giống hệt S2 quét một mình: 69/69 file, cache routing giống hệt, mỗi lượt tự tính hộp grounding.
+- Bản xuất: `h264_nvenc`, `lane: parallel`, `cpu_full_decode`, không fallback, qua kiểm tra của "Xóa video gốc".
+- Mọi FFmpeg thấy được (6 mỗi lượt) đều dưới mức bình thường.
+- Root tạm đã xóa bằng `remove`; `.venv`, models và tools của thư mục cài còn nguyên. Bằng chứng: `docs/evidence/a1c/check-2026-10-15/` (`check.json`, README).
+
+### Script kiểm thật `scripts/a1c_check.py`
 - Dựng root tạm `temp\a1c-check-<giờ>` như A1b (`a1b_vram_measure.make_root`, thêm tiền tố `a1c-check-`), Control Center thử ở cổng 8793, clip cắt bằng stream copy (video gốc chỉ được đọc).
 - **Không gọi route nào của Control Center thật.** Trước và trong mỗi bước dùng GPU, script đọc database thật ở chế độ `mode=ro`. Nó chỉ chạy khi hàng đợi thật vừa trống vừa đang tạm dừng (không job nào QUEUED hay đang chạy). Mọi thay đổi trong lúc chạy được ghi lại.
 - Script tự hạ mức ưu tiên xuống dưới bình thường. Control Center thử, các bước và mọi FFmpeg kế thừa mức đó; lượt chạy ghi mức ưu tiên của từng FFmpeg nó thấy.
@@ -61,11 +74,15 @@
   - mọi FFmpeg dưới bình thường; hàng đợi thật trống và tạm dừng suốt các bước.
 
 ## Đang dở
-- Phần kiểm thật dùng GPU (chờ người dùng chọn giờ).
+- (trống)
 
 ## Bước tiếp theo
-1. Khi người dùng chọn giờ: người dùng bấm "Tạm dừng hàng đợi" trên Control Center thật (hàng đợi phải trống). Agent không tự bấm.
-2. Chạy, từ `temp\wt-a1c`, với python của `.venv` thư mục cài. `<video>` là video gốc của job 142, tra đường dẫn bằng cách đọc database thật ở chế độ `mode=ro`; không ghi đường dẫn đó vào repo:
+1. Điều phối: full suite trên nhánh, rồi gộp theo lời người dùng. Agent của A1c không push, không merge.
+2. Sau khi gộp và khởi động lại Control Center thật, A1c có hiệu lực ngay ("Tự động" và hồ sơ đã đo trên máy thật).
+
+## Chạy lại phần kiểm thật (nếu cần, máy khác hoặc code khác)
+1. Người dùng bấm "Tạm dừng hàng đợi" trên Control Center thật (hàng đợi phải trống). Agent không tự bấm.
+2. Chạy, từ worktree, với python của `.venv` thư mục cài. `<video>` là một video ≤1080p (lần này: video gốc của job 142, tra đường dẫn bằng database thật ở chế độ `mode=ro`); không ghi đường dẫn đó vào repo:
    ```
    $py = "E:\DungChung\BiliFlow\.venv\Scripts\python.exe"
    & $py scripts\a1c_check.py setup --install E:\DungChung\BiliFlow --code . --source <video>
@@ -76,9 +93,7 @@
    & $py scripts\a1c_check.py report  --install E:\DungChung\BiliFlow --root <root> --evidence docs\evidence\a1c\<ngày>
    & $py scripts\a1c_check.py remove  --install E:\DungChung\BiliFlow --root <root>
    ```
-   Ước tính 30–40 phút GPU. Xong thì báo người dùng mở lại hàng đợi thật.
-3. Viết README tiếng Việt cho bằng chứng, cập nhật file này, `CHANGELOG.md`, `docs/PROJECT_STATUS.md`, `docs/SESSION_HANDOFF.md`, rồi commit.
-4. Điều phối: full suite trên nhánh, rồi gộp. Agent của A1c không push, không merge.
+   Lần này các bước từ `profile` tới `alone` mất khoảng 8,5 phút (clip 6 phút). Xong thì báo người dùng mở lại hàng đợi thật.
 
 ## Cách kiểm
 - Lệnh test (trong worktree):
@@ -89,7 +104,8 @@
 - Khóa cache: so `cache_dependencies.stage_source_paths` và SHA-256 từng file của mọi bước trong `stage_cache.CACHEABLE_STAGES`, cộng các file cố định của `stage_cache._tree_fingerprint`, giữa worktree và `git archive dc9d294`. Script nằm trong scratchpad của session; viết lại theo mô tả này nếu cần.
 
 ## Chờ người dùng
-- Giờ chạy phần kiểm thật dùng GPU (người dùng chọn "Để sau" ngày 2026-10-15; nguồn clip: video gốc của job 142).
+- Mở lại hàng đợi thật (người dùng đã tạm dừng nó cho lần kiểm thật).
+- Quyết định gộp nhánh vào main.
 
 ## Lưu ý cho người tiếp quản
 - **"Ngắn" là giả định.** `preflight` băm SHA-256 toàn bộ video gốc (`_run_preflight`), nên trên ổ chậm hay video lớn nó có thể mất vài chục giây. Trong lúc đó bản xuất chờ và GPU rảnh. Vẫn tốt hơn trước, khi bản xuất chặn cả lượt quét. Chỉ `preflight` nằm trong `SHORT_CPU_STAGES`; thêm bước khác vào đó cần đo trước.
