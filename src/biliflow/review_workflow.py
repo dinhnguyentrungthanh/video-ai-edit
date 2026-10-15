@@ -3393,8 +3393,14 @@ def build_review_queue(
             candidate_previous = _read_json(queue_path)
             if isinstance(candidate_previous, dict):
                 previous_queue = candidate_previous
-        except (OSError, ValueError, json.JSONDecodeError):
+        except (OSError, ValueError, json.JSONDecodeError) as error:
+            if keep_decisions:
+                raise ValueError(
+                    f"Không đọc được danh sách duyệt cũ; chưa dựng lại để không mất quyết định: {error}"
+                ) from error
             previous_queue = None
+        if keep_decisions and previous_queue is None:
+            raise ValueError("Danh sách duyệt cũ không hợp lệ; chưa dựng lại để không mất quyết định")
     if not report_paths:
         raise ValueError("At least one report is required")
     ad_text_keys: tuple[str, ...] = ()
@@ -3536,6 +3542,13 @@ def build_review_queue(
                 or str(previous_source.get("sha256")) == source_sha256
             )
         )
+        if keep_decisions and not same_source and any(
+            isinstance(item, dict) and item.get("decision") is not None
+            for item in previous_queue.get("items") or []
+        ):
+            raise ValueError(
+                "Danh sách duyệt cũ thuộc một video nguồn khác; chưa dựng lại để không mất quyết định"
+            )
         if same_source and keep_decisions:
             decided_previous_items = list(previous_queue.get("items") or [])
         if same_source:

@@ -4,12 +4,19 @@ A rebuild (``build_review_queue(keep_decisions=True)``) can change cards: a newe
 review step may join pieces into one longer card (scrolling text, 2026-10-15) or
 start a card earlier. Each decided card of the previous queue is carried:
 
-- to the new card with the same id: exactly, the reviewed interval included;
+- to the new card with the same id and the same moments: exactly, the reviewed
+  interval included;
 - else to a new card showing the same thing (same category, at least 80 % of the
   shorter card's time shared, boxes overlapping by 75 % of the smaller one):
-  BLUR always, its time and box widened to cover the old ones too (a blur never
-  shrinks); KEEP, CUT and NEEDS_MORE_CONTEXT only to a card the old one covered
-  for 80 % of its time (a KEEP of one piece is not a KEEP of a whole line);
+  - BLUR always. On a card of one span its time and box widen to cover the old
+    ones too (a blur never shrinks). On a card of separate moments
+    (``discrete_detected_intervals``) it keeps the new card's own region; an
+    old card that region and those moments do not cover comes back unchanged
+    beside it;
+  - KEEP, CUT and NEEDS_MORE_CONTEXT only to a card that shows nothing the old
+    one did not: its time inside the reviewed time, its box inside the old box,
+    and neither card of separate moments (a KEEP of one piece is not a KEEP of a
+    whole line, and a CUT never reaches time nobody reviewed);
 - when the old cards matching one new card disagree, that card stays open and
   names them in ``decision_conflict``.
 
@@ -27,7 +34,9 @@ DECISION_FIELDS = (
 )
 CARRY_TIME_OVERLAP = 0.80  # share of the shorter card's time both cards cover
 CARRY_REGION_OVERLAP = 0.75  # intersection over the smaller box
-CARRY_SAME_SPAN = 0.80  # share of the new card's time a carried KEEP/CUT covered
+CARRY_INSIDE = 0.80  # share of the new card's box inside the old one for a carried KEEP/CUT
+CARRY_TIME_TOLERANCE = 0.05  # seconds a carried KEEP/CUT card may reach past the reviewed time
+DISCRETE = "discrete_detected_intervals"
 PRESERVED_DECIDED = "preserved_decided_from_previous_queue"
 PRESERVED_DECIDED_REASON = (
     "Quyết định cũ của bạn được giữ nguyên khi dựng lại danh sách duyệt "
@@ -79,9 +88,62 @@ def _same_thing(old: dict, new: dict) -> bool:
     return old.get("candidate_type") == new.get("candidate_type")
 
 
-def _covers_new_card(old: dict, new: dict) -> bool:
-    duration = _span(new)[1] - _span(new)[0]
-    return duration > 0 and _shared_seconds(old, new) / duration >= CARRY_SAME_SPAN
+def _discrete(item: dict) -> bool:
+    return item.get("temporal_policy") == DISCRETE
+
+
+def _moments(item: dict) -> list[tuple[float, float]]:
+    if _discrete(item):
+        intervals = [
+            (round(float(value["start_seconds"]), 3), round(float(value["end_seconds"]), 3))
+            for value in item.get("detected_intervals") or [] if isinstance(value, dict)
+        ]
+        if intervals:
+            return sorted(intervals)
+    return [tuple(round(value, 3) for value in _span(item))]
+
+
+def _same_moments(old: dict, new: dict) -> bool:
+    return _discrete(old) == _discrete(new) and _moments(old) == _moments(new)
+
+
+def _inside(inner: dict | None, outer: dict | None) -> bool:
+    """``inner`` lies inside ``outer`` for CARRY_INSIDE of its area (two missing boxes: True)."""
+    if inner is None or outer is None:
+        return inner is None and outer is None
+    width = min(inner["x"] + inner["width"], outer["x"] + outer["width"]) - max(inner["x"], outer["x"])
+    height = min(inner["y"] + inner["height"], outer["y"] + outer["height"]) - max(inner["y"], outer["y"])
+    area = inner["width"] * inner["height"]
+    return area > 0 and max(0, width) * max(0, height) / area >= CARRY_INSIDE
+
+
+def _old_box(old: dict) -> dict | None:
+    return _box(old.get("decision_region_source_pixels")) or _box(old.get("suggested_region_source_pixels"))
+
+
+def _shows_no_more(old: dict, new: dict) -> bool:
+    """A KEEP, CUT or NEEDS_MORE_CONTEXT of ``old`` may resolve ``new``: nothing unreviewed."""
+    if _discrete(old) or _discrete(new):
+        return False
+    (old_start, old_end), (new_start, new_end) = _span(old), _span(new)
+    return (
+        new_start >= old_start - CARRY_TIME_TOLERANCE and new_end <= old_end + CARRY_TIME_TOLERANCE
+        and _inside(_box(new.get("suggested_region_source_pixels")), _old_box(old))
+    )
+
+
+def _covered_by_moments(old: dict, new: dict) -> bool:
+    """``old``'s reviewed time and blur region lie inside ``new``'s moments and region."""
+    start, end = _span(old)
+    if not any(
+        moment_start - CARRY_TIME_TOLERANCE <= start and end <= moment_end + CARRY_TIME_TOLERANCE
+        for moment_start, moment_end in _moments(new)
+    ):
+        return False
+    region = old.get("decision_region_source_pixels")
+    if region == "FULL_FRAME":
+        return new.get("decision_region_source_pixels") == "FULL_FRAME"
+    return _inside(_box(region), _box(new.get("decision_region_source_pixels")))
 
 
 def _copy_exact(new: dict, old: dict) -> None:
@@ -126,8 +188,13 @@ def _copy_matched(new: dict, sources: list[dict]) -> None:
     for field in DECISION_FIELDS:
         if field in latest:
             new[field] = latest[field]
-    if new["decision"] == "BLUR":
+    if new["decision"] == "BLUR" and not _discrete(new):
         _widen_blur(new, sources)
+    elif new["decision"] == "BLUR":
+        # Separate moments: the new card's own region; old blurs it misses stay beside it.
+        suggested = _box(new.get("suggested_region_source_pixels"))
+        if suggested is not None:
+            new["decision_region_source_pixels"] = suggested
     new["decision_carried_from"] = [str(source["id"]) for source in sources]
 
 
@@ -136,7 +203,7 @@ def _carry_main(new: dict, decided: list[dict], by_id: dict[str, dict], carried:
     if new.get("decision") is not None:
         return False
     exact = by_id.get(str(new.get("id")))
-    if exact is not None:
+    if exact is not None and _same_moments(exact, new):
         _copy_exact(new, exact)
         carried.add(str(exact["id"]))
         return False
@@ -144,9 +211,15 @@ def _carry_main(new: dict, decided: list[dict], by_id: dict[str, dict], carried:
     if len({source["decision"] for source in sources}) > 1:
         new["decision_conflict"] = sorted(str(source["id"]) for source in sources)
         return True
-    if sources and (
-        sources[0]["decision"] == "BLUR" or all(_covers_new_card(source, new) for source in sources)
-    ):
+    if not sources:
+        return False
+    if sources[0]["decision"] == "BLUR":
+        _copy_matched(new, sources)
+        carried.update(
+            str(source["id"]) for source in sources
+            if not _discrete(new) or _covered_by_moments(source, new)
+        )
+    elif all(_shows_no_more(source, new) for source in sources):
         _copy_matched(new, sources)
         carried.update(str(source["id"]) for source in sources)
     return False
@@ -182,9 +255,17 @@ def carry_review_decisions(
     present = {str(item.get("id")) for item in output}
     restored = 0
     for old in decided:
-        if str(old["id"]) in carried or str(old["id"]) in present:
+        if str(old["id"]) in carried:
             continue
         kept = dict(old)
+        if str(old["id"]) in present:
+            # A new card took this id (other moments): the old decision stays under its own name.
+            suffix = 1
+            while f'{old["id"]}-previous-{suffix}' in present:
+                suffix += 1
+            kept["id"] = f'{old["id"]}-previous-{suffix}'
+            kept["previous_id"] = str(old["id"])
+            present.add(kept["id"])
         kept["migration_status"] = PRESERVED_DECIDED
         kept["reasons"] = list(dict.fromkeys(list(kept.get("reasons") or []) + [PRESERVED_DECIDED_REASON]))
         output.append(kept)

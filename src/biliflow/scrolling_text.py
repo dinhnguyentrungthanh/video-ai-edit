@@ -32,19 +32,24 @@ _DOTTED_TLDS = (
     "com|net|org|vn|tv|me|io|xyz|cc|co|info|top|club|link|live|online|site|biz|asia|pro|"
     "app|fun|vip|bet|win|us|to|ly|gg"
 )
-# A domain whose dot OCR lost is only trusted in capitals and for these endings:
-# "nấu cơm", "xem tv" or "Hà Nội, VN" stay ordinary text.
+# A domain whose dot OCR lost is only trusted with its name in capitals and for
+# these endings: "nấu cơm", "xem tv", "SMART TV" or "Saigon, VN" stay ordinary text.
 _DOTLESS_TLDS = "COM|NET|ORG|VN|TV"
 _WEB_ADDRESS_PATTERNS = (
     re.compile(r"(?i)https?://|(?<![\w.@-])www(?![\w])"),
-    # name.tld
-    re.compile(rf"(?i)(?<![\w.@-])[a-z0-9][a-z0-9-]{{1,62}}\.(?:{_DOTTED_TLDS})(?![\w])"),
-    # NAME. COM, NAME ,COM, NAME,COM: the dot read with a space next to it or as a comma
+    # name.tld and sub.name.tld, the ending in any case (OCR reads "cOM", "aPP")
     re.compile(
-        rf"(?<![\w.@-])[A-Za-z0-9][A-Za-z0-9-]{{1,62}}(?:\s+[.,]\s*|[.,]\s+|,)(?:{_DOTLESS_TLDS})(?![\w])"
+        rf"(?<![\w.@-])(?:[A-Za-z0-9][A-Za-z0-9-]{{0,62}}\.)*[A-Za-z0-9][A-Za-z0-9-]{{1,62}}"
+        rf"\.(?i:{_DOTTED_TLDS})(?![\w])"
     ),
-    # NAMECOM, NAME COM: the dot lost
-    re.compile(rf"(?<![\w.@-])[A-Z0-9][A-Z0-9-]{{2,62}}\s?(?:{_DOTLESS_TLDS})(?![\w])"),
+    # NAME. COM, NAME .COM: the dot read with a space next to it
+    re.compile(rf"(?<![\w.@-])[A-Z0-9][A-Z0-9-]{{2,62}}(?:\s+\.\s*|\.\s+)(?:{_DOTLESS_TLDS})(?![\w])"),
+    # NAME,COM, NAME ,COM: the dot read as a comma ("SAIGON, VN" is a place)
+    re.compile(r"(?<![\w.@-])[A-Z0-9][A-Z0-9-]{2,62}\s*,\s*(?:COM|NET|ORG)(?![\w])"),
+    # NAMECOM: the dot lost
+    re.compile(rf"(?<![\w.@-])[A-Z0-9][A-Z0-9-]{{2,62}}(?:{_DOTLESS_TLDS})(?![\w])"),
+    # NAME COM, NAME NET: the dot read as a space ("THE NET", "LIVE TV" are words)
+    re.compile(r"(?<![\w.@-])(?:[A-Z0-9][A-Z0-9-]{2,62}\sCOM|[A-Z0-9][A-Z0-9-]{3,62}\s(?:NET|ORG))(?![\w])"),
 )
 # Ordinary words that end like a dot-less domain.
 _DOTLESS_WORDS = frozenset({
@@ -52,19 +57,30 @@ _DOTLESS_WORDS = frozenset({
     "GARNET", "SONNET", "BONNET", "HORNET", "CORNET", "SIGNET", "BAYONET", "CLARINET",
     "DRAGNET", "CYBORG",
 })
+# Endings that are also words: "Wait.Me", "Stop.To" are two sentences with the space lost.
+_WORD_TLDS = frozenset({
+    "me", "to", "us", "pro", "top", "fun", "win", "live", "link", "club", "site", "app", "bet",
+    "vip", "co", "cc", "io", "ly", "gg", "info", "online",
+})
+
+
+def _sentence_break(token: str) -> bool:
+    ending = token.rsplit(".", 1)[-1] if "." in token else ""
+    return ending.lower() in _WORD_TLDS and ending[:1].isupper() and ending[1:].islower()
 
 
 def web_address_tokens(text: object) -> list[str]:
     """Web addresses in one OCR reading, also when OCR lost the dot or added a space.
 
-    A general rule for every site: ``name.tld``, ``www``/``http``, and in capitals
-    ``NAME. COM``, ``NAME,COM``, ``NAMECOM`` or ``NAME COM`` (COM, NET, ORG, VN, TV).
+    A general rule for every site: ``name.tld`` and ``sub.name.tld``, ``www``/``http``,
+    and with the name in capitals ``NAME. COM``, ``NAME,COM``, ``NAMECOM`` (COM, NET,
+    ORG, VN, TV), ``NAME COM`` and ``NAME NET``.
     """
     found = []
     for pattern in _WEB_ADDRESS_PATTERNS:
         for match in pattern.finditer(str(text or "")):
             token = match.group(0).strip()
-            if re.sub(r"[^A-Z]", "", token.upper()) in _DOTLESS_WORDS:
+            if re.sub(r"[^A-Z]", "", token.upper()) in _DOTLESS_WORDS or _sentence_break(token):
                 continue
             found.append(token)
     return list(dict.fromkeys(found))
@@ -368,17 +384,24 @@ def _crossings(pieces: list[_Piece], width: float, sample_every: float) -> list[
 
 
 def _absorb_band_pieces(
-    group: list[_Piece], pieces: list[_Piece], taken: set[int], sample_every: float,
+    group: list[_Piece], pieces: list[_Piece], taken: set[int], width: float, sample_every: float,
 ) -> list[_Piece]:
-    """Other pieces in the band while the line crosses it (short or unlinked readings)."""
+    """Other pieces of the line in the band while it crosses: short readings, or at a frame edge.
+
+    A piece read in full that did not link and stays clear of both edges is other
+    text, and a subtitle line is never part of the line: both keep their tracks.
+    """
     band = (0.0, min(p.box[1] for p in group), 1.0, max(p.box[3] for p in group))
     window_start = min(p.start for p in group) - sample_every - 0.001
     window_end = max(p.end for p in group) + sample_every + 0.001
+    edge = SCROLLING_EDGE * width
     members = list(group)
     grouped = {piece.index for piece in group}
     for piece in pieces:
         if (
             piece.index in taken or piece.index in grouped
+            or piece.track.get("routing") == "LIKELY_SUBTITLE"
+            or piece.readings and edge < piece.box[0] and piece.box[2] < width - edge
             or piece.start < window_start or piece.end > window_end
             or piece.height < SCROLLING_PIECE_HEIGHT * (band[3] - band[1])
             or _vertical_overlap(piece.box, band) < SCROLLING_BAND_OVERLAP
@@ -437,9 +460,8 @@ def _scrolling_track(
         "routing": SCROLLING_ROUTING,
         "candidate_type": SCROLLING_CANDIDATE_TYPE,
         "suggested_decision": "BLUR",
-        "grouped_track_ids": [
-            int(piece.track["track_id"]) for piece in members if "track_id" in piece.track
-        ],
+        # A track without an id is named by its index in the report, as the queue names it.
+        "grouped_track_ids": [int(piece.track.get("track_id", piece.index)) for piece in members],
         "member_previews": list(dict.fromkeys(
             str(piece.track["preview"]) for piece in members if piece.track.get("preview")
         )),
@@ -490,7 +512,7 @@ def promote_scrolling_text(payload: dict) -> dict:
         for group in _crossings(pieces, width, sample_every):
             if any(piece.index in absorbed for piece in group):
                 continue
-            members = _absorb_band_pieces(group, pieces, absorbed, sample_every)
+            members = _absorb_band_pieces(group, pieces, absorbed, width, sample_every)
             absorbed.update(piece.index for piece in members)
             promoted.append(_scrolling_track(
                 members, side=side, width=width, sample_every=sample_every, scan_start=scan_start,

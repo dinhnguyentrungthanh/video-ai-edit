@@ -224,6 +224,26 @@ class ScrollingTextGroupTests(unittest.TestCase):
         for ticker in _scrolling(output):
             self.assertNotIn(159, ticker["grouped_track_ids"])
 
+    def test_subtitle_lines_and_other_text_in_the_band_keep_their_own_tracks(self):
+        # A crossing of the bottom band with two subtitle lines and a centred sign inside it.
+        tracks = [dict(track, union_box=[track["union_box"][0], 400 + track["union_box"][1] - 26,
+                                         track["union_box"][2], 400 + track["union_box"][3] - 26],
+                       zone="subtitle")
+                  for track in _job107_ticker() if track["track_id"] != 164]
+        tracks += [
+            _track(500, 2930.0, 2933.0, ["Anh không biết gì cả"], [300, 402, 660, 450],
+                   zone="subtitle", routing="LIKELY_SUBTITLE"),
+            _track(501, 2936.0, 2939.0, ["Em đi đâu vậy"], [330, 402, 630, 450],
+                   zone="subtitle", routing="LIKELY_SUBTITLE"),
+            _track(502, 2933.0, 2936.0, ["QUÁN CƠM NGON"], [380, 404, 600, 452], zone="subtitle"),
+        ]
+        output = promote_scrolling_text(_payload(tracks))
+        [ticker] = _scrolling(output)
+        self.assertEqual(ticker["scrolling_text"]["band"], "bottom")
+        self.assertEqual(sorted(ticker["grouped_track_ids"]), [158, 159, 160, 161, 162, 163])
+        self.assertEqual(sorted(track["track_id"] for track in output["tracks"]
+                                if track.get("candidate_type") != "scrolling_text"), [500, 501, 502])
+
     def test_end_credits_whose_reading_only_grows_are_not_scrolling_text(self):
         # Job 128 at 3813 s and job 108 at 3657 s: a credit read short, then whole.
         tracks = [
@@ -271,8 +291,10 @@ class WebAddressTests(unittest.TestCase):
         for text in (
             "EXAMPLE.COM chia sẻ dữ liệu", "'EXAMPLECOM chia sẻ €", "EXAMPLE COM-chia-sẻ",
             "EXAMPLE. COM", "EXAMPLE ,COM", "xem tại example.com nhé", "EXAMPLECOM]",
-            "EXAMPLENET", "EXAMPLE NET", "EXAMPLEVN", "EXAMPLE.VN", "EXAMPLE TV", "EXAMPLEORG",
-            "www example", "https://example.org/a", "Example.Net",
+            "EXAMPLENET", "EXAMPLE NET", "EXAMPLEVN", "EXAMPLE.VN", "EXAMPLETV", "EXAMPLEORG",
+            "www example", "https://example.org/a", "Example.Net", "Example.Com",
+            # Subdomains, endings OCR read in mixed case, a short name read with a space.
+            "xem.example.com", "m.example.com", "EXAMPLE.cOM", "Example.aPP", "XYZ COM",
         ):
             with self.subTest(text=text):
                 self.assertTrue(web_address_tokens(text), text)
@@ -283,6 +305,10 @@ class WebAddressTests(unittest.TestCase):
             "sitcom", "VIETTEL TELECOM", "ANIMAL PLANET", "INTERNET", "CABINET", "COMPANY",
             "COMBO 3 MÓN", "NETWORK", "VTV3", "HTV7", "SCTV", "Tập 12", "3.14", "A NETFLIX SERIES",
             "Ừ. Com", "CCOM]", "NCCOM chia sẻ",
+            # ASCII words before an ending (review of 220d25f).
+            "Anh, TV dang bat", "Saigon, VN", "Ha Noi, VN", "SMART TV", "THE NET", "LIVE TV",
+            "OLED TV", "MUSIC TV", "OK. TV hỏng", "Ok. Tv", "Wait.Me", "Stop.To", "Good.Pro",
+            "abc@example.com",
         ):
             with self.subTest(text=text):
                 self.assertEqual(web_address_tokens(text), [], text)
