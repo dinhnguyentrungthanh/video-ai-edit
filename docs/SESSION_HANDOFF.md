@@ -1,5 +1,13 @@
 # BiliFlow session handoff
 
+## G12 merge, a fixed logo under the site's top line is blurred with that line's card (session D) — 2026-10-15, branch `merge/g12` (worktree `temp\wt-merge-g12`), not yet in the main folder
+
+- **Request:** job 145's export showed the source site's fixed logo at the top right all film long; the user asked for session D's fix to be checked and merged.
+- **Merge:** `fix/top-logo-box` (`376795f`, from `de91261`) into `merge/g12` from `main` `22b1582` (G11) with `--no-ff` (`28e6c8c`); the prepended entries of `CHANGELOG.md`, `docs/PROJECT_STATUS.md` and `docs/SESSION_HANDOFF.md` conflicted and keep both, session D's on top. `src/` and `tests/` equal `376795f`.
+- **Gates:** scan cache keys identical to `main` (10 stages: no rescan); full suite 3,458 tests OK, 31 skipped (2026-10-15 22:35–23:20, while the real Control Center exported); 302 focused review tests OK. Coordinator's rebuild of a copy of job 145 (temporary root): 50 → 7 cards; the film-long text card suggesting BLUR now covers (0,21,1280,71), the logo's pixels in the export lie at about x 865–1146, y 55–84; subtitle-band ad tracks weakened 0.
+- **Still open:** the text scan's consensus box that drops the logo's own box (a scan change: text-stage cache key, rescan); planned only when the user asks, together with the 250-track cap. A1d (see the plan): the export lane never opens on a 6 GB card because every scan stage is budgeted at the Qwen2-VL peak.
+- **Next:** with the Control Center's queue empty and the user's explicit go, stop it and fast-forward the main folder to `merge/g12`; the user restarts it, uses "Chạy lại" on job 145, BLURs the film-long text card and exports again; push only on the user's word.
+
 ## Session D, the fixed site logo under the top line (job 145) — 2026-10-15, branch `fix/top-logo-box` from `de91261` (worktree `temp\wt-top-logo`), not merged
 
 - **Request (coordinator):** job 145's fixed top-right site logo leaked through the whole export. Find why the film-long fixed-text card's region missed it; (a) make that region cover a fixed logo at the same place when there is evidence; (b) a visual-logo card at the same place with the same text takes the film-long card's time; (c) no scan cache key change (stop and report if needed). No commits on `fix/ticker-subtitle`.

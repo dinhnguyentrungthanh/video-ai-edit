@@ -1,3 +1,7 @@
+## G12 merge, job 145's top-right logo (2026-10-15) — branch `merge/g12`, not yet in the main folder
+
+- Session D (entry below): a plain visual-logo card that reads the same text as a fixed-text card suggesting BLUR, at a touching place and time, joins that card; its box becomes the union. Scan cache keys unchanged; full suite 3,458 OK. Details in `CHANGELOG.md`.
+
 ## The fixed site logo under the top line, session D (2026-10-15) — branch `fix/top-logo-box`, not merged
 
 - Job 145's fixed site logo at the top right, just under the site's scrolling line, was outside the film-long card's blur (the text scan's consensus box kept the line and dropped the logo). When a visual-logo card reads the same text right beside a fixed-text card, the card's region now takes the logo's box in and the logo card takes the card's time: one BLUR covers line and logo all film. Review build only: scan cache keys unchanged, no rescan ("Chạy lại", then BLUR). Details in `docs/handoff/D-top-logo.md`.

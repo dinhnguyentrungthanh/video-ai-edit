@@ -1019,6 +1019,14 @@ Session cloud lập kế hoạch dừng vì hết credit. Một session **điề
 - Gộp `fix/ticker-subtitle` vào `merge/g11`: mỗi lượt chạy của dòng chữ chạy là một thẻ chính đề xuất làm mờ cả dải, từ trước lần đọc đầu; địa chỉ web mất dấu chấm vẫn được nhận; watermark dưới phụ đề thành một thẻ; dòng phụ đề không có dấu hiệu quảng cáo nào sang danh sách phụ. Chỉ đổi bước dựng danh sách duyệt: khóa cache quét không đổi, job cũ chỉ cần "Chạy lại". Full suite 3.447 OK.
 - Còn lại: logo cố định góc trên phải của job 145 (khung thẻ cả phim nằm ở dòng chữ chạy phía trên), nút dựng lại giữ quyết định, giới hạn 250 track, lỗi nguồn xoay 90°/270°.
 
+### 14.17 G12: D, logo cố định góc trên phải của job 145 (2026-10-15)
+
+- Gộp `fix/top-logo-box` vào `merge/g12`: thẻ logo (visual_logo) đọc cùng chữ với một thẻ chữ cố định cả phim đề xuất làm mờ, ở chỗ chạm nhau, được nhập vào thẻ đó; khung làm mờ thành hợp của hai khung (job 145: (0,21,1280,32) → (0,21,1280,71), phủ logo). Khóa cache quét không đổi; full suite 3.458 OK.
+- Còn lại:
+  - sửa tận gốc khung chung của bước quét chữ (đổi khóa cache bước chữ, phải quét lại), làm chung với giới hạn 250 track khi người dùng yêu cầu;
+  - **A1d** (người dùng muốn làm sau, 2026-10-15): làn xuất song song không bao giờ mở trên card 6 GB, vì mọi bước quét đều được tính theo mức đỉnh của Qwen2-VL (4.943 MiB) trong khi Windows và các chương trình khác giữ khoảng 950–1.250 MiB. Tính theo bước đang chạy (visual_logo 4.690, localize_logo 1.309, text ≤ 833 MiB) và cho bước nặng hơn chờ bản xuất đang chạy xong; giữ biên 256 MiB và chỉ dùng NVENC;
+  - nút dựng lại giữ quyết định, lỗi nguồn xoay 90°/270°.
+
 ### 14.6 Cách session điều phối làm việc
 
 - Làm trong worktree `temp\wt-coord`, nhánh `coord/plan` (từ `origin/main`). **Không sửa thư mục chính** đang chạy Control Center.

@@ -1,3 +1,8 @@
+# G12 merge: a fixed logo under the site's top line is blurred with that line's card (2026-10-15, branch `merge/g12` from `main` `22b1582`; not yet in the main folder)
+
+- Merged `fix/top-logo-box` (session D, entry below) with `--no-ff`; docs conflicts keep both entries.
+- Scan cache keys unchanged (10 stages); full suite 3,458 tests OK, 31 skipped. The coordinator's rebuild of a copy of job 145 gives the film-long text card the box (0,21,1280,71), which covers the logo.
+
 # A fixed logo under the top line is blurred with the line's card — session D (2026-10-15, branch `fix/top-logo-box` from `de91261`; not merged)
 
 - Cause (job 145): the source site's name is a fixed logo at the top right, just under the site's scrolling line. The text scan read it all film long, but it joined 12 top-right tracks of the same name (most likely pieces of the line) and their consensus box (`textscan._consensus_overlay_box`) kept the line's box and dropped the logo's taller box. The film-long card blurred the line only; the visual-logo card in the logo's own box covered 175–180 s. Fixing the consensus would change the text stage's cache key; not done.
