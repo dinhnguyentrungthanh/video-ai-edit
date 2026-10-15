@@ -1,3 +1,7 @@
+## Export beside a new film's first GPU stage, A1c (2026-10-15) — branch `perf/a1c-preflight-lane`, not merged
+
+- An export queued ahead of a film still waiting at preflight now runs in the export lane beside the film's first GPU stage instead of holding the whole scan back. Unit tests, scan cache keys and the check on a test Control Center passed (scan identical to a scan alone, export passes the post-export check). Details in `docs/handoff/A1c-preflight-lane.md`.
+
 ## G9 merge, cover regions at the frame edge and clearer review cards (2026-10-15) — branch `merge/g9`, not yet in the main folder
 
 - Session H2: a cover region at the right or bottom frame edge no longer fails the export (job 141). Session R (squashed): outlined boxes, "Ẩn khung", a magnifier, "Máy đọc" lines and zone names on the review page. Scan cache keys unchanged; full suite 3,368 OK. Details in `CHANGELOG.md`.

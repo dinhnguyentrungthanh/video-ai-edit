@@ -110,6 +110,12 @@ SOURCE_RESTORE_REJECTED_MESSAGE = (
 MAIN_LANE = "main"
 EXPORT_LANE = "export"
 LANES = (MAIN_LANE, EXPORT_LANE)
+# Perf plan A1c. CPU stages short enough that the main lane runs them while the
+# first waiting export waits for the export lane beside the GPU stage after them.
+# A film that has not started waits at preflight (source, tools, models and disk
+# checked, no process); judged there for its first GPU stage, the export no longer
+# runs ahead of the whole scan.
+SHORT_CPU_STAGES = frozenset({"preflight"})
 # EXPORT_DEFERRED event text by the renderer's reason (final_renderer.DEFER_REASONS).
 EXPORT_DEFERRED_MESSAGES = {
     "encoder_error": "NVENC lỗi khi xuất song song; bản xuất sẽ được encode lại bằng x264 sau khi lượt quét đang chạy xong.",
@@ -901,9 +907,11 @@ class JobScheduler:
         stage is an export, the main lane takes the first waiting scan stage
         instead while the export lane runs an
         export (one render at a time), while that export goes to the export lane
-        beside the scan stage the main lane is about to start, and while it was
-        handed back from the export lane and the scan job that ran beside it still
-        has stages to run (perf plan A1b: x264 after the scan, never cutting in).
+        beside the scan stage the main lane is about to start, or beside the first
+        GPU stage after the short CPU stages it is about to start (A1c: a film at
+        preflight), and while it was handed back from the export lane and the scan
+        job that ran beside it still has stages to run (perf plan A1b: x264 after
+        the scan, never cutting in).
         """
         parallel = self._parallel_allowed()
         export_lane_busy = self._lane_busy(EXPORT_LANE)
@@ -946,13 +954,49 @@ class JobScheduler:
         with self._lock:
             if job_id in self._sequential_exports:
                 return False
-        if not runs_on_gpu(next_scan[2]):
+        if self._first_gpu_stage(next_scan) is None:
             return False
         # Nothing runs on the GPU now: what is in use is the baseline of the stage to come.
         decision = self._lane_decision(export, baseline_mib=None)
         if not decision.parallel:
             self._turn_down(job_id, decision)
         return decision.parallel
+
+    def _first_gpu_stage(
+        self, scan: tuple[dict[str, Any], dict[str, Any], PipelineStage],
+    ) -> PipelineStage | None:
+        """The GPU stage the export would run beside if the main lane takes ``scan``, or None.
+
+        The waiting stage itself when it runs on the GPU (A1b). When it is a short
+        CPU stage (A1c, SHORT_CPU_STAGES: preflight), the first GPU stage among the
+        job's stages still to run after it, reached through short CPU stages only;
+        the export lane takes the export once that stage's process starts, and the
+        main lane judges the export again (VRAM read anew) at that stage's boundary.
+        None when another CPU stage or no GPU stage comes first: the export then goes
+        first, as before.
+        """
+        job, stage, definition = scan
+        if runs_on_gpu(definition):
+            return definition
+        if definition.name not in SHORT_CPU_STAGES:
+            return None
+        definitions = self._definitions(job)
+        rows = self.store.stages(int(job["id"]))
+        names = [row["name"] for row in rows]
+        if stage["name"] not in names:
+            return None
+        for row in rows[names.index(stage["name"]) + 1:]:
+            # The stages next_pending_stage would hand out next, in order.
+            if row["state"] not in {"PENDING", "FAILED_RETRYABLE"}:
+                continue
+            following = definitions.get(row["name"])
+            if following is None:
+                return None
+            if runs_on_gpu(following):
+                return following
+            if following.name not in SHORT_CPU_STAGES:
+                return None
+        return None
 
     def _handed_back(self, job_id: int) -> bool:
         render = self.store.setting(f"render:{job_id}")

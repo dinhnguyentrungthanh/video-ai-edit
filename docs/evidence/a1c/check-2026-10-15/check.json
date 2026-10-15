@@ -1,0 +1,271 @@
+{
+  "written_at": "2026-10-15T14:05:34+07:00",
+  "code_commit": "566ff4fad58cfdfb4c2bd4e5701d2814aa9fd217",
+  "test_root": "a1c-check-20261015-132858",
+  "detectors": [
+    "advertising"
+  ],
+  "style": "live_action",
+  "clips": {
+    "E1": {
+      "width": 1280,
+      "height": 534,
+      "duration_seconds": 364.606523,
+      "sha256": "fc03cf58836360d6610d259699cf070a4f4d3194a75291da5597d77b5ba3ac55",
+      "bytes": 25846000
+    },
+    "S1": {
+      "width": 1280,
+      "height": 534,
+      "duration_seconds": 363.445195,
+      "sha256": "8d8aafaa8915299fb75ad692bee89c793e07307bf3a5f67a5c2f40aeaf44bf13",
+      "bytes": 22924892
+    },
+    "S2": {
+      "width": 1280,
+      "height": 534,
+      "duration_seconds": 363.445195,
+      "sha256": "b2d3a780a51637ca629a6d1d3a0f684c42e3109e305f55d984121d7b48918247",
+      "bytes": 22924928,
+      "copy_of": "S1"
+    }
+  },
+  "jobs": {
+    "E1": 1,
+    "S1": 2,
+    "S2": 3
+  },
+  "profile": {
+    "exit": 0,
+    "outcome": "done",
+    "nvenc_trial": "ok"
+  },
+  "ready": {
+    "queue_status": "READY_FOR_EDIT_PLAN",
+    "decisions": {
+      "KEEP": 3
+    },
+    "state": "READY_TO_EXPORT"
+  },
+  "checks": {
+    "export_beside_first_gpu_stage": true,
+    "preflight_ran_before_the_export": true,
+    "gpu_stage_started_before_the_export": true,
+    "export_only_in_the_export_lane": true,
+    "both_lanes_at_once": true,
+    "scan_identical_to_alone": true,
+    "export_passes_post_export_check": true,
+    "every_ffmpeg_below_normal": true,
+    "real_queue_stayed_empty_and_paused": true,
+    "passed": true
+  },
+  "details": {
+    "first_gpu_stage_of_the_film": "text",
+    "timeline": [
+      {
+        "job": "S1",
+        "stage": "preflight",
+        "start_s": 0.0,
+        "end_s": 0.1
+      },
+      {
+        "job": "S1",
+        "stage": "text",
+        "start_s": 0.1,
+        "end_s": 29.0
+      },
+      {
+        "job": "E1",
+        "stage": "render",
+        "start_s": 0.5,
+        "end_s": 62.1
+      },
+      {
+        "job": "S1",
+        "stage": "visual_logo",
+        "start_s": 29.0,
+        "end_s": 68.2
+      },
+      {
+        "job": "S1",
+        "stage": "localize_logo",
+        "start_s": 68.3,
+        "end_s": 95.4
+      },
+      {
+        "job": "S1",
+        "stage": "build_review",
+        "start_s": 95.4,
+        "end_s": 121.7
+      }
+    ],
+    "lane_events": [
+      {
+        "event": "EXPORT_LANE_PARALLEL",
+        "level": "INFO",
+        "payload": {
+          "reason": "opened",
+          "total_mib": 6144,
+          "used_mib": 409,
+          "free_mib": 5734,
+          "baseline_mib": 409,
+          "scan_peak_mib": 4943,
+          "need_mib": 170,
+          "margin_mib": 256,
+          "left_mib": 622,
+          "width": 1280,
+          "height": 534,
+          "scan_job_id": 2,
+          "scan_stage": "text"
+        }
+      }
+    ],
+    "lane_segments": [
+      {
+        "lane": "main",
+        "job_id": 2,
+        "stage": "text",
+        "pid": 4196,
+        "start_s": 0.6,
+        "end_s": 29.2
+      },
+      {
+        "lane": "export",
+        "job_id": 1,
+        "stage": "render",
+        "pid": 37620,
+        "start_s": 1.2,
+        "end_s": 62.7
+      },
+      {
+        "lane": "main",
+        "job_id": 2,
+        "stage": "visual_logo",
+        "pid": 36808,
+        "start_s": 30.3,
+        "end_s": 68.2
+      },
+      {
+        "lane": "main",
+        "job_id": 2,
+        "stage": "localize_logo",
+        "pid": 14024,
+        "start_s": 69.3,
+        "end_s": 83.6
+      },
+      {
+        "lane": "main",
+        "job_id": 2,
+        "stage": "localize_logo",
+        "pid": 31652,
+        "start_s": 83.6,
+        "end_s": 95.7
+      },
+      {
+        "lane": "main",
+        "job_id": 2,
+        "stage": "build_review",
+        "pid": 47476,
+        "start_s": 95.7,
+        "end_s": 122.3
+      }
+    ],
+    "overlap_seconds": 60.4,
+    "stage_overlap_seconds": {
+      "text": 28.0,
+      "visual_logo": 32.4,
+      "localize_logo": 0.0,
+      "build_review": 0.0
+    },
+    "post_export_check": {
+      "eligible_for_delete_source": true,
+      "refusal": null,
+      "encoder": "h264_nvenc",
+      "lane": "parallel",
+      "validation_method": "cpu_full_decode",
+      "fallback": null
+    },
+    "scan_comparison": {
+      "files": 69,
+      "identical": 69,
+      "only_alone": [],
+      "only_beside": [],
+      "different_files": [],
+      "not_compared_run_logs": [
+        "text/logo-routing-prewarm.log"
+      ],
+      "routing_cache": {
+        "compared": true,
+        "files": {
+          "left": 1,
+          "right": 1
+        },
+        "ok": true
+      },
+      "grounding": {
+        "left": {
+          "computed": 1,
+          "cache_hits": 0
+        },
+        "right": {
+          "computed": 1,
+          "cache_hits": 0
+        },
+        "own_boxes": true
+      },
+      "ignored_keys": [
+        "created_at",
+        "decided_at",
+        "downloaded_at",
+        "elapsed_seconds",
+        "metrics:clock",
+        "metrics:detect_seconds",
+        "metrics:elapsed_seconds",
+        "metrics:peak_cuda_memory_bytes",
+        "metrics:peak_process_ram_bytes",
+        "metrics:recognize_seconds",
+        "metrics:total_wall_seconds",
+        "metrics:unattributed_wall_seconds",
+        "metrics:video_seconds_per_processing_second",
+        "metrics:wall_seconds",
+        "peak_cuda_bytes",
+        "routing_cache.key/path/bytes",
+        "updated_at"
+      ],
+      "passed": true
+    },
+    "process_priority": {
+      "run": {
+        "ffmpeg": {
+          "below_normal": 6
+        },
+        "other": {
+          "below_normal": 24
+        }
+      },
+      "alone": {
+        "ffmpeg": {
+          "below_normal": 6
+        },
+        "other": {
+          "below_normal": 21
+        }
+      }
+    },
+    "real_queue_changes": {
+      "profile": [],
+      "ready": [],
+      "run": [],
+      "alone": []
+    },
+    "seconds": {
+      "run": 123.0,
+      "alone": 112.5
+    },
+    "vram_mib": {
+      "run_before": 409,
+      "run_peak": 5253,
+      "alone_peak": 5080
+    }
+  }
+}

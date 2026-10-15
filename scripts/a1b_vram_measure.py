@@ -45,8 +45,9 @@ from golden_trial_root import _junction, _link_tree, _links  # noqa: E402
 from biliflow.final_renderer import DEFAULT_MAX_OUTPUT_BYTES, DEFAULT_TARGET_OUTPUT_BYTES  # noqa: E402
 
 PREFIX = "a1b-measure-"
-# The throw-away roots of the A1b scripts (this one and scripts/a1b_gates.py).
-PREFIXES = (PREFIX, "a1b-gates-")
+# The throw-away roots of the A1b scripts (this one and scripts/a1b_gates.py) and of A1c's check
+# (scripts/a1c_check.py).
+PREFIXES = (PREFIX, "a1b-gates-", "a1c-check-")
 MARKER = "biliflow-install.json"
 REAL_PORT = 8765
 MIB = 1024 * 1024
