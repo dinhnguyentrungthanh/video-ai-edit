@@ -1,5 +1,13 @@
 # BiliFlow session handoff
 
+## G11 merge, the source site's scrolling line and the watermark in the subtitle band (session D) — 2026-10-15, branch `merge/g11` (worktree `temp\wt-merge-g11`), not yet in the main folder
+
+- **Request:** exported episodes still showed the source site's scrolling line and its address under the subtitles; the user asked for session D's fix to be checked and merged.
+- **Merge:** `fix/ticker-subtitle` (`220d25f`, `e6daeb5`, `16a4469`, `c230029`, `9fe0cff`, `de91261`) into `merge/g11` from `main` `bd0a7b8` with `--no-ff`, no conflict; the merged tree is identical to `de91261`.
+- **Gates:** scan cache keys identical to `main` (10 stages: no rescan); full suite on `de91261` 3,447 tests OK, 30 skipped (2026-10-15 21:15–21:58); the real-OCR clip test with the install's models 2/2 OK. Coordinator's own rebuild gate on copies of jobs 138, 139 and 145 (temporary root): the scrolling lines of 138 and 139 are now main cards suggesting BLUR over their whole crossing (139 covers its unblurred seconds); 145 50 → 8 cards, subtitle-band ad tracks weakened 0, rebuild keeping decisions loses 0.
+- **Still open:** job 145's fixed logo in the top-right corner is not covered: its film-long text card's box stays on the scrolling line above it, and the visual-logo card at the logo's place lasts 5 s (session D works on it, branch `fix/top-logo-box` from `de91261`). The "Dựng lại danh sách duyệt (giữ quyết định)" action, the 250-track cap and the two limits in `docs/handoff/D-ticker.md` wait.
+- **Next:** with the Control Center's queue empty and the user's explicit go, stop it and fast-forward the main folder to `merge/g11`; the user restarts it and uses "Chạy lại" on the affected jobs whose sources remain, then reviews and exports again; push only on the user's word.
+
 ## Session D part 2, the site watermark in the subtitle band — 2026-10-15, branch `fix/ticker-subtitle` (worktree `temp\wt-detect`), not merged
 
 - **Request:** jobs 134 and 143 (also 130, 136, 145): the source site's watermark in the subtitle band flickers into dozens of cards and subtitle lines are caught as ads. Group one watermark into one card with intervals suggesting BLUR; separate subtitle lines from ad text without ever weakening ad detection in the subtitle band.

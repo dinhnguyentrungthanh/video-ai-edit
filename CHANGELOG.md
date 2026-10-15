@@ -1,3 +1,8 @@
+# G11 merge: the source site's scrolling line and the watermark in the subtitle band (2026-10-15, branch `merge/g11` from `main` `bd0a7b8`; not yet in the main folder)
+
+- Merged `fix/ticker-subtitle` (session D, parts 1 and 2, entries below) with `--no-ff`.
+- Scan cache keys unchanged (10 stages); full suite 3,447 tests OK, 30 skipped; the real-OCR clip test 2/2 OK with the install's models. The coordinator's rebuild gate on copies of jobs 138, 139 and 145 agrees with session D's gates; job 145's top-right logo box is still open.
+
 # The site watermark in the subtitle band is one card; subtitle lines without ad evidence leave the main list — session D, part 2 (2026-10-15, branch `fix/ticker-subtitle`; not merged)
 
 - Cause (jobs 130, 134, 136, 143, 145): the source site's address sits just under the subtitles and the text scan reads it in runs (a subtitle covers it, OCR misreads a letter), so one film had 47–64 tracks of it. After part 1 each was a main BLUR card; cards close in time merged with the subtitle cards between them into boxes over the dialogue (job 143: up to 715 × 87 px), and the user's exports still showed the address (job 134: read at 33 of 180 samples in its first 100 s). Single dialogue lines scored as uncertain ad text also filled the main list.

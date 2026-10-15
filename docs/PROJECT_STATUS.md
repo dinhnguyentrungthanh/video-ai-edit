@@ -1,3 +1,7 @@
+## G11 merge, the source site's scrolling line and the watermark in the subtitle band (2026-10-15) — branch `merge/g11`, not yet in the main folder
+
+- Session D, parts 1 and 2 (entries below): one main card per crossing of the site's scrolling line, web addresses without their dot, one card for the site's mark under the subtitles, subtitle lines without ad evidence moved to the optional cards. Scan cache keys unchanged; full suite 3,447 OK. Open: job 145's top-right logo box. Details in `CHANGELOG.md`.
+
 ## The site watermark in the subtitle band, session D part 2 (2026-10-15) — branch `fix/ticker-subtitle`, not merged
 
 - The source site's address under the subtitles (jobs 130, 134, 136, 143, 145) is now one main card suggesting BLUR over every time it shows, in its own box, instead of dozens of cards that merged into boxes over the dialogue: main cards 134 42 → 6, 143 64 → 22, 136 38 → 9, 145 50 → 8. Subtitle lines with no ad evidence go to the optional cards; every line with a web address, phone number, @handle, policy hit or ad score keeps its main card (0 weakened in 25 jobs). Review build only: scan cache keys unchanged, old jobs need no rescan ("Chạy lại", then one BLUR on the watermark card). Details in `docs/handoff/D-ticker.md`.

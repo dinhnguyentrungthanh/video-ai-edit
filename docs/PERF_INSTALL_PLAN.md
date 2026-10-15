@@ -1014,6 +1014,11 @@ Session cloud lập kế hoạch dừng vì hết credit. Một session **điề
 - Gộp `perf/a1c-preflight-lane` vào `merge/g10`: bản xuất xếp trước một phim chưa quét giờ chạy ở làn xuất cạnh bước GPU đầu tiên của phim đó, thay vì bắt cả lượt quét chờ. Mọi điều kiện an toàn của A1b giữ nguyên. Khóa cache quét không đổi; full suite 3.382 OK; kiểm thật 9/9 trên Control Center thử.
 - Tiếp theo: đợt chất lượng phát hiện (watermark chập chờn ở dải phụ đề thành một thẻ, tách phụ đề khỏi quảng cáo mà không làm yếu việc bắt quảng cáo ở dải phụ đề), lỗi nguồn xoay 90°/270°.
 
+### 14.16 G11: D, dòng chữ chạy của trang nguồn và watermark trong dải phụ đề (2026-10-15)
+
+- Gộp `fix/ticker-subtitle` vào `merge/g11`: mỗi lượt chạy của dòng chữ chạy là một thẻ chính đề xuất làm mờ cả dải, từ trước lần đọc đầu; địa chỉ web mất dấu chấm vẫn được nhận; watermark dưới phụ đề thành một thẻ; dòng phụ đề không có dấu hiệu quảng cáo nào sang danh sách phụ. Chỉ đổi bước dựng danh sách duyệt: khóa cache quét không đổi, job cũ chỉ cần "Chạy lại". Full suite 3.447 OK.
+- Còn lại: logo cố định góc trên phải của job 145 (khung thẻ cả phim nằm ở dòng chữ chạy phía trên), nút dựng lại giữ quyết định, giới hạn 250 track, lỗi nguồn xoay 90°/270°.
+
 ### 14.6 Cách session điều phối làm việc
 
 - Làm trong worktree `temp\wt-coord`, nhánh `coord/plan` (từ `origin/main`). **Không sửa thư mục chính** đang chạy Control Center.
