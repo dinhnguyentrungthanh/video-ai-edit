@@ -1,9 +1,14 @@
-"""fix/ticker-subtitle gate, part 1: review queues rebuilt from copies of real scan reports.
+"""fix/ticker-subtitle gate, parts 1 and 2: review queues rebuilt from copies of real scan reports.
 
     jobs    For each job id: its report folder and review queue copied into --work, then
             built fresh by the baseline tree and by the candidate tree, and rebuilt by the
             candidate with keep_decisions=True over the copy of the user's queue. A job
             whose source is gone gets an empty placeholder source (fresh builds only).
+            Part 2 adds, per build: the repeated-watermark cards, the subtitle lines moved
+            to the optional list, and which subtitle-band tracks holding ad evidence (a web
+            address, phone number, @handle or policy hit, by the candidate tree's own
+            functions) a main-list card cites; ``subtitle_band_ads.weakened`` lists every
+            such track the baseline's main list cited and the candidate's does not.
     golden  The Golden Set v2 baseline's nine trial folders copied into --work, each queue
             built fresh by both trees (benchmark settings: no studio-logo memory), scored
             with evaluate_golden.py score, then compared with compare --gate detector. A
@@ -106,11 +111,61 @@ def _scrolling_card(item: dict) -> dict:
     }
 
 
-def summarize(queue: dict) -> dict:
+def _watermark_card(item: dict) -> dict:
+    details = item.get("repeated_watermark") or {}
+    return {
+        "start": item["start_seconds"], "end": item["end_seconds"],
+        "moments": len(item.get("detected_intervals") or []), "sightings": details.get("sightings"),
+        "region": item.get("suggested_region_source_pixels"), "band": _band(item),
+        "suggested": item.get("suggested_decision"), "decision": item.get("decision"),
+        "carried_from": len(item.get("decision_carried_from") or []),
+    }
+
+
+def _cited_tracks(items: list[dict]) -> set[str]:
+    """``<report>#track:<id>`` of every track a card cites, also through absorbed supporting cards."""
+    refs: set[str] = set()
+    for item in items:
+        refs.update(str(ref) for ref in item.get("source_candidate_refs") or [])
+        for support in item.get("supporting_detections") or []:
+            refs.update(str(ref) for ref in support.get("source_candidate_refs") or [])
+    return {ref.replace("\\", "/") for ref in refs if "#track:" in ref}
+
+
+def subtitle_band_ad_tracks(root: Path, reports: list[Path], candidate: Path) -> list[str]:
+    """``<report>#track:<id>`` of every subtitle-zone track holding ad evidence."""
+    if str(candidate) not in sys.path:
+        sys.path.insert(0, str(candidate))
+    from biliflow.ad_text_patterns import ad_text_tokens
+    from biliflow.scrolling_text import web_address_tokens
+    found = []
+    for report in reports:
+        payload = read(report)
+        relative = report.relative_to(root).as_posix()
+        for index, track in enumerate(payload.get("tracks") or []):
+            texts = [str(text) for text in track.get("sample_text") or []]
+            if track.get("zone") == "subtitle" and (
+                list(track.get("policy_hits") or [])
+                or any(web_address_tokens(text) or ad_text_tokens(text) or "@" in text for text in texts)
+            ):
+                found.append(f"{relative}#track:{track.get('track_id', index)}")
+    return found
+
+
+def summarize(queue: dict, ad_tracks: list[str] | None = None) -> dict:
     items, advisory = queue.get("items") or [], queue.get("advisory_items") or []
     suggested_blur = [item for item in items if item.get("suggested_decision") == "BLUR"]
     scrolling = [item for item in items if item.get("candidate_type") == "scrolling_text"]
+    watermarks = [item for item in items if item.get("candidate_type") == "repeated_watermark"]
+    main_refs = _cited_tracks(items)
+    band_ads = {
+        "tracks": len(ad_tracks or []),
+        "main_list": sorted(ref for ref in ad_tracks or [] if ref in main_refs),
+    }
     return {
+        "repeated_watermark_cards": [_watermark_card(item) for item in sorted(watermarks, key=lambda v: v["start_seconds"])],
+        "subtitle_line_cards": sum(1 for item in advisory if isinstance(item.get("subtitle_line"), dict)),
+        "subtitle_band_ads": band_ads,
         "items": len(items),
         "advisory_items": len(advisory),
         "pending": sum(1 for item in items if item.get("decision") is None),
@@ -218,13 +273,17 @@ def gate_job(work: Path, trees: dict[str, Path], job_id: int, row: dict) -> dict
         job = {"root": str(root), "reports": [str(p) for p in reports], "queue": str(fresh), "ffmpeg": str(FFMPEG),
                "options": build_options(old, memory=True)}
         run_build(tree, job)
-        result[f"{side}_fresh"] = summarize(read(fresh))
+        ad_tracks = subtitle_band_ad_tracks(root, reports, trees["candidate"])
+        result[f"{side}_fresh"] = summarize(read(fresh), ad_tracks)
         if side == "candidate" and has_source:
             run_build(tree, {**job, "queue": str(queue_copy), "keep_decisions": True})
             rebuilt = read(queue_copy)
-            result["candidate_rebuild"] = summarize(rebuilt)
+            result["candidate_rebuild"] = summarize(rebuilt, ad_tracks)
             result["candidate_rebuild"]["decision_carry"] = rebuilt.get("decision_carry")
             result["candidate_rebuild"]["decisions_kept"] = decisions_kept(old, rebuilt)
+    base_ads = result["baseline_fresh"]["subtitle_band_ads"]
+    cand_ads = result["candidate_fresh"]["subtitle_band_ads"]
+    cand_ads["weakened"] = sorted(set(base_ads["main_list"]) - set(cand_ads["main_list"]))
     result["user_queue"] = summarize(old)
     result["user_queue"]["old_text_blur_top_band"] = old_blur_cards_in_band(old, "top")
     return result
@@ -248,7 +307,11 @@ def jobs_command(args) -> None:
         rebuild = result.get("candidate_rebuild")
         print(f"job {result['job']}: items {base['items']} -> {cand['items']}, suggested BLUR "
               f"{base['suggested_blur']} -> {cand['suggested_blur']} (bottom {base['suggested_blur_bottom_band']} -> "
-              f"{cand['suggested_blur_bottom_band']}), scrolling {len(cand['scrolling_cards'])}"
+              f"{cand['suggested_blur_bottom_band']}), scrolling {len(cand['scrolling_cards'])}, watermark cards "
+              f"{len(cand['repeated_watermark_cards'])}, subtitle lines moved {cand['subtitle_line_cards']}, "
+              f"subtitle-band ad tracks in main list {len(base['subtitle_band_ads']['main_list'])} -> "
+              f"{len(cand['subtitle_band_ads']['main_list'])} of {cand['subtitle_band_ads']['tracks']} "
+              f"(weakened {len(cand['subtitle_band_ads']['weakened'])})"
               + (f", rebuild pending {rebuild['pending']}, lost {len(rebuild['decisions_kept']['lost'])}"
                  if rebuild else ""), flush=True)
 

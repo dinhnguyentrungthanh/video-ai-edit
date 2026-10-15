@@ -11,7 +11,8 @@ web-address rule does not read, such as "examplecom" in lower case or
 "EXAMPLE - COM". A name without its ending ("example") is not matched.
 
 Only a BLUR adds or refreshes a key; no other decision, rebuild or error removes
-one. Only review_workflow imports this module: it is in no scan stage's cache key.
+one. Only review_workflow and subtitle_band import this module: it is in no scan
+stage's cache key.
 """
 from __future__ import annotations
 

@@ -1,3 +1,7 @@
+## The site watermark in the subtitle band, session D part 2 (2026-10-15) — branch `fix/ticker-subtitle`, not merged
+
+- The source site's address under the subtitles (jobs 130, 134, 136, 143, 145) is now one main card suggesting BLUR over every time it shows, in its own box, instead of dozens of cards that merged into boxes over the dialogue: main cards 134 42 → 6, 143 64 → 22, 136 38 → 9, 145 50 → 8. Subtitle lines with no ad evidence go to the optional cards; every line with a web address, phone number, @handle, policy hit or ad score keeps its main card (0 weakened in 25 jobs). Review build only: scan cache keys unchanged, old jobs need no rescan ("Chạy lại", then one BLUR on the watermark card). Details in `docs/handoff/D-ticker.md`.
+
 ## The source site's scrolling line and dot-less web addresses, session D part 1 (2026-10-15) — branch `fix/ticker-subtitle`, not merged
 
 - The source site's scrolling line in the top band is now one main card suggesting BLUR over the whole band, from before its first reading to after its last (job 107's leak at 2922–2928 s and job 108's unblurred line are covered); web addresses read without their dot are found and always reach the main list. A BLUR on a web-address card is remembered (`state/ad-text-memory.json`) and later builds suggest BLUR for that address. Review build and decision code only: scan cache keys unchanged, old jobs need no rescan. A rebuild that keeps decisions exists in code but has no Control Center action yet. Details in `docs/handoff/D-ticker.md`.

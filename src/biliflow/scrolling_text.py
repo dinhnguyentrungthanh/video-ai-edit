@@ -15,8 +15,9 @@ reading at the frame's edge is missing; suggested BLUR. ``promote_web_address_tr
 sends every other track with a web address to the main list with a BLUR
 suggestion. Both only regroup and suggest; the reviewer decides.
 
-Built from an existing text scan, so old jobs need no rescan. Only
-``review_workflow`` imports this module: it is in no scan stage's cache key.
+Built from an existing text scan, so old jobs need no rescan. Only review-build
+modules (``review_workflow``, ``ad_text_memory``, ``subtitle_band``) import this
+module: it is in no scan stage's cache key.
 """
 from __future__ import annotations
 
@@ -109,13 +110,17 @@ def promote_web_address_tracks(payload: dict, remembered: Iterable[str] = ()) ->
     reviewer blurred before (``ad_text_memory``); a track whose folded reading
     holds one counts as having a web address. The payload is returned unchanged
     (the same object) when no track has a web address; untouched tracks stay the
-    same objects.
+    same objects. A scrolling line, and a track that already names its web address
+    (``subtitle_band``'s repeated watermark), keeps its own routing and reason.
     """
     remembered = tuple(remembered)
     output_tracks = []
     changed = False
     for track in payload.get("tracks") or []:
-        eligible = isinstance(track, dict) and track.get("candidate_type") != SCROLLING_CANDIDATE_TYPE
+        eligible = (
+            isinstance(track, dict) and track.get("candidate_type") != SCROLLING_CANDIDATE_TYPE
+            and not isinstance(track.get("web_address"), dict)
+        )
         tokens = _track_web_addresses(track) if eligible else []
         folded = [fold_alnum(text) for text in track.get("sample_text") or []] if eligible and remembered else []
         known = [key for key in remembered if any(key in reading for reading in folded)]

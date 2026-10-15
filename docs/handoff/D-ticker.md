@@ -1,10 +1,10 @@
-# Bàn giao D – dòng chữ chạy của trang nguồn và địa chỉ web mất dấu chấm (phần 1)
+# Bàn giao D – dòng chữ chạy của trang nguồn, địa chỉ web mất dấu chấm (phần 1) và watermark trong dải phụ đề (phần 2)
 - Nhánh: fix/ticker-subtitle (từ main bd0a7b8) · Worktree: `temp\wt-detect` · Cập nhật: 2026-10-15
 - Chạy ở: PC · Trạng thái: **phần 1 xong (commit 220d25f, e6daeb5 mục 5, 16a4469 và c230029 sửa theo một lượt
-  review đọc mã), mọi cổng đạt, chạy lại trên c230029; chờ điều phối gộp và chạy full suite.** Chưa push, chưa merge.
-  Phần 2 (watermark trong dải phụ đề, job 134/143) làm tiếp trên cùng nhánh.
-- Bằng chứng: `docs/evidence/scrolling-text/README.md` (quy tắc, số đo, cổng). Kết quả có chữ OCR thật chỉ nằm trong
-  `reports\evidence\ticker-d\` (không vào Git).
+  review đọc mã), mọi cổng đạt, chạy lại trên c230029. Phần 2 xong (commit sau 9fe0cff), mọi cổng đạt. Chờ điều
+  phối gộp và chạy full suite.** Chưa push, chưa merge.
+- Bằng chứng: `docs/evidence/scrolling-text/README.md` (phần 1) và `docs/evidence/subtitle-band/README.md` (phần 2).
+  Kết quả có chữ OCR thật chỉ nằm trong `reports\evidence\ticker-d\` (không vào Git).
 
 ## Đã xong (phần 1)
 
@@ -71,8 +71,63 @@
   `build_review_queue(keep_decisions=True)` trên revision đang dùng, đưa job đã xuất về duyệt rồi xuất lại: cần điều
   phối đồng ý trước.
 
+## Đã xong (phần 2: watermark trong dải phụ đề, phụ đề bị bắt nhầm)
+
+### 1. Vì sao
+- Job 130, 134, 136, 143, 145: địa chỉ trang nguồn nằm ngay dưới phụ đề. Quét chữ đọc được nó từng quãng (phụ đề che,
+  OCR đọc sai một chữ), nên một phim có 47–64 track của nó. Sau phần 1 mỗi track là một thẻ BLUR; các thẻ gần nhau
+  lại gộp với thẻ phụ đề ở giữa thành khung to đè lên phụ đề (143: khung tới 715 × 87 px). Bản đã xuất vẫn lộ địa
+  chỉ (134: OCR đọc được ở 33 trên 180 mẫu của 100 s đầu). Dòng thoại đọc một lần, điểm quảng cáo "chưa chắc",
+  cũng thành thẻ chính.
+
+### 2. Cách sửa (`src/biliflow/subtitle_band.py`, chỉ ở bước dựng danh sách duyệt; khóa cache quét không đổi)
+- `group_repeated_watermarks`: các track có địa chỉ web (hoặc địa chỉ đã nhớ) ở cùng chỗ (IoU ≥ 0,5 với khung giữa
+  của nhóm) và cùng chữ đã chuẩn hóa thành một thẻ `repeated_watermark`, đề xuất BLUR, mỗi lần hiện là một khoảng
+  (từ một lần đọc trước tới hết lần đó). Nhóm từ 10 lần trở lên thì nối các khoảng cách nhau ≤ 150 s, và khung bỏ
+  10 % lần đọc lệch nhất ở mỗi cạnh. Thẻ này không bao giờ bị gộp với thẻ khác hay bị thẻ watermark cố định nuốt.
+- Vì sao nối 150 s: OCR trên video gốc vẫn đọc được watermark ở giữa các khoảng, cả khoảng dài hơn 60 s, ở cả năm
+  phim (`docs/evidence/subtitle-band/gap_check.py`). Quét bỏ sót chứ watermark không biến mất. Nên năm watermark này
+  mỗi cái thành một khoảng liền từ trước lần thấy đầu tới sau lần thấy cuối. Dòng chỉ đọc hai lần (job 130, cách nhau
+  870 s) vẫn hai khoảng. Yêu cầu là "một thẻ nhiều khoảng": thẻ vẫn có nhiều khoảng khi watermark thật sự rời đi
+  (khoảng trống trên 150 s); ở năm phim này bằng chứng cho thấy nó không rời đi.
+- `move_subtitle_lines`: dòng ở vùng phụ đề, đọc ≤ 2 lần, nằm giữa khung, định tuyến đúng `REVIEW_UNCERTAIN`, trong
+  phim có ≥ 20 dòng như vậy, không có dấu hiệu quảng cáo nào: sang danh sách phụ ("Giống một dòng phụ đề; không chặn
+  xuất video", đề xuất KEEP).
+- **Không làm yếu việc bắt quảng cáo trong dải phụ đề:** dòng có địa chỉ web (cả dạng cũ "tên . vn", "xem tv"), địa
+  chỉ đã nhớ, số điện thoại, @, từ khóa chính sách, nhãn ngữ nghĩa đứng đầu là "advertisement", điểm quảng cáo
+  ≥ 0,40, hay định tuyến khác `REVIEW_UNCERTAIN` (ví dụ `REVIEW_AD_LIKELY`) vẫn là thẻ chính như trước. Nhãn và
+  điểm quảng cáo được thêm sau một lượt review đọc mã.
+- `src/biliflow/ad_text_patterns.py`: các mẫu số điện thoại/@/tên miền cũ, chuyển nguyên từ `review_workflow`.
+
+### 3. Cổng (chi tiết: `docs/evidence/subtitle-band/README.md`)
+- Test `tests/test_subtitle_band.py` 15 OK; 17 module duyệt 407 test OK.
+- Số thẻ chính (bd0a7b8 → nhánh): 134 42 → 6, 143 64 → 22, 136 38 → 9, 145 50 → 8, 130 9 → 8; 20 job còn lại như
+  sau phần 1. Thẻ đề xuất BLUR ở dải dưới không giảm ở job nào.
+- Track quảng cáo trong dải phụ đề (có địa chỉ web, số điện thoại, @ hay từ khóa chính sách) có thẻ chính: 134
+  50 → 65 trên 66, 143 45 → 47 trên 47, 136 47 → 60, 145 47 → 50, 130 46 → 52; **bị yếu đi (trước có, giờ không): 0
+  ở cả 25 job.**
+- Quyết định cũ của người dùng trên các dòng bị chuyển: 33 thẻ KEEP; 12 thẻ BLUR đều là khung gộp có cả watermark
+  (watermark vẫn có thẻ riêng ở danh sách chính); không thẻ BLUR/CUT nào chỉ gồm các dòng bị chuyển.
+- Xuất thử 100 s đầu job 143 và 134 (x264): watermark đọc được ở 0 mẫu sau một BLUR trên thẻ mới (gốc: 116 và 111;
+  bản người dùng đã xuất: 15 và 55, có địa chỉ 2 và 33); phụ đề job 143 đọc được 72 mẫu (gốc 69, bản đã xuất 21 vì
+  khung gộp che mất).
+- Dựng lại giữ quyết định: mất 0. Thẻ watermark chờ một quyết định ở 134, 136, 143, 145 (người dùng đã BLUR hầu hết
+  các lần nhưng KEEP ít nhất một khung gộp có cả phụ đề, nên các quyết định cũ mâu thuẫn); mọi thẻ cũ giữ nguyên.
+- Golden v2: bắt thêm 1, mất 0, bẫy mới 0; 19/19 nhãn quảng cáo ở danh sách chính, dương tính giả 24 → 24. Khóa cache
+  quét: không đổi.
+
+### 4. Giới hạn
+- Chấm điểm golden chỉ coi thẻ cảnh là nhiều khoảng; chưa golden nào có thẻ watermark nên không ảnh hưởng hôm nay.
+- Dựng lại trên chính danh sách cũ còn thẻ chưa quyết định thì thẻ phụ đề cũ chưa quyết định quay lại danh sách
+  chính (cơ chế "không bỏ thẻ chờ duyệt"); danh sách mới tinh ("Chạy lại") thì không.
+
 ## Cách người dùng áp dụng cho job cũ (khi nhánh đã vào main và Control Center khởi động lại)
-- Job còn video gốc (107, 108, 128, 140, 147): hiện chỉ có "Chạy lại" (duyệt lại toàn bộ thẻ). Nếu điều phối đồng ý
-  nút "Dựng lại danh sách duyệt", người dùng bấm nút đó, chỉ duyệt thẻ mới (job 108: thẻ dòng chữ chạy 402–423,5 s),
-  rồi "Xuất video" lại.
+- Không cần quét lại: mọi thay đổi chỉ ở bước dựng danh sách duyệt, khóa cache quét không đổi.
+- Hiện chỉ có "Chạy lại": tạo revision mới, các bước quét lấy lại từ cache nếu còn, danh sách mới không có quyết định
+  cũ. Với job 134, 136, 143, 145 đây là cách gọn nhất: còn 6–22 thẻ thay vì 38–64, bấm BLUR một lần trên thẻ
+  watermark, xem các thẻ còn lại rồi "Xuất video" lại. Các khung gộp to trước đây (đè lên phụ đề) không còn.
+- Nếu điều phối đồng ý nút "Dựng lại danh sách duyệt (giữ quyết định)": mọi quyết định cũ được giữ (kể cả các BLUR
+  khung gộp to cũ, vẫn áp dụng), chỉ phải duyệt thẻ mới: job 108 thẻ dòng chữ chạy 402–423,5 s; job 134/136/143/145
+  thẻ watermark (một quyết định). Muốn bỏ khung gộp to cũ thì đổi các thẻ đó thành KEEP.
+- Job còn gốc của phần 1 (107, 108, 128, 140, 147): như trên ("Chạy lại", hoặc nút dựng lại nếu có).
 - Job đã mất gốc (101–103, 112, 118): không xuất lại được.

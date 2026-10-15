@@ -86,11 +86,19 @@ from biliflow.platform_memory import (
 )
 from biliflow.platform_names import match_platform_texts
 from biliflow.ad_text_memory import AD_TEXT_MEMORY_PATH, remember_blurred_addresses, remembered_keys
+from biliflow.ad_text_patterns import AD_TEXT_PATTERNS as _AD_TEXT_PATTERNS
+from biliflow.ad_text_patterns import ad_text_tokens
 from biliflow.review_decision_carry import carry_review_decisions
 from biliflow.scrolling_text import (
     SCROLLING_CANDIDATE_TYPE,
     promote_scrolling_text,
     promote_web_address_tracks,
+)
+from biliflow.subtitle_band import (
+    REPEATED_WATERMARK_TYPE,
+    SUBTITLE_LINE_REASON,
+    group_repeated_watermarks,
+    move_subtitle_lines,
 )
 from biliflow.blur_filter import (
     CHROMA_420,
@@ -713,6 +721,8 @@ def reconcile_persistent_overlay_items(
                 or support.get("candidate_type") in {
                     "opening_promotion", "branded_end_card", "promotional_segment",
                     "scene_text", "subtitle", "title_overlay", *GATE_PROTECTED_TYPES,
+                    # One card holds every run of a site's address with its own moments.
+                    REPEATED_WATERMARK_TYPE,
                 }
                 or support.get("review_kind") == "title_overlay"
                 or not isinstance(support_region, dict)
@@ -1820,7 +1830,9 @@ def _advisory_text_items(root: Path, report_path: Path, payload: dict) -> list[d
     """
     advisory_tracks = []
     for track in payload.get("tracks", []):
-        if not _low_ad_optional_track(track):
+        # subtitle_band.move_subtitle_lines marks a centred subtitle line read as
+        # uncertain ad text (it has no main-list card).
+        if not _low_ad_optional_track(track) and not isinstance(track.get("subtitle_line"), dict):
             continue
         clone = dict(track)
         clone["review_candidate"] = True
@@ -1839,7 +1851,10 @@ def _advisory_text_items(root: Path, report_path: Path, payload: dict) -> list[d
         item["advisory"] = True
         item["reasons"] = list(dict.fromkeys(
             list(item.get("reasons") or [])
-            + ["Ứng viên OCR điểm quảng cáo thấp; không chặn xuất video"]
+            + [
+                SUBTITLE_LINE_REASON if isinstance(item.get("subtitle_line"), dict)
+                else "Ứng viên OCR điểm quảng cáo thấp; không chặn xuất video"
+            ]
         ))
     return items
 
@@ -1891,18 +1906,8 @@ def order_text_previews(items: list[dict], tracks: dict[str, dict]) -> list[dict
 
 # Opening studio idents (user decision 2026-10-01, R3a/R3b). Ad evidence is any
 # website / phone / @handle token, ad-routed text, or a brand region that is not
-# the film's persistent watermark (that watermark is its own card).
-_AD_TEXT_PATTERNS = (
-    re.compile(r"\b(?:https?|www)\b", re.IGNORECASE),
-    re.compile(
-        r"[a-z0-9][a-z0-9-]*\s?[.,·•]\s?(?:com|net|org|vn|tv|me|io|xyz|cc|co|info|top|club|"
-        r"link|live|online|site|biz|asia|pro|app|fun|vip|bet|win|us|to|ly|gg)\b",
-        re.IGNORECASE,
-    ),
-    re.compile(r"\b[a-z0-9][a-z0-9-]{2,}\s(?:com|net|org|vn|tv|xyz)\b", re.IGNORECASE),
-    re.compile(r"(?<!\d)(?:\+?\d[\s.\-]?){8,}(?!\d)"),
-    re.compile(r"(?<![\w.])@[a-z0-9_.]{3,}", re.IGNORECASE),
-)
+# the film's persistent watermark (that watermark is its own card). The token
+# patterns are ad_text_patterns.AD_TEXT_PATTERNS.
 _AD_TEXT_ROUTINGS = {"REVIEW_AD_LIKELY"}
 _PERSISTENT_TEXT_ROUTINGS = {"REVIEW_PERSISTENT_OVERLAY"}
 _BRAND_REGION_CLASSES = {
@@ -1930,14 +1935,6 @@ def studio_ident_reason(texts: list[str]) -> str:
         "Đoạn mở đầu giống logo hãng phim: không thấy website hay số điện thoại nên BiliFlow không "
         f"đề xuất Cắt. Chữ đọc được: {shown} — nếu là tên web/thương hiệu lạ hãy Cắt. Hãy xem rồi tự chọn."
     )
-
-
-def ad_text_tokens(text: str) -> list[str]:
-    """Website, domain, phone or @handle tokens in one OCR reading."""
-    found = []
-    for pattern in _AD_TEXT_PATTERNS:
-        found += [match.group(0).strip() for match in pattern.finditer(str(text or ""))]
-    return list(dict.fromkeys(value for value in found if value))
 
 
 def _resolved_intervals(item: dict, scan_payloads: dict[str, dict]) -> list[dict]:
@@ -2751,16 +2748,26 @@ def _text_items(root: Path, report_path: Path, payload: dict) -> list[dict]:
         item_category = "text"
         start = float(track["start_seconds"])
         end = float(track.get("recommended_blur_end_seconds", track["end_seconds"]))
-        scrolling = track.get("candidate_type") == SCROLLING_CANDIDATE_TYPE
-        # A scrolling line's card shows every piece (entry, wide, exit) and cites every track.
-        previews = track.get("member_previews") if scrolling else None
+        grouped = track.get("candidate_type") in {SCROLLING_CANDIDATE_TYPE, REPEATED_WATERMARK_TYPE}
+        # A scrolling line's card shows every piece (entry, wide, exit) and a repeated
+        # watermark's card some of its runs; both cite every track.
+        previews = track.get("member_previews") if grouped else None
         previews = previews or ([track["preview"]] if track.get("preview") else [])
         preview_images = [
             _relative(root, report_path.parent / str(preview)) for preview in previews
         ]
         track_refs = (
-            track.get("grouped_track_ids") if scrolling else None
+            track.get("grouped_track_ids") if grouped else None
         ) or [track.get("track_id", track_index)]
+        # A repeated watermark's decision edits its runs only, not the time between them.
+        moments = (
+            [
+                {"start_seconds": round(float(value["start_seconds"]), 3),
+                 "end_seconds": round(float(value["end_seconds"]), 3)}
+                for value in track.get("detected_intervals") or [] if isinstance(value, dict)
+            ]
+            if track.get("temporal_policy") == "discrete_detected_intervals" else []
+        )
         region = None
         box = track.get("union_box")
         if isinstance(box, list) and len(box) == 4:
@@ -2817,9 +2824,11 @@ def _text_items(root: Path, report_path: Path, payload: dict) -> list[dict]:
                         name: list(value) if isinstance(value, list) else value
                         for name, value in track[key].items()
                     }
-                    for key in ("scrolling_text", "web_address") if isinstance(track.get(key), dict)
+                    for key in ("scrolling_text", "web_address", "repeated_watermark", "subtitle_line")
+                    if isinstance(track.get(key), dict)
                 },
-                "detected_intervals": [{
+                **({"temporal_policy": "discrete_detected_intervals"} if moments else {}),
+                "detected_intervals": moments or [{
                     "start_seconds": round(start, 3),
                     "end_seconds": round(end, 3),
                 }],
@@ -2867,6 +2876,11 @@ def _merge_items(items: Iterable[dict], maximum_gap_seconds: float) -> list[dict
             or item.get("suggested_decision") is None
             or previous.get("suggested_decision") == item.get("suggested_decision")
         )
+        # A repeated watermark's card already holds every run of its mark at its
+        # own place; merged, its runs would take another card's box.
+        separate_watermark = previous is not None and REPEATED_WATERMARK_TYPE in {
+            previous.get("candidate_type"), item.get("candidate_type"),
+        }
         visual_regions_compatible = True
         if previous is not None and previous["category"] == item["category"] == "visual_logo":
             overlap = pixel_region_iou(
@@ -2893,6 +2907,7 @@ def _merge_items(items: Iterable[dict], maximum_gap_seconds: float) -> list[dict
             and same_candidate_type
             and suggestions_compatible
             and visual_regions_compatible
+            and not separate_watermark
         ):
             current = previous
             current["end_seconds"] = max(current["end_seconds"], item["end_seconds"])
@@ -3475,10 +3490,14 @@ def build_review_queue(
             platform_payloads[relative_report] = text_payload
             title_references.extend(_title_overlay_references(text_payload))
             in_film_text_references.extend(_in_film_text_references(text_payload))
-            # Cards only: one card per crossing of a scrolling line, and every web
+            # Cards only: one card per crossing of a scrolling line, one card for a
+            # web address read again and again at one place, centred subtitle lines
+            # read as uncertain ad text among the optional candidates, and every web
             # address (also one the user blurred before) in the main list. The
             # guards and previews keep the tracks.
-            card_payload = promote_web_address_tracks(promote_scrolling_text(text_payload), ad_text_keys)
+            card_payload = promote_web_address_tracks(move_subtitle_lines(
+                group_repeated_watermarks(promote_scrolling_text(text_payload), ad_text_keys), ad_text_keys,
+            ), ad_text_keys)
             items.extend(_text_items(root, report_path, card_payload))
             advisory_items.extend(_advisory_text_items(root, report_path, card_payload))
         else:

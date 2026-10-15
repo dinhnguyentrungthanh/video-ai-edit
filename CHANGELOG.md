@@ -1,3 +1,18 @@
+# The site watermark in the subtitle band is one card; subtitle lines without ad evidence leave the main list — session D, part 2 (2026-10-15, branch `fix/ticker-subtitle`; not merged)
+
+- Cause (jobs 130, 134, 136, 143, 145): the source site's address sits just under the subtitles and the text scan reads it in runs (a subtitle covers it, OCR misreads a letter), so one film had 47–64 tracks of it. After part 1 each was a main BLUR card; cards close in time merged with the subtitle cards between them into boxes over the dialogue (job 143: up to 715 × 87 px), and the user's exports still showed the address (job 134: read at 33 of 180 samples in its first 100 s). Single dialogue lines scored as uncertain ad text also filled the main list.
+- `subtitle_band.py` (review build only):
+  - `group_repeated_watermarks` joins the tracks with a web address (or a remembered one) at one place (IoU ≥ 0.5 with the group's median box) and with one folded address into one `repeated_watermark` card suggesting BLUR, with one interval per run from one read interval before it; a group of 10 runs or more joins runs at most 150 s apart (OCR on the sources still reads the mark between its runs, also in gaps over 60 s, in all five films) and takes each box edge's 10th/90th percentile. The card is never merged with another card nor absorbed by a fixed overlay's card;
+  - `move_subtitle_lines` sends a centred subtitle-zone line read at most twice and routed `REVIEW_UNCERTAIN`, in a film with at least 20 such lines, to the optional cards ("Giống một dòng phụ đề; không chặn xuất video") only when it has no ad evidence: a web address (also the older "name . vn" patterns), a remembered address, a phone number, an @handle, a policy hit, "advertisement" as the first semantic label or an ad score of 0.40 or more keeps its main card.
+- `ad_text_patterns.py`: the phone/@/domain patterns moved unchanged out of `review_workflow`. `promote_web_address_tracks` leaves a track that already names its address.
+- Gates (`docs/evidence/subtitle-band/`):
+  - unit tests `test_subtitle_band` 15 (the fixed-overlay one fails without the new exclusion); 17 review modules 407 OK;
+  - main cards (bd0a7b8 → branch): 134 42 → 6, 143 64 → 22, 136 38 → 9, 145 50 → 8, 130 9 → 8, the other 20 jobs as after part 1; suggested BLUR in the bottom band never fewer;
+  - subtitle-band ad tracks (web address, phone, @, policy hit) cited by a main card: never fewer, 0 weakened in all 25 jobs;
+  - window exports of the first 100 s of jobs 143 and 134: the mark is read at 0 samples after one BLUR on the new card (the user's exports: 15 and 55); job 143's subtitles stay readable (72 samples, 21 in the user's export);
+  - a rebuild keeping decisions loses none; Golden Set v2 +1 caught, 0 missed, 0 new trap hits, false positives 24 → 24; scan cache keys unchanged (10 stages).
+- Limits: golden scoring treats only scene cards as separate moments (no golden queue has a watermark card); a rebuild over a queue with undecided subtitle-line cards brings them back to the main list.
+
 # The source site's scrolling line is one blurred card from before its first reading; web addresses without their dot — session D, part 1 (2026-10-15, branch `fix/ticker-subtitle` from `main` `bd0a7b8`; not merged)
 
 - Cause (jobs 101–103, 107, 108, 112, 118, 128, 140, 147): the text scan reads every 3 s, so one crossing of the line came out as several short tracks (an entry piece read once, wide pieces, exit pieces), often with the domain's dot lost. Each was judged alone: job 107 blurred from its second reading (about 4 s visible), job 108's wide piece was only an optional card suggesting KEEP.
