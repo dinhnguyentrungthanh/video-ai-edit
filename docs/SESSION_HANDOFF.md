@@ -1,5 +1,28 @@
 # BiliFlow session handoff
 
+## Session D, the text scan keeps a fixed logo's box in its group (job 145) and ad evidence past its 250-track limit (item 6); subtitle dialogue suggests no BLUR (task 2) — 2026-10-16, branch `fix/text-consensus-logo` from `main` `419377f` (worktree `temp\wt-text-consensus`), not merged
+
+- **Request (coordinator, the user agreed):** the user's "Chạy lại" of job 145 (revision 2) lost the visual-logo card at 175–180 s, so G12's join had nothing to join and the logo leaked again. Fix the text scan's consensus so a fixed logo next to the scrolling line is not dropped; plan first (text-stage cache key), then TDD after approval. Measure item 6 (the 250-track cap) in the same GPU pass, do not change it.
+- **Plan:** `docs/handoff/D-text-consensus-plan.md` (approved: option A, "anchor" footprint, `textscan.py` only).
+- **Done:** `textscan.py` (`footprint_box`, `_overlay_box_with_anchors`); tests `tests/test_textscan.py` (10 new), `tests/test_fixed_logo_scan.py`, `tests/test_fixed_logo_clip.py`; gates `docs/evidence/text-consensus/` (`rescan.py`, `export_logo.py`, `gate-summary.json`, README). Handoff (Vietnamese) `docs/handoff/D-text-consensus.md`.
+- **Gates:** see `CHANGELOG.md`; text-stage key changes, the 9 others equal; one GPU pass of about 19 minutes with the user's go and an empty queue.
+- **Item 6 (the user chose it after the first gates, on the same branch, TDD):**
+  - Done (commit after ca17c07): `textscan.py` (`_has_ad_evidence`, `omitted_tracks`), `web_address_patterns.py` (moved from `scrolling_text.py`), `ad_text_memory.readmit_remembered_tracks`, `review_workflow.py` (the take-back, `FIXED_TEXT_PIECE_INSIDE`).
+  - Tests: `test_textscan` (4 new), `test_ad_text_memory` (4), `test_text_track_limit_scan` (4), `test_fixed_text_overlays` (1).
+  - Gates: `docs/evidence/text-consensus/` (`limit_gate.py`, `export_tail.py`, `limit-gate-summary.json`, README section 4); two more GPU passes of about 16 minutes each, with the user's go and an empty queue. The text key changes once for both parts.
+- **Task 2 (the user confirmed the blurred dialogue of 130 and 136 was not intended; done on the same branch, TDD):**
+  - Code: `review_workflow.py` only (`_subtitle_dialogue`, `_line_consensus`, `_reads_contact_or_site`, `_absorbable_by_dialogue`, the `ad_text_evidence` mark on text items, and the guards in `corroborate_fixed_text_overlays`, `_merge_items` and `reconcile_persistent_overlay_items`).
+  - Tests: `tests/test_subtitle_dialogue_overlay.py` (13; 7 fail on 7fa0e0e).
+  - Gates: `docs/evidence/text-consensus/dialogue_gate.py`, `dialogue-gate-summary.json`, README section 7. No cache key changes.
+  - Open choice for the user: the 16–20 added cards per dialogue film (README section 7, the trade-off).
+- **Waiting for the coordinator:** the merge.
+- **Next for the user (after the merge and a Control Center restart):**
+  - "Chạy lại" job 145 (the text stage scans again, about 2 minutes);
+  - BLUR the film-long text card (0,21,1280,74) and the subtitle-band watermark card, which now reaches the film's end;
+  - review the other cards and export again;
+  - jobs 130, 134, 136 and 143 get the same longer watermark card after "Chạy lại";
+  - the dialogue cards of 130, 134, 136 and 145 suggest nothing: KEEP them. An earlier BLUR on them (130, 136 rev 2) survives a rebuild with kept decisions; change it to KEEP and export again.
+
 ## G12 merge, a fixed logo under the site's top line is blurred with that line's card (session D) — 2026-10-15, branch `merge/g12` (worktree `temp\wt-merge-g12`), not yet in the main folder
 
 - **Request:** job 145's export showed the source site's fixed logo at the top right all film long; the user asked for session D's fix to be checked and merged.

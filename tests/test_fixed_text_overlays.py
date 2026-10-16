@@ -93,6 +93,23 @@ class PromoteFixedTextOverlayTests(unittest.TestCase):
         self.assertEqual(len(payload["tracks"]), len(FRAGMENTS) + 2, "input payload is not modified")
         self.assertEqual(len(output["fixed_text_overlays"]), 2)
 
+    def test_a_piece_of_a_whole_film_text_stays_out_of_a_line_it_reads_like(self):
+        # Job 134 (item 6, 2026-10-16): the site's logo, read all film long just under its line,
+        # broke near the end; that last piece read the site's name like the line, joined the
+        # line's group and took the logo into the line's box.
+        logo = _track(1, 0.0, DURATION, "Example.com", [628, 33, 867, 72], zone="top-right",
+                      persistent=True, observations=865)
+        pieces = [_track(index, start, start + 3, text, [x1, 16, x2, 43], zone="top-center")
+                  for index, (start, text, x1, x2) in enumerate(FRAGMENTS, start=2)]
+        tail_text = FRAGMENTS[5][1]  # a piece of the line's own reading
+        tail = _track(50, 2560.0, 2605.0, tail_text, [626, 22, 864, 70], zone="top-right", observations=15)
+        output = promote_fixed_text_overlays(_payload([logo] + pieces + [tail]))
+        line = next(t for t in output["tracks"]
+                    if (t.get("fixed_text_overlay") or {}).get("rule") == "recurring_fixed_text")
+        self.assertEqual(line["union_box"], [292, 16, 674, 43])
+        self.assertNotIn(50, line["grouped_track_ids"])
+        self.assertIn(50, [track["track_id"] for track in output["tracks"]])
+
     def test_faint_line_inherits_the_site_name_of_the_watermark(self):
         output = promote_fixed_text_overlays(_payload(_job40_tracks(ad_line=False)))
         line = next(

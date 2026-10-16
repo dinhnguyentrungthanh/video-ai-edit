@@ -20,6 +20,7 @@ import json
 import re
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Iterable
 
 from biliflow.resource_lock import project_resource_lock
 from biliflow.scrolling_text import fold_alnum, web_address_tokens
@@ -52,6 +53,34 @@ def card_addresses(item: dict) -> list[str]:
     for text in item.get("labels") or []:
         tokens += web_address_tokens(text)
     return list(dict.fromkeys(key for key in (memory_key(token) for token in tokens) if key))
+
+
+def holds_remembered_address(track: dict, remembered: tuple[str, ...]) -> bool:
+    """A track whose folded reading holds a remembered key."""
+    folded = [fold_alnum(text) for text in track.get("sample_text") or []]
+    return any(key in reading for key in remembered for reading in folded)
+
+
+def readmit_remembered_tracks(payload: dict, remembered: Iterable[str]) -> dict:
+    """Tracks the text scan left past its track limit that hold a remembered address, back in ``tracks``.
+
+    The scan cannot see this memory (it is in no scan stage's cache key), so it keeps the
+    tracks past its limit in ``omitted_tracks``, without previews (item 6, 2026-10-16).
+    The payload is returned unchanged (the same object) when nothing comes back.
+    """
+    keys = tuple(remembered)
+    omitted = payload.get("omitted_tracks")
+    if not keys or not isinstance(omitted, list):
+        return payload
+    back = [track for track in omitted if isinstance(track, dict) and holds_remembered_address(track, keys)]
+    if not back:
+        return payload
+    return {
+        **payload,
+        "tracks": list(payload.get("tracks") or []) + back,
+        "omitted_tracks": [track for track in omitted if not any(track is other for other in back)],
+        "readmitted_track_ids": [track.get("track_id") for track in back],
+    }
 
 
 def _empty() -> dict:

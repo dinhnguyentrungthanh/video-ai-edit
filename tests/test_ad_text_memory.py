@@ -11,6 +11,7 @@ from biliflow.ad_text_memory import (
     AD_TEXT_MEMORY_PATH,
     load_ad_text_memory,
     memory_key,
+    readmit_remembered_tracks,
 )
 from biliflow.review_workflow import (
     build_review_queue,
@@ -61,7 +62,7 @@ class AdTextMemoryTests(unittest.TestCase):
     def tearDown(self):
         self.temporary.cleanup()
 
-    def _build(self, tracks, queue_path=None, **options):
+    def _build(self, tracks, queue_path=None, omitted=None, **options):
         directory = self.root / "reports" / "job" / "text"
         directory.mkdir(parents=True, exist_ok=True)
         report = directory / "text-scan.json"
@@ -69,6 +70,7 @@ class AdTextMemoryTests(unittest.TestCase):
             "status": "REVIEW_REQUIRED", "input": str(self.source), "duration_seconds": DURATION,
             "scan_start_seconds": 0.0, "scan_duration_seconds": DURATION, "sample_every_seconds": 3.0,
             "source_size": [1280, 640], "analysis_size": [960, 480], "tracks": tracks,
+            **({"omitted_tracks": omitted} if omitted is not None else {}),
         }, ensure_ascii=False), encoding="utf-8")
         return build_review_queue(
             project_root=self.root, report_paths=[report], queue_path=queue_path or self.queue_path, **options,
@@ -172,12 +174,60 @@ class AdTextMemoryTests(unittest.TestCase):
                               use_studio_logo_memory=True)
         self.assertEqual([item for item in payload["items"] if item["category"] == "text"], [])
 
+    def test_a_remembered_address_the_scan_left_past_its_limit_gets_its_card(self):
+        self._remember_example()
+        omitted = [_omitted(_track(7, 600.0, 603.0, ["xem tai examplecom nhe"], [300, 420, 700, 445])),
+                   _omitted(_track(8, 612.0, 615.0, ["Một dòng chữ"], [300, 420, 700, 445]))]
+        payload = self._build([], omitted=omitted, use_studio_logo_memory=True)
+        [card] = [item for item in payload["items"] if item["category"] == "text"]
+        self.assertEqual(card["suggested_decision"], "BLUR")
+        self.assertEqual(card["web_address"]["remembered"], ["examplecom"])
+        self.assertEqual((card["start_seconds"] <= 600.0, card["end_seconds"] >= 603.0), (True, True))
+
+    def test_without_the_users_memories_tracks_past_the_scan_limit_stay_out(self):
+        self._remember_example()
+        omitted = [_omitted(_track(7, 600.0, 603.0, ["xem tai examplecom nhe"], [300, 420, 700, 445]))]
+        payload = self._build([], omitted=omitted)
+        self.assertEqual([item for item in payload["items"] if item["category"] == "text"], [])
+
     def test_an_unreadable_memory_does_not_stop_a_build(self):
         self.memory_path.write_text("{not json", encoding="utf-8")
         payload = self._build([_track(7, 600.0, 603.0, ["xem tai examplecom nhe"], [300, 420, 700, 445])],
                               use_studio_logo_memory=True)
         self.assertEqual([item for item in payload["items"] if item["category"] == "text"], [])
         self.assertIn("error", payload["ad_text_memory"])
+
+
+def _omitted(track):
+    """A track the text scan left past its track limit: kept in the report without a preview."""
+    return {key: value for key, value in track.items() if key != "preview"}
+
+
+class ReadmitRememberedTracksTests(unittest.TestCase):
+    def _payload(self):
+        return {"tracks": [_track(1, 10.0, 13.0, ["Phụ đề"], [0, 0, 10, 10])],
+                "omitted_tracks": [_omitted(_track(2, 900.0, 903.0, ["xem tai examplecom nhe"], [300, 420, 700, 445])),
+                                   _omitted(_track(3, 910.0, 913.0, ["Một dòng chữ"], [300, 420, 700, 445]))]}
+
+    def test_a_track_past_the_scan_limit_holding_a_remembered_address_comes_back(self):
+        payload = self._payload()
+        output = readmit_remembered_tracks(payload, ("examplecom",))
+        self.assertEqual([track["track_id"] for track in output["tracks"]], [1, 2])
+        self.assertEqual([track["track_id"] for track in output["omitted_tracks"]], [3])
+        self.assertEqual(output["readmitted_track_ids"], [2])
+        self.assertEqual([track["track_id"] for track in payload["tracks"]], [1])
+        self.assertEqual(len(payload["omitted_tracks"]), 2)
+
+    def test_nothing_to_take_back_returns_the_same_payload(self):
+        for name, keys, payload in (
+            ("no memory", (), self._payload()),
+            ("no match", ("othersitecom",), self._payload()),
+            ("no omitted tracks", ("examplecom",), {"tracks": []}),
+            ("name without its ending", ("examplecom",), {"tracks": [], "omitted_tracks": [
+                _omitted(_track(4, 1.0, 2.0, ["example nhe"], [0, 0, 10, 10]))]}),
+        ):
+            with self.subTest(name):
+                self.assertIs(readmit_remembered_tracks(payload, keys), payload)
 
 
 if __name__ == "__main__":

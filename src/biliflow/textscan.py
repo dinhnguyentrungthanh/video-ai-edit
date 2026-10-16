@@ -23,9 +23,11 @@ import numpy as np
 import psutil
 from PIL import Image, ImageDraw, ImageFont
 
+from biliflow.ad_text_patterns import ad_text_tokens
 from biliflow.platform_names import match_platform_texts
 from biliflow.probe import duration_seconds, probe_video
 from biliflow.storage import require_capacity
+from biliflow.web_address_patterns import web_address_tokens
 
 
 def _sha256_file(path: Path) -> str:
@@ -39,6 +41,17 @@ def _sha256_file(path: Path) -> str:
 BLUR_ABSENCE_CONFIRM_SECONDS = 3.0
 BLUR_POST_CONFIRM_TAIL_SECONDS = 0.5
 LOW_CONFIDENCE_TOP_BANNER_THRESHOLD = 0.10
+# A member of a repeated corner overlay that is a fixed overlay by itself: read at least
+# this often, over at least the group's minimum span. Its own box joins the group's box.
+OVERLAY_ANCHOR_MINIMUM_READINGS = 10
+OVERLAY_ANCHOR_COVERED = 0.95  # an anchor box this much inside the group's box adds nothing
+OVERLAY_ANCHOR_HEIGHT_RATIO = 2.5  # an anchor box taller than this times the group's box stays out
+# A reference track past the report's track limit stays in it with this ad score or more
+# (subtitle_band's SUBTITLE_LINE_MAXIMUM_AD: the review build's ad evidence).
+REFERENCE_AD_EVIDENCE = 0.40
+# Tracks past the limit, kept in the report without previews for the review build's
+# remembered addresses: every report on this PC fits (at most 3,344, a 3.3-hour film).
+MAX_OMITTED_TRACK_RECORDS = 4000
 
 
 def _read_exact(stream, size: int) -> bytes:
@@ -250,6 +263,9 @@ def _summarize_track(
         "reason": reason,
         "max_confidence": round(track.best_confidence, 6),
         "union_box": union_box,
+        # Where the track's own reads agree: a read far off their usual size (joined to
+        # distant scene text) drops out; one slightly larger stays.
+        "footprint_box": _consensus_overlay_box(boxes),
         "sample_text": texts[:8],
     }
 
@@ -308,6 +324,60 @@ def _consensus_overlay_box(boxes: list[list[int]]) -> list[int]:
         min(box[0] for box in inliers), min(box[1] for box in inliers),
         max(box[2] for box in inliers), max(box[3] for box in inliers),
     ]
+
+
+def _share_inside(inner: list[int], outer: list[int]) -> float:
+    width = max(0, min(inner[2], outer[2]) - max(inner[0], outer[0]))
+    height = max(0, min(inner[3], outer[3]) - max(inner[1], outer[1]))
+    return width * height / (max(1, inner[2] - inner[0]) * max(1, inner[3] - inner[1]))
+
+
+def _touches_overlay_box(footprint: list[int], box: list[int]) -> bool:
+    """Overlapping the box or apart by at most half its own height, and not much taller."""
+    height = max(1, footprint[3] - footprint[1])
+    horizontal_gap = max(footprint[0], box[0]) - min(footprint[2], box[2])
+    vertical_gap = max(footprint[1], box[1]) - min(footprint[3], box[3])
+    return (
+        horizontal_gap <= height / 2 and vertical_gap <= height / 2
+        and height <= OVERLAY_ANCHOR_HEIGHT_RATIO * max(1, box[3] - box[1])
+    )
+
+
+def _overlay_box_with_anchors(
+    group: list[dict], consensus: list[int], minimum_span: float,
+) -> tuple[list[int], dict | None]:
+    """Add the own box of every member that is a fixed overlay by itself.
+
+    The consensus gives each member one vote, so a fixed logo read the whole film
+    beside a line read in many short pieces lost its box to theirs (job 145: a site's
+    logo just below its scrolling line). Such an anchor's footprint joins the box when
+    it touches it; the box never shrinks. Returns the box and, when an anchor's
+    footprint sticks out of the consensus, where the box came from.
+    """
+    box = list(consensus)
+    anchors = []
+    for member in group:
+        footprint = member.get("footprint_box")
+        if (
+            not isinstance(footprint, list) or len(footprint) != 4
+            or int(member.get("observations") or 0) < OVERLAY_ANCHOR_MINIMUM_READINGS
+            or float(member["end_seconds"]) - float(member["start_seconds"]) < minimum_span
+        ):
+            continue
+        footprint = [int(value) for value in footprint]
+        if _share_inside(footprint, consensus) >= OVERLAY_ANCHOR_COVERED:
+            continue
+        joined = _touches_overlay_box(footprint, consensus)
+        if joined:
+            box = [
+                min(box[0], footprint[0]), min(box[1], footprint[1]),
+                max(box[2], footprint[2]), max(box[3], footprint[3]),
+            ]
+        anchors.append({
+            "track_id": int(member["track_id"]), "footprint_box": footprint,
+            "observations": int(member["observations"]), "joined": joined,
+        })
+    return box, ({"consensus_box": list(consensus), "anchors": anchors} if anchors else None)
 
 
 def _promote_repeated_corner_overlays(
@@ -377,6 +447,11 @@ def _promote_repeated_corner_overlays(
             for item in group
         )
         review_as_brand = brand_routed or ad_score >= 0.45
+        union_box, box_sources = _overlay_box_with_anchors(
+            group, _consensus_overlay_box(boxes), minimum_span,
+        )
+        if box_sources:
+            merged["overlay_box_sources"] = box_sources
         merged.update({
             "start_seconds": round(min(float(item["start_seconds"]) for item in group), 3),
             "end_seconds": round(max(float(item["end_seconds"]) for item in group), 3),
@@ -384,7 +459,8 @@ def _promote_repeated_corner_overlays(
                 float(item.get("recommended_blur_end_seconds", item["end_seconds"]))
                 for item in group
             ), 3),
-            "union_box": _consensus_overlay_box(boxes),
+            "union_box": union_box,
+            "footprint_box": list(union_box),
             "sample_text": list(dict.fromkeys(
                 text for item in group for text in _track_texts(item)
             ))[:8],
@@ -428,11 +504,29 @@ def _annotate_platform_names(summaries: list[dict]) -> list[dict]:
     return annotated
 
 
+def _has_ad_evidence(summary: dict) -> bool:
+    """The review build's ad evidence in a track (``subtitle_band``), without the user's memory.
+
+    A lone "@" is not enough here (an @handle is): OCR reads one in dialogue, and a kept
+    dialogue line can link others into a film-long fixed-text card (job 143, 2026-10-16).
+    """
+    texts = [str(text) for text in summary.get("sample_text") or []]
+    return bool(
+        summary.get("policy_hits")
+        or summary.get("semantic_top_label") == "advertisement"
+        or float(summary.get("ad_probability") or 0.0) >= REFERENCE_AD_EVIDENCE
+        or any(web_address_tokens(text) or ad_text_tokens(text) for text in texts)
+    )
+
+
 def _limit_report_tracks(summaries: list[dict], max_report_tracks: int) -> list[dict]:
-    """Keep review candidates, platform-name tracks, then the earliest references.
+    """Keep review candidates, platform-name tracks, the earliest references and every
+    reference with ad evidence or a web address.
 
     Platform idents sit in the last seconds of an episode, exactly where a
-    plain earliest-first cut drops reference tracks.
+    plain earliest-first cut drops reference tracks; so does a site's mark read
+    under the subtitles near the end (item 6, 2026-10-16). A reference with
+    evidence past the limit takes no place of one kept before; order is kept.
     """
     review_candidates = [
         summary for summary in summaries if summary.get("review_candidate", True)
@@ -442,8 +536,9 @@ def _limit_report_tracks(summaries: list[dict], max_report_tracks: int) -> list[
     ]
     platform = [summary for summary in references if summary.get("platform_name")]
     others = [summary for summary in references if not summary.get("platform_name")]
-    return review_candidates + platform + others[
-        :max(0, max_report_tracks - len(review_candidates) - len(platform))
+    room = max(0, max_report_tracks - len(review_candidates) - len(platform))
+    return review_candidates + platform + [
+        summary for index, summary in enumerate(others) if index < room or _has_ad_evidence(summary)
     ]
 
 
@@ -834,7 +929,12 @@ def scan_text(
     review_candidates = [
         summary for summary in summaries if summary.get("review_candidate", True)
     ]
-    summaries = _limit_report_tracks(summaries, max_report_tracks)
+    listed = _limit_report_tracks(summaries, max_report_tracks)
+    listed_ids = {id(summary) for summary in listed}
+    # The rest, without previews: the review build takes back the ones holding an address
+    # the reviewer blurred before (ad_text_memory), which this stage cannot see.
+    omitted = [summary for summary in summaries if id(summary) not in listed_ids]
+    summaries = listed
     with performance.measure('preview_output'):
         for summary in summaries:
             track = tracks_by_id[summary["track_id"]]
@@ -869,9 +969,11 @@ def scan_text(
         "tracks_before_limit": tracks_before_limit,
         "max_report_tracks": max_report_tracks,
         "tracks_omitted": max(0, tracks_before_limit - len(summaries)),
+        "omitted_tracks_unrecorded": max(0, len(omitted) - MAX_OMITTED_TRACK_RECORDS),
         "review_candidate_count": len(review_candidates),
         "routing_counts": full_routing_counts,
         "tracks": summaries,
+        "omitted_tracks": omitted[:MAX_OMITTED_TRACK_RECORDS],
         "metrics": {
             "recognition_batch_size": recognition_batch_size,
             "recognition_frame_window": recognition_frame_window,

@@ -1,0 +1,839 @@
+{
+ "note": "Item 6 gate (limit_gate.py on the GPU rescan gpu3 with the final code; before = ca17c07's tree). Job ids, counts, seconds, boxes and sizes only.",
+ "remembered_addresses": 14,
+ "reports": {
+  "golden-j37": {
+   "duration_seconds": 6738.068667,
+   "tracks_before_limit": 392,
+   "scanned_with_limit": 250,
+   "before": {
+    "tracks": 250,
+    "omitted_records": 0,
+    "omitted_unrecorded": 0,
+    "report_bytes": 355273,
+    "previews": 250,
+    "preview_bytes": 14778129
+   },
+   "after": {
+    "tracks": 250,
+    "omitted_records": 142,
+    "omitted_unrecorded": 0,
+    "report_bytes": 546180,
+    "previews": 250,
+    "preview_bytes": 14778129
+   },
+   "readmitted_with_memory": 0
+  },
+  "golden-j38": {
+   "duration_seconds": 6689.578333,
+   "tracks_before_limit": 468,
+   "scanned_with_limit": 250,
+   "before": {
+    "tracks": 250,
+    "omitted_records": 0,
+    "omitted_unrecorded": 0,
+    "report_bytes": 355692,
+    "previews": 250,
+    "preview_bytes": 14789147
+   },
+   "after": {
+    "tracks": 250,
+    "omitted_records": 218,
+    "omitted_unrecorded": 0,
+    "report_bytes": 648917,
+    "previews": 250,
+    "preview_bytes": 14789147
+   },
+   "readmitted_with_memory": 0
+  },
+  "golden-j39-00000": {
+   "duration_seconds": 636.08,
+   "tracks_before_limit": 60,
+   "scanned_with_limit": 250,
+   "before": {
+    "tracks": 60,
+    "omitted_records": 0,
+    "omitted_unrecorded": 0,
+    "report_bytes": 88606,
+    "previews": 60,
+    "preview_bytes": 3175969
+   },
+   "after": {
+    "tracks": 60,
+    "omitted_records": 0,
+    "omitted_unrecorded": 0,
+    "report_bytes": 88664,
+    "previews": 60,
+    "preview_bytes": 3175969
+   },
+   "readmitted_with_memory": 0
+  },
+  "golden-j39-00816": {
+   "duration_seconds": 330.08,
+   "tracks_before_limit": 1,
+   "scanned_with_limit": 250,
+   "before": {
+    "tracks": 1,
+    "omitted_records": 0,
+    "omitted_unrecorded": 0,
+    "report_bytes": 4693,
+    "previews": 1,
+    "preview_bytes": 22973
+   },
+   "after": {
+    "tracks": 1,
+    "omitted_records": 0,
+    "omitted_unrecorded": 0,
+    "report_bytes": 4751,
+    "previews": 1,
+    "preview_bytes": 22973
+   },
+   "readmitted_with_memory": 0
+  },
+  "golden-j39-01962": {
+   "duration_seconds": 374.08,
+   "tracks_before_limit": 2,
+   "scanned_with_limit": 250,
+   "before": {
+    "tracks": 2,
+    "omitted_records": 0,
+    "omitted_unrecorded": 0,
+    "report_bytes": 6526,
+    "previews": 2,
+    "preview_bytes": 114992
+   },
+   "after": {
+    "tracks": 2,
+    "omitted_records": 0,
+    "omitted_unrecorded": 0,
+    "report_bytes": 6584,
+    "previews": 2,
+    "preview_bytes": 114992
+   },
+   "readmitted_with_memory": 0
+  },
+  "golden-j39-03216": {
+   "duration_seconds": 383.08,
+   "tracks_before_limit": 2,
+   "scanned_with_limit": 250,
+   "before": {
+    "tracks": 2,
+    "omitted_records": 0,
+    "omitted_unrecorded": 0,
+    "report_bytes": 6661,
+    "previews": 2,
+    "preview_bytes": 90625
+   },
+   "after": {
+    "tracks": 2,
+    "omitted_records": 0,
+    "omitted_unrecorded": 0,
+    "report_bytes": 6719,
+    "previews": 2,
+    "preview_bytes": 90625
+   },
+   "readmitted_with_memory": 0
+  },
+  "golden-j39-06744": {
+   "duration_seconds": 312.08,
+   "tracks_before_limit": 1,
+   "scanned_with_limit": 250,
+   "before": {
+    "tracks": 1,
+    "omitted_records": 0,
+    "omitted_unrecorded": 0,
+    "report_bytes": 5107,
+    "previews": 1,
+    "preview_bytes": 27476
+   },
+   "after": {
+    "tracks": 1,
+    "omitted_records": 0,
+    "omitted_unrecorded": 0,
+    "report_bytes": 5165,
+    "previews": 1,
+    "preview_bytes": 27476
+   },
+   "readmitted_with_memory": 0
+  },
+  "golden-j39-08562": {
+   "duration_seconds": 274.08,
+   "tracks_before_limit": 1,
+   "scanned_with_limit": 250,
+   "before": {
+    "tracks": 1,
+    "omitted_records": 0,
+    "omitted_unrecorded": 0,
+    "report_bytes": 5210,
+    "previews": 1,
+    "preview_bytes": 48514
+   },
+   "after": {
+    "tracks": 1,
+    "omitted_records": 0,
+    "omitted_unrecorded": 0,
+    "report_bytes": 5268,
+    "previews": 1,
+    "preview_bytes": 48514
+   },
+   "readmitted_with_memory": 0
+  },
+  "golden-j39-11364": {
+   "duration_seconds": 398.72,
+   "tracks_before_limit": 2658,
+   "scanned_with_limit": 250,
+   "before": {
+    "tracks": 250,
+    "omitted_records": 0,
+    "omitted_unrecorded": 0,
+    "report_bytes": 355714,
+    "previews": 250,
+    "preview_bytes": 11437604
+   },
+   "after": {
+    "tracks": 250,
+    "omitted_records": 2408,
+    "omitted_unrecorded": 0,
+    "report_bytes": 3624664,
+    "previews": 250,
+    "preview_bytes": 11437604
+   },
+   "readmitted_with_memory": 0
+  },
+  "job-130": {
+   "duration_seconds": 2655.166708,
+   "tracks_before_limit": 913,
+   "scanned_with_limit": 250,
+   "before": {
+    "tracks": 250,
+    "omitted_records": 0,
+    "omitted_unrecorded": 0,
+    "report_bytes": 369103,
+    "previews": 250,
+    "preview_bytes": 9752190
+   },
+   "after": {
+    "tracks": 311,
+    "omitted_records": 602,
+    "omitted_unrecorded": 0,
+    "report_bytes": 1274243,
+    "previews": 311,
+    "preview_bytes": 12188821
+   },
+   "readmitted_with_memory": 0
+  },
+  "job-134": {
+   "duration_seconds": 2657.236042,
+   "tracks_before_limit": 944,
+   "scanned_with_limit": 250,
+   "before": {
+    "tracks": 250,
+    "omitted_records": 0,
+    "omitted_unrecorded": 0,
+    "report_bytes": 368576,
+    "previews": 250,
+    "preview_bytes": 9827138
+   },
+   "after": {
+    "tracks": 299,
+    "omitted_records": 645,
+    "omitted_unrecorded": 0,
+    "report_bytes": 1314744,
+    "previews": 299,
+    "preview_bytes": 11797417
+   },
+   "readmitted_with_memory": 0
+  },
+  "job-136": {
+   "duration_seconds": 2702.206708,
+   "tracks_before_limit": 919,
+   "scanned_with_limit": 250,
+   "before": {
+    "tracks": 250,
+    "omitted_records": 0,
+    "omitted_unrecorded": 0,
+    "report_bytes": 368748,
+    "previews": 250,
+    "preview_bytes": 9517448
+   },
+   "after": {
+    "tracks": 293,
+    "omitted_records": 626,
+    "omitted_unrecorded": 0,
+    "report_bytes": 1278059,
+    "previews": 293,
+    "preview_bytes": 11299137
+   },
+   "readmitted_with_memory": 0
+  },
+  "job-143": {
+   "duration_seconds": 2668.116042,
+   "tracks_before_limit": 830,
+   "scanned_with_limit": 250,
+   "before": {
+    "tracks": 250,
+    "omitted_records": 0,
+    "omitted_unrecorded": 0,
+    "report_bytes": 368084,
+    "previews": 250,
+    "preview_bytes": 9622481
+   },
+   "after": {
+    "tracks": 292,
+    "omitted_records": 538,
+    "omitted_unrecorded": 0,
+    "report_bytes": 1159919,
+    "previews": 292,
+    "preview_bytes": 11326821
+   },
+   "readmitted_with_memory": 0
+  },
+  "job-145": {
+   "duration_seconds": 2561.172042,
+   "tracks_before_limit": 856,
+   "scanned_with_limit": 250,
+   "before": {
+    "tracks": 250,
+    "omitted_records": 0,
+    "omitted_unrecorded": 0,
+    "report_bytes": 369487,
+    "previews": 250,
+    "preview_bytes": 9487685
+   },
+   "after": {
+    "tracks": 294,
+    "omitted_records": 562,
+    "omitted_unrecorded": 0,
+    "report_bytes": 1196304,
+    "previews": 294,
+    "preview_bytes": 11128756
+   },
+   "readmitted_with_memory": 2
+  }
+ },
+ "jobs": {
+  "job-130": {
+   "film_seconds": 2655.166708,
+   "subtitle_band_weakened": 0,
+   "before": {
+    "items": 8,
+    "advisory_items": 212,
+    "suggested_blur": 5,
+    "suggested_blur_bottom_band": 3,
+    "text_items": 6,
+    "web_address_items": 4,
+    "band_watermark_end": 2247.5,
+    "repeated_watermark_cards": [
+     {
+      "start": 0.0,
+      "end": 2247.5,
+      "moments": 1,
+      "sightings": 49,
+      "region": {
+       "x": 550,
+       "y": 444,
+       "width": 180,
+       "height": 34
+      },
+      "band": "bottom",
+      "suggested": "BLUR"
+     },
+     {
+      "start": 561.0,
+      "end": 1431.5,
+      "moments": 2,
+      "sightings": 2,
+      "region": {
+       "x": 420,
+       "y": 409,
+       "width": 445,
+       "height": 60
+      },
+      "band": "bottom",
+      "suggested": "BLUR"
+     }
+    ],
+    "band_overlays": [
+     {
+      "start": 0.0,
+      "end": 2655.167,
+      "region": {
+       "x": 292,
+       "y": 404,
+       "width": 696,
+       "height": 68
+      },
+      "suggested": "BLUR"
+     }
+    ],
+    "subtitle_band_ad_tracks": 52,
+    "subtitle_band_ad_tracks_in_main_list": 52,
+    "fixed_text_logo_cards": 1,
+    "queue_bytes": 357648
+   },
+   "after": {
+    "items": 8,
+    "advisory_items": 212,
+    "suggested_blur": 5,
+    "suggested_blur_bottom_band": 3,
+    "text_items": 6,
+    "web_address_items": 4,
+    "band_watermark_end": 2646.5,
+    "repeated_watermark_cards": [
+     {
+      "start": 0.0,
+      "end": 2646.5,
+      "moments": 1,
+      "sightings": 99,
+      "region": {
+       "x": 550,
+       "y": 444,
+       "width": 180,
+       "height": 34
+      },
+      "band": "bottom",
+      "suggested": "BLUR"
+     },
+     {
+      "start": 561.0,
+      "end": 1431.5,
+      "moments": 2,
+      "sightings": 2,
+      "region": {
+       "x": 420,
+       "y": 409,
+       "width": 445,
+       "height": 60
+      },
+      "band": "bottom",
+      "suggested": "BLUR"
+     }
+    ],
+    "band_overlays": [
+     {
+      "start": 0.0,
+      "end": 2655.167,
+      "region": {
+       "x": 292,
+       "y": 404,
+       "width": 696,
+       "height": 68
+      },
+      "suggested": "BLUR"
+     }
+    ],
+    "subtitle_band_ad_tracks": 104,
+    "subtitle_band_ad_tracks_in_main_list": 103,
+    "fixed_text_logo_cards": 1,
+    "queue_bytes": 363846
+   }
+  },
+  "job-134": {
+   "film_seconds": 2657.236042,
+   "subtitle_band_weakened": 0,
+   "before": {
+    "items": 6,
+    "advisory_items": 202,
+    "suggested_blur": 4,
+    "suggested_blur_bottom_band": 2,
+    "text_items": 4,
+    "web_address_items": 3,
+    "band_watermark_end": 2427.5,
+    "repeated_watermark_cards": [
+     {
+      "start": 0.0,
+      "end": 2427.5,
+      "moments": 1,
+      "sightings": 64,
+      "region": {
+       "x": 551,
+       "y": 443,
+       "width": 177,
+       "height": 31
+      },
+      "band": "bottom",
+      "suggested": "BLUR"
+     }
+    ],
+    "band_overlays": [
+     {
+      "start": 0.0,
+      "end": 2657.236,
+      "region": {
+       "x": 276,
+       "y": 389,
+       "width": 736,
+       "height": 74
+      },
+      "suggested": "BLUR"
+     }
+    ],
+    "subtitle_band_ad_tracks": 66,
+    "subtitle_band_ad_tracks_in_main_list": 65,
+    "fixed_text_logo_cards": 0,
+    "queue_bytes": 327401
+   },
+   "after": {
+    "items": 7,
+    "advisory_items": 202,
+    "suggested_blur": 5,
+    "suggested_blur_bottom_band": 3,
+    "text_items": 5,
+    "web_address_items": 4,
+    "band_watermark_end": 2643.5,
+    "repeated_watermark_cards": [
+     {
+      "start": 0.0,
+      "end": 2643.5,
+      "moments": 1,
+      "sightings": 101,
+      "region": {
+       "x": 552,
+       "y": 443,
+       "width": 176,
+       "height": 31
+      },
+      "band": "bottom",
+      "suggested": "BLUR"
+     },
+     {
+      "start": 186.0,
+      "end": 2589.5,
+      "moments": 2,
+      "sightings": 2,
+      "region": {
+       "x": 556,
+       "y": 409,
+       "width": 201,
+       "height": 58
+      },
+      "band": "bottom",
+      "suggested": "BLUR"
+     }
+    ],
+    "band_overlays": [
+     {
+      "start": 0.0,
+      "end": 2657.236,
+      "region": {
+       "x": 263,
+       "y": 389,
+       "width": 757,
+       "height": 74
+      },
+      "suggested": "BLUR"
+     }
+    ],
+    "subtitle_band_ad_tracks": 104,
+    "subtitle_band_ad_tracks_in_main_list": 103,
+    "fixed_text_logo_cards": 0,
+    "queue_bytes": 332592
+   }
+  },
+  "job-136": {
+   "film_seconds": 2702.206708,
+   "subtitle_band_weakened": 0,
+   "before": {
+    "items": 9,
+    "advisory_items": 225,
+    "suggested_blur": 4,
+    "suggested_blur_bottom_band": 2,
+    "text_items": 7,
+    "web_address_items": 3,
+    "band_watermark_end": 2436.5,
+    "repeated_watermark_cards": [
+     {
+      "start": 0.0,
+      "end": 2436.5,
+      "moments": 1,
+      "sightings": 60,
+      "region": {
+       "x": 551,
+       "y": 443,
+       "width": 177,
+       "height": 32
+      },
+      "band": "bottom",
+      "suggested": "BLUR"
+     }
+    ],
+    "band_overlays": [
+     {
+      "start": 0.0,
+      "end": 2702.207,
+      "region": {
+       "x": 260,
+       "y": 405,
+       "width": 761,
+       "height": 58
+      },
+      "suggested": "BLUR"
+     }
+    ],
+    "subtitle_band_ad_tracks": 60,
+    "subtitle_band_ad_tracks_in_main_list": 60,
+    "fixed_text_logo_cards": 0,
+    "queue_bytes": 371952
+   },
+   "after": {
+    "items": 9,
+    "advisory_items": 225,
+    "suggested_blur": 4,
+    "suggested_blur_bottom_band": 2,
+    "text_items": 7,
+    "web_address_items": 3,
+    "band_watermark_end": 2691.5,
+    "repeated_watermark_cards": [
+     {
+      "start": 0.0,
+      "end": 2691.5,
+      "moments": 1,
+      "sightings": 94,
+      "region": {
+       "x": 552,
+       "y": 443,
+       "width": 176,
+       "height": 32
+      },
+      "band": "bottom",
+      "suggested": "BLUR"
+     }
+    ],
+    "band_overlays": [
+     {
+      "start": 0.0,
+      "end": 2702.207,
+      "region": {
+       "x": 260,
+       "y": 405,
+       "width": 761,
+       "height": 58
+      },
+      "suggested": "BLUR"
+     }
+    ],
+    "subtitle_band_ad_tracks": 94,
+    "subtitle_band_ad_tracks_in_main_list": 94,
+    "fixed_text_logo_cards": 0,
+    "queue_bytes": 375640
+   }
+  },
+  "job-143": {
+   "film_seconds": 2668.116042,
+   "subtitle_band_weakened": 0,
+   "before": {
+    "items": 22,
+    "advisory_items": 216,
+    "suggested_blur": 2,
+    "suggested_blur_bottom_band": 1,
+    "text_items": 20,
+    "web_address_items": 2,
+    "band_watermark_end": 2361.5,
+    "repeated_watermark_cards": [
+     {
+      "start": 0.0,
+      "end": 2361.5,
+      "moments": 1,
+      "sightings": 47,
+      "region": {
+       "x": 551,
+       "y": 469,
+       "width": 177,
+       "height": 32
+      },
+      "band": "bottom",
+      "suggested": "BLUR"
+     }
+    ],
+    "band_overlays": [],
+    "subtitle_band_ad_tracks": 47,
+    "subtitle_band_ad_tracks_in_main_list": 47,
+    "fixed_text_logo_cards": 0,
+    "queue_bytes": 366620
+   },
+   "after": {
+    "items": 22,
+    "advisory_items": 216,
+    "suggested_blur": 2,
+    "suggested_blur_bottom_band": 1,
+    "text_items": 20,
+    "web_address_items": 2,
+    "band_watermark_end": 2668.116,
+    "repeated_watermark_cards": [
+     {
+      "start": 0.0,
+      "end": 2668.116,
+      "moments": 1,
+      "sightings": 84,
+      "region": {
+       "x": 551,
+       "y": 469,
+       "width": 177,
+       "height": 31
+      },
+      "band": "bottom",
+      "suggested": "BLUR"
+     }
+    ],
+    "band_overlays": [],
+    "subtitle_band_ad_tracks": 84,
+    "subtitle_band_ad_tracks_in_main_list": 84,
+    "fixed_text_logo_cards": 0,
+    "queue_bytes": 370651
+   }
+  },
+  "job-145": {
+   "film_seconds": 2561.172042,
+   "subtitle_band_weakened": 0,
+   "before": {
+    "items": 7,
+    "advisory_items": 211,
+    "suggested_blur": 2,
+    "suggested_blur_bottom_band": 1,
+    "text_items": 5,
+    "web_address_items": 2,
+    "band_watermark_end": 2313.5,
+    "repeated_watermark_cards": [
+     {
+      "start": 0.0,
+      "end": 2313.5,
+      "moments": 1,
+      "sightings": 49,
+      "region": {
+       "x": 551,
+       "y": 469,
+       "width": 177,
+       "height": 32
+      },
+      "band": "bottom",
+      "suggested": "BLUR"
+     }
+    ],
+    "band_overlays": [
+     {
+      "start": 0.0,
+      "end": 2561.172,
+      "region": {
+       "x": 285,
+       "y": 404,
+       "width": 707,
+       "height": 60
+      },
+      "suggested": null
+     }
+    ],
+    "subtitle_band_ad_tracks": 50,
+    "subtitle_band_ad_tracks_in_main_list": 50,
+    "fixed_text_logo_cards": 0,
+    "queue_bytes": 355656
+   },
+   "after": {
+    "items": 7,
+    "advisory_items": 211,
+    "suggested_blur": 2,
+    "suggested_blur_bottom_band": 1,
+    "text_items": 5,
+    "web_address_items": 2,
+    "band_watermark_end": 2561.172,
+    "repeated_watermark_cards": [
+     {
+      "start": 0.0,
+      "end": 2561.172,
+      "moments": 1,
+      "sightings": 89,
+      "region": {
+       "x": 552,
+       "y": 469,
+       "width": 176,
+       "height": 32
+      },
+      "band": "bottom",
+      "suggested": "BLUR"
+     }
+    ],
+    "band_overlays": [
+     {
+      "start": 0.0,
+      "end": 2561.172,
+      "region": {
+       "x": 285,
+       "y": 404,
+       "width": 707,
+       "height": 60
+      },
+      "suggested": null
+     }
+    ],
+    "subtitle_band_ad_tracks": 90,
+    "subtitle_band_ad_tracks_in_main_list": 89,
+    "fixed_text_logo_cards": 0,
+    "queue_bytes": 360043
+   }
+  }
+ },
+ "golden": {
+  "before_vs_after": {
+   "exit": 1,
+   "lines": [
+    "newly caught: 0, newly missed: 0, new trap hits: 0",
+    "GATE FAIL: Thiếu thời gian pipeline ở một trong hai scorecard; không kiểm được cổng +5% (chấm bằng evaluate_golden.py run hoặc score --trial)"
+   ]
+  },
+  "v2_baseline_tag_vs_after": {
+   "exit": 1,
+   "lines": [
+    "newly caught: 1, newly missed: 0, new trap hits: 0",
+    "GATE FAIL: Thiếu thời gian pipeline ở một trong hai scorecard; không kiểm được cổng +5% (chấm bằng evaluate_golden.py run hoặc score --trial)"
+   ]
+  }
+ },
+ "export_tail_145": {
+  "window_film_seconds": [
+   2313.0,
+   2561.067
+  ],
+  "film_seconds": 2561.172,
+  "cards": [
+   {
+    "region": {
+     "x": 552,
+     "y": 469,
+     "width": 176,
+     "height": 32
+    },
+    "start": 0.0,
+    "end": 2561.172
+   }
+  ],
+  "mark_box": {
+   "x": 548,
+   "y": 465,
+   "width": 184,
+   "height": 40
+  },
+  "sample_count": 496,
+  "summary": {
+   "source": {
+    "readable": 188,
+    "web_address": 160
+   },
+   "before": {
+    "readable": 188,
+    "web_address": 159
+   },
+   "after": {
+    "readable": 0,
+    "web_address": 0
+   }
+  },
+  "after_readable_seconds": [],
+  "operations_in_window": {
+   "before": 2,
+   "after": 1
+  },
+  "export_status": {
+   "before": "COMPLETED",
+   "after": "COMPLETED"
+  }
+ }
+}
