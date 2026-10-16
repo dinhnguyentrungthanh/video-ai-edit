@@ -98,6 +98,56 @@ class CarryTests(unittest.TestCase):
         self.assertEqual(carried["decision_region_source_pixels"], {"x": 0, "y": 30, "width": 1280, "height": 80})
         self.assertEqual(carried["decision_carried_from"], ["old"])
 
+    def test_an_old_card_carried_to_its_own_card_does_not_vote_on_another(self):
+        # Job 134 rev 2 (2026-10-16): the watermark card grew to the film's end (a new id). A KEEP on a
+        # subtitle line inside its box and time, carried to the line's own card, left it open as a conflict.
+        watermark = {"x": 552, "y": 443, "width": 176, "height": 31}
+        line = {"x": 333, "y": 408, "width": 618, "height": 65}
+        blur = _card("mark", 0.0, 2643.5, watermark, "BLUR", **_moments((0.0, 2643.5)))
+        keep = _card("line", 2253.0, 2259.5, line, "KEEP")
+        longer = _card("mark-longer", 0.0, 2657.2, watermark, **_moments((0.0, 2657.2)))
+        for home in ("main", "optional"):
+            with self.subTest(line_card=home):
+                own = _card("line", 2253.0, 2259.5, line, **({"advisory": True} if home == "optional" else {}))
+                items, optional, summary = carry_review_decisions(
+                    [blur, keep], [longer] + ([own] if home == "main" else []), [own] if home == "optional" else [])
+                by_id = {item["id"]: item for item in items}
+                self.assertEqual(by_id["mark-longer"]["decision"], "BLUR")
+                self.assertEqual(by_id["mark-longer"]["decision_carried_from"], ["mark"])
+                self.assertNotIn("decision_conflict", by_id["mark-longer"])
+                self.assertEqual(by_id["line"]["decision"], "KEEP")
+                self.assertEqual(optional, [])
+                self.assertEqual(summary, {"previous_decisions": 2, "carried": 2, "restored_unchanged": 0,
+                                           "conflicts": 0})
+
+    def test_a_blur_of_separate_moments_carries_to_the_same_moments_grown(self):
+        # Two moments, the last grown to the film's end: each old moment lies inside a new one, so the
+        # old card does not come back beside the new one.
+        watermark = {"x": 552, "y": 443, "width": 176, "height": 31}
+        old = _card("mark", 0.0, 2559.5, watermark, "BLUR", **_moments((0.0, 1000.5), (1297.0, 2559.5)))
+        grown = _card("mark-longer", 0.0, 2700.0, watermark, **_moments((0.0, 1000.5), (1297.0, 2700.0)))
+        items, _, summary = carry_review_decisions([old], [grown], [])
+        [carried] = items
+        self.assertEqual((carried["id"], carried["decision"], carried["decision_carried_from"]),
+                         ("mark-longer", "BLUR", ["mark"]))
+        self.assertEqual((summary["carried"], summary["restored_unchanged"]), (1, 0))
+        # An old moment outside every new moment still brings the old card back unchanged.
+        shorter = _card("mark-other", 0.0, 2700.0, watermark, **_moments((0.0, 900.0), (1297.0, 2700.0)))
+        items, _, summary = carry_review_decisions([old], [shorter], [])
+        self.assertEqual(sorted(item["id"] for item in items), ["mark", "mark-other"])
+        self.assertEqual(summary["restored_unchanged"], 1)
+
+    def test_old_cards_without_their_own_card_still_disagree(self):
+        watermark = {"x": 552, "y": 443, "width": 176, "height": 31}
+        blur = _card("mark", 0.0, 2643.5, watermark, "BLUR", **_moments((0.0, 2643.5)))
+        keep = _card("line", 2253.0, 2259.5, {"x": 333, "y": 408, "width": 618, "height": 65}, "KEEP")
+        longer = _card("mark-longer", 0.0, 2657.2, watermark, **_moments((0.0, 2657.2)))
+        items, _, summary = carry_review_decisions([blur, keep], [longer], [])
+        new = next(item for item in items if item["id"] == "mark-longer")
+        self.assertIsNone(new["decision"])
+        self.assertEqual(new["decision_conflict"], ["line", "mark"])
+        self.assertEqual((summary["conflicts"], summary["restored_unchanged"]), (1, 2))
+
     def test_an_optional_card_with_the_old_id_moves_to_the_main_list(self):
         old = _card("adv", 50.0, 53.5, PIECE, "BLUR")
         items, optional, summary = carry_review_decisions(

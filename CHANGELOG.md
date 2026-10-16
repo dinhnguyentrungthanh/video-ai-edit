@@ -1,3 +1,19 @@
+# A site watermark read in many runs reaches the film's edges — session D (2026-10-16, branch `fix/watermark-edges` from `main` `41d219d`; not merged)
+
+- Cause (job 134 rev 2, the user's real "Chạy lại" on G13): the subtitle-band watermark card ended at 2,643.5 s of 2,657.2 s. The end credits covered the mark's last readings, but it stayed in its box to the end; the export showed it for the last 14 s. Jobs 130 and 136 the same (8.7 and 10.7 s short); 143 and 145 already reached the end.
+- `subtitle_band.py` (review build only; no cache key changes): a `repeated_watermark` group of `WATERMARK_ROBUST_RUNS` (10) runs or more whose first or last moment lies `WATERMARK_BRIDGE_SECONDS` (150 s) or closer to the scan's start or end reaches it (the scan's end: `scan_start + scan_duration`, at most the film's duration). The same reason as the 150 s join between runs: the scan missed the mark, it did not leave. Fewer runs keep their time; separate moments keep their gaps; the card records `read_span` and its reason names the edge reached.
+- `review_decision_carry.py`, found by the rebuild gate on 134's real queue: the longer card has a new id, and two KEEPs inside its box and time (a 2-run group, a 6.5 s subtitle line) still on their own cards left it open as a conflict, the old BLUR beside it (26 cards instead of 25). Now:
+  - an old card carried to its own unchanged card (same id and moments, or the same id in the optional list) decides no other card;
+  - a BLUR of separate moments is carried when each old moment lies inside a new one (code review: a grown last moment left the old card beside the new one).
+- Other edges checked on the active queues of 77 jobs: film-long fixed-text cards are already built edge to edge (39 of 42; the others are two visual-logo groups whose sources are gone and one part-film line); scrolling lines get one card per crossing. No evidence elsewhere, so only `repeated_watermark` changes.
+- Gates (`docs/evidence/watermark-edges/`, `edge-gate-summary.json`; before = 41d219d):
+  - 14 new tests (11 fail on 41d219d); 515 tests of 30 review modules; full suite 3,513 tests OK, 53 skipped (with a 1 s synthetic clip in the worktree's `input\`, removed after);
+  - latest real reports of 130, 134, 136, 143, 145: band watermark cards start at 0 and end at the film's length (130 2,655.167, 134 2,657.236, 136 2,702.207, 143 2,668.116, 145 2,561.172); cards unchanged; rebuilds with kept decisions lose 0 and 134's BLUR is on the longer card;
+  - the 25 jobs of the subtitle-band gate: cards equal, subtitle band weakened 0; rebuilds by both trees (10 jobs with sources) give the same card and decision counts, changing only the edge cards of 130, 134 and 136;
+  - job 134's last 30 s exported (x264): after 2,643.5 s the mark is read in 0 of 27 samples (41d219d: 27, 4 with its address);
+  - Golden Set v2: identical scorecards (598 items; 19/19, false positives 24, traps 0);
+  - cache keys: all 10 stages equal to 41d219d.
+
 # G13 merge: text-scan logo box, 250-track limit and subtitle dialogue (2026-10-16, branch `merge/g13` from `main` `419377f`; not yet in the main folder)
 
 - Merged `fix/text-consensus-logo` (session D: `ca17c07`, `7fa0e0e`, `86f17fe`, entries below) with `--no-ff`.

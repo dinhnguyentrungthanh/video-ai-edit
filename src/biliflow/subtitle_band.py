@@ -10,8 +10,11 @@ scored as ad text also filled the main list.
 again at the same place (similar folded address, boxes overlapping by
 WATERMARK_PLACE_IOU) into one track: one moment per run, from one read interval
 before its first reading to its blur end, in the union of the runs' boxes,
-suggested BLUR. One decision then edits every moment and only those. A general
-rule for every site: nothing here names one.
+suggested BLUR. A mark read in WATERMARK_ROBUST_RUNS runs or more stays on screen
+between its runs and up to the scan's edges: moments WATERMARK_BRIDGE_SECONDS or
+closer join, and so does a first or last moment that close to the scan's start or
+end. One decision then edits every moment and only those. A general rule for
+every site: nothing here names one.
 
 ``move_subtitle_lines`` sends a centred line of the subtitle zone read at most
 SUBTITLE_LINE_MAXIMUM_READS times and routed only uncertain, in a film with a
@@ -22,8 +25,8 @@ SUBTITLE_LINE_MAXIMUM_AD or "advertisement" as its first semantic label, or one
 that stays on screen keeps its main-list card exactly as before.
 
 Both only regroup and suggest; the reviewer decides. Built from an existing text
-scan, so old jobs need no rescan. Only ``review_workflow`` imports this module:
-it is in no scan stage's cache key.
+scan, so old jobs need no rescan. Only ``review_workflow`` and ``fixed_text_logo``
+(a constant) import this module: it is in no scan stage's cache key.
 """
 from __future__ import annotations
 
@@ -51,7 +54,9 @@ WATERMARK_ROBUST_RUNS = 10
 WATERMARK_EDGE_SHARE = 0.10
 # A mark read in that many runs is still on screen between them: OCR read it in the
 # source inside gaps of every length up to the longest (131.5 s) in jobs 130-145
-# (docs/evidence/subtitle-band/gap_check.py). Its moments closer than this join.
+# (docs/evidence/subtitle-band/gap_check.py). Its moments closer than this join, and a
+# first or last moment this close to the scan's start or end reaches it (job 134: the
+# end credits covered the mark for its last 14 s, 2026-10-16).
 WATERMARK_BRIDGE_SECONDS = 150.0
 _FIXED_ROUTINGS = frozenset({"REVIEW_PERSISTENT_OVERLAY", "LIKELY_TITLE_OVERLAY", "REVIEW_POLICY_OVERRIDE"})
 _FIXED_CANDIDATE_TYPES = frozenset({"persistent_overlay", "title_overlay", SCROLLING_CANDIDATE_TYPE})
@@ -163,6 +168,34 @@ def _moments(members: list[_Sighting], sample_every: float, scan_start: float) -
     return moments
 
 
+def _scan_end(payload: dict, scan_start: float) -> float | None:
+    """The end of the scanned time (the film's end when the scan reaches past it), None when unknown."""
+    duration = float(payload.get("duration_seconds") or 0.0)
+    scan_duration = float(payload.get("scan_duration_seconds") or duration)
+    if scan_duration <= 0:
+        return None
+    end = scan_start + scan_duration
+    return min(duration, end) if duration > 0 else end
+
+
+def _reach_edges(
+    moments: list[dict], scan_start: float, scan_end: float | None,
+) -> tuple[list[dict], bool, bool]:
+    """A mark read in WATERMARK_ROBUST_RUNS runs does not leave the frame before its first or after its
+    last reading either (job 134: the end credits covered it for its last 14 s). As between its runs, a
+    first or last moment WATERMARK_BRIDGE_SECONDS or closer to the scan's start or end reaches it.
+    Returns new moments and whether the start and the end were reached."""
+    moments = [dict(moment) for moment in moments]
+    first, last = moments[0]["start_seconds"], moments[-1]["end_seconds"]
+    reaches_start = scan_start < first <= scan_start + WATERMARK_BRIDGE_SECONDS
+    reaches_end = scan_end is not None and scan_end - WATERMARK_BRIDGE_SECONDS <= last < scan_end
+    if reaches_start:
+        moments[0]["start_seconds"] = round(scan_start, 3)
+    if reaches_end:
+        moments[-1]["end_seconds"] = round(scan_end, 3)
+    return moments, reaches_start, reaches_end
+
+
 def _region(members: list[_Sighting]) -> list[int]:
     """The card's box in analysis pixels: the union of the runs' boxes, robust from WATERMARK_ROBUST_RUNS on."""
     share = WATERMARK_EDGE_SHARE if len(members) >= WATERMARK_ROBUST_RUNS else 0.0
@@ -187,11 +220,17 @@ def _clock(seconds: float) -> str:
     return f"{whole // 60}:{whole % 60:02d}"
 
 
-def _watermark_track(members: list[_Sighting], sample_every: float, scan_start: float) -> dict:
+def _watermark_track(
+    members: list[_Sighting], sample_every: float, scan_start: float, scan_end: float | None,
+) -> dict:
     members = sorted(members, key=lambda value: (value.start, value.index))
     anchor = max(members, key=lambda value: (len(value.tokens), -value.start))
-    moments = _moments(members, sample_every, scan_start)
+    read = _moments(members, sample_every, scan_start)
     bridged = len(members) >= WATERMARK_ROBUST_RUNS
+    moments, reaches_start, reaches_end = (
+        _reach_edges(read, scan_start, scan_end) if bridged else (read, False, False)
+    )
+    edges = [name for name, reached in (("đầu", reaches_start), ("cuối", reaches_end)) if reached]
     tokens = list(dict.fromkeys(token for member in members for token in member.tokens))
     known = list(dict.fromkeys(key for member in members for key in member.remembered))
     shown = ", ".join((tokens or known)[:2])
@@ -233,6 +272,9 @@ def _watermark_track(members: list[_Sighting], sample_every: float, scan_start: 
             "sightings": len(members),
             "moments": len(moments),
             "bridge_seconds": WATERMARK_BRIDGE_SECONDS if bridged else 0.0,
+            # From the first read moment's start to the last's end (gaps between moments included),
+            # before the card reached the scan's edges.
+            "read_span": {"start_seconds": read[0]["start_seconds"], "end_seconds": read[-1]["end_seconds"]},
             "previous_routings": sorted({str(member.track.get("routing") or "") for member in members}),
         },
         "reason": (
@@ -241,6 +283,8 @@ def _watermark_track(members: list[_Sighting], sample_every: float, scan_start: 
             f"lần ({len(moments)} khoảng"
             + (f"; hai lần đọc cách nhau tới {WATERMARK_BRIDGE_SECONDS:g} s được nối liền vì watermark vẫn còn "
                "trên hình giữa các lần đọc" if bridged else "")
+            + (f"; thẻ kéo tới {' và '.join(edges)} vùng quét vì lần đọc gần đó nhất cách không quá "
+               f"{WATERMARK_BRIDGE_SECONDS:g} s" if edges else "")
             + "), chỉ làm mờ đúng chỗ đó trong các khoảng đó. Đề xuất làm mờ, chờ bạn duyệt."
         ),
     })
@@ -260,6 +304,7 @@ def group_repeated_watermarks(payload: dict, remembered: Iterable[str] = ()) -> 
     tracks = list(payload.get("tracks") or [])
     sample_every = float(payload.get("sample_every_seconds") or 0.0)
     scan_start = float(payload.get("scan_start_seconds") or 0.0)
+    scan_end = _scan_end(payload, scan_start)
     sightings = [
         sighting for sighting in (_sighting(index, track, remembered) for index, track in enumerate(tracks))
         if sighting is not None
@@ -275,7 +320,7 @@ def group_repeated_watermarks(payload: dict, remembered: Iterable[str] = ()) -> 
     if not joined:
         return payload
     absorbed = {member.index for members in joined for member in members}
-    promoted = [_watermark_track(members, sample_every, scan_start) for members in joined]
+    promoted = [_watermark_track(members, sample_every, scan_start, scan_end) for members in joined]
     output = dict(payload)
     output["tracks"] = [track for index, track in enumerate(tracks) if index not in absorbed] + promoted
     output["repeated_watermark_tracks"] = [

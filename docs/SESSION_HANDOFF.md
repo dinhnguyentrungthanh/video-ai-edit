@@ -1,5 +1,13 @@
 # BiliFlow session handoff
 
+## Session D, a site watermark read in many runs reaches the film's edges — 2026-10-16, branch `fix/watermark-edges` from `main` `41d219d` (worktree `temp\wt-wm-edges`), not merged
+
+- **Request (coordinator, the user wants it soon):** job 134 rev 2's band watermark card ends 13.7 s before the film's end while the mark stays on screen; stretch a robust group's card to the scan's edges within the bridge distance, report other edge stops, no cache key change.
+- **Done:** `subtitle_band.py` (`_scan_end`, `_reach_edges`, `read_span`), `review_decision_carry.py` (an old card on its own card decides no other card; separate moments covered moment by moment). Tests `tests/test_watermark_edges.py` (11) and `tests/test_review_decision_carry.py` (3 new). Gates `docs/evidence/watermark-edges/` (`edge_gate.py`, `edge-gate-summary.json`, README), `docs/evidence/text-consensus/export_tail.py` (`--job`, `--queue`, `--before-queue`). Handoff (Vietnamese) `docs/handoff/D-watermark-edges.md`.
+- **Gates:** see `CHANGELOG.md`; no GPU use (EasyOCR on the CPU for the tail export).
+- **Waiting for the coordinator:** the merge.
+- **For the user after the merge:** jobs 130, 134 and 136 get the longer watermark card at the next build of their review queue; a rebuild that keeps decisions keeps the BLUR on it (134's gate). Until then an export of these three leaks the mark in its last 9–14 s.
+
 ## G13 merge, the text scan keeps a fixed logo and ad evidence, subtitle dialogue suggests no BLUR (session D) — 2026-10-16, branch `merge/g13` (worktree `temp\wt-merge-g13`), not yet in the main folder
 
 - **Request:** after G12, the user's real "Chạy lại" of job 145 (revision 2) re-ran `visual_logo` (its cache key holds `state\brand-memory.json`, changed on 2026-10-15) and found no logo card to join, so the logo leaked again; the user asked for the root fix, for item 6 (the 250-track limit) on the same branch, and for whole-film cards of subtitle dialogue to stop suggesting BLUR (jobs 130 and 136 were exported with their dialogue blurred).
