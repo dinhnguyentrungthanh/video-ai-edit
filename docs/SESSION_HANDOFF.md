@@ -1,5 +1,14 @@
 # BiliFlow session handoff
 
+## G14 merge, the subtitle-band watermark card reaches the film's edges (session D) — 2026-10-16, branch `merge/g14` (worktree `temp\wt-merge-g14`), not yet in the main folder
+
+- **Request:** after the user's real "Chạy lại" on G13, the subtitle-band watermark cards of jobs 130, 134 and 136 ended 9–14 s before the film's end (the end credits covered the mark's last readings), so those exports showed the mark at the end; the user asked for the fix before exporting them.
+- **Merge:** `fix/watermark-edges` (`cb0122e`, from `main` `41d219d`) into `merge/g14` with `--no-ff` (`6732c66`, tree identical to `cb0122e`).
+- **Gates:** scan cache keys of all 10 stages equal to `main` (no rescan); full suite on `6732c66` 3,513 tests, 39 skipped, 1 failure in `test_download_account_e2e_flows` (the episode dialog's button still read its waiting label after 60 s; unrelated to this change), and that module rerun alone 5/5 OK; session D's suite on `cb0122e` 3,513 OK. Session D's gates (`docs/evidence/watermark-edges/`): the band watermark cards of 130, 134, 136, 143 and 145 start at 0 and end at the film's length, card counts unchanged, rebuilds keeping decisions lose 0, the last 30 s of 134's export read the mark 0 of 27 times (before: 27), Golden Set v2 scorecards identical. No real domain, title or source path in the diff.
+- **For the user after the merge:** jobs 130, 134 and 136: "Chạy lại" (no rescan, only the review list is rebuilt), "Dùng đề xuất" first, look over the rest, "Giữ tất cả", then export again.
+- **Backlog noted (the user's word on 2026-10-16):** a card's preview shows the original frame with only its own box, so a dialogue card looks as if the site mark under it or the top logo stays uncovered although other cards blur them; show the BLUR regions of other cards in the preview and count `repeated_watermark` and `scrolling_text` in the overlap note (`dashboard_v2/review-detail.js` `overlapCoverage`).
+- **Next:** with the Control Center's queue empty and the user's explicit go, stop it and fast-forward the main folder to `merge/g14`; push only on the user's word.
+
 ## Session D, a site watermark read in many runs reaches the film's edges — 2026-10-16, branch `fix/watermark-edges` from `main` `41d219d` (worktree `temp\wt-wm-edges`), not merged
 
 - **Request (coordinator, the user wants it soon):** job 134 rev 2's band watermark card ends 13.7 s before the film's end while the mark stays on screen; stretch a robust group's card to the scan's edges within the bridge distance, report other edge stops, no cache key change.

@@ -1,3 +1,7 @@
+## G14 merge, the subtitle-band watermark card reaches the film's edges (2026-10-16) — branch `merge/g14`, not yet in the main folder
+
+- Session D (entry below): a site watermark read in 10 runs or more reaches the scan's start and end when they are 150 s or closer, and carried decisions stay with their own card. Review build only: scan cache keys unchanged, "Chạy lại" rebuilds the list without a rescan. Full suite 3,513 (1 unrelated download e2e failure, OK on rerun). Details in `CHANGELOG.md`.
+
 ## A site watermark read in many runs reaches the film's edges, session D (2026-10-16) — branch `fix/watermark-edges`, not merged
 
 - Job 134 rev 2: the subtitle-band watermark card stopped 13.7 s before the end (the end credits covered the mark's last readings); 130 and 136 the same. A watermark group of 10 runs or more now reaches the scan's start and end when its first or last moment is 150 s or closer. The decision carry keeps the user's BLUR on the longer card.

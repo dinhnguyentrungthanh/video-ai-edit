@@ -1,3 +1,8 @@
+# G14 merge: the subtitle-band watermark card reaches the film's edges (2026-10-16, branch `merge/g14` from `main` `41d219d`; not yet in the main folder)
+
+- Merged `fix/watermark-edges` (session D: `cb0122e`, entry below) with `--no-ff`.
+- Scan cache keys unchanged (10 stages). Full suite 3,513 tests, 39 skipped, 1 failure in `test_download_account_e2e_flows` (a 60 s wait on the episode dialog's button label), which passed 5/5 when rerun alone.
+
 # A site watermark read in many runs reaches the film's edges — session D (2026-10-16, branch `fix/watermark-edges` from `main` `41d219d`; not merged)
 
 - Cause (job 134 rev 2, the user's real "Chạy lại" on G13): the subtitle-band watermark card ended at 2,643.5 s of 2,657.2 s. The end credits covered the mark's last readings, but it stayed in its box to the end; the export showed it for the last 14 s. Jobs 130 and 136 the same (8.7 and 10.7 s short); 143 and 145 already reached the end.

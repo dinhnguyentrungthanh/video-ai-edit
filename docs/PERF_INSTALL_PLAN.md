@@ -1037,6 +1037,16 @@ Session cloud lập kế hoạch dừng vì hết credit. Một session **điề
 - Bài học: lần "Chạy lại" thật có thể không lấy bước visual_logo từ cache (khóa của nó có bộ nhớ thương hiệu), nên phần sửa nào dựa vào kết quả của bước khác phải được kiểm trên một lần quét lại thật.
 - Còn lại: A1d (mục 14.17), nút dựng lại giữ quyết định, nhớ đoạn giới thiệu của nền tảng (job 129, job 145 0:00–0:05), lỗi nguồn xoay 90°/270°.
 
+### 14.19 G14: D, thẻ watermark dưới phụ đề tới mép phim (2026-10-16)
+
+- Gộp `fix/watermark-edges` vào `merge/g14`:
+  - nhóm watermark đọc được từ 10 lần trở lên, cách đầu hoặc cuối vùng quét không quá 150 s, thì kéo tới đó (chữ danh sách đoàn phim che watermark, nó không rời đi);
+  - quyết định cũ đã về đúng thẻ của nó thì không phản đối thẻ khác; BLUR của thẻ nhiều khoảnh khắc được mang sang theo từng khoảnh khắc.
+- Chỉ đổi bước dựng danh sách duyệt: khóa cache quét không đổi, job 130, 134, 136 chỉ cần "Chạy lại". Full suite 3.513 (1 test tải phim chập chờn, chạy lại đạt).
+- Còn lại:
+  - ảnh xem trước của thẻ hiện cả vùng các thẻ khác đã làm mờ (để thẻ phụ đề không trông như bỏ sót quảng cáo);
+  - A1d (mục 14.17), nút dựng lại giữ quyết định, nhớ đoạn giới thiệu của nền tảng (job 129, job 145 0:00–0:05), lỗi nguồn xoay 90°/270°.
+
 ### 14.6 Cách session điều phối làm việc
 
 - Làm trong worktree `temp\wt-coord`, nhánh `coord/plan` (từ `origin/main`). **Không sửa thư mục chính** đang chạy Control Center.
