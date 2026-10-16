@@ -1,3 +1,7 @@
+## G13 merge, text-scan logo box, 250-track limit and subtitle dialogue (2026-10-16) — branch `merge/g13`, not yet in the main folder
+
+- Session D (entries below): the text scan keeps a fixed logo's own box beside the site's scrolling line (job 145), keeps every ad-evidence track past its 250-track limit (subtitle-band watermark cards reach the film's end), and a whole-film card of subtitle dialogue suggests no BLUR. The text stage's cache key changes: "Chạy lại" rescans text. Full suite 3,499 OK. Details in `CHANGELOG.md`.
+
 ## A film-long card of subtitle dialogue suggests no BLUR, session D task 2 (2026-10-16) — branch `fix/text-consensus-logo`, not merged
 
 - Dialogue chains under the film became whole-film fixed-text cards suggesting BLUR (130, 134, 136); 130 and 136 exported with the dialogue blurred. A whole-film line card in the subtitle band with no web address, phone number, @handle, other domain or platform name and a line consensus below 0.60 now suggests nothing. It absorbs only plain text cards (no suggestion, ad score below 0.40, no ad evidence) and merges with none.

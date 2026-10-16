@@ -1,3 +1,8 @@
+# G13 merge: text-scan logo box, 250-track limit and subtitle dialogue (2026-10-16, branch `merge/g13` from `main` `419377f`; not yet in the main folder)
+
+- Merged `fix/text-consensus-logo` (session D: `ca17c07`, `7fa0e0e`, `86f17fe`, entries below) with `--no-ff`.
+- Scan cache keys: only the text stage changes. Full suite 3,499 tests OK, 39 skipped.
+
 # A film-long card of subtitle dialogue suggests no BLUR — session D, task 2 (2026-10-16, branch `fix/text-consensus-logo`; not merged)
 
 - Cause (jobs 130, 134, 136, 145): dialogue lines read one after another under the film chained into one recurring-text group (each piece shares a word with the next). It became a whole-film fixed-text card over the subtitles. One dialogue line scored as an ad made it suggest BLUR in 130, 134 and 136, and jobs 130 and 136 exported with the dialogue blurred all film long; the user confirmed it was not intended. The site's mark below the subtitles has its own repeated-watermark card.

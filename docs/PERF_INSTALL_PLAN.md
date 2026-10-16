@@ -1027,6 +1027,16 @@ Session cloud lập kế hoạch dừng vì hết credit. Một session **điề
   - **A1d** (người dùng muốn làm sau, 2026-10-15): làn xuất song song không bao giờ mở trên card 6 GB, vì mọi bước quét đều được tính theo mức đỉnh của Qwen2-VL (4.943 MiB) trong khi Windows và các chương trình khác giữ khoảng 950–1.250 MiB. Tính theo bước đang chạy (visual_logo 4.690, localize_logo 1.309, text ≤ 833 MiB) và cho bước nặng hơn chờ bản xuất đang chạy xong; giữ biên 256 MiB và chỉ dùng NVENC;
   - nút dựng lại giữ quyết định, lỗi nguồn xoay 90°/270°.
 
+### 14.18 G13: D, khung logo ở bước quét chữ, giới hạn 250 track, thẻ phụ đề thoại (2026-10-16)
+
+- Gộp `fix/text-consensus-logo` vào `merge/g13`:
+  - bước quét chữ giữ khung của logo cố định sát dòng chữ chạy (job 145 không cần thẻ visual_logo nữa);
+  - quá 250 track vẫn giữ mọi track có dấu hiệu quảng cáo, nên thẻ watermark dưới phụ đề kéo tới hết phim;
+  - thẻ cả phim gom từ các câu thoại ở vùng phụ đề không còn đề xuất làm mờ.
+- Khóa cache bước text đổi: "Chạy lại" quét lại bước chữ (khoảng 2 phút mỗi phim 45 phút). Full suite 3.499 OK.
+- Bài học: lần "Chạy lại" thật có thể không lấy bước visual_logo từ cache (khóa của nó có bộ nhớ thương hiệu), nên phần sửa nào dựa vào kết quả của bước khác phải được kiểm trên một lần quét lại thật.
+- Còn lại: A1d (mục 14.17), nút dựng lại giữ quyết định, nhớ đoạn giới thiệu của nền tảng (job 129, job 145 0:00–0:05), lỗi nguồn xoay 90°/270°.
+
 ### 14.6 Cách session điều phối làm việc
 
 - Làm trong worktree `temp\wt-coord`, nhánh `coord/plan` (từ `origin/main`). **Không sửa thư mục chính** đang chạy Control Center.
