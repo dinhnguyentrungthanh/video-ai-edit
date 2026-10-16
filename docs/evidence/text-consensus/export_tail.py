@@ -2,7 +2,9 @@
 
 Runs after ``limit_gate.py``: its --work folder holds gate/job-145/after/.../gate-fresh, the queue
 built from the text report with this branch's track limit (the user's memories on). From --start
-(the end of the old watermark card, 2,313 s) to the end of the film:
+(the end of the old watermark card, 2,313 s) to the end of the film. ``--job`` and ``--queue`` (the
+watermark-edge gate, 2026-10-16) take another job and the "after" queue of another gate, and
+``--before-queue`` the band watermark cards of the "before" build instead of the user's own queue:
 
 1. "before": the edit operations of the user's own queue (what was exported);
    "after": one BLUR on each subtitle-band ``repeated_watermark`` card of the gate's queue that
@@ -70,16 +72,19 @@ def _union(regions: list[dict]) -> dict:
 
 
 def check_tail(args, reader) -> dict:
-    work, gate_work = Path(args.work), Path(args.gate_work)
+    work = Path(args.work)
     candidate = Path(args.candidate).resolve(strict=True)
-    folder = queue_folder(JOB)
-    root = work / f"job-{JOB}-tail"
+    job_id = args.job
+    folder = queue_folder(job_id)
+    root = work / f"job-{job_id}-tail"
     for name in ("input", "work", "output", "state", "reports/jobs"):
         (root / name).mkdir(parents=True, exist_ok=True)
-    fresh = gate_work / "gate" / f"job-{JOB}" / "after" / folder / "gate-fresh" / "review-queue.json"
+    fresh = (Path(args.queue) if args.queue else
+             Path(args.gate_work) / "gate" / f"job-{job_id}" / "after" / folder / "gate-fresh" / "review-queue.json")
     plans = {}
-    for label, queue, only in (("before", INSTALL / folder / "review-queue.json", False), ("after", fresh, True)):
-        target = root / "reports" / "jobs" / f"{label}-{JOB}"
+    before = (Path(args.before_queue), True) if args.before_queue else (INSTALL / folder / "review-queue.json", False)
+    for label, queue, only in (("before", *before), ("after", fresh, True)):
+        target = root / "reports" / "jobs" / f"{label}-{job_id}"
         target.mkdir(parents=True)
         shutil.copyfile(queue, target / "review-queue.json")
         plans[label] = run_tree(candidate, PLAN_PROGRAM, {
@@ -90,13 +95,13 @@ def check_tail(args, reader) -> dict:
         raise SystemExit("the gate's queue has no subtitle-band watermark card suggesting BLUR")
     source = Path(plans["after"]["source"]["path"])
     duration = float(plans["after"]["source"]["duration_seconds"])
-    clip, length = window_clip(root, JOB, source, (args.start, duration))
-    report = {"job": JOB, "window_film_seconds": [round(args.start, 3), round(args.start + length, 3)],
+    clip, length = window_clip(root, job_id, source, (args.start, duration))
+    report = {"job": job_id, "window_film_seconds": [round(args.start, 3), round(args.start + length, 3)],
               "film_seconds": duration, "cards": cards, "exports": {}}
     videos = {"source": clip}
     for label in ("before", "after"):
         plan = window_plan(root, label, plans[label]["operations"], clip, length, args.start)
-        output = root / "output" / f"job-{JOB}-tail-{label}.mp4"
+        output = root / "output" / f"job-{job_id}-tail-{label}.mp4"
         report["exports"][label] = run_tree(candidate, RENDER_PROGRAM, {
             "root": str(root), "plan": str(plan), "output": str(output), "ffmpeg": str(FFMPEG),
             "ffprobe": str(FFPROBE)})
@@ -123,12 +128,21 @@ def check_tail(args, reader) -> dict:
 def main() -> None:
     sys.stdout.reconfigure(encoding="utf-8")
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--gate-work", required=True, help="the --work folder of limit_gate.py")
+    parser.add_argument("--gate-work", help="the --work folder of limit_gate.py (its job-<job> after queue)")
+    parser.add_argument("--queue", help="the \"after\" queue instead of the gate's (e.g. ../watermark-edges/edge_gate.py)")
+    parser.add_argument("--job", type=int, default=JOB, help="job id (default 145)")
+    parser.add_argument("--before-queue", help="\"before\": the band watermark cards of this queue, not the user's own queue (one still being reviewed has no edit plan)")
     parser.add_argument("--candidate", required=True, help="src folder of the candidate tree")
     parser.add_argument("--work", required=True, help="new folder under <install>/temp")
-    parser.add_argument("--start", type=float, default=2313.0, help="window start, film seconds")
+    parser.add_argument("--start", type=float, help="window start, film seconds (job 145: 2313 by default)")
     parser.add_argument("--output", required=True)
     args = parser.parse_args()
+    if not args.gate_work and not args.queue:
+        raise SystemExit("give --gate-work or --queue")
+    if args.start is None:
+        if args.job != JOB:
+            raise SystemExit("give --start for another job")
+        args.start = 2313.0
     work = Path(args.work).resolve()
     if work.exists() or INSTALL / "temp" not in work.parents:
         raise SystemExit("--work must be a new folder under <install>/temp")

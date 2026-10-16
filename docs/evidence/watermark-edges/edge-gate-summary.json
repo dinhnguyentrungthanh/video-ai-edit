@@ -1,0 +1,1751 @@
+{
+ "note": "Watermark-edge gate (edge_gate.py, export_tail.py): before = 41d219d, after = fix/watermark-edges. Active revisions (jobs 130, 134, 136, 143, 145: their real reruns of 2026-10-16). Job ids, counts, seconds and regions (source pixels) only.",
+ "jobs": [
+  {
+   "job": 62,
+   "revision": 1,
+   "source_present": false,
+   "film_seconds": 2698.201,
+   "items": {
+    "before": 5,
+    "after": 5
+   },
+   "watermarks": {
+    "before": [],
+    "after": []
+   },
+   "changed_cards": {
+    "before_only": [],
+    "after_only": []
+   },
+   "subtitle_band_ad_tracks": {
+    "cited_by_main_card": {
+     "before": 0,
+     "after": 0
+    },
+    "weakened": 0
+   },
+   "robust_band_watermarks_reach_edges": true
+  },
+  {
+   "job": 63,
+   "revision": 1,
+   "source_present": false,
+   "film_seconds": 2501.183,
+   "items": {
+    "before": 2,
+    "after": 2
+   },
+   "watermarks": {
+    "before": [],
+    "after": []
+   },
+   "changed_cards": {
+    "before_only": [],
+    "after_only": []
+   },
+   "subtitle_band_ad_tracks": {
+    "cited_by_main_card": {
+     "before": 0,
+     "after": 0
+    },
+    "weakened": 0
+   },
+   "robust_band_watermarks_reach_edges": true
+  },
+  {
+   "job": 64,
+   "revision": 1,
+   "source_present": false,
+   "film_seconds": 2840.788,
+   "items": {
+    "before": 3,
+    "after": 3
+   },
+   "watermarks": {
+    "before": [],
+    "after": []
+   },
+   "changed_cards": {
+    "before_only": [],
+    "after_only": []
+   },
+   "subtitle_band_ad_tracks": {
+    "cited_by_main_card": {
+     "before": 0,
+     "after": 0
+    },
+    "weakened": 0
+   },
+   "robust_band_watermarks_reach_edges": true
+  },
+  {
+   "job": 65,
+   "revision": 1,
+   "source_present": false,
+   "film_seconds": 2833.236,
+   "items": {
+    "before": 5,
+    "after": 5
+   },
+   "watermarks": {
+    "before": [],
+    "after": []
+   },
+   "changed_cards": {
+    "before_only": [],
+    "after_only": []
+   },
+   "subtitle_band_ad_tracks": {
+    "cited_by_main_card": {
+     "before": 0,
+     "after": 0
+    },
+    "weakened": 0
+   },
+   "robust_band_watermarks_reach_edges": true
+  },
+  {
+   "job": 66,
+   "revision": 1,
+   "source_present": false,
+   "film_seconds": 2538.079,
+   "items": {
+    "before": 3,
+    "after": 3
+   },
+   "watermarks": {
+    "before": [],
+    "after": []
+   },
+   "changed_cards": {
+    "before_only": [],
+    "after_only": []
+   },
+   "subtitle_band_ad_tracks": {
+    "cited_by_main_card": {
+     "before": 0,
+     "after": 0
+    },
+    "weakened": 0
+   },
+   "robust_band_watermarks_reach_edges": true
+  },
+  {
+   "job": 70,
+   "revision": 1,
+   "source_present": false,
+   "film_seconds": 2634.185,
+   "items": {
+    "before": 6,
+    "after": 6
+   },
+   "watermarks": {
+    "before": [],
+    "after": []
+   },
+   "changed_cards": {
+    "before_only": [],
+    "after_only": []
+   },
+   "subtitle_band_ad_tracks": {
+    "cited_by_main_card": {
+     "before": 0,
+     "after": 0
+    },
+    "weakened": 0
+   },
+   "robust_band_watermarks_reach_edges": true
+  },
+  {
+   "job": 71,
+   "revision": 1,
+   "source_present": false,
+   "film_seconds": 2594.132,
+   "items": {
+    "before": 5,
+    "after": 5
+   },
+   "watermarks": {
+    "before": [],
+    "after": []
+   },
+   "changed_cards": {
+    "before_only": [],
+    "after_only": []
+   },
+   "subtitle_band_ad_tracks": {
+    "cited_by_main_card": {
+     "before": 0,
+     "after": 0
+    },
+    "weakened": 0
+   },
+   "robust_band_watermarks_reach_edges": true
+  },
+  {
+   "job": 72,
+   "revision": 1,
+   "source_present": false,
+   "film_seconds": 2631.156,
+   "items": {
+    "before": 6,
+    "after": 6
+   },
+   "watermarks": {
+    "before": [],
+    "after": []
+   },
+   "changed_cards": {
+    "before_only": [],
+    "after_only": []
+   },
+   "subtitle_band_ad_tracks": {
+    "cited_by_main_card": {
+     "before": 0,
+     "after": 0
+    },
+    "weakened": 0
+   },
+   "robust_band_watermarks_reach_edges": true
+  },
+  {
+   "job": 99,
+   "revision": 1,
+   "source_present": false,
+   "film_seconds": 2821.247,
+   "items": {
+    "before": 5,
+    "after": 5
+   },
+   "watermarks": {
+    "before": [],
+    "after": []
+   },
+   "changed_cards": {
+    "before_only": [],
+    "after_only": []
+   },
+   "subtitle_band_ad_tracks": {
+    "cited_by_main_card": {
+     "before": 0,
+     "after": 0
+    },
+    "weakened": 0
+   },
+   "robust_band_watermarks_reach_edges": true
+  },
+  {
+   "job": 100,
+   "revision": 1,
+   "source_present": false,
+   "film_seconds": 2860.233,
+   "items": {
+    "before": 5,
+    "after": 5
+   },
+   "watermarks": {
+    "before": [],
+    "after": []
+   },
+   "changed_cards": {
+    "before_only": [],
+    "after_only": []
+   },
+   "subtitle_band_ad_tracks": {
+    "cited_by_main_card": {
+     "before": 0,
+     "after": 0
+    },
+    "weakened": 0
+   },
+   "robust_band_watermarks_reach_edges": true
+  },
+  {
+   "job": 101,
+   "revision": 1,
+   "source_present": false,
+   "film_seconds": 2894.825,
+   "items": {
+    "before": 4,
+    "after": 4
+   },
+   "watermarks": {
+    "before": [],
+    "after": []
+   },
+   "changed_cards": {
+    "before_only": [],
+    "after_only": []
+   },
+   "subtitle_band_ad_tracks": {
+    "cited_by_main_card": {
+     "before": 0,
+     "after": 0
+    },
+    "weakened": 0
+   },
+   "robust_band_watermarks_reach_edges": true
+  },
+  {
+   "job": 102,
+   "revision": 1,
+   "source_present": false,
+   "film_seconds": 2753.94,
+   "items": {
+    "before": 4,
+    "after": 4
+   },
+   "watermarks": {
+    "before": [],
+    "after": []
+   },
+   "changed_cards": {
+    "before_only": [],
+    "after_only": []
+   },
+   "subtitle_band_ad_tracks": {
+    "cited_by_main_card": {
+     "before": 0,
+     "after": 0
+    },
+    "weakened": 0
+   },
+   "robust_band_watermarks_reach_edges": true
+  },
+  {
+   "job": 103,
+   "revision": 1,
+   "source_present": false,
+   "film_seconds": 2797.204,
+   "items": {
+    "before": 4,
+    "after": 4
+   },
+   "watermarks": {
+    "before": [],
+    "after": []
+   },
+   "changed_cards": {
+    "before_only": [],
+    "after_only": []
+   },
+   "subtitle_band_ad_tracks": {
+    "cited_by_main_card": {
+     "before": 0,
+     "after": 0
+    },
+    "weakened": 0
+   },
+   "robust_band_watermarks_reach_edges": true
+  },
+  {
+   "job": 107,
+   "revision": 1,
+   "source_present": true,
+   "film_seconds": 3974.1,
+   "items": {
+    "before": 7,
+    "after": 7
+   },
+   "watermarks": {
+    "before": [],
+    "after": []
+   },
+   "changed_cards": {
+    "before_only": [],
+    "after_only": []
+   },
+   "subtitle_band_ad_tracks": {
+    "cited_by_main_card": {
+     "before": 1,
+     "after": 1
+    },
+    "weakened": 0
+   },
+   "robust_band_watermarks_reach_edges": true,
+   "rebuild_keep_decisions": {
+    "items": 7,
+    "user_queue_items": 7,
+    "old_decided": 7,
+    "lost": 0,
+    "watermark_decisions": []
+   }
+  },
+  {
+   "job": 108,
+   "revision": 1,
+   "source_present": true,
+   "film_seconds": 3868.095,
+   "items": {
+    "before": 6,
+    "after": 6
+   },
+   "watermarks": {
+    "before": [],
+    "after": []
+   },
+   "changed_cards": {
+    "before_only": [],
+    "after_only": []
+   },
+   "subtitle_band_ad_tracks": {
+    "cited_by_main_card": {
+     "before": 1,
+     "after": 1
+    },
+    "weakened": 0
+   },
+   "robust_band_watermarks_reach_edges": true,
+   "rebuild_keep_decisions": {
+    "items": 6,
+    "user_queue_items": 5,
+    "old_decided": 5,
+    "lost": 0,
+    "watermark_decisions": []
+   }
+  },
+  {
+   "job": 112,
+   "revision": 1,
+   "source_present": false,
+   "film_seconds": 3278.068,
+   "items": {
+    "before": 4,
+    "after": 4
+   },
+   "watermarks": {
+    "before": [],
+    "after": []
+   },
+   "changed_cards": {
+    "before_only": [],
+    "after_only": []
+   },
+   "subtitle_band_ad_tracks": {
+    "cited_by_main_card": {
+     "before": 0,
+     "after": 0
+    },
+    "weakened": 0
+   },
+   "robust_band_watermarks_reach_edges": true
+  },
+  {
+   "job": 118,
+   "revision": 1,
+   "source_present": false,
+   "film_seconds": 3250.196,
+   "items": {
+    "before": 7,
+    "after": 7
+   },
+   "watermarks": {
+    "before": [],
+    "after": []
+   },
+   "changed_cards": {
+    "before_only": [],
+    "after_only": []
+   },
+   "subtitle_band_ad_tracks": {
+    "cited_by_main_card": {
+     "before": 0,
+     "after": 0
+    },
+    "weakened": 0
+   },
+   "robust_band_watermarks_reach_edges": true
+  },
+  {
+   "job": 128,
+   "revision": 1,
+   "source_present": true,
+   "film_seconds": 3878.719,
+   "items": {
+    "before": 4,
+    "after": 4
+   },
+   "watermarks": {
+    "before": [],
+    "after": []
+   },
+   "changed_cards": {
+    "before_only": [],
+    "after_only": []
+   },
+   "subtitle_band_ad_tracks": {
+    "cited_by_main_card": {
+     "before": 0,
+     "after": 0
+    },
+    "weakened": 0
+   },
+   "robust_band_watermarks_reach_edges": true,
+   "rebuild_keep_decisions": {
+    "items": 4,
+    "user_queue_items": 4,
+    "old_decided": 4,
+    "lost": 0,
+    "watermark_decisions": []
+   }
+  },
+  {
+   "job": 130,
+   "revision": 2,
+   "source_present": true,
+   "film_seconds": 2655.167,
+   "items": {
+    "before": 30,
+    "after": 30
+   },
+   "watermarks": {
+    "before": [
+     {
+      "start": 0.0,
+      "end": 2646.5,
+      "runs": 99,
+      "suggested": "BLUR",
+      "decision": null,
+      "region": {
+       "x": 550,
+       "y": 444,
+       "width": 180,
+       "height": 34
+      },
+      "read_span": null,
+      "reaches_start": true,
+      "reaches_end": false
+     },
+     {
+      "start": 561.0,
+      "end": 1431.5,
+      "runs": 2,
+      "suggested": "BLUR",
+      "decision": null,
+      "region": {
+       "x": 420,
+       "y": 409,
+       "width": 445,
+       "height": 60
+      },
+      "read_span": null,
+      "reaches_start": false,
+      "reaches_end": false
+     }
+    ],
+    "after": [
+     {
+      "start": 0.0,
+      "end": 2655.167,
+      "runs": 99,
+      "suggested": "BLUR",
+      "decision": null,
+      "region": {
+       "x": 550,
+       "y": 444,
+       "width": 180,
+       "height": 34
+      },
+      "read_span": {
+       "start_seconds": 0.0,
+       "end_seconds": 2646.5
+      },
+      "reaches_start": true,
+      "reaches_end": true
+     },
+     {
+      "start": 561.0,
+      "end": 1431.5,
+      "runs": 2,
+      "suggested": "BLUR",
+      "decision": null,
+      "region": {
+       "x": 420,
+       "y": 409,
+       "width": 445,
+       "height": 60
+      },
+      "read_span": {
+       "start_seconds": 561.0,
+       "end_seconds": 1431.5
+      },
+      "reaches_start": false,
+      "reaches_end": false
+     }
+    ]
+   },
+   "changed_cards": {
+    "before_only": [
+     {
+      "category": "text",
+      "type": "repeated_watermark",
+      "region": [
+       550,
+       444,
+       180,
+       34
+      ],
+      "start": 0.0,
+      "end": 2646.5
+     },
+     {
+      "category": "visual_logo",
+      "type": "None",
+      "region": [
+       550,
+       444,
+       180,
+       34
+      ],
+      "start": 0.0,
+      "end": 2646.5
+     }
+    ],
+    "after_only": [
+     {
+      "category": "text",
+      "type": "repeated_watermark",
+      "region": [
+       550,
+       444,
+       180,
+       34
+      ],
+      "start": 0.0,
+      "end": 2655.167
+     },
+     {
+      "category": "visual_logo",
+      "type": "None",
+      "region": [
+       550,
+       444,
+       180,
+       34
+      ],
+      "start": 0.0,
+      "end": 2655.167
+     }
+    ]
+   },
+   "subtitle_band_ad_tracks": {
+    "cited_by_main_card": {
+     "before": 103,
+     "after": 103
+    },
+    "weakened": 0
+   },
+   "robust_band_watermarks_reach_edges": true,
+   "rebuild_keep_decisions": {
+    "items": 30,
+    "user_queue_items": 30,
+    "old_decided": 0,
+    "lost": 0,
+    "watermark_decisions": []
+   }
+  },
+  {
+   "job": 134,
+   "revision": 2,
+   "source_present": true,
+   "film_seconds": 2657.236,
+   "items": {
+    "before": 25,
+    "after": 25
+   },
+   "watermarks": {
+    "before": [
+     {
+      "start": 0.0,
+      "end": 2643.5,
+      "runs": 101,
+      "suggested": "BLUR",
+      "decision": null,
+      "region": {
+       "x": 552,
+       "y": 443,
+       "width": 176,
+       "height": 31
+      },
+      "read_span": null,
+      "reaches_start": true,
+      "reaches_end": false
+     },
+     {
+      "start": 186.0,
+      "end": 2589.5,
+      "runs": 2,
+      "suggested": "BLUR",
+      "decision": null,
+      "region": {
+       "x": 556,
+       "y": 409,
+       "width": 201,
+       "height": 58
+      },
+      "read_span": null,
+      "reaches_start": false,
+      "reaches_end": false
+     }
+    ],
+    "after": [
+     {
+      "start": 0.0,
+      "end": 2657.236,
+      "runs": 101,
+      "suggested": "BLUR",
+      "decision": null,
+      "region": {
+       "x": 552,
+       "y": 443,
+       "width": 176,
+       "height": 31
+      },
+      "read_span": {
+       "start_seconds": 0.0,
+       "end_seconds": 2643.5
+      },
+      "reaches_start": true,
+      "reaches_end": true
+     },
+     {
+      "start": 186.0,
+      "end": 2589.5,
+      "runs": 2,
+      "suggested": "BLUR",
+      "decision": null,
+      "region": {
+       "x": 556,
+       "y": 409,
+       "width": 201,
+       "height": 58
+      },
+      "read_span": {
+       "start_seconds": 186.0,
+       "end_seconds": 2589.5
+      },
+      "reaches_start": false,
+      "reaches_end": false
+     }
+    ]
+   },
+   "changed_cards": {
+    "before_only": [
+     {
+      "category": "text",
+      "type": "repeated_watermark",
+      "region": [
+       552,
+       443,
+       176,
+       31
+      ],
+      "start": 0.0,
+      "end": 2643.5
+     }
+    ],
+    "after_only": [
+     {
+      "category": "text",
+      "type": "repeated_watermark",
+      "region": [
+       552,
+       443,
+       176,
+       31
+      ],
+      "start": 0.0,
+      "end": 2657.236
+     }
+    ]
+   },
+   "subtitle_band_ad_tracks": {
+    "cited_by_main_card": {
+     "before": 103,
+     "after": 103
+    },
+    "weakened": 0
+   },
+   "robust_band_watermarks_reach_edges": true,
+   "rebuild_keep_decisions": {
+    "items": 25,
+    "user_queue_items": 25,
+    "old_decided": 24,
+    "lost": 0,
+    "watermark_decisions": [
+     {
+      "old": {
+       "start": 0.0,
+       "end": 2643.5,
+       "decision": "BLUR",
+       "runs": 101
+      },
+      "new": [
+       {
+        "start": 0.0,
+        "end": 2657.236,
+        "decision": "BLUR",
+        "type": "repeated_watermark",
+        "preserved": null
+       }
+      ]
+     },
+     {
+      "old": {
+       "start": 186.0,
+       "end": 2589.5,
+       "decision": "KEEP",
+       "runs": 2
+      },
+      "new": [
+       {
+        "start": 186.0,
+        "end": 2589.5,
+        "decision": "KEEP",
+        "type": "repeated_watermark",
+        "preserved": null
+       }
+      ]
+     }
+    ]
+   }
+  },
+  {
+   "job": 136,
+   "revision": 3,
+   "source_present": true,
+   "film_seconds": 2702.207,
+   "items": {
+    "before": 26,
+    "after": 26
+   },
+   "watermarks": {
+    "before": [
+     {
+      "start": 0.0,
+      "end": 2691.5,
+      "runs": 94,
+      "suggested": "BLUR",
+      "decision": null,
+      "region": {
+       "x": 552,
+       "y": 443,
+       "width": 176,
+       "height": 32
+      },
+      "read_span": null,
+      "reaches_start": true,
+      "reaches_end": false
+     }
+    ],
+    "after": [
+     {
+      "start": 0.0,
+      "end": 2702.207,
+      "runs": 94,
+      "suggested": "BLUR",
+      "decision": null,
+      "region": {
+       "x": 552,
+       "y": 443,
+       "width": 176,
+       "height": 32
+      },
+      "read_span": {
+       "start_seconds": 0.0,
+       "end_seconds": 2691.5
+      },
+      "reaches_start": true,
+      "reaches_end": true
+     }
+    ]
+   },
+   "changed_cards": {
+    "before_only": [
+     {
+      "category": "text",
+      "type": "repeated_watermark",
+      "region": [
+       552,
+       443,
+       176,
+       32
+      ],
+      "start": 0.0,
+      "end": 2691.5
+     }
+    ],
+    "after_only": [
+     {
+      "category": "text",
+      "type": "repeated_watermark",
+      "region": [
+       552,
+       443,
+       176,
+       32
+      ],
+      "start": 0.0,
+      "end": 2702.207
+     }
+    ]
+   },
+   "subtitle_band_ad_tracks": {
+    "cited_by_main_card": {
+     "before": 94,
+     "after": 94
+    },
+    "weakened": 0
+   },
+   "robust_band_watermarks_reach_edges": true,
+   "rebuild_keep_decisions": {
+    "items": 26,
+    "user_queue_items": 26,
+    "old_decided": 0,
+    "lost": 0,
+    "watermark_decisions": []
+   }
+  },
+  {
+   "job": 140,
+   "revision": 2,
+   "source_present": true,
+   "film_seconds": 4162.516,
+   "items": {
+    "before": 3,
+    "after": 3
+   },
+   "watermarks": {
+    "before": [],
+    "after": []
+   },
+   "changed_cards": {
+    "before_only": [],
+    "after_only": []
+   },
+   "subtitle_band_ad_tracks": {
+    "cited_by_main_card": {
+     "before": 0,
+     "after": 0
+    },
+    "weakened": 0
+   },
+   "robust_band_watermarks_reach_edges": true,
+   "rebuild_keep_decisions": {
+    "items": 3,
+    "user_queue_items": 3,
+    "old_decided": 3,
+    "lost": 0,
+    "watermark_decisions": []
+   }
+  },
+  {
+   "job": 143,
+   "revision": 3,
+   "source_present": true,
+   "film_seconds": 2668.116,
+   "items": {
+    "before": 22,
+    "after": 22
+   },
+   "watermarks": {
+    "before": [
+     {
+      "start": 0.0,
+      "end": 2668.116,
+      "runs": 84,
+      "suggested": "BLUR",
+      "decision": null,
+      "region": {
+       "x": 551,
+       "y": 469,
+       "width": 177,
+       "height": 31
+      },
+      "read_span": null,
+      "reaches_start": true,
+      "reaches_end": true
+     }
+    ],
+    "after": [
+     {
+      "start": 0.0,
+      "end": 2668.116,
+      "runs": 84,
+      "suggested": "BLUR",
+      "decision": null,
+      "region": {
+       "x": 551,
+       "y": 469,
+       "width": 177,
+       "height": 31
+      },
+      "read_span": {
+       "start_seconds": 0.0,
+       "end_seconds": 2670.0
+      },
+      "reaches_start": true,
+      "reaches_end": true
+     }
+    ]
+   },
+   "changed_cards": {
+    "before_only": [],
+    "after_only": []
+   },
+   "subtitle_band_ad_tracks": {
+    "cited_by_main_card": {
+     "before": 84,
+     "after": 84
+    },
+    "weakened": 0
+   },
+   "robust_band_watermarks_reach_edges": true,
+   "rebuild_keep_decisions": {
+    "items": 22,
+    "user_queue_items": 22,
+    "old_decided": 22,
+    "lost": 0,
+    "watermark_decisions": [
+     {
+      "old": {
+       "start": 0.0,
+       "end": 2668.116,
+       "decision": "BLUR",
+       "runs": 84
+      },
+      "new": [
+       {
+        "start": 0.0,
+        "end": 2668.116,
+        "decision": "BLUR",
+        "type": "repeated_watermark",
+        "preserved": null
+       }
+      ]
+     }
+    ]
+   }
+  },
+  {
+   "job": 145,
+   "revision": 3,
+   "source_present": true,
+   "film_seconds": 2561.172,
+   "items": {
+    "before": 27,
+    "after": 27
+   },
+   "watermarks": {
+    "before": [
+     {
+      "start": 0.0,
+      "end": 2561.172,
+      "runs": 89,
+      "suggested": "BLUR",
+      "decision": null,
+      "region": {
+       "x": 552,
+       "y": 469,
+       "width": 176,
+       "height": 32
+      },
+      "read_span": null,
+      "reaches_start": true,
+      "reaches_end": true
+     }
+    ],
+    "after": [
+     {
+      "start": 0.0,
+      "end": 2561.172,
+      "runs": 89,
+      "suggested": "BLUR",
+      "decision": null,
+      "region": {
+       "x": 552,
+       "y": 469,
+       "width": 176,
+       "height": 32
+      },
+      "read_span": {
+       "start_seconds": 0.0,
+       "end_seconds": 2565.0
+      },
+      "reaches_start": true,
+      "reaches_end": true
+     }
+    ]
+   },
+   "changed_cards": {
+    "before_only": [],
+    "after_only": []
+   },
+   "subtitle_band_ad_tracks": {
+    "cited_by_main_card": {
+     "before": 89,
+     "after": 89
+    },
+    "weakened": 0
+   },
+   "robust_band_watermarks_reach_edges": true,
+   "rebuild_keep_decisions": {
+    "items": 27,
+    "user_queue_items": 27,
+    "old_decided": 27,
+    "lost": 0,
+    "watermark_decisions": [
+     {
+      "old": {
+       "start": 0.0,
+       "end": 2561.172,
+       "decision": "BLUR",
+       "runs": 89
+      },
+      "new": [
+       {
+        "start": 0.0,
+        "end": 2561.172,
+        "decision": "BLUR",
+        "type": "repeated_watermark",
+        "preserved": null
+       }
+      ]
+     }
+    ]
+   }
+  },
+  {
+   "job": 147,
+   "revision": 2,
+   "source_present": true,
+   "film_seconds": 4392.447,
+   "items": {
+    "before": 8,
+    "after": 8
+   },
+   "watermarks": {
+    "before": [],
+    "after": []
+   },
+   "changed_cards": {
+    "before_only": [],
+    "after_only": []
+   },
+   "subtitle_band_ad_tracks": {
+    "cited_by_main_card": {
+     "before": 0,
+     "after": 0
+    },
+    "weakened": 0
+   },
+   "robust_band_watermarks_reach_edges": true,
+   "rebuild_keep_decisions": {
+    "items": 8,
+    "user_queue_items": 8,
+    "old_decided": 8,
+    "lost": 0,
+    "watermark_decisions": []
+   }
+  }
+ ],
+ "rebuild_both_trees": [
+  {
+   "job": 107,
+   "revision": 1,
+   "items": {
+    "before": 7,
+    "after": 7
+   },
+   "user_queue_items": 7,
+   "decisions": {
+    "before": {
+     "BLUR": 3,
+     "CUT": 1,
+     "KEEP": 3
+    },
+    "after": {
+     "BLUR": 3,
+     "CUT": 1,
+     "KEEP": 3
+    }
+   },
+   "lost": {
+    "before": 0,
+    "after": 0
+   },
+   "changed_cards": {
+    "before_only": [],
+    "after_only": []
+   },
+   "watermark_decisions": []
+  },
+  {
+   "job": 130,
+   "revision": 2,
+   "items": {
+    "before": 30,
+    "after": 30
+   },
+   "user_queue_items": 30,
+   "decisions": {
+    "before": {
+     "None": 30
+    },
+    "after": {
+     "None": 30
+    }
+   },
+   "lost": {
+    "before": 0,
+    "after": 0
+   },
+   "changed_cards": {
+    "before_only": [
+     {
+      "category": "text",
+      "type": "repeated_watermark",
+      "region": [
+       550,
+       444,
+       180,
+       34
+      ],
+      "start": 0.0,
+      "end": 2646.5
+     },
+     {
+      "category": "visual_logo",
+      "type": "None",
+      "region": [
+       550,
+       444,
+       180,
+       34
+      ],
+      "start": 0.0,
+      "end": 2646.5
+     }
+    ],
+    "after_only": [
+     {
+      "category": "text",
+      "type": "repeated_watermark",
+      "region": [
+       550,
+       444,
+       180,
+       34
+      ],
+      "start": 0.0,
+      "end": 2655.167
+     },
+     {
+      "category": "visual_logo",
+      "type": "None",
+      "region": [
+       550,
+       444,
+       180,
+       34
+      ],
+      "start": 0.0,
+      "end": 2655.167
+     }
+    ]
+   },
+   "watermark_decisions": []
+  },
+  {
+   "job": 108,
+   "revision": 1,
+   "items": {
+    "before": 6,
+    "after": 6
+   },
+   "user_queue_items": 5,
+   "decisions": {
+    "before": {
+     "BLUR": 1,
+     "CUT": 1,
+     "KEEP": 3,
+     "None": 1
+    },
+    "after": {
+     "BLUR": 1,
+     "CUT": 1,
+     "KEEP": 3,
+     "None": 1
+    }
+   },
+   "lost": {
+    "before": 0,
+    "after": 0
+   },
+   "changed_cards": {
+    "before_only": [],
+    "after_only": []
+   },
+   "watermark_decisions": []
+  },
+  {
+   "job": 134,
+   "revision": 2,
+   "items": {
+    "before": 25,
+    "after": 25
+   },
+   "user_queue_items": 25,
+   "decisions": {
+    "before": {
+     "BLUR": 3,
+     "CUT": 1,
+     "KEEP": 20,
+     "None": 1
+    },
+    "after": {
+     "BLUR": 3,
+     "CUT": 1,
+     "KEEP": 20,
+     "None": 1
+    }
+   },
+   "lost": {
+    "before": 0,
+    "after": 0
+   },
+   "changed_cards": {
+    "before_only": [
+     {
+      "category": "text",
+      "type": "repeated_watermark",
+      "region": [
+       552,
+       443,
+       176,
+       31
+      ],
+      "start": 0.0,
+      "end": 2643.5
+     }
+    ],
+    "after_only": [
+     {
+      "category": "text",
+      "type": "repeated_watermark",
+      "region": [
+       552,
+       443,
+       176,
+       31
+      ],
+      "start": 0.0,
+      "end": 2657.236
+     }
+    ]
+   },
+   "watermark_decisions": [
+    {
+     "old": {
+      "start": 0.0,
+      "end": 2643.5,
+      "decision": "BLUR",
+      "runs": 101
+     },
+     "new": [
+      {
+       "start": 0.0,
+       "end": 2657.236,
+       "decision": "BLUR",
+       "type": "repeated_watermark",
+       "preserved": null
+      }
+     ]
+    },
+    {
+     "old": {
+      "start": 186.0,
+      "end": 2589.5,
+      "decision": "KEEP",
+      "runs": 2
+     },
+     "new": [
+      {
+       "start": 186.0,
+       "end": 2589.5,
+       "decision": "KEEP",
+       "type": "repeated_watermark",
+       "preserved": null
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "job": 128,
+   "revision": 1,
+   "items": {
+    "before": 4,
+    "after": 4
+   },
+   "user_queue_items": 4,
+   "decisions": {
+    "before": {
+     "BLUR": 1,
+     "KEEP": 3
+    },
+    "after": {
+     "BLUR": 1,
+     "KEEP": 3
+    }
+   },
+   "lost": {
+    "before": 0,
+    "after": 0
+   },
+   "changed_cards": {
+    "before_only": [],
+    "after_only": []
+   },
+   "watermark_decisions": []
+  },
+  {
+   "job": 136,
+   "revision": 3,
+   "items": {
+    "before": 26,
+    "after": 26
+   },
+   "user_queue_items": 26,
+   "decisions": {
+    "before": {
+     "None": 26
+    },
+    "after": {
+     "None": 26
+    }
+   },
+   "lost": {
+    "before": 0,
+    "after": 0
+   },
+   "changed_cards": {
+    "before_only": [
+     {
+      "category": "text",
+      "type": "repeated_watermark",
+      "region": [
+       552,
+       443,
+       176,
+       32
+      ],
+      "start": 0.0,
+      "end": 2691.5
+     }
+    ],
+    "after_only": [
+     {
+      "category": "text",
+      "type": "repeated_watermark",
+      "region": [
+       552,
+       443,
+       176,
+       32
+      ],
+      "start": 0.0,
+      "end": 2702.207
+     }
+    ]
+   },
+   "watermark_decisions": []
+  },
+  {
+   "job": 140,
+   "revision": 2,
+   "items": {
+    "before": 3,
+    "after": 3
+   },
+   "user_queue_items": 3,
+   "decisions": {
+    "before": {
+     "BLUR": 1,
+     "KEEP": 2
+    },
+    "after": {
+     "BLUR": 1,
+     "KEEP": 2
+    }
+   },
+   "lost": {
+    "before": 0,
+    "after": 0
+   },
+   "changed_cards": {
+    "before_only": [],
+    "after_only": []
+   },
+   "watermark_decisions": []
+  },
+  {
+   "job": 143,
+   "revision": 3,
+   "items": {
+    "before": 22,
+    "after": 22
+   },
+   "user_queue_items": 22,
+   "decisions": {
+    "before": {
+     "BLUR": 2,
+     "CUT": 1,
+     "KEEP": 19
+    },
+    "after": {
+     "BLUR": 2,
+     "CUT": 1,
+     "KEEP": 19
+    }
+   },
+   "lost": {
+    "before": 0,
+    "after": 0
+   },
+   "changed_cards": {
+    "before_only": [],
+    "after_only": []
+   },
+   "watermark_decisions": [
+    {
+     "old": {
+      "start": 0.0,
+      "end": 2668.116,
+      "decision": "BLUR",
+      "runs": 84
+     },
+     "new": [
+      {
+       "start": 0.0,
+       "end": 2668.116,
+       "decision": "BLUR",
+       "type": "repeated_watermark",
+       "preserved": null
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "job": 145,
+   "revision": 3,
+   "items": {
+    "before": 27,
+    "after": 27
+   },
+   "user_queue_items": 27,
+   "decisions": {
+    "before": {
+     "BLUR": 2,
+     "CUT": 1,
+     "KEEP": 24
+    },
+    "after": {
+     "BLUR": 2,
+     "CUT": 1,
+     "KEEP": 24
+    }
+   },
+   "lost": {
+    "before": 0,
+    "after": 0
+   },
+   "changed_cards": {
+    "before_only": [],
+    "after_only": []
+   },
+   "watermark_decisions": [
+    {
+     "old": {
+      "start": 0.0,
+      "end": 2561.172,
+      "decision": "BLUR",
+      "runs": 89
+     },
+     "new": [
+      {
+       "start": 0.0,
+       "end": 2561.172,
+       "decision": "BLUR",
+       "type": "repeated_watermark",
+       "preserved": null
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "job": 147,
+   "revision": 2,
+   "items": {
+    "before": 8,
+    "after": 8
+   },
+   "user_queue_items": 8,
+   "decisions": {
+    "before": {
+     "BLUR": 1,
+     "KEEP": 7
+    },
+    "after": {
+     "BLUR": 1,
+     "KEEP": 7
+    }
+   },
+   "lost": {
+    "before": 0,
+    "after": 0
+   },
+   "changed_cards": {
+    "before_only": [],
+    "after_only": []
+   },
+   "watermark_decisions": []
+  }
+ ],
+ "golden_v2": {
+  "before_vs_after": {
+   "exit": 1,
+   "lines": [
+    "newly caught: 0, newly missed: 0, new trap hits: 0",
+    "GATE FAIL: Thiếu thời gian pipeline ở một trong hai scorecard; không kiểm được cổng +5% (chấm bằng evaluate_golden.py run hoặc score --trial)"
+   ]
+  },
+  "v2_baseline_tag_vs_after": {
+   "exit": 1,
+   "lines": [
+    "newly caught: 1, newly missed: 0, new trap hits: 0",
+    "GATE FAIL: Thiếu thời gian pipeline ở một trong hai scorecard; không kiểm được cổng +5% (chấm bằng evaluate_golden.py run hoặc score --trial)"
+   ]
+  },
+  "before_vs_after_scorecards": {
+   "metrics_equal": true,
+   "items_equal": true,
+   "items": 598,
+   "advertising_all": {
+    "labels": 19,
+    "caught": 19,
+    "missed": 0,
+    "false_positive_main": 24,
+    "advisory_items": 487,
+    "trap_hits": 0
+   }
+  }
+ },
+ "tail_export_134": {
+  "job": 134,
+  "window_film_seconds": [
+   2627.236,
+   2657.131
+  ],
+  "film_seconds": 2657.236,
+  "cards": [
+   {
+    "region": {
+     "x": 552,
+     "y": 443,
+     "width": 176,
+     "height": 31
+    },
+    "start": 0.0,
+    "end": 2657.236
+   },
+   {
+    "region": {
+     "x": 556,
+     "y": 409,
+     "width": 201,
+     "height": 58
+    },
+    "start": 186.0,
+    "end": 2589.5
+   }
+  ],
+  "mark_box": {
+   "x": 548,
+   "y": 405,
+   "width": 212,
+   "height": 72
+  },
+  "sample_count": 60,
+  "operations_in_window": {
+   "before": 1,
+   "after": 1
+  },
+  "export_status": {
+   "before": "COMPLETED",
+   "after": "COMPLETED"
+  },
+  "mark_read": {
+   "source": {
+    "readable": 47,
+    "web_address": 8
+   },
+   "before": {
+    "readable": 34,
+    "web_address": 4
+   },
+   "after": {
+    "readable": 7,
+    "web_address": 0
+   }
+  },
+  "after_readable_seconds": [
+   2627.74,
+   2629.24,
+   2629.74,
+   2630.74,
+   2631.24,
+   2631.74,
+   2632.24
+  ],
+  "before_readable_seconds": [
+   2627.74,
+   2629.24,
+   2629.74,
+   2630.74,
+   2631.24,
+   2631.74,
+   2632.24,
+   2643.74,
+   2644.24,
+   2644.74,
+   2645.24,
+   2645.74,
+   2646.24,
+   2646.74,
+   2647.24,
+   2647.74,
+   2648.24,
+   2648.74,
+   2649.24,
+   2649.74,
+   2650.24,
+   2650.74,
+   2651.24,
+   2651.74,
+   2652.24,
+   2652.74,
+   2653.24,
+   2653.74,
+   2654.24,
+   2654.74,
+   2655.24,
+   2655.74,
+   2656.24,
+   2656.74
+  ]
+ }
+}

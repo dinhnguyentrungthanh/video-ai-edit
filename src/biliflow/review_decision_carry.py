@@ -5,7 +5,8 @@ review step may join pieces into one longer card (scrolling text, 2026-10-15) or
 start a card earlier. Each decided card of the previous queue is carried:
 
 - to the new card with the same id and the same moments: exactly, the reviewed
-  interval included;
+  interval included. Such an old card (or one whose id an optional card has)
+  decides no other card;
 - else to a new card showing the same thing (same category, at least 80 % of the
   shorter card's time shared, boxes overlapping by 75 % of the smaller one):
   - BLUR always. On a card of one span its time and box widen to cover the old
@@ -133,11 +134,12 @@ def _shows_no_more(old: dict, new: dict) -> bool:
 
 
 def _covered_by_moments(old: dict, new: dict) -> bool:
-    """``old``'s reviewed time and blur region lie inside ``new``'s moments and region."""
-    start, end = _span(old)
-    if not any(
-        moment_start - CARRY_TIME_TOLERANCE <= start and end <= moment_end + CARRY_TIME_TOLERANCE
-        for moment_start, moment_end in _moments(new)
+    """``old``'s reviewed moments (its span for a card of one) and blur region lie inside ``new``'s
+    moments and region."""
+    if not all(
+        any(moment_start - CARRY_TIME_TOLERANCE <= start and end <= moment_end + CARRY_TIME_TOLERANCE
+            for moment_start, moment_end in _moments(new))
+        for start, end in _moments(old)
     ):
         return False
     region = old.get("decision_region_source_pixels")
@@ -198,7 +200,7 @@ def _copy_matched(new: dict, sources: list[dict]) -> None:
     new["decision_carried_from"] = [str(source["id"]) for source in sources]
 
 
-def _carry_main(new: dict, decided: list[dict], by_id: dict[str, dict], carried: set[str]) -> bool:
+def _carry_main(new: dict, decided: list[dict], by_id: dict[str, dict], carried: set[str], homed: set[str]) -> bool:
     """Carry the old decision(s) onto one new main card; True when they conflict."""
     if new.get("decision") is not None:
         return False
@@ -207,7 +209,7 @@ def _carry_main(new: dict, decided: list[dict], by_id: dict[str, dict], carried:
         _copy_exact(new, exact)
         carried.add(str(exact["id"]))
         return False
-    sources = [old for old in decided if _same_thing(old, new)]
+    sources = [old for old in decided if str(old["id"]) not in homed and _same_thing(old, new)]
     if len({source["decision"] for source in sources}) > 1:
         new["decision_conflict"] = sorted(str(source["id"]) for source in sources)
         return True
@@ -234,12 +236,23 @@ def carry_review_decisions(
         if isinstance(item, dict) and item.get("decision") in DECIDED and item.get("id")
     ]
     by_id = {str(item["id"]): item for item in decided}
+    # An old card whose own card is still there (its id, and for a main card its moments) goes to it
+    # and decides no other card (job 134 rev 2: a KEEP on a subtitle line inside the box and time of
+    # the grown watermark card left that card open as a conflict).
+    homed = {
+        str(item["id"]) for item in items
+        if item.get("decision") is None and str(item.get("id")) in by_id
+        and _same_moments(by_id[str(item["id"])], item)
+    } | {
+        str(item["id"]) for item in advisory_items
+        if item.get("decision") is None and str(item.get("id")) in by_id
+    }
     carried: set[str] = set()
     conflicts = 0
     output = []
     for item in items:
         new = dict(item)
-        conflicts += _carry_main(new, decided, by_id, carried)
+        conflicts += _carry_main(new, decided, by_id, carried, homed)
         output.append(new)
     optional = []
     for item in advisory_items:

@@ -1,3 +1,10 @@
+## A site watermark read in many runs reaches the film's edges, session D (2026-10-16) — branch `fix/watermark-edges`, not merged
+
+- Job 134 rev 2: the subtitle-band watermark card stopped 13.7 s before the end (the end credits covered the mark's last readings); 130 and 136 the same. A watermark group of 10 runs or more now reaches the scan's start and end when its first or last moment is 150 s or closer. The decision carry keeps the user's BLUR on the longer card.
+- Review build only: no cache key changes.
+- Gates: the five real reruns reach the film's end with the same cards; decisions lost 0; subtitle band weakened 0 (25 jobs); 134's tail export reads the mark 0 of 27 times after 2,643.5 s; Golden Set v2 identical.
+- Details in `docs/evidence/watermark-edges/README.md`.
+
 ## G13 merge, text-scan logo box, 250-track limit and subtitle dialogue (2026-10-16) — branch `merge/g13`, not yet in the main folder
 
 - Session D (entries below): the text scan keeps a fixed logo's own box beside the site's scrolling line (job 145), keeps every ad-evidence track past its 250-track limit (subtitle-band watermark cards reach the film's end), and a whole-film card of subtitle dialogue suggests no BLUR. The text stage's cache key changes: "Chạy lại" rescans text. Full suite 3,499 OK. Details in `CHANGELOG.md`.
