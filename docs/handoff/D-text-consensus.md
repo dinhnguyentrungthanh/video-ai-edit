@@ -1,11 +1,11 @@
-# Bàn giao D – bước quét chữ giữ hộp của logo cố định trong nhóm (job 145) và giữ dấu hiệu quảng cáo quá giới hạn 250 track (mục 6)
+# Bàn giao D – bước quét chữ giữ hộp của logo cố định trong nhóm (job 145) và giữ dấu hiệu quảng cáo quá giới hạn 250 track (mục 6); thẻ chuỗi thoại không đề xuất BLUR (việc 2)
 - Nhánh: fix/text-consensus-logo (từ main 419377f) · Worktree: `temp\wt-text-consensus` · Cập nhật: 2026-10-16
 - Kế hoạch đã được điều phối duyệt: `docs/handoff/D-text-consensus-plan.md` (phương án A). Bằng chứng:
   `docs/evidence/text-consensus/README.md`, `gate-summary.json`. Số đo có chữ OCR thật chỉ nằm trong
   `temp\text-consensus\` (không vào Git).
-- Trạng thái: **phương án A (ca17c07) và mục 6 (commit sau) xong, mọi cổng đạt; chờ điều phối gộp.** Việc 2 (thẻ
-  chữ cố định trong dải phụ đề) chỉ đo và đề xuất (phần 3b), chờ người dùng xác nhận. Chưa push, chưa merge.
-- Khóa cache bước `text` đổi một lần cho cả hai phần; 9 bước còn lại giữ nguyên.
+- Trạng thái: **phương án A (ca17c07), mục 6 (7fa0e0e) và việc 2 (commit sau) xong, mọi cổng đạt; chờ điều phối
+  gộp.** Chưa push, chưa merge.
+- Khóa cache bước `text` đổi một lần (phương án A và mục 6); việc 2 chỉ ở bước dựng, không đổi khóa nào.
 
 ## 1. Phương án A (ca17c07, chỉ `src/biliflow/textscan.py`)
 - **Footprint của track:** mỗi track có `footprint_box`, là khung chung của chính các lần đọc của nó.
@@ -154,41 +154,115 @@ dưới phụ đề dừng sớm 200–400 s, và bản xuất của job 145 (re
 - Hai file test sửa sau lần chạy (tên ví dụ; giới hạn 4.000 bản ghi) đạt trên mã cuối (14 + 4), cùng 113 test của
   các module đổi.
 
-## 3b. Việc 2: thẻ chữ cố định cả phim trong dải phụ đề (CHỈ ĐO VÀ ĐỀ XUẤT, chưa sửa)
-**Đo trên mọi báo cáo:** có 16 thẻ trong dải phụ đề, đều là `recurring_fixed_text` và đều kéo cả phim.
-- **10 thẻ thật** (dòng chữ hoặc watermark của trang; job 62, 63, 64, 65, 66, 70, 71, 72, 99, 100 rev 1):
-  - độ đồng thuận của dòng 0,993–1,0;
-  - tỉ lệ chữ khác nhau 0,41–0,55.
-- **6 chuỗi thoại** (130 rev1; 134 rev1; 136 rev1 và rev2; 145 rev1 và rev2):
-  - độ đồng thuận 0,25–0,375;
-  - tỉ lệ chữ khác nhau 1,0;
-  - không thành viên nào có địa chỉ web, số điện thoại hay @tên.
-- **Đề xuất và quyết định:** 13 thẻ đề xuất BLUR, 3 không đề xuất (job 64 và cả hai của 145). Người dùng chọn
-  12 BLUR và 4 KEEP (134, 136 rev1, cả hai của 145). Job 130 và 136 hiện xuất với cả dải thoại bị mờ suốt phim.
+## 3b. Việc 2: thẻ chữ cố định cả phim trong dải phụ đề (đã làm theo TDD, commit sau 7fa0e0e)
+**Vì sao:** ở job 130, 134, 136 và 145, các câu thoại đọc nối nhau dưới phim gộp thành một nhóm chữ lặp lại, rồi
+thành một thẻ chữ cố định cả phim phủ phụ đề.
+- Thẻ đề xuất BLUR ở 130, 134 và 136, vì một câu thoại bị mô hình chấm điểm quảng cáo cao.
+- 130 và 136 đã xuất với cả dải thoại bị mờ suốt phim. Người dùng xác nhận đó là không cố ý.
+- Watermark dưới phụ đề đã có thẻ repeated_watermark riêng. Điều phối kiểm: watermark nằm trọn trong thẻ đó ở 15/15
+  mẫu.
 
-**Đề xuất quy tắc** (chỉ ở bước dựng, không đổi khóa cache):
-- Trong `promote_fixed_text_overlays`, không nâng một nhóm `recurring_fixed_text` khi đủ cả ba:
-  - tâm khung nằm trong dải phụ đề (tâm y ≥ 0,70 H, x trong 0,18–0,82 W);
-  - không thành viên nào có địa chỉ web, số điện thoại hay @tên;
-  - độ đồng thuận của dòng < 0,60.
+**Đo trước khi làm** (trên mọi báo cáo):
+- 16 thẻ `recurring_fixed_text` cả phim trong dải phụ đề.
+- 10 thẻ thật (job 62–66, 70–72, 99, 100): độ đồng thuận 0,993–1,0.
+- 6 chuỗi thoại (130 rev1; 134 rev1; 136 rev1 và rev2; 145 rev1 và rev2): độ đồng thuận 0,25–0,375.
 
-  Các thành viên giữ track riêng và vẫn qua `subtitle_band` như mọi dòng phụ đề.
-- **Ảnh hưởng đo được:**
-  - bỏ 4 đề xuất BLUR trong danh sách (130, 134, 136 rev1 và rev2) và 7 trong các nhóm tính lại;
-  - giữ nguyên 10 thẻ thật và 25 thẻ chữ cố định ngoài dải; dòng chạy phía trên có độ đồng thuận 0,44–0,59 nhưng có
-    thành viên chứa địa chỉ web;
-  - không đụng thẻ `repeated_watermark` nào.
-- **Không làm yếu việc bắt quảng cáo trong dải phụ đề:**
-  - quy tắc chỉ bỏ nhóm không có dấu hiệu nào;
-  - watermark dưới phụ đề là thẻ `repeated_watermark`, không đi qua đường này;
-  - để chắc hơn, có thể dùng luôn bộ dấu hiệu rộng hơn của mục 6 (điểm quảng cáo, chính sách, token), nhưng phải đo
-    lại.
-- **Không đề xuất** bắt buộc có web, số điện thoại hay @ mới được BLUR: cách đó mất 9 đề xuất thật.
-- **Giới hạn của phép đo:**
-  - chỉ 4 phim, một kiểu phụ đề;
-  - bỏ qua bộ nhớ chữ quảng cáo;
-  - các danh sách đã lưu được dựng bằng mã cũ.
-- **Chờ người dùng xác nhận qua điều phối.**
+**Quy tắc** (`review_workflow.py`, chỉ ở bước dựng, không đổi khóa cache). Một thẻ `recurring_fixed_text` cả phim không
+đề xuất gì khi đủ cả ba điều kiện:
+1. tâm khung nằm trong dải phụ đề (y ≥ 0,70 H, x trong 0,18–0,82 W, trên khung phân tích);
+2. không thành viên nào đọc ra:
+   - địa chỉ web (kể cả mất dấu chấm);
+   - số điện thoại hay @tên;
+   - tên miền khác (đuôi như ".ph");
+   - tên nền tảng;
+3. độ đồng thuận < 0,60. Đây là tỉ lệ lớn nhất số thành viên có cách đọc dài nhất là mẩu (giống ≥ 0,75, như bước
+   gộp) của cùng một cách đọc dài (từ 12 chữ) trong nhóm.
+
+Cách thẻ đó hoạt động:
+- **Vẫn ở danh sách chính**, ghi `subtitle_dialogue: {line_consensus}` và lý do: "giống chuỗi phụ đề thoại; logo dưới
+  phụ đề (nếu có) đã có thẻ watermark riêng — chưa đề xuất làm mờ, bạn tự quyết". Dấu hiệu yếu vẫn được liệt kê.
+- **Ngoại lệ:** thành viên nào gọi tên trang của một watermark khác thì thẻ giữ cách cũ.
+- **Không cho thẻ đó che gì:**
+  - Nó chỉ nuốt thẻ chữ thường: không đề xuất, điểm quảng cáo < 0,40, và không có `ad_text_evidence`.
+    - `ad_text_evidence` là: trúng chính sách, hoặc đọc ra địa chỉ, số điện thoại, "@", tên miền hay tên nền tảng.
+    - Dấu này được ghi trên mục chữ và giữ lại khi gộp thẻ.
+  - Mọi thẻ khác trong khung vẫn là thẻ riêng, kể cả thẻ visual-logo.
+  - Nó không gộp theo thời gian với thẻ khác.
+  - Xác nhận visual-logo trong khung của nó không thành bằng chứng của nó.
+
+**Review đọc mã** (ecc:code-reviewer), hai lỗi đã sửa kèm test:
+- **HIGH:** bản đầu để thẻ đó nuốt thẻ quảng cáo không có đề xuất riêng (số điện thoại, @tên, trúng chính sách). Khi
+  đó các thẻ ấy không còn được thấy.
+- **MEDIUM:** điều kiện 2 thiếu các tên miền ngoài danh sách địa chỉ và tên nền tảng.
+
+**Cổng** (`dialogue_gate.py`, `dialogue-gate-summary.json`; trước = 7fa0e0e, sau = nhánh):
+- **Test:**
+  - `test_subtitle_dialogue_overlay`: 13 test mới; 7 test hỏng trên 7fa0e0e.
+  - 6 test còn lại giữ BLUR khi:
+    - có địa chỉ, địa chỉ mất dấu chấm, số điện thoại, @tên, tên miền ".ph" hay tên nền tảng;
+    - chuỗi ở trên khung hình;
+    - chuỗi không kéo cả phim;
+    - có thành viên gọi tên trang của watermark;
+    - một dòng đọc thành mẩu trong dải.
+  - 513 test của 31 module duyệt: OK.
+  - Full suite: xem phần 3c.
+- **Dựng lại từ báo cáo quét lại của mục 6, mọi revision:**
+
+  | Job, revision | Thẻ thoại trước → sau (đồng thuận) | Watermark dải phụ đề BLUR tới / độ dài phim | Số thẻ |
+  |---|---|---|---|
+  | 130 r1 | BLUR → không (0,375) | 2646,5 / 2655,2 | 8 → 30 |
+  | 134 r1 | BLUR → không (0,13) | 2643,5 / 2657,2 | 7 → 25 |
+  | 136 r1, r2 | BLUR → không (0,333; thêm một thẻ chuỗi thứ hai) | 2691,5 / 2702,2 | 9 → 26 |
+  | 143 r1, r2 | không có thẻ trong dải | 2668,1 / 2668,1 | 22 → 22 |
+  | 145 r1, r2 | không → không (0,273) | 2561,2 / 2561,2 | 7 → 27 |
+
+  - **Thẻ thêm** đều là thẻ trước đây nằm trong thẻ thoại.
+    - Phần lớn là câu thoại bị mô hình chấm điểm quảng cáo ≥ 0,40: không có địa chỉ, số điện thoại, @ hay chính sách,
+      không có đề xuất. Có 19 ở 130, 18 ở 134, 16 ở 136, 19 ở 145.
+    - Trong số đó, ở 130, có một lần đọc tên trang không có dấu chấm (điểm 0,47).
+    - Còn lại:
+      - 130: một dòng địa chỉ web (1767–1785,5 s, BLUR), thẻ visual-logo của dấu trang (BLUR, cùng khung và thời gian
+        với thẻ watermark), một câu thoại mà OCR đọc một chữ thành "@", và một thẻ chữ cố định;
+      - 136: thẻ chuỗi thứ hai;
+      - 145: một câu thoại mà OCR đọc một chữ thành "@" (với 7fa0e0e nó cũng nằm trong thẻ của dải).
+  - Dải phụ đề yếu đi (thẻ chính trích dẫn): 0 ở cả 8.
+  - Cách đếm chặt hơn (thẻ đề xuất BLUR trích dẫn): ít đi 1 ở 130. Đó là câu "@" (831–834 s), giờ là thẻ riêng,
+    không có đề xuất.
+  - Dựng lại giữ quyết định: mất 0 ở cả 8 (đã quyết 9, 42, 38, 9, 64, 22, 50, 7).
+    - Quyết định BLUR cũ của người dùng trên thẻ thoại của 130 và 136 r2 vẫn còn: được mang sang, hoặc thẻ cũ được
+      giữ.
+    - Người dùng cần đổi thành KEEP. Bản dựng mới (fresh) không có quyết định nào trên thẻ đó.
+- **25 job của cổng dải phụ đề (báo cáo đã lưu, revision đang dùng):**
+  - 10 thẻ thật giữ nguyên đề xuất: BLUR ở 62, 63, 65, 66, 70, 71, 72, 99, 100; không đề xuất ở 64.
+  - Thẻ thoại của 130, 134, 136 và 145 không còn đề xuất.
+  - Số thẻ bằng nhau, trừ 130 (8 → 30), 134 (6 → 24), 136 r2 (9 → 26), 145 r2 (7 → 27); các thẻ thêm cùng loại như
+    trên.
+  - Dải phụ đề yếu đi: 0. Cách đếm chặt: vẫn chỉ câu "@" đó của 130.
+  - Dựng lại giữ quyết định: mất 0 ở 10 job còn video gốc.
+- **Golden v2** (báo cáo quét lại của mục 6, không dùng bộ nhớ):
+  - scorecard trước và sau giống hệt: 598 mục chấm; quảng cáo 19/19; dương tính giả 24; thẻ tư vấn 487; bẫy 0;
+  - so với baseline v2: +1 (G11), mất 0, bẫy mới 0;
+  - `compare` thoát 1 chỉ vì cổng thời gian.
+- **Khóa cache:** cả 10 bước giống 7fa0e0e.
+
+**Đánh đổi (người dùng quyết):** vì thẻ không đề xuất gì thì không được che gì, mỗi phim trong bốn phim này có thêm
+16–20 thẻ không đề xuất, gần như toàn là câu thoại.
+- Nếu cho thẻ thoại nuốt cả các câu chỉ có điểm quảng cáo, số thẻ về lại 8–11.
+- Nhưng làm vậy sẽ che lần đọc tên trang không dấu chấm của 130.
+- Nó cũng che mọi dòng quảng cáo thật không có địa chỉ, số điện thoại, @ hay chính sách. Với 7fa0e0e các dòng đó nằm
+  dưới BLUR của thẻ thoại ở 130, 134 và 136.
+
+Đó là làm yếu dải phụ đề, nên chưa làm.
+
+**Giới hạn:**
+- Dải phụ đề và ngưỡng 0,60 mới đo trên một kiểu phụ đề: 4 phim có chuỗi thoại, 10 phim có dòng của trang.
+  - Một dòng của trang bị đọc thành những mẩu rất khác nhau có thể xuống dưới 0,60.
+  - Khi đó nó vẫn là thẻ, chỉ không có đề xuất.
+- Quảng cáo chỉ đọc ra chữ giống thoại không nhận BLUR từ thẻ thoại. Nó vẫn là thẻ riêng của nó.
+
+## 3c. Full suite (việc 2)
+- `unittest discover` (BILIFLOW_TEST_INSTALL_ROOT là thư mục cài đặt), trên mã cuối, với một clip tổng hợp 1 s trong
+  `input\` của worktree (đã xóa sau đó): 3.499 test trong 2.583 s, OK, 53 bỏ qua.
 
 ## 4. Giới hạn (từ một lượt review đọc mã, không có lỗi nặng)
 - **Footprint giữ cả lần đọc lớn tới 1,8 lần cỡ thường.** Vì vậy hộp của job 145 xuống tới y 77 trên khung phân
@@ -209,3 +283,8 @@ Sau khi nhánh vào main và Control Center khởi động lại:
 Bản đã xuất hôm nay còn lộ logo, và còn lộ watermark dưới phụ đề ở khoảng 4 phút cuối. Các job 130, 134, 136 và 143
 cũng có thẻ watermark dừng sớm 200–400 s: "Chạy lại" sẽ kéo thẻ tới cuối phim (với 134 có thêm một thẻ địa chỉ
 trong dải phụ đề). Người dùng quyết có xuất lại không.
+
+Việc 2: thẻ chuỗi thoại (dải phụ đề, suốt phim) của 130, 134, 136 và 145 không còn đề xuất BLUR.
+- Hãy chọn KEEP cho thẻ đó, và BLUR cho thẻ watermark cùng các thẻ địa chỉ trong dải.
+- Bản xuất của 130 và 136 (rev2) đang làm mờ cả dải thoại suốt phim. Nếu dựng lại mà giữ quyết định, quyết định BLUR
+  cũ trên thẻ thoại vẫn còn: hãy đổi thành KEEP rồi xuất lại.

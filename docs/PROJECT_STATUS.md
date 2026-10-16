@@ -1,3 +1,16 @@
+## A film-long card of subtitle dialogue suggests no BLUR, session D task 2 (2026-10-16) — branch `fix/text-consensus-logo`, not merged
+
+- Dialogue chains under the film became whole-film fixed-text cards suggesting BLUR (130, 134, 136); 130 and 136 exported with the dialogue blurred. A whole-film line card in the subtitle band with no web address, phone number, @handle, other domain or platform name and a line consensus below 0.60 now suggests nothing. It absorbs only plain text cards (no suggestion, ad score below 0.40, no ad evidence) and merges with none.
+- Cost: 16–20 more cards without a suggestion per dialogue film (130 8 → 30, 134 7 → 25, 136 9 → 26, 145 7 → 27), the lines the dialogue card used to cover. Hiding the ad-scored ones again would weaken the subtitle band; the user decides.
+- Review build only: no cache key changes.
+- Gates:
+  - the 10 site lines keep their suggestions;
+  - the band watermark keeps BLUR to the end;
+  - subtitle band weakened 0 (8 rescanned revisions, 25 jobs);
+  - decisions lost 0;
+  - Golden Set v2 identical.
+- Details in `docs/evidence/text-consensus/README.md` section 7.
+
 ## The text report keeps ad evidence past its 250-track limit, session D item 6 (2026-10-16) — branch `fix/text-consensus-logo`, not merged
 
 - The 250-track limit dropped the subtitle-band watermark's last 200–400 s in this series. Past the limit, the report now keeps every track with ad evidence and records the others without previews (up to 4,000). The review build takes back omitted tracks that hold a remembered address, and keeps a piece of a whole-film fixed text out of the recurring-text groups.
@@ -7,7 +20,7 @@
   - subtitle band weakened 0;
   - Golden Set v2 identical;
   - job 145's last 248 s read the mark at 0 of 496 samples after one BLUR.
-- Task 2 (chains of dialogue lines in the subtitle band as film-long fixed-text cards) is measured and proposed only.
+- Task 2 (chains of dialogue lines in the subtitle band as film-long fixed-text cards): done next (above).
 - Details in `docs/evidence/text-consensus/README.md` section 4.
 
 ## The text scan keeps a fixed logo's box in its group, session D (2026-10-16) — branch `fix/text-consensus-logo`, not merged

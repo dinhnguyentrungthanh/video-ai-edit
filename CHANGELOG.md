@@ -1,3 +1,34 @@
+# A film-long card of subtitle dialogue suggests no BLUR — session D, task 2 (2026-10-16, branch `fix/text-consensus-logo`; not merged)
+
+- Cause (jobs 130, 134, 136, 145): dialogue lines read one after another under the film chained into one recurring-text group (each piece shares a word with the next). It became a whole-film fixed-text card over the subtitles. One dialogue line scored as an ad made it suggest BLUR in 130, 134 and 136, and jobs 130 and 136 exported with the dialogue blurred all film long; the user confirmed it was not intended. The site's mark below the subtitles has its own repeated-watermark card.
+- `review_workflow.py` (review build only; no cache key changes): a whole-film `recurring_fixed_text` card suggests nothing when all three hold:
+  - its centre lies in the subtitle band (70 % of the height or lower, 18–82 % of the width);
+  - no member reads a web address (also without its dot), a phone number, an @handle, another domain (an ending like ".ph") or a platform name;
+  - its line consensus is below 0.60 (the share of members that are pieces of one long reading).
+- Such a card stays in the main list with `subtitle_dialogue` and a reason, and nothing hides inside it:
+  - it absorbs only plain text cards: no suggestion, an ad score below 0.40 and no ad evidence (`ad_text_evidence`: a policy hit, or a reading with an address, phone number, "@", domain or platform name; marked on text items and kept when cards merge);
+  - every other card inside its box, visual-logo cards included, stays a card of its own;
+  - it never merges in time with another card;
+  - a visual-logo confirmation is not its evidence.
+
+  A member naming another watermark's site keeps the old behaviour. A code review found two gaps in the first version, both fixed with tests: it absorbed ad cards without a suggestion of their own (HIGH), and condition 2 missed other domains and platform names (MEDIUM).
+- Gates (`docs/evidence/text-consensus/README.md` section 7, `dialogue-gate-summary.json`; before = 7fa0e0e):
+  - 13 new tests (7 fail on 7fa0e0e); 513 tests of 31 review modules; full suite 3,499 tests OK, 53 skipped (with a 1 s synthetic clip in the worktree's `input\`, removed after);
+  - jobs 130, 134, 136, 143 and 145, every revision, from item 6's rescanned reports:
+    - the dialogue cards suggest nothing (130, 134, 136 were BLUR; 145 was already none);
+    - the band watermark still suggests BLUR to the film's end;
+    - subtitle band weakened 0;
+    - rebuilds with kept decisions lose 0;
+    - cards 130 8 → 30, 134 7 → 25, 136 9 → 26, 143 22 → 22, 145 7 → 27: the cards the dialogue card used to absorb, mostly dialogue lines scored as ads (0.40 or more) without an address, phone number, @ or policy hit, none suggesting anything new;
+  - the 25 jobs of the subtitle-band gate (stored reports):
+    - the 10 site lines keep their suggestions;
+    - weakened 0;
+    - cards equal except 130 (8 → 30), 134 (6 → 24), 136 rev 2 (9 → 26) and 145 rev 2 (7 → 27), the same kinds;
+  - Golden Set v2: identical scorecards (598 items; 19/19, false positives 24, traps 0);
+  - cache keys: all 10 stages equal to 7fa0e0e.
+- The user's earlier BLUR on the dialogue card of 130 and 136 (rev 2) survives a rebuild with kept decisions: set it to KEEP and export again.
+- Trade-off for the user: the 16–20 added cards per film. Letting the dialogue card take in lines whose only evidence is the ad score would bring the counts back to 8–11, but it would hide job 130's dotless site reading and any real ad line without an address, phone number, @ or policy hit. That weakens the subtitle band, so it is not done.
+
 # The text report keeps ad evidence past its 250-track limit — session D, item 6 (2026-10-16, branch `fix/text-consensus-logo`; not merged)
 
 - Cause: the text report keeps at most 250 tracks (review candidates, platform names, then the earliest references). This series' films have 830–944, so the last 580–694 references were dropped, and with them the sightings of the site's watermark under the subtitles in the film's last minutes: its card stopped 200–400 s early, and job 145's export showed the mark after 2,313 s.
@@ -18,7 +49,7 @@
   - subtitle band weakened 0; the old BLUR cards stay covered at least 96.9 %;
   - Golden Set v2 identical before and after (19/19, false positives 24/24, traps 0);
   - export of job 145's last 248 s: the mark is read at 188 of 496 samples in the user's export, and at 0 after one BLUR on the new card.
-- Measured only (task 2, not changed): 16 film-long fixed-text cards in the subtitle band across all reports, 6 of them chains of dialogue lines (jobs 130, 134, 136, 145). A review-build rule is proposed in `docs/handoff/D-text-consensus.md` section 3b and waits for the user.
+- Task 2 (chains of dialogue lines in the subtitle band, measured here) was done next on the same branch (entry above).
 
 # The text scan keeps a fixed logo's box in its group — session D (2026-10-16, branch `fix/text-consensus-logo` from `main` `419377f`; not merged)
 

@@ -103,6 +103,7 @@ from biliflow.subtitle_band import (
     group_repeated_watermarks,
     move_subtitle_lines,
 )
+from biliflow.web_address_patterns import web_address_tokens
 from biliflow.blur_filter import (
     CHROMA_420,
     COVER_METHOD,
@@ -625,6 +626,7 @@ def reconcile_persistent_overlay_items(
         ):
             continue
         owner_is_approved_brand = _has_approved_brand_region(visual)
+        owner_is_dialogue = _is_subtitle_dialogue(visual)
         # The approved box joins an OCR track of the same mark at the overlap
         # at which the track would otherwise have absorbed that brand card.
         required_track_overlap = 0.60 if owner_is_approved_brand else 0.75
@@ -737,6 +739,9 @@ def reconcile_persistent_overlay_items(
                     and _coverage(support_region, visual_region) < 0.95
                 )
                 or (support_overlap < required_overlap and not inside_joined_track)
+                # A card of subtitle dialogue suggests nothing: a card inside it that
+                # proposes an action or holds ad evidence keeps its own decision.
+                or (owner_is_dialogue and not _absorbable_by_dialogue(support))
                 or float(support["start_seconds"]) < float(visual["start_seconds"])
                 or float(support["end_seconds"]) > float(visual["end_seconds"])
                 or (
@@ -2337,6 +2342,16 @@ RECURRING_TEXT_MINIMUM_SPAN_SHARE = 0.30
 # A track lying this much inside a whole-film fixed text's box is a piece of that text
 # (its track broke), never a piece of another line.
 FIXED_TEXT_PIECE_INSIDE = 0.60
+# A whole-film line card in the subtitle band whose pieces read different dialogue lines (jobs
+# 130-145, task 2, 2026-10-16): each piece shared a word with the next, so the lines under the
+# film chained into one group. With no web address, phone number or @handle among them and no
+# long reading most of them are pieces of, it suggests nothing: the site's mark under the
+# subtitles has its own repeated-watermark card.
+SUBTITLE_DIALOGUE_BAND_TOP = 0.70  # the card's centre lies below this share of the frame height
+SUBTITLE_DIALOGUE_BAND_X = (0.18, 0.82)  # and between these shares of its width
+SUBTITLE_DIALOGUE_MAXIMUM_CONSENSUS = 0.60
+# A card inside it with an ad score from this line (subtitle_band's) keeps a card of its own.
+SUBTITLE_DIALOGUE_SUPPORT_AD_SCORE = 0.40
 FIXED_TEXT_VISUAL_OVERLAP = 0.60
 _FIXED_TEXT_SKIPPED_ROUTINGS = {
     "REVIEW_PERSISTENT_OVERLAY", "REVIEW_POLICY_OVERRIDE", "LIKELY_TITLE_OVERLAY",
@@ -2421,6 +2436,84 @@ def _inside_any_box(box: object, boxes: list[list[float]]) -> bool:
         if width * height / area >= FIXED_TEXT_PIECE_INSIDE:
             return True
     return False
+
+
+def _line_consensus(members: list[dict]) -> float:
+    """Largest share of members whose longest reading is a piece of one long reading among them."""
+    texts = [
+        max((_fold_alnum(text) for text in track.get("sample_text") or []), key=len, default="")
+        for track in members
+    ]
+    texts = [text for text in texts if text]
+    if not texts:
+        return 0.0
+    references = sorted(
+        {text for text in texts if len(text) >= RECURRING_TEXT_LONG_READING_CHARS}
+    ) or [max(texts, key=len)]
+    counts = {text: Counter(text) for text in set(texts)}
+    best = 0
+    for reference in references:
+        matched = 0
+        for text in texts:
+            short, long = sorted((text, reference), key=len)
+            if (
+                sum((counts[short] & counts[long]).values()) >= RECURRING_TEXT_FRAGMENT_SIMILARITY * len(short)
+                and _fragment_similarity(short, long) >= RECURRING_TEXT_FRAGMENT_SIMILARITY
+            ):
+                matched += 1
+        best = max(best, matched)
+    return best / len(texts)
+
+
+def _subtitle_dialogue(overlay: dict, members: list[dict], analysis_size: object) -> dict | None:
+    """``{"line_consensus": …}`` when a whole-film line card in the subtitle band is a chain of dialogue."""
+    details = overlay["fixed_text_overlay"]
+    if (
+        details["rule"] != "recurring_fixed_text" or not details["whole_film"]
+        or not isinstance(analysis_size, list) or len(analysis_size) != 2
+        or min(float(value) for value in analysis_size) <= 0
+    ):
+        return None
+    box = [float(value) for value in overlay["union_box"]]
+    centre_x = (box[0] + box[2]) / 2 / float(analysis_size[0])
+    centre_y = (box[1] + box[3]) / 2 / float(analysis_size[1])
+    if (
+        centre_y < SUBTITLE_DIALOGUE_BAND_TOP
+        or not SUBTITLE_DIALOGUE_BAND_X[0] <= centre_x <= SUBTITLE_DIALOGUE_BAND_X[1]
+        or any(_reads_contact_or_site(track.get("sample_text") or []) for track in members)
+    ):
+        return None
+    consensus = _line_consensus(members)
+    if consensus >= SUBTITLE_DIALOGUE_MAXIMUM_CONSENSUS:
+        return None
+    return {"line_consensus": round(consensus, 3)}
+
+
+def _reads_contact_or_site(texts: Iterable[object]) -> bool:
+    """A web address (also without its dot), a phone number, an @handle, a domain or a platform name."""
+    texts = [str(text) for text in texts]
+    return bool(
+        any(web_address_tokens(text) or ad_text_tokens(text) or _FIXED_TEXT_DOMAIN.search(text) for text in texts)
+        or match_platform_texts(texts) is not None
+    )
+
+
+def _is_subtitle_dialogue(item: dict) -> bool:
+    return bool((item.get("fixed_text_overlay") or {}).get("subtitle_dialogue"))
+
+
+def _absorbable_by_dialogue(item: dict) -> bool:
+    """A card a card of subtitle dialogue may take in: plain text with no suggestion and no ad evidence."""
+    labels = [str(label) for label in item.get("labels") or []]
+    return (
+        item.get("category") == "text"
+        and item.get("suggested_decision") is None
+        and float(item.get("max_score") or 0.0) < SUBTITLE_DIALOGUE_SUPPORT_AD_SCORE
+        and not item.get("ad_text_evidence")
+        and not item.get("web_address")
+        and not _reads_contact_or_site(labels)
+        and not any("@" in label for label in labels)
+    )
 
 
 def _vertical_band_overlap(first: list[float], second: list[float]) -> bool:
@@ -2558,6 +2651,9 @@ def promote_fixed_text_overlays(payload: dict) -> dict:
                 "ad_evidence": _fixed_text_ad_evidence(members),
             },
         })
+        dialogue = _subtitle_dialogue(merged, members, payload.get("analysis_size"))
+        if dialogue is not None:
+            merged["fixed_text_overlay"]["subtitle_dialogue"] = dialogue
         return merged
 
     for track in tracks:
@@ -2615,14 +2711,34 @@ def promote_fixed_text_overlays(payload: dict) -> dict:
             if shared:
                 details["ad_evidence"] = [f"cùng tên trang với watermark {shared[0]}"]
                 break
+    # Dialogue naming a watermark's site is that site's line, not dialogue.
     for overlay in promoted:
         details = overlay["fixed_text_overlay"]
-        overlay["suggested_decision"] = "BLUR" if details["ad_evidence"] else None
+        folded = [_fold_alnum(text) for text in overlay.get("sample_text") or []]
+        if details.get("subtitle_dialogue") and any(
+            token in text
+            for other in promoted if other is not overlay and other["fixed_text_overlay"]["ad_evidence"]
+            for token in _site_tokens([other]) for text in folded
+        ):
+            del details["subtitle_dialogue"]
+    for overlay in promoted:
+        details = overlay["fixed_text_overlay"]
+        dialogue = details.get("subtitle_dialogue")
+        overlay["suggested_decision"] = "BLUR" if details["ad_evidence"] and not dialogue else None
         place = (
             "suốt video" if details["whole_film"]
             else f"{_clock_text(details['observed_start_seconds'])}–"
                  f"{_clock_text(details['observed_end_seconds'])}"
         )
+        if dialogue:
+            overlay["reason"] = (
+                f"Cùng một chỗ trong dải phụ đề, OCR đọc được {details['track_count']} dòng ({place}) "
+                f"nhưng chỉ {dialogue['line_consensus']:.0%} là mảnh của cùng một dòng, không có địa chỉ "
+                "web, số điện thoại hay @tên: giống chuỗi phụ đề thoại. Logo dưới phụ đề (nếu có) đã có "
+                "thẻ watermark riêng — chưa đề xuất làm mờ, bạn tự quyết"
+                + (" (dấu hiệu yếu: " + "; ".join(details["ad_evidence"]) + ")" if details["ad_evidence"] else "")
+            )
+            continue
         overlay["reason"] = (
             ("Chữ cố định một chỗ, OCR đọc được ở "
              f"{details['coverage']:.0%} thời gian quét" if details["rule"] == "whole_film_text"
@@ -2669,6 +2785,8 @@ def corroborate_fixed_text_overlays(items: list[dict]) -> list[dict]:
             or item.get("decision") is not None
             or item.get("suggested_decision") is not None
             or not isinstance(region, dict)
+            # A logo inside a card of subtitle dialogue is the mark's own card, not the dialogue's.
+            or _is_subtitle_dialogue(item)
         ):
             continue
         confirmations = [
@@ -2841,6 +2959,11 @@ def _text_items(root: Path, report_path: Path, payload: dict) -> list[dict]:
                     else None
                 ),
                 "source_candidate_refs": [f"{evidence}#track:{value}" for value in track_refs],
+                # A policy hit or any reading with an address, phone number, "@", domain or
+                # platform name: a card of subtitle dialogue never takes this card in.
+                **({"ad_text_evidence": True} if track.get("policy_hits") or _reads_contact_or_site(
+                    track.get("sample_text") or []) or any("@" in str(text) for text in track.get("sample_text") or [])
+                    else {}),
                 **({"fixed_text_overlay": {
                     key: list(value) if isinstance(value, list) else value
                     for key, value in track["fixed_text_overlay"].items()
@@ -2903,10 +3026,12 @@ def _merge_items(items: Iterable[dict], maximum_gap_seconds: float) -> list[dict
             or previous.get("suggested_decision") == item.get("suggested_decision")
         )
         # A repeated watermark's card already holds every run of its mark at its
-        # own place; merged, its runs would take another card's box.
-        separate_watermark = previous is not None and REPEATED_WATERMARK_TYPE in {
-            previous.get("candidate_type"), item.get("candidate_type"),
-        }
+        # own place; merged, its runs would take another card's box. A card of
+        # subtitle dialogue suggests nothing; merged, it would take another card's BLUR.
+        separate_watermark = previous is not None and (
+            REPEATED_WATERMARK_TYPE in {previous.get("candidate_type"), item.get("candidate_type")}
+            or _is_subtitle_dialogue(previous) or _is_subtitle_dialogue(item)
+        )
         visual_regions_compatible = True
         if previous is not None and previous["category"] == item["category"] == "visual_logo":
             overlap = pixel_region_iou(
@@ -2984,6 +3109,8 @@ def _merge_items(items: Iterable[dict], maximum_gap_seconds: float) -> list[dict
                 current["suggested_decision"] = None
             if current.get("candidate_type") is None:
                 current["candidate_type"] = item.get("candidate_type")
+            if item.get("ad_text_evidence"):
+                current["ad_text_evidence"] = True
             if current["category"] == "text":
                 current["suggested_region_source_pixels"] = union_pixel_regions(
                     current.get("suggested_region_source_pixels"),

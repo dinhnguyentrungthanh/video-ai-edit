@@ -1,4 +1,4 @@
-# The text scan keeps a fixed logo's box in its group, and ad evidence past its track limit (fix/text-consensus-logo, 2026-10-16)
+# The text scan keeps a fixed logo's box in its group and ad evidence past its track limit; subtitle dialogue suggests no BLUR (fix/text-consensus-logo, 2026-10-16)
 
 Branch `fix/text-consensus-logo` from `main` `419377f` (session D; plan
 `docs/handoff/D-text-consensus-plan.md`, approved by the coordinator on 2026-10-16). Two changes
@@ -6,7 +6,9 @@ of the text stage, made on one branch so that its cache key changes once:
 - the fixed logo's box (sections 1–3; `src/biliflow/textscan.py`);
 - item 6, the 250-track limit (section 4, requested by the coordinator for the user after the
   first gates): `textscan.py`, the web-address patterns moved to `web_address_patterns.py`, and two
-  review-build changes (`ad_text_memory.py`, `review_workflow.py`).
+  review-build changes (`ad_text_memory.py`, `review_workflow.py`);
+- task 2, a film-long card of subtitle dialogue suggests no BLUR (section 7, the user's choice after
+  item 6; review build only, `review_workflow.py`, no cache key change).
 
 **The text stage's cache key changes** (the 9 other stages keep theirs): after the merge, "Chạy
 lại" scans the text stage again (about 2 minutes for a 45-minute film on this PC). Jobs by id
@@ -247,9 +249,16 @@ queue, and **0** times after one BLUR on the new watermark card.
     at least 60 % of each.
   - On this PC 4 groups of 139 change, and each keeps its BLUR suggestion.
   - The queue does not show `omitted_tracks_unrecorded` (0 everywhere here).
-- **Dialogue chains (task 2) remain.** The subtitle band's film-long fixed-text cards of jobs 130,
-  134 and 136 are there before and after; this branch adds none. Job 134's grows 21 px wider
-  ((276, 389, 736, 74) → (263, 389, 757, 74)): more dialogue pieces are kept.
+- **Dialogue chains.** Item 6 alone keeps the subtitle band's film-long fixed-text cards of jobs
+  130, 134 and 136 and adds none; job 134's grows 21 px wider ((276, 389, 736, 74) →
+  (263, 389, 757, 74)) because more dialogue pieces are kept. Task 2 (section 7) takes their
+  suggestion away.
+- **Task 2's limits.**
+  - The band and the 0.60 consensus are measured on one subtitle layout (4 films with chains, 10
+    with a site line). A site line read in very different pieces could fall below 0.60; it would
+    still be a card, without a suggestion.
+  - An ad read only in dialogue-like words gets no BLUR from such a card; it stays a card of its own
+    (a review cost: 16–20 more cards in each of the four films, section 7).
 
 ## 6. Tools
 
@@ -259,6 +268,121 @@ queue, and **0** times after one BLUR on the new watermark card.
 - `limit_gate.py`: CPU; item 6's reports, queues, golden scores and sizes. `--before-src` builds
   the "before" queues with another tree.
 - `export_logo.py`, `export_tail.py`: CPU; the window exports.
+- `dialogue_gate.py`: CPU; task 2's queues (rescanned, the 25 stored jobs, golden).
 
 They read the real reports, queues and sources, and the database read-only. They never call a
 Control Center route.
+
+## 7. Task 2: a film-long card of subtitle dialogue suggests no BLUR
+
+**Why.** In jobs 130, 134, 136 and 145 the dialogue lines read one after another under the film
+chained into one recurring-text group (each piece shares a word with the next). It became a
+whole-film fixed-text card over the subtitles.
+- It suggested BLUR in 130, 134 and 136, from one dialogue line the semantic model scored as an ad.
+- Jobs 130 and 136 exported with the dialogue blurred all film long; the user confirmed this was
+  not intended.
+- The site's mark under the subtitles has its own repeated-watermark card (15/15 samples inside it
+  on item 6's queues, the coordinator's check).
+
+**The rule** (`review_workflow.py`, review build only; no cache key changes). A whole-film
+`recurring_fixed_text` card suggests nothing when all three hold:
+1. its box's centre lies in the subtitle band: at least 70 % of the height, 18–82 % of the width
+   (analysis frame);
+2. no member reads any of these (`_reads_contact_or_site`):
+   - a web address, also without its dot (`web_address_tokens`);
+   - a phone number or an @handle (`ad_text_tokens`);
+   - any other domain (`_FIXED_TEXT_DOMAIN`, for an ending like ".ph");
+   - a platform name;
+3. its line consensus is below 0.60. That is the largest share of members whose longest reading is a
+   piece (similarity ≥ 0.75, as the grouping) of one long reading (12+ letters) among them.
+
+Behaviour of such a card:
+- It stays a main-list card, records `subtitle_dialogue: {line_consensus}` and says why ("giống
+  chuỗi phụ đề thoại; logo dưới phụ đề (nếu có) đã có thẻ watermark riêng"). Its weak evidence is
+  listed but suggests nothing.
+- A member naming the site of another watermark card (its address word) keeps the old behaviour.
+- **So that nothing hides inside it:**
+  - It takes in only a plain text card: one with no suggestion, an ad score below 0.40 and no ad
+    evidence. Ad evidence here means `ad_text_evidence`: a policy hit, or a reading with an
+    address, phone number, "@", domain or platform name. It is marked on text items and kept when
+    cards merge.
+  - Every other card inside its box keeps its own card, visual-logo cards included.
+  - It never merges in time with another card.
+  - A visual-logo confirmation inside its box is not its evidence.
+
+**Code review** (`ecc:code-reviewer`, read-only), both findings fixed with tests:
+- **HIGH:** the first version let such a card absorb ad cards that carry no suggestion of their own
+  (a phone number, an @handle, a policy hit), so they would no longer be seen.
+- **MEDIUM:** condition 2 missed domains outside the address list and platform names.
+
+**Gates** (`dialogue_gate.py`, `dialogue-gate-summary.json`; before = 7fa0e0e, after = this branch).
+
+*Tests:*
+- `test_subtitle_dialogue_overlay`: 13 new tests; 7 fail on 7fa0e0e.
+- The other 6 guard what keeps its BLUR:
+  - an address, a dotless address, a phone number, an @handle, a ".ph" domain or a platform name in
+    the chain;
+  - the same chain at the top of the frame;
+  - a chain over part of the film;
+  - a member naming a watermark's site;
+  - one line read in pieces in the band.
+- 513 tests of 31 review modules pass.
+- Full suite on the final code: 3,499 tests OK, 53 skipped, with a 1 s synthetic clip in the
+  worktree's `input\` (removed after).
+
+*Jobs 130, 134, 136, 143 and 145, every revision, with item 6's rescanned text reports:*
+
+| Job, revision | Dialogue card before → after (consensus) | Band watermark: BLUR until / film | Cards |
+|---|---|---|---|
+| 130 r1 | BLUR → none (0.375) | 2,646.5 / 2,655.2 s | 8 → 30 |
+| 134 r1 | BLUR → none (0.13) | 2,643.5 / 2,657.2 s | 7 → 25 |
+| 136 r1, r2 | BLUR → none (0.333; a second chain card too) | 2,691.5 / 2,702.2 s | 9 → 26 |
+| 143 r1, r2 | none in the band | 2,668.1 / 2,668.1 s | 22 → 22 |
+| 145 r1, r2 | none → none (0.273) | 2,561.2 / 2,561.2 s | 7 → 27 |
+
+- **The added cards** were inside the dialogue card before.
+  - Most are dialogue lines the semantic model scored as ads (0.40 or more), with no address, phone
+    number, @ or policy hit and no suggestion: 19 in 130, 18 in 134, 16 in 136, 19 in 145.
+  - Among them, in 130, is one reading of the site's name without its dot (score 0.47).
+  - The others:
+    - in 130: a web-address line (1,767–1,785.5 s, BLUR), the band mark's visual-logo card (BLUR,
+      the watermark card's box and time), a dialogue line where OCR read a letter as "@", and one
+      persistent text card;
+    - in 136: the second chain card;
+    - in 145: a dialogue line where OCR read a letter as "@" (with 7fa0e0e it was inside the band
+      card too).
+- Subtitle-band ad tracks cited by a main card: weakened 0 in all eight.
+- Cited by a card suggesting BLUR (a stricter count): 1 fewer in job 130. It is the "@" line
+  (831–834 s), now a card of its own without a suggestion.
+- Rebuilt with kept decisions: 0 lost in all eight (9, 42, 38, 9, 64, 22, 50 and 7 decided).
+  - The user's BLUR on the old dialogue card of 130 and of 136 r2 stays: it is carried, or the old
+    card is kept. The user sets it to KEEP.
+  - A fresh build has no decision on the card.
+
+*The 25 jobs of the subtitle-band gate (stored reports, active revision):*
+- **Band text cards:**
+  - the 10 site lines keep their suggestions: BLUR in 62, 63, 65, 66, 70, 71, 72, 99 and 100,
+    none in 64;
+  - the dialogue cards of 130, 134, 136 and 145 suggest nothing.
+- **Cards:** equal except 130 (8 → 30), 134 (6 → 24), 136 r2 (9 → 26) and 145 r2 (7 → 27): the same
+  kinds as above.
+- **Band ad tracks:** weakened 0; cited by a BLUR card: the same one line of 130.
+- **Rebuilds:** 0 decisions lost in the 10 jobs whose source is still there.
+
+*Golden Set v2* (item 6's rescanned reports, no memories):
+- The scorecards before and after are identical: 598 scored items, advertising 19/19, false
+  positives 24, advisory 487, traps 0.
+- Against the stored v2 baseline: +1 caught (G11), 0 missed, 0 traps.
+- `compare` exits 1 only for its time gate.
+
+*Cache keys:* all 10 stages equal to 7fa0e0e.
+
+**The trade-off (for the user).** Nothing hides inside a card that suggests nothing, so each of these
+four films gets 16–20 more cards without a suggestion, almost all dialogue lines.
+- Letting the dialogue card take in lines whose only evidence is the ad score would bring the
+  counts back to 8–11.
+- It would also hide the one dotless site reading of job 130.
+- It would also hide any real ad line without an address, phone number, @ or policy hit. With
+  7fa0e0e those lines were under the dialogue card's BLUR in 130, 134 and 136.
+
+That is a weakening of the subtitle band, so it is not done here.
