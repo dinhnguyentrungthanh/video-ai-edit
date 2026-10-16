@@ -1,3 +1,16 @@
+# The text scan keeps a fixed logo's box in its group — session D (2026-10-16, branch `fix/text-consensus-logo` from `main` `419377f`; not merged)
+
+- Cause (job 145, after G12): the text scan joins repeated corner tracks of one text, and the group's consensus box gives every member one vote, so 11 short pieces of the site's scrolling line outvoted the fixed logo just below it (read in 607 samples). G12's review-build fix needed a visual-logo card of the logo; the user's "Chạy lại" re-ran the visual-logo stage (its key holds the brand memory, which had changed), which asks about 175 of 512 windows and this time skipped 175–180 s, so the film-long card stayed on the line and the export showed the logo.
+- `textscan.py`: every track gets `footprint_box` (the consensus of its own reads). In a corner group, a member read at least 10 times over the group's minimum span is an anchor; its footprint joins the group box when it is not already 95 % inside it, touches it and is at most 2.5 times as tall. The box never shrinks; `overlay_box_sources` records the old box and the anchors. Thresholds, grouping, routing and the 250-track cap are unchanged.
+- **The text stage's cache key changes** (the 9 other stages keep theirs): "Chạy lại" rescans text, about 2 minutes for a 45-minute film.
+- Gates (`docs/evidence/text-consensus/`):
+  - tests: 10 new in `test_textscan`; `test_fixed_logo_scan` (scripted OCR shaped on job 145, fails on `main`); `test_fixed_logo_clip` (real OCR, a self-made logo-under-the-line clip); 97 tests of the modules that use the text scan pass;
+  - GPU rescans of jobs 145, 130, 134, 136 and 143 and the Golden Set v2 sources, with the user's go and an empty queue: only job 145's group box changes ([432,18,960,43] → [432,18,960,77]);
+  - job 145's queue from the rescanned text report with revision 2's logo reports: one BLUR card (0,21,1280,74), 0–2561 s, covers the logo; `fixed_text_logo` (G12) joins nothing and widens nothing;
+  - subtitle-band ad tracks weakened 0 (5 jobs); Golden Set v2 identical to the old box (19/19, false positives 24/24, traps 0);
+  - window exports of job 145: the logo read at 0 of 400 samples after one BLUR (the user's export: 398).
+- Item 6 measured, not changed: without the 250-track cap the subtitle-band watermark card reaches the end of every film of this series (with it, it stops 200–400 s early, and job 145's export shows the mark at 8 of 24 samples after 2,313 s); Golden Set v2 uncapped: 19/19, false positives 24 → 22. The user decides.
+
 # G12 merge: a fixed logo under the site's top line is blurred with that line's card (2026-10-15, branch `merge/g12` from `main` `22b1582`; not yet in the main folder)
 
 - Merged `fix/top-logo-box` (session D, entry below) with `--no-ff`; docs conflicts keep both entries.

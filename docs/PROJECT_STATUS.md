@@ -1,3 +1,7 @@
+## The text scan keeps a fixed logo's box in its group, session D (2026-10-16) — branch `fix/text-consensus-logo`, not merged
+
+- G12 did not hold for job 145: "Chạy lại" re-ran the visual-logo stage (brand memory changed) and its 175–180 s logo card was gone, so the film-long card stayed on the scrolling line. Root fix in the text scan: a member of a corner group that is a fixed overlay by itself (10+ reads over the group's span) keeps its own box in the group box. **Text-stage cache key changes** (other 9 stages unchanged). Gates: only job 145's box changes over 14 rescans; its card covers the logo without a visual-logo card; subtitle band weakened 0; Golden Set v2 identical; window exports read the logo at 0 of 400 samples. Item 6 (250-track cap) measured: it cuts the subtitle-band watermark's last 200–400 s in this series; the user decides. Details in `docs/evidence/text-consensus/README.md`.
+
 ## G12 merge, job 145's top-right logo (2026-10-15) — branch `merge/g12`, not yet in the main folder
 
 - Session D (entry below): a plain visual-logo card that reads the same text as a fixed-text card suggesting BLUR, at a touching place and time, joins that card; its box becomes the union. Scan cache keys unchanged; full suite 3,458 OK. Details in `CHANGELOG.md`.

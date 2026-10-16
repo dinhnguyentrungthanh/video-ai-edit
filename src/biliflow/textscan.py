@@ -39,6 +39,11 @@ def _sha256_file(path: Path) -> str:
 BLUR_ABSENCE_CONFIRM_SECONDS = 3.0
 BLUR_POST_CONFIRM_TAIL_SECONDS = 0.5
 LOW_CONFIDENCE_TOP_BANNER_THRESHOLD = 0.10
+# A member of a repeated corner overlay that is a fixed overlay by itself: read at least
+# this often, over at least the group's minimum span. Its own box joins the group's box.
+OVERLAY_ANCHOR_MINIMUM_READINGS = 10
+OVERLAY_ANCHOR_COVERED = 0.95  # an anchor box this much inside the group's box adds nothing
+OVERLAY_ANCHOR_HEIGHT_RATIO = 2.5  # an anchor box taller than this times the group's box stays out
 
 
 def _read_exact(stream, size: int) -> bytes:
@@ -250,6 +255,9 @@ def _summarize_track(
         "reason": reason,
         "max_confidence": round(track.best_confidence, 6),
         "union_box": union_box,
+        # Where the track's own reads agree: a read far off their usual size (joined to
+        # distant scene text) drops out; one slightly larger stays.
+        "footprint_box": _consensus_overlay_box(boxes),
         "sample_text": texts[:8],
     }
 
@@ -308,6 +316,60 @@ def _consensus_overlay_box(boxes: list[list[int]]) -> list[int]:
         min(box[0] for box in inliers), min(box[1] for box in inliers),
         max(box[2] for box in inliers), max(box[3] for box in inliers),
     ]
+
+
+def _share_inside(inner: list[int], outer: list[int]) -> float:
+    width = max(0, min(inner[2], outer[2]) - max(inner[0], outer[0]))
+    height = max(0, min(inner[3], outer[3]) - max(inner[1], outer[1]))
+    return width * height / (max(1, inner[2] - inner[0]) * max(1, inner[3] - inner[1]))
+
+
+def _touches_overlay_box(footprint: list[int], box: list[int]) -> bool:
+    """Overlapping the box or apart by at most half its own height, and not much taller."""
+    height = max(1, footprint[3] - footprint[1])
+    horizontal_gap = max(footprint[0], box[0]) - min(footprint[2], box[2])
+    vertical_gap = max(footprint[1], box[1]) - min(footprint[3], box[3])
+    return (
+        horizontal_gap <= height / 2 and vertical_gap <= height / 2
+        and height <= OVERLAY_ANCHOR_HEIGHT_RATIO * max(1, box[3] - box[1])
+    )
+
+
+def _overlay_box_with_anchors(
+    group: list[dict], consensus: list[int], minimum_span: float,
+) -> tuple[list[int], dict | None]:
+    """Add the own box of every member that is a fixed overlay by itself.
+
+    The consensus gives each member one vote, so a fixed logo read the whole film
+    beside a line read in many short pieces lost its box to theirs (job 145: a site's
+    logo just below its scrolling line). Such an anchor's footprint joins the box when
+    it touches it; the box never shrinks. Returns the box and, when an anchor's
+    footprint sticks out of the consensus, where the box came from.
+    """
+    box = list(consensus)
+    anchors = []
+    for member in group:
+        footprint = member.get("footprint_box")
+        if (
+            not isinstance(footprint, list) or len(footprint) != 4
+            or int(member.get("observations") or 0) < OVERLAY_ANCHOR_MINIMUM_READINGS
+            or float(member["end_seconds"]) - float(member["start_seconds"]) < minimum_span
+        ):
+            continue
+        footprint = [int(value) for value in footprint]
+        if _share_inside(footprint, consensus) >= OVERLAY_ANCHOR_COVERED:
+            continue
+        joined = _touches_overlay_box(footprint, consensus)
+        if joined:
+            box = [
+                min(box[0], footprint[0]), min(box[1], footprint[1]),
+                max(box[2], footprint[2]), max(box[3], footprint[3]),
+            ]
+        anchors.append({
+            "track_id": int(member["track_id"]), "footprint_box": footprint,
+            "observations": int(member["observations"]), "joined": joined,
+        })
+    return box, ({"consensus_box": list(consensus), "anchors": anchors} if anchors else None)
 
 
 def _promote_repeated_corner_overlays(
@@ -377,6 +439,11 @@ def _promote_repeated_corner_overlays(
             for item in group
         )
         review_as_brand = brand_routed or ad_score >= 0.45
+        union_box, box_sources = _overlay_box_with_anchors(
+            group, _consensus_overlay_box(boxes), minimum_span,
+        )
+        if box_sources:
+            merged["overlay_box_sources"] = box_sources
         merged.update({
             "start_seconds": round(min(float(item["start_seconds"]) for item in group), 3),
             "end_seconds": round(max(float(item["end_seconds"]) for item in group), 3),
@@ -384,7 +451,8 @@ def _promote_repeated_corner_overlays(
                 float(item.get("recommended_blur_end_seconds", item["end_seconds"]))
                 for item in group
             ), 3),
-            "union_box": _consensus_overlay_box(boxes),
+            "union_box": union_box,
+            "footprint_box": list(union_box),
             "sample_text": list(dict.fromkeys(
                 text for item in group for text in _track_texts(item)
             ))[:8],
