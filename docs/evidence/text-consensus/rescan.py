@@ -116,7 +116,7 @@ def scan_command(args) -> None:
             project_root=root, input_path=entry["source"], report_dir=root / "reports" / "scan" / "text",
             model_dir=INSTALL / "models" / "easyocr", ffmpeg_path=FFMPEG, ffprobe_path=FFPROBE,
             sample_every=float(original["sample_every_seconds"]), analysis_width=int(original["analysis_size"][0]),
-            max_report_tracks=UNCAPPED, duration_seconds_limit=args.seconds,
+            max_report_tracks=args.max_report_tracks, duration_seconds_limit=args.seconds,
             device_name=args.device, semantic_classifier=classifier,
             policy_path=TREE / "config" / "text_review_policy.json", reader=reader,
             recognition_batch_size=8 if cuda else 1, recognition_frame_window=4 if cuda else 1,
@@ -127,6 +127,7 @@ def scan_command(args) -> None:
         gate.write(root / "scan-info.json", {
             "label": entry["label"], "original": str(entry["original"]), "seconds": round(time.perf_counter() - started, 1),
             "duration_seconds": payload["duration_seconds"], "tracks_before_limit": payload["tracks_before_limit"],
+            "max_report_tracks": args.max_report_tracks,
         })
         print(f"{entry['label']}: {payload['tracks_before_limit']} tracks, "
               f"{time.perf_counter() - started:.0f} s", flush=True)
@@ -346,6 +347,8 @@ def main() -> None:
     scan.add_argument("--device", choices=["cuda", "cpu"], default="cuda")
     scan.add_argument("--only", nargs="*", help="scan only these labels (dry runs)")
     scan.add_argument("--seconds", type=float, help="scan only the first seconds of each source (dry runs)")
+    scan.add_argument("--max-report-tracks", type=int, default=UNCAPPED,
+                      help="the stage's track limit (default: none; 250 is production, for limit_gate.py)")
     check = commands.add_parser("gate")
     check.add_argument("--work", required=True)
     check.add_argument("--main-commit", default="419377f")

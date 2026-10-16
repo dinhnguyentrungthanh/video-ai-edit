@@ -1,6 +1,18 @@
+## The text report keeps ad evidence past its 250-track limit, session D item 6 (2026-10-16) — branch `fix/text-consensus-logo`, not merged
+
+- The 250-track limit dropped the subtitle-band watermark's last 200–400 s in this series. Past the limit, the report now keeps every track with ad evidence and records the others without previews (up to 4,000). The review build takes back omitted tracks that hold a remembered address, and keeps a piece of a whole-film fixed text out of the recurring-text groups.
+- **Text-stage cache key changes once, together with the logo fix below** (the 9 other stages are unchanged).
+- Gates:
+  - the watermark card reaches the film's end in jobs 130, 134, 136, 143 and 145;
+  - subtitle band weakened 0;
+  - Golden Set v2 identical;
+  - job 145's last 248 s read the mark at 0 of 496 samples after one BLUR.
+- Task 2 (chains of dialogue lines in the subtitle band as film-long fixed-text cards) is measured and proposed only.
+- Details in `docs/evidence/text-consensus/README.md` section 4.
+
 ## The text scan keeps a fixed logo's box in its group, session D (2026-10-16) — branch `fix/text-consensus-logo`, not merged
 
-- G12 did not hold for job 145: "Chạy lại" re-ran the visual-logo stage (brand memory changed) and its 175–180 s logo card was gone, so the film-long card stayed on the scrolling line. Root fix in the text scan: a member of a corner group that is a fixed overlay by itself (10+ reads over the group's span) keeps its own box in the group box. **Text-stage cache key changes** (other 9 stages unchanged). Gates: only job 145's box changes over 14 rescans; its card covers the logo without a visual-logo card; subtitle band weakened 0; Golden Set v2 identical; window exports read the logo at 0 of 400 samples. Item 6 (250-track cap) measured: it cuts the subtitle-band watermark's last 200–400 s in this series; the user decides. Details in `docs/evidence/text-consensus/README.md`.
+- G12 did not hold for job 145: "Chạy lại" re-ran the visual-logo stage (brand memory changed) and its 175–180 s logo card was gone, so the film-long card stayed on the scrolling line. Root fix in the text scan: a member of a corner group that is a fixed overlay by itself (10+ reads over the group's span) keeps its own box in the group box. **Text-stage cache key changes** (other 9 stages unchanged). Gates: only job 145's box changes over 14 rescans; its card covers the logo without a visual-logo card; subtitle band weakened 0; Golden Set v2 identical; window exports read the logo at 0 of 400 samples. Item 6 (250-track cap) measured: it cuts the subtitle-band watermark's last 200–400 s in this series; done on the same branch (above). Details in `docs/evidence/text-consensus/README.md`.
 
 ## G12 merge, job 145's top-right logo (2026-10-15) — branch `merge/g12`, not yet in the main folder
 

@@ -85,7 +85,9 @@ from biliflow.platform_memory import (
     source_box,
 )
 from biliflow.platform_names import match_platform_texts
-from biliflow.ad_text_memory import AD_TEXT_MEMORY_PATH, remember_blurred_addresses, remembered_keys
+from biliflow.ad_text_memory import (
+    AD_TEXT_MEMORY_PATH, readmit_remembered_tracks, remember_blurred_addresses, remembered_keys,
+)
 from biliflow.ad_text_patterns import AD_TEXT_PATTERNS as _AD_TEXT_PATTERNS
 from biliflow.ad_text_patterns import ad_text_tokens
 from biliflow.fixed_text_logo import join_fixed_text_logos
@@ -2332,6 +2334,9 @@ RECURRING_TEXT_LONG_READING_CHARS = 12
 RECURRING_TEXT_FRAGMENT_CHARS = 6
 RECURRING_TEXT_FRAGMENT_SIMILARITY = 0.75
 RECURRING_TEXT_MINIMUM_SPAN_SHARE = 0.30
+# A track lying this much inside a whole-film fixed text's box is a piece of that text
+# (its track broke), never a piece of another line.
+FIXED_TEXT_PIECE_INSIDE = 0.60
 FIXED_TEXT_VISUAL_OVERLAP = 0.60
 _FIXED_TEXT_SKIPPED_ROUTINGS = {
     "REVIEW_PERSISTENT_OVERLAY", "REVIEW_POLICY_OVERRIDE", "LIKELY_TITLE_OVERLAY",
@@ -2402,6 +2407,20 @@ def _site_tokens(tracks: list[dict]) -> set[str]:
                     if len(word) >= _FIXED_TEXT_SITE_TOKEN_CHARS:
                         tokens.add(word)
     return tokens
+
+
+def _inside_any_box(box: object, boxes: list[list[float]]) -> bool:
+    """``box`` lies at least FIXED_TEXT_PIECE_INSIDE inside one of ``boxes`` ([x1, y1, x2, y2])."""
+    if not isinstance(box, list) or len(box) != 4:
+        return False
+    inner = [float(value) for value in box]
+    area = max(1.0, (inner[2] - inner[0]) * (inner[3] - inner[1]))
+    for outer in boxes:
+        width = max(0.0, min(inner[2], outer[2]) - max(inner[0], outer[0]))
+        height = max(0.0, min(inner[3], outer[3]) - max(inner[1], outer[1]))
+        if width * height / area >= FIXED_TEXT_PIECE_INSIDE:
+            return True
+    return False
 
 
 def _vertical_band_overlap(first: list[float], second: list[float]) -> bool:
@@ -2558,7 +2577,13 @@ def promote_fixed_text_overlays(payload: dict) -> dict:
             promoted.append(build(track, [track], "whole_film_text", min(1.0, coverage)))
             absorbed.add(id(track))
     remaining = [track for track in tracks if id(track) not in absorbed]
-    for members in _recurring_text_groups(remaining):
+    # Grouped with a line it reads like, such a piece took the whole-film text into the
+    # line's box (job 134, item 6, 2026-10-16); it stays a track of its own.
+    whole_film_boxes = [[float(value) for value in overlay["union_box"]] for overlay in promoted]
+    line_candidates = [
+        track for track in remaining if not _inside_any_box(track.get("union_box"), whole_film_boxes)
+    ]
+    for members in _recurring_text_groups(line_candidates):
         start = min(float(track["start_seconds"]) for track in members)
         end = max(float(track["end_seconds"]) for track in members)
         if end - start < max(
@@ -3443,7 +3468,9 @@ def build_review_queue(
     for candidate in report_paths:
         report_path = _inside(reports_root, candidate, "Report path")
         report_path = report_path.resolve(strict=True)
-        payload = _read_json(report_path)
+        # A track the text scan left past its limit that holds a remembered address
+        # comes back first, so cards and their citations see it like any other track.
+        payload = readmit_remembered_tracks(_read_json(report_path), ad_text_keys)
         if payload.get("status") not in {"COMPLETED", "REVIEW_REQUIRED"}:
             raise ValueError(f"Report is not reviewable: {report_path}")
         verification_alias = _verified_report_alias(root, reports_root, payload)

@@ -1,6 +1,7 @@
 # Kế hoạch D – giữ hộp logo trong khung chung của bước quét chữ (job 145)
 - Nhánh: fix/text-consensus-logo (từ main 419377f) · Worktree: `temp\wt-text-consensus` · 2026-10-16
-- Trạng thái: **điều phối duyệt phương án A ngày 2026-10-16; mục 6 chỉ đo.** Kết quả: `docs/handoff/D-text-consensus.md`.
+- Trạng thái: **điều phối duyệt phương án A ngày 2026-10-16 (ca17c07); sau cổng, người dùng chọn làm mục 6 trên cùng
+  nhánh (đã xong).** Kết quả: `docs/handoff/D-text-consensus.md`.
 - Số đo thô (không vào Git): `temp\text-consensus\` (probe OCR, bản dựng thử).
 
 ## 1. Báo ngắn: vì sao "Chạy lại" không lấy visual_logo từ cache, và vì sao kết quả khác

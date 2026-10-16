@@ -319,5 +319,63 @@ class RepeatedOverlayAnchorTests(unittest.TestCase):
         self.assertEqual(result["footprint_box"], result["union_box"])
 
 
+def _reference(track_id, start, text, **extra):
+    track = {"track_id": track_id, "review_candidate": False, "sample_text": [text], "start_seconds": start,
+             "ad_probability": 0.05, "semantic_top_label": "scene_text", "policy_hits": []}
+    track.update(extra)
+    return track
+
+
+class ReportTrackLimitTests(unittest.TestCase):
+    """Item 6 (2026-10-16): the 250-track limit keeps every track with ad evidence or a web address."""
+
+    def _summaries(self, last, *, plain=5):
+        candidate = {"track_id": 1, "review_candidate": True, "sample_text": ["SHOP NOW"], "start_seconds": 1.0}
+        return [candidate] + [
+            _reference(10 + index, 20.0 + index, "Một dòng chữ trong cảnh") for index in range(plain)
+        ] + [last]
+
+    def test_a_reference_past_the_limit_with_ad_evidence_or_a_web_address_is_kept(self):
+        for name, last in (
+            ("dotted address", _reference(99, 2500.0, "xem phim tai example.com")),
+            ("address without its dot", _reference(99, 2500.0, "EXAMPLECOM")),
+            ("phone number", _reference(99, 2500.0, "Hotline 0912 345 678")),
+            ("handle", _reference(99, 2500.0, "theo doi @examplephim")),
+            ("advertisement label", _reference(99, 2500.0, "Một dòng chữ", semantic_top_label="advertisement")),
+            ("ad score", _reference(99, 2500.0, "Một dòng chữ", ad_probability=0.40)),
+            ("policy hit", _reference(99, 2500.0, "Một dòng chữ", policy_hits=["term"])),
+        ):
+            with self.subTest(name):
+                kept = _limit_report_tracks(self._summaries(last), 4)
+                self.assertEqual([track["track_id"] for track in kept], [1, 10, 11, 12, 99])
+
+    def test_plain_references_past_the_limit_still_drop(self):
+        for name, last in (
+            ("scene text", _reference(99, 2500.0, "Một dòng chữ trong cảnh")),
+            ("ad score below the line", _reference(99, 2500.0, "Một dòng chữ", ad_probability=0.39)),
+            ("word that ends like a domain", _reference(99, 2500.0, "SITCOM")),
+            ("name without its ending", _reference(99, 2500.0, "example")),
+            # OCR noise in dialogue, no handle: in job 143 one such line linked seven dialogue
+            # lines into a film-long fixed-text card over the subtitles.
+            ("bare at sign", _reference(99, 2500.0, "lien he @ day")),
+        ):
+            with self.subTest(name):
+                kept = _limit_report_tracks(self._summaries(last), 4)
+                self.assertEqual([track["track_id"] for track in kept], [1, 10, 11, 12])
+
+    def test_evidence_takes_no_place_of_a_track_kept_before_and_keeps_its_order(self):
+        summaries = self._summaries(_reference(99, 2500.0, "EXAMPLE.COM"), plain=6)
+        summaries[2] = _reference(11, 21.0, "EXAMPLE.COM")  # inside the limit
+        summaries[5] = _reference(14, 24.0, "Hotline 0912 345 678")  # past it
+        kept = _limit_report_tracks(summaries, 4)
+        self.assertEqual([track["track_id"] for track in kept], [1, 10, 11, 12, 14, 99])
+
+    def test_candidates_and_platform_tracks_are_kept_as_before(self):
+        ending = _reference(98, 2700.0, "iOIYI")
+        summaries = _annotate_platform_names(self._summaries(_reference(99, 2600.0, "example.com")) + [ending])
+        kept = _limit_report_tracks(summaries, 2)
+        self.assertEqual([track["track_id"] for track in kept], [1, 98, 99])
+
+
 if __name__ == "__main__":
     unittest.main()

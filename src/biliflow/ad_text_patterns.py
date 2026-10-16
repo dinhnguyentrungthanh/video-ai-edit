@@ -2,8 +2,9 @@
 
 Moved unchanged from ``review_workflow`` (session D, 2026-10-15) so that
 ``subtitle_band`` keeps every line holding such a token a main-list card without
-importing ``review_workflow``. Only review-build modules import it: it is in no
-scan stage's cache key.
+importing ``review_workflow``. The text scan imports it too, to keep every track
+holding such a token past its track limit (item 6, 2026-10-16): it is in the text
+stage's cache key, so an edit here makes "Chạy lại" scan the text again.
 """
 from __future__ import annotations
 

@@ -1,3 +1,25 @@
+# The text report keeps ad evidence past its 250-track limit — session D, item 6 (2026-10-16, branch `fix/text-consensus-logo`; not merged)
+
+- Cause: the text report keeps at most 250 tracks (review candidates, platform names, then the earliest references). This series' films have 830–944, so the last 580–694 references were dropped, and with them the sightings of the site's watermark under the subtitles in the film's last minutes: its card stopped 200–400 s early, and job 145's export showed the mark after 2,313 s.
+- `textscan.py`: past the limit, the report keeps every reference track with ad evidence: a policy hit, the advertisement label, an ad score of 0.40 or more, a web address (also without its dot), an address, a phone number of 8+ digits or an @handle. A lone "@" is not enough. The tracks kept before keep their places. The others stay as `omitted_tracks` without previews, up to 4,000 (`omitted_tracks_unrecorded` counts the rest). `web_address_tokens` and `fold_alnum` moved unchanged from `scrolling_text.py` to `web_address_patterns.py`.
+- Review build (in no cache key):
+  - `ad_text_memory.readmit_remembered_tracks` takes an omitted track that holds a remembered address back into the tracks when the user's memories are on;
+  - `promote_fixed_text_overlays` keeps a track lying 60 % or more inside a whole-film fixed text's box out of the recurring-text groups. In job 134 the logo's last piece had joined the line's group, and the line's card was then absorbed by the logo's.
+- **The text stage's cache key changes once for both parts of this branch** (18 → 20 files: `ad_text_patterns.py`, `web_address_patterns.py`); the 9 other stages keep theirs.
+- Gates (`docs/evidence/text-consensus/README.md` section 4, `limit-gate-summary.json`):
+  - 13 new tests; full suite: 3,485 tests in 2,571 s: 3,404 OK, 53 skipped and 28 errors, all `next((ROOT / "input").glob("*.mp4"))` (the worktree has no input clip; `test_job_pipeline` and `test_job_ocr_option` pass 35/35 with a 1 s synthetic clip in the worktree's `input\`); the two test files edited after the run pass on the final code;
+  - two GPU rescans (with the user's go, empty queue) of jobs 130, 134, 136, 143 and 145 and the Golden Set v2 sources: every report equals, track for track, the rule applied offline to the uncapped scans;
+  - report sizes:
+    - listed tracks 250 → 292–311 per film;
+    - text-scan.json 0.37 → 1.16–1.31 MB (densest golden clip: 3.62 MB);
+    - queues +4–6 KB;
+  - the subtitle-band watermark card now ends 0–14 s before the film's end, against 200–400 s before;
+  - cards per job unchanged, except job 134 (6 → 7: one more card of the site's address in the subtitle zone);
+  - subtitle band weakened 0; the old BLUR cards stay covered at least 96.9 %;
+  - Golden Set v2 identical before and after (19/19, false positives 24/24, traps 0);
+  - export of job 145's last 248 s: the mark is read at 188 of 496 samples in the user's export, and at 0 after one BLUR on the new card.
+- Measured only (task 2, not changed): 16 film-long fixed-text cards in the subtitle band across all reports, 6 of them chains of dialogue lines (jobs 130, 134, 136, 145). A review-build rule is proposed in `docs/handoff/D-text-consensus.md` section 3b and waits for the user.
+
 # The text scan keeps a fixed logo's box in its group — session D (2026-10-16, branch `fix/text-consensus-logo` from `main` `419377f`; not merged)
 
 - Cause (job 145, after G12): the text scan joins repeated corner tracks of one text, and the group's consensus box gives every member one vote, so 11 short pieces of the site's scrolling line outvoted the fixed logo just below it (read in 607 samples). G12's review-build fix needed a visual-logo card of the logo; the user's "Chạy lại" re-ran the visual-logo stage (its key holds the brand memory, which had changed), which asks about 175 of 512 windows and this time skipped 175–180 s, so the film-long card stayed on the line and the export showed the logo.
@@ -9,7 +31,7 @@
   - job 145's queue from the rescanned text report with revision 2's logo reports: one BLUR card (0,21,1280,74), 0–2561 s, covers the logo; `fixed_text_logo` (G12) joins nothing and widens nothing;
   - subtitle-band ad tracks weakened 0 (5 jobs); Golden Set v2 identical to the old box (19/19, false positives 24/24, traps 0);
   - window exports of job 145: the logo read at 0 of 400 samples after one BLUR (the user's export: 398).
-- Item 6 measured, not changed: without the 250-track cap the subtitle-band watermark card reaches the end of every film of this series (with it, it stops 200–400 s early, and job 145's export shows the mark at 8 of 24 samples after 2,313 s); Golden Set v2 uncapped: 19/19, false positives 24 → 22. The user decides.
+- Item 6 measured, not changed: without the 250-track cap the subtitle-band watermark card reaches the end of every film of this series (with it, it stops 200–400 s early, and job 145's export shows the mark at 8 of 24 samples after 2,313 s); Golden Set v2 uncapped: 19/19, false positives 24 → 22. The user chose to do item 6 on this branch (entry above).
 
 # G12 merge: a fixed logo under the site's top line is blurred with that line's card (2026-10-15, branch `merge/g12` from `main` `22b1582`; not yet in the main folder)
 

@@ -1,11 +1,17 @@
-# The text scan keeps a fixed logo's box in its group (fix/text-consensus-logo, 2026-10-16)
+# The text scan keeps a fixed logo's box in its group, and ad evidence past its track limit (fix/text-consensus-logo, 2026-10-16)
 
 Branch `fix/text-consensus-logo` from `main` `419377f` (session D; plan
-`docs/handoff/D-text-consensus-plan.md`, approved by the coordinator on 2026-10-16). Code:
-`src/biliflow/textscan.py` only. **The text stage's cache key changes** (the 9 other stages keep
-theirs): after the merge, "Chạy lại" scans the text stage again (about 2 minutes for a 45-minute
-film on this PC). Jobs by id only; the site is `EXAMPLE.COM` here. Results with real readings
-stay in `temp\text-consensus\` (Git-ignored, this PC only).
+`docs/handoff/D-text-consensus-plan.md`, approved by the coordinator on 2026-10-16). Two changes
+of the text stage, made on one branch so that its cache key changes once:
+- the fixed logo's box (sections 1–3; `src/biliflow/textscan.py`);
+- item 6, the 250-track limit (section 4, requested by the coordinator for the user after the
+  first gates): `textscan.py`, the web-address patterns moved to `web_address_patterns.py`, and two
+  review-build changes (`ad_text_memory.py`, `review_workflow.py`).
+
+**The text stage's cache key changes** (the 9 other stages keep theirs): after the merge, "Chạy
+lại" scans the text stage again (about 2 minutes for a 45-minute film on this PC). Jobs by id
+only; the site is `EXAMPLE.COM` here. Results with real readings stay in `temp\text-consensus\`
+(Git-ignored, this PC only).
 
 ## 1. Why job 145's logo still leaked after G12
 
@@ -33,8 +39,8 @@ stay in `temp\text-consensus\` (Git-ignored, this PC only).
   - it is at most 2.5 times as tall.
 - The box never shrinks. `overlay_box_sources` keeps the consensus box and every anchor that
   sticks out (track, footprint, reads, joined or not).
-- Unchanged: thresholds, how tracks join a group, routing, ad scores, the 250-track cap. A read
-  joined to scene text still drops out: a one-read track is never an anchor.
+- Unchanged: thresholds, how tracks join a group, routing, ad scores (the 250-track cap: see
+  section 4). A read joined to scene text still drops out: a one-read track is never an anchor.
 
 ## 3. Gates (`gate-summary.json`)
 
@@ -97,37 +103,125 @@ The scrolling line (400–500 s) reads 165 in the source, 0 in the user's export
 `text` differs (`src/biliflow/textscan.py`). `adult`, `animation_safety`, `confirm_violence`,
 `gore`, `live_safety`, `localize_logo`, `verify_adult`, `violence` and `visual_logo` are equal.
 
-## 4. Item 6 (the 250-track cap): measured, not changed
+## 4. Item 6: the 250-track limit keeps ad evidence
 
-Uncapped vs the cap of 250, from the same scans:
+**Why.** The text report keeps at most 250 tracks: review candidates, platform names, then the
+earliest references. A film of this series has 830–944 tracks, so the limit dropped the last
+580–694 references, and with them the sightings of the site's mark under the subtitles in the
+film's last minutes. That card stopped 200–400 s before the end (table below), and job 145's
+export (revision 2) still shows the mark there.
 
-- **What the cap drops** (580–694 tracks per film in this series): reference tracks, mostly in
-  the subtitle zone (credits, scene text, subtitle lines, low-ad uncertain lines) and the middle
-  of the frame. It drops the latest ones first.
-- **What is lost: the end of the subtitle-band watermark.** The watermark card under the
-  subtitles ends earlier with the cap:
+**The rule (text stage).**
+- Past the limit, the report keeps every reference track with ad evidence:
+  - a policy hit, the advertisement label, or an ad score of at least 0.40
+    (`REFERENCE_AD_EVIDENCE`, `subtitle_band`'s line);
+  - a web address (`web_address_tokens`, also without its dot);
+  - an ad-text token: an address, a phone number of 8 or more digits, an @handle.
+- The tracks kept before keep their places; the order is unchanged.
+- A lone "@" is not enough (an @handle is). In the first version it was: in job 143 it kept one
+  dialogue line, which linked seven others into a film-long fixed-text card suggesting BLUR over
+  the subtitles (the band cards of task 2).
+- Every other track past the limit stays in the report as `omitted_tracks`, without a preview,
+  up to 4,000 (`MAX_OMITTED_TRACK_RECORDS`; `omitted_tracks_unrecorded` counts any beyond). The
+  largest report on this PC has 3,594 tracks: 3,344 past the limit.
+- `web_address_tokens` and `fold_alnum` moved unchanged from `scrolling_text.py` to
+  `web_address_patterns.py`; `scrolling_text` imports them back. Both pattern modules are now in
+  the text stage's cache key (an edit there rescans text); `scrolling_text.py` stays out.
 
-  | Job | Card ends with the cap | Card ends without | Film length |
-  |---|---|---|---|
-  | 130 | 2,247 s | 2,646 s | 2,655 s |
-  | 134 | 2,427 s | 2,643 s | 2,657 s |
-  | 136 | 2,436 s | 2,691 s | 2,702 s |
-  | 143 | 2,361 s | 2,668 s | 2,668 s |
-  | 145 | 2,313 s | 2,561 s | 2,561 s |
+**The review build (in no cache key).**
+- `ad_text_memory.readmit_remembered_tracks`:
+  - The scan cannot see the remembered addresses (`state/ad-text-memory.json`). Putting them in
+    the text key would rescan every film each time the user blurs a new address.
+  - So, with the user's memories on, the review build takes an omitted track whose folded
+    reading holds a remembered address back into `tracks` as soon as it reads the report.
+  - Benchmarks build without memories, so nothing comes back there.
+- `promote_fixed_text_overlays`: a track lying at least 60 % inside a whole-film fixed text's
+  box (`FIXED_TEXT_PIECE_INSIDE`) stays out of the recurring-text groups.
+  - What happened in job 134: the site's logo, read all film long under its scrolling line, broke
+    near the end. Its last piece, kept now because it reads the site's address, read like the line,
+    joined the line's group and stretched the group's box over the logo.
+  - The logo's film-long card then absorbed the line's card, and only the logo's box was left to blur.
+  - Over 139 text reports (125 stored, 14 rescanned) the rule changes 4 groups:
+    - job 134's line box returns to [0, 16, 960, 43];
+    - job 143's line group has 24 members instead of 25, with the same box.
 
-  The sightings in a film's last minutes are among the dropped references.
-- **On the user's exports:**
-  - Job 145's export (revision 2) still shows the mark after 2,313 s: OCR reads it in 8 of 24
-    samples from 2,320 to 2,550 s (10 in the source).
-  - Job 130's export reads it in 0 of 24 (6 in the source); its older queue blurred that area
-    longer.
-- **Golden v2 without the cap:** caught 19/19, missed 0, new traps 0, false positives 24 → 22.
-- **Queues without the cap:**
-  - main cards 130: 8 → 7, 134: 6 → 8, 136: 9 → 9, 143: 22 → 7, 145: 7 → 8;
-  - subtitle-band ad tracks in a film: 47–66 → 86–107.
+**Gates** (`limit-gate-summary.json`; `limit_gate.py`, `export_tail.py`).
 
-Whether to drop or change the cap on this branch, before the merge (one text-key change), is the
-user's decision.
+*Tests (13 new):*
+- `test_textscan`, 4:
+  - a track with evidence is kept past the limit;
+  - a plain track, a word like "SITCOM", a name without its ending and a lone "@" still drop;
+  - evidence takes no track's place;
+  - candidates and platform names are kept as before.
+- `test_ad_text_memory`, 4: the take-back, its no-op cases, and a card with and without the
+  user's memories.
+- `test_text_track_limit_scan`, 4: scripted OCR through `scan_text` and `build_review_queue`, and the
+  bound of 4,000 omitted records (patched to 2).
+- `test_fixed_text_overlays`, 1.
+
+*GPU rescans* (with the user's go and an empty queue): jobs 130, 134, 136, 143 and 145 and the
+Golden Set v2 sources, with the production arguments and the limit of 250.
+- They ran twice, about 16 minutes each; the second run used the final scan rule.
+- Every report of both runs equals, track for track, the same rule applied to the morning's
+  uncapped scans of the same sources.
+
+*Tracks and report sizes* (text-scan.json as written; previews):
+
+| Source | Tracks | Listed before → after | Omitted records | text-scan.json | Previews |
+|---|---|---|---|---|---|
+| 130 | 913 | 250 → 311 | 602 | 0.37 → 1.27 MB | 250 → 311 (9.8 → 12.2 MB) |
+| 134 | 944 | 250 → 299 | 645 | 0.37 → 1.31 MB | 250 → 299 (9.8 → 11.8 MB) |
+| 136 | 919 | 250 → 293 | 626 | 0.37 → 1.28 MB | 250 → 293 (9.5 → 11.3 MB) |
+| 143 | 830 | 250 → 292 | 538 | 0.37 → 1.16 MB | 250 → 292 (9.6 → 11.3 MB) |
+| 145 | 856 | 250 → 294 | 562 | 0.37 → 1.20 MB | 250 → 294 (9.5 → 11.1 MB) |
+| film 37 | 392 | 250 → 250 | 142 | 0.36 → 0.55 MB | 250 (14.8 MB) |
+| film 38 | 468 | 250 → 250 | 218 | 0.36 → 0.65 MB | 250 (14.8 MB) |
+| dense clip of job 39 | 2,658 | 250 → 250 | 2,408 | 0.36 → 3.62 MB | 250 (11.4 MB) |
+
+The six other golden clips have 1–60 tracks and do not change. The review page reads the queue,
+not the report: the five queues grow by 4–6 KB (327–372 KB → 333–376 KB), and their card counts
+follow.
+
+*The subtitle-band watermark card now reaches the end.* Queues are built with the user's memories;
+"before" is built by ca17c07's own code:
+
+| Job | Card ends before | Card ends after | Film length | Cards before → after |
+|---|---|---|---|---|
+| 130 | 2,247.5 s | 2,646.5 s | 2,655.2 s | 8 → 8 |
+| 134 | 2,427.5 s | 2,643.5 s | 2,657.2 s | 6 → 7 |
+| 136 | 2,436.5 s | 2,691.5 s | 2,702.2 s | 9 → 9 |
+| 143 | 2,361.5 s | 2,668.1 s | 2,668.1 s | 22 → 22 |
+| 145 | 2,313.5 s | 2,561.2 s | 2,561.2 s | 7 → 7 |
+
+- A card that ends before the film ends at the mark's last sighting plus the usual tail (9–14 s
+  before the end).
+- Job 134's seventh card holds two sightings of the site's address at one place in the subtitle
+  zone. The one at 189–204 s was folded into the band's dialogue card before; the one at
+  2,580–2,589 s is kept now. The card suggests BLUR on those two moments only.
+
+*The subtitle band and the blur:*
+- Subtitle band weakened: 0 in all five jobs. Every ad track a main card cited before is still
+  cited after.
+- Every BLUR card of the "before" queues stays covered by BLUR cards after, at 50 moments each:
+  at least 96.9 % of its box. The watermark box moves by 1 px with more sightings; job 143's is
+  31 px high instead of 32.
+- Job 145's queue takes back its 2 omitted tracks that hold a remembered address; the other four
+  jobs have none.
+
+*Golden Set v2* (built without memories):
+- Before and after are identical for every detector: advertising caught 19/19, false positives
+  24/24, advisory cards 487/487, traps 0.
+- Against the stored v2 baseline: +1 caught (G11), 0 missed, 0 traps. `compare` exits 1 only for
+  its time gate.
+
+*Export of job 145's end* (`export_tail.py`, x264, OCR every 0.5 s on the mark's box, 2,313–2,561 s,
+496 samples): the mark is readable 188 times in the source, 188 times in the export of the user's
+queue, and **0** times after one BLUR on the new watermark card.
+
+*Cache keys* (clean trees of `main`, ca17c07 and this branch): only `text` differs.
+- `textscan.py` changed; `ad_text_patterns.py` and `web_address_patterns.py` join the key
+  (18 → 20 files).
+- The 9 other stages are equal.
 
 ## 5. Limits (from a read-only code review)
 
@@ -140,12 +234,31 @@ user's decision.
   review build does not show that.
 - **The width is not bounded.** Only the height is capped. Over the 14 rescanned reports only job
   145 changed.
+- **Report size (item 6).**
+  - text-scan.json grows about 3.4 times on this series (1.2–1.3 MB for a 45-minute film) and 10
+    times on the densest golden clip (3.6 MB for 400 s), all from `omitted_tracks`.
+  - It holds at most 4,000 omitted records (about 5–6 MB).
+  - Previews grow only with the evidence kept (42–61 per film here).
+- **A remembered address beyond 4,000 omitted tracks** is not taken back (none on this PC). A track
+  taken back has no preview of its own.
+- **A piece inside a whole-film text's box joins no recurring group.**
+  - A recurring ad line with a phone number or an @handle that lies at least 60 % inside such a box
+    would lose its own group card. Its tracks stay items of their own, and the whole-film card covers
+    at least 60 % of each.
+  - On this PC 4 groups of 139 change, and each keeps its BLUR suggestion.
+  - The queue does not show `omitted_tracks_unrecorded` (0 everywhere here).
+- **Dialogue chains (task 2) remain.** The subtitle band's film-long fixed-text cards of jobs 130,
+  134 and 136 are there before and after; this branch adds none. Job 134's grows 21 px wider
+  ((276, 389, 736, 74) → (263, 389, 757, 74)): more dialogue pieces are kept.
 
 ## 6. Tools
 
 - `rescan.py scan`: GPU; writes only into a new folder under `<install>\temp`.
-- `rescan.py gate`: CPU; queues, golden scores, counts.
-- `export_logo.py`: CPU; the window exports.
+  `--max-report-tracks 250` scans with the production limit (the default is none).
+- `rescan.py gate`: CPU; queues, golden scores and counts for the logo's box.
+- `limit_gate.py`: CPU; item 6's reports, queues, golden scores and sizes. `--before-src` builds
+  the "before" queues with another tree.
+- `export_logo.py`, `export_tail.py`: CPU; the window exports.
 
 They read the real reports, queues and sources, and the database read-only. They never call a
 Control Center route.

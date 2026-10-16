@@ -23,9 +23,11 @@ import numpy as np
 import psutil
 from PIL import Image, ImageDraw, ImageFont
 
+from biliflow.ad_text_patterns import ad_text_tokens
 from biliflow.platform_names import match_platform_texts
 from biliflow.probe import duration_seconds, probe_video
 from biliflow.storage import require_capacity
+from biliflow.web_address_patterns import web_address_tokens
 
 
 def _sha256_file(path: Path) -> str:
@@ -44,6 +46,12 @@ LOW_CONFIDENCE_TOP_BANNER_THRESHOLD = 0.10
 OVERLAY_ANCHOR_MINIMUM_READINGS = 10
 OVERLAY_ANCHOR_COVERED = 0.95  # an anchor box this much inside the group's box adds nothing
 OVERLAY_ANCHOR_HEIGHT_RATIO = 2.5  # an anchor box taller than this times the group's box stays out
+# A reference track past the report's track limit stays in it with this ad score or more
+# (subtitle_band's SUBTITLE_LINE_MAXIMUM_AD: the review build's ad evidence).
+REFERENCE_AD_EVIDENCE = 0.40
+# Tracks past the limit, kept in the report without previews for the review build's
+# remembered addresses: every report on this PC fits (at most 3,344, a 3.3-hour film).
+MAX_OMITTED_TRACK_RECORDS = 4000
 
 
 def _read_exact(stream, size: int) -> bytes:
@@ -496,11 +504,29 @@ def _annotate_platform_names(summaries: list[dict]) -> list[dict]:
     return annotated
 
 
+def _has_ad_evidence(summary: dict) -> bool:
+    """The review build's ad evidence in a track (``subtitle_band``), without the user's memory.
+
+    A lone "@" is not enough here (an @handle is): OCR reads one in dialogue, and a kept
+    dialogue line can link others into a film-long fixed-text card (job 143, 2026-10-16).
+    """
+    texts = [str(text) for text in summary.get("sample_text") or []]
+    return bool(
+        summary.get("policy_hits")
+        or summary.get("semantic_top_label") == "advertisement"
+        or float(summary.get("ad_probability") or 0.0) >= REFERENCE_AD_EVIDENCE
+        or any(web_address_tokens(text) or ad_text_tokens(text) for text in texts)
+    )
+
+
 def _limit_report_tracks(summaries: list[dict], max_report_tracks: int) -> list[dict]:
-    """Keep review candidates, platform-name tracks, then the earliest references.
+    """Keep review candidates, platform-name tracks, the earliest references and every
+    reference with ad evidence or a web address.
 
     Platform idents sit in the last seconds of an episode, exactly where a
-    plain earliest-first cut drops reference tracks.
+    plain earliest-first cut drops reference tracks; so does a site's mark read
+    under the subtitles near the end (item 6, 2026-10-16). A reference with
+    evidence past the limit takes no place of one kept before; order is kept.
     """
     review_candidates = [
         summary for summary in summaries if summary.get("review_candidate", True)
@@ -510,8 +536,9 @@ def _limit_report_tracks(summaries: list[dict], max_report_tracks: int) -> list[
     ]
     platform = [summary for summary in references if summary.get("platform_name")]
     others = [summary for summary in references if not summary.get("platform_name")]
-    return review_candidates + platform + others[
-        :max(0, max_report_tracks - len(review_candidates) - len(platform))
+    room = max(0, max_report_tracks - len(review_candidates) - len(platform))
+    return review_candidates + platform + [
+        summary for index, summary in enumerate(others) if index < room or _has_ad_evidence(summary)
     ]
 
 
@@ -902,7 +929,12 @@ def scan_text(
     review_candidates = [
         summary for summary in summaries if summary.get("review_candidate", True)
     ]
-    summaries = _limit_report_tracks(summaries, max_report_tracks)
+    listed = _limit_report_tracks(summaries, max_report_tracks)
+    listed_ids = {id(summary) for summary in listed}
+    # The rest, without previews: the review build takes back the ones holding an address
+    # the reviewer blurred before (ad_text_memory), which this stage cannot see.
+    omitted = [summary for summary in summaries if id(summary) not in listed_ids]
+    summaries = listed
     with performance.measure('preview_output'):
         for summary in summaries:
             track = tracks_by_id[summary["track_id"]]
@@ -937,9 +969,11 @@ def scan_text(
         "tracks_before_limit": tracks_before_limit,
         "max_report_tracks": max_report_tracks,
         "tracks_omitted": max(0, tracks_before_limit - len(summaries)),
+        "omitted_tracks_unrecorded": max(0, len(omitted) - MAX_OMITTED_TRACK_RECORDS),
         "review_candidate_count": len(review_candidates),
         "routing_counts": full_routing_counts,
         "tracks": summaries,
+        "omitted_tracks": omitted[:MAX_OMITTED_TRACK_RECORDS],
         "metrics": {
             "recognition_batch_size": recognition_batch_size,
             "recognition_frame_window": recognition_frame_window,
