@@ -431,11 +431,14 @@ class JobScheduler:
         *, detector_groups: list[str] | tuple[str, ...] | None = None,
         ocr_recognition_batch_size: int | None = None,
         fast_scan: bool | None = None,
+        pipeline_key: str | None = None,
     ) -> dict:
         """Queue a clean scan in a new revision, at the back of the queue.
 
         Runs under the start lock and refuses a job that is already waiting or
-        running, so a double click cannot queue two revisions.
+        running, so a double click cannot queue two revisions. ``pipeline_key``:
+        the revision's report folder a caller prepared ("Dựng lại danh sách
+        duyệt (giữ quyết định)", review_rebuild); otherwise <job_key>-run-<time>.
         """
         with self._start_lock:
             job = self.store.get_job(job_id)
@@ -457,7 +460,7 @@ class JobScheduler:
             if fast_scan is not None:
                 normalize_fast_scan(fast_scan)
             stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-            pipeline_key = f"{job['job_key']}-run-{stamp}"
+            pipeline_key = pipeline_key or f"{job['job_key']}-run-{stamp}"
             self.store.set_setting(f"render:{job_id}", None)
             # A new scan replaces the review a skip was recorded for.
             self.store.set_setting(f"skip:{job_id}", None)

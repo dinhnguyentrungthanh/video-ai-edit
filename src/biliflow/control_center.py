@@ -78,6 +78,13 @@ from biliflow.final_renderer import (
     read_render_progress,
     render_progress_path,
 )
+from biliflow.review_rebuild import (
+    carry_request,
+    discard_carry_request,
+    new_revision_key,
+    rebuild_refusal,
+    write_carry_request,
+)
 from biliflow.review_workflow import (
     _interactive_html,
     apply_visual_ai_assessments,
@@ -1674,6 +1681,41 @@ class ControlCenter:
             )
             return value
 
+    def rebuild_review(self, job_id: int) -> dict[str, Any]:
+        """Dựng lại danh sách duyệt (giữ quyết định): a new revision as "Chạy lại" queues it, whose
+        build_review carries the decisions of the active queue (review_rebuild).
+
+        Every guard runs first; the request is written into the new revision's report folder before
+        the job is queued, and removed again when the scheduler refuses it. The active queue, its
+        decisions, the old revision and the outputs are never written.
+        """
+        with _REVIEW_QUEUE_IO, self.scheduler.job_action_lock:
+            self._refuse_source_lock(job_id)
+            job = self.store.get_job(job_id)
+            refusal = rebuild_refusal(
+                job, in_flight=self._export_in_flight(job), busy=self.scheduler.is_busy(job_id),
+                in_process=job["state"] in IN_PROCESS_STATES,
+                source_present=Path(str(job["source_path"])).is_file(),
+            )
+            if refusal:
+                raise ValueError(refusal)
+            request = carry_request(self.root, job, self.queue_path(job_id))
+            pipeline_key = new_revision_key(self.root, str(job["job_key"]))
+            path = write_carry_request(self.root, pipeline_key, request)
+            try:
+                value = self.scheduler.rerun(job_id, pipeline_key=pipeline_key)
+            except BaseException:
+                discard_carry_request(path)
+                raise
+            summary = {key: request[key] for key in ("from_revision", "from_queue", "decisions")}
+            self.store.add_event(
+                job_id, "REVIEW_REBUILD_QUEUED",
+                f"Dựng lại danh sách duyệt, giữ {request['decisions']} quyết định của revision "
+                f"{request['from_revision']}; bản xuất cũ vẫn ở output",
+                payload={**summary, "pipeline_key": pipeline_key},
+            )
+            return {**value, "rebuild": {**summary, "pipeline_key": pipeline_key}}
+
     def start_ai_audit(self, job_id: int, *, visual_opt_in: bool = False) -> None:
         if visual_opt_in:
             connection = self.ai_status()
@@ -2378,7 +2420,7 @@ def _handler_class(center: ControlCenter) -> type[BaseHTTPRequestHandler]:
                         result = switch(body["enabled"])
                 elif match := re.fullmatch(r"/api/jobs/(\d+)/(hide|unhide)", path):
                     result = center.set_job_hidden(int(match.group(1)), match.group(2) == "hide")
-                elif match := re.fullmatch(r"/api/jobs/(\d+)/(start|resume|pause|stop-after-stage|cancel|retry|rerun|skip|unskip|ai-audit)", path):
+                elif match := re.fullmatch(r"/api/jobs/(\d+)/(start|resume|pause|stop-after-stage|cancel|retry|rerun|rebuild-review|skip|unskip|ai-audit)", path):
                     job_id, action = int(match.group(1)), match.group(2)
                     if action == "start":
                         detectors = body.get("detectors")
@@ -2398,6 +2440,7 @@ def _handler_class(center: ControlCenter) -> type[BaseHTTPRequestHandler]:
                     elif action == "retry": result = center.scheduler.retry(job_id)
                     elif action == "skip": result = center.skip_export(job_id)
                     elif action == "unskip": result = center.unskip_export(job_id)
+                    elif action == "rebuild-review": result = center.rebuild_review(job_id)  # the body is ignored
                     elif action == "rerun":
                         detectors = body.get("detectors")
                         result = center.scheduler.rerun(

@@ -59,7 +59,7 @@ CSP_LITERAL = ("default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-
 PHONE_POSTS_LITERAL = (
     r"/api/scheduler",
     r"/api/ai/check",
-    r"/api/jobs/\d+/(?:start|resume|pause|stop-after-stage|cancel|retry|rerun|skip|unskip|hide|unhide)",
+    r"/api/jobs/\d+/(?:start|resume|pause|stop-after-stage|cancel|retry|rerun|rebuild-review|skip|unskip|hide|unhide)",
     r"/api/jobs/\d+/ai-audit",
     r"/api/jobs/\d+/review/(?:decision|clear|bulk-keep|bulk-accept|finalize)",
     # "Tải video" (video download plan, D2).

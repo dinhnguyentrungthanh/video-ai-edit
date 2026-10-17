@@ -92,6 +92,7 @@ from biliflow.ad_text_patterns import AD_TEXT_PATTERNS as _AD_TEXT_PATTERNS
 from biliflow.ad_text_patterns import ad_text_tokens
 from biliflow.fixed_text_logo import join_fixed_text_logos
 from biliflow.review_decision_carry import carry_review_decisions
+from biliflow.review_rebuild import QUEUE_MISMATCH, read_carry_request, same_source as same_carry_source
 from biliflow.scrolling_text import (
     SCROLLING_CANDIDATE_TYPE,
     promote_scrolling_text,
@@ -3569,6 +3570,9 @@ def build_review_queue(
             previous_queue = None
         if keep_decisions and previous_queue is None:
             raise ValueError("Danh sách duyệt cũ không hợp lệ; chưa dựng lại để không mất quyết định")
+    # "Dựng lại danh sách duyệt (giữ quyết định)": a request beside the queue names the queue whose decisions
+    # this build carries (review_rebuild). Checked before any work; an unusable one stops the build.
+    carry = read_carry_request(root, queue_path)
     if not report_paths:
         raise ValueError("At least one report is required")
     ad_text_keys: tuple[str, ...] = ()
@@ -3745,6 +3749,11 @@ def build_review_queue(
                 items, source_duration=source_duration,
             )
             items = group_safety_review_events(items)
+    if carry is not None:
+        # A fresh build, as "Chạy lại": the old queue's open cards stay behind; its decisions are carried below.
+        if not same_carry_source(carry[1], source_path, source_sha256):
+            raise ValueError(QUEUE_MISMATCH)
+        decided_previous_items = list(carry[1].get("items") or [])
     # Opening studio idents: no pre-selected CUT without ad evidence (R3a), and a
     # card repeating a user-confirmed studio logo goes to the optional list (R3b).
     items = withhold_studio_ident_suggestions(items, scan_payloads)
@@ -3904,8 +3913,12 @@ def build_review_queue(
         },
     }
     if decision_carry is not None:
+        if carry is not None:
+            decision_carry = {**decision_carry, "from_revision": carry[0].get("from_revision"),
+                              "from_queue": carry[0].get("from_queue")}
         payload["decision_carry"] = decision_carry
-        payload["audit_log"] = list((previous_queue or {}).get("audit_log") or []) + [{
+        history = carry[1] if carry is not None else previous_queue
+        payload["audit_log"] = list((history or {}).get("audit_log") or []) + [{
             "at": payload["created_at"], "action": "REBUILD_KEEP_DECISIONS", **decision_carry,
         }]
         payload["audit_log"] = payload["audit_log"][-1000:]
