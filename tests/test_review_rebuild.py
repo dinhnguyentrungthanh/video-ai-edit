@@ -280,6 +280,40 @@ class ControlCenterRebuildTests(CleanupFixture):
         self.assertEqual(_decided(self.queue(job_id)), {"a": "KEEP", "b": "KEEP"})
         self.assertEqual(output.read_bytes(), output_bytes)  # the old export stays in output
 
+    def test_a_rebuild_that_renders_the_same_reuses_the_export_for_finalize_cleanup_and_archive(self):
+        # Job 143 (docs/handoff/D-export-reuse.md): every decision kept under new card ids.
+        decided = iso(NOW - timedelta(hours=1))
+        blurred = {
+            **card("b", "BLUR", decided), "category": "advertising", "start_seconds": 3.0, "end_seconds": 4.5,
+            "reasons": ["logo"], "evidence": [],
+            "decision_region_source_pixels": {"x": 10, "y": 20, "width": 200, "height": 96},
+        }
+        job_id = self.make_exported_job("film", items=[card("a", "KEEP", decided), blurred], operations=True)
+        output = self.output_of(job_id)
+        before = (output.read_bytes(), output.with_suffix(".mp4.manifest.json").read_bytes())
+        self.center.rebuild_review(job_id)
+        self.assertEqual(self.finish_build(job_id)["state"], "READY_TO_EXPORT")
+        # The fixture's text scan has no track and no input_sha256, so the build keeps the old cards and
+        # names no source hash; a real build makes new cards, with new ids, from the new revision's
+        # reports, and takes the hash from them.
+        queue = self.queue(job_id)
+        queue["source"]["sha256"] = self.store.get_job(job_id)["source_sha256"]
+        for value in queue["items"]:
+            value["id"] = f'{value["id"]}-r4'
+        self.queue_file(job_id).write_text(json.dumps(queue), encoding="utf-8")
+        self.assertNotEqual(self.output_of(job_id), output)
+        result = self.center.finalize(job_id)
+        self.assertEqual((result["status"], result["output"]), ("COMPLETED", output.relative_to(self.root).as_posix()))
+        self.assertIsNone(self.store.render_request(job_id))
+        job = self.store.get_job(job_id)
+        self.assertEqual(job["state"], "COMPLETED")
+        cleanup = source_cleanup.assess_job(self.root, self.store, self.scheduler, job, fresh=True)
+        archive = source_archive.assess_archive(self.root, self.store, self.scheduler, job, fresh=True)
+        self.assertTrue(cleanup.eligible, cleanup.reason)
+        self.assertTrue(archive.eligible, archive.reason)
+        self.assertEqual((cleanup.output_path, archive.output_path), (output.relative_to(self.root).as_posix(),) * 2)
+        self.assertEqual((output.read_bytes(), output.with_suffix(".mp4.manifest.json").read_bytes()), before)
+
     def test_a_refused_rebuild_writes_nothing(self):
         cases = {
             "skipped": lambda: self.make_skipped_job("skipped"),

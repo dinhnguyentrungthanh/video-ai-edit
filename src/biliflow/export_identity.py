@@ -11,6 +11,14 @@ detected intervals of a discrete item); they are still found under that
 legacy name (``output_candidates``), and only their manifest can tell whether
 they render the current decisions.
 
+The hash also holds each operation's id, which the render never uses. A new
+revision of the review ("Chạy lại", "Dựng lại danh sách duyệt") names its
+cards, and so its operations, anew, so an export of the same render made from
+an earlier revision has another name; it is still found (``other_exports``)
+when its manifest's operations, ids aside, are the current ones and its name is
+the one those operations give under the current source and size policy
+(``other_export_problem``). Exports keep the names they were given.
+
 An existing file is the export only when its manifest proves it
 (``manifest_problem``): a complete, decode-validated render of the same,
 unmodified source with the same operations, lying at that path as a plain
@@ -27,7 +35,7 @@ import re
 import stat
 from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 # The fields of an edit-plan operation that follow from the review decisions.
 # Of its "blur" settings only edge_feather_mode is a decision; sigma, method and
@@ -35,7 +43,10 @@ from typing import Any
 # region. So an export rendered before the cover method (blur_filter.COVER_METHOD,
 # 2026-10-04) still counts as rendered from the current decisions: the user re-exports
 # a video to hide its logos with the cover.
-RENDER_FIELDS = ("id", "type", "start_seconds", "end_seconds", "region_source_pixels")
+RENDER_FIELDS = ("type", "start_seconds", "end_seconds", "region_source_pixels")
+# The operation id also names the export (the names exports were given), but the
+# render never uses it and a new revision changes it: same_render leaves it out.
+NAME_FIELDS = ("id", *RENDER_FIELDS)
 # Marks the operations hash apart from the legacy decision hash it replaced.
 IDENTITY_VERSION = 2
 
@@ -45,6 +56,9 @@ PROBLEM_DECODE = "decode"  # never passed the full decode validation
 PROBLEM_CHANGED = "changed"  # the file's size differs from the manifest
 PROBLEM_OLDER = "older"  # rendered from other operations
 PROBLEM_NO_OPERATIONS = "no_operations"  # an early manifest that lists no operations
+# A file other_exports found under a name its manifest's operations, the source
+# and the size policy do not give (renamed, or rendered under another policy).
+PROBLEM_NAME = "name"
 
 # A symbolic link, junction or other reparse point (os.stat_result.st_file_attributes).
 FILE_ATTRIBUTE_REPARSE_POINT = 0x400
@@ -55,16 +69,17 @@ _SOURCE_HASH = re.compile(r"[0-9a-fA-F]{8,64}")
 
 
 def render_identity(operations: Any) -> list[dict[str, Any]] | None:
-    """The decision fields of edit-plan operations, in order; None when malformed.
+    """The decision fields of edit-plan operations and their ids, in order; None when malformed.
 
-    Two exports with the same identity were rendered from the same review
-    decisions (cut and blur intervals, regions and blur edge mode).
+    It names the export (export_paths). Two identities render the same when
+    they are equal ids aside (same_render): the same cut and blur intervals,
+    regions and blur edge modes, in the same order.
     """
     if not isinstance(operations, list) or not all(isinstance(op, dict) for op in operations):
         return None
     identity = []
     for operation in operations:
-        value = {field: operation.get(field) for field in RENDER_FIELDS}
+        value = {field: operation.get(field) for field in NAME_FIELDS}
         blur = operation.get("blur")
         value["edge_feather_mode"] = (
             str((blur if isinstance(blur, dict) else {}).get("edge_feather_mode", "all_edges"))
@@ -72,6 +87,21 @@ def render_identity(operations: Any) -> list[dict[str, Any]] | None:
         )
         identity.append(value)
     return identity
+
+
+def same_render(left: list | None, right: list | None) -> bool:
+    """Two render identities apply the same operations in the same order, ids aside.
+
+    The order counts: the renderer keeps it for blurs that start together, and a
+    region next to or over an earlier one reads that region's blurred picture.
+    """
+    if left is None or right is None:
+        return False
+    return _without_ids(left) == _without_ids(right)
+
+
+def _without_ids(identity: list) -> list:
+    return [{field: value for field, value in operation.items() if field != "id"} for operation in identity]
 
 
 def aware_datetime(value: Any) -> datetime | None:
@@ -95,17 +125,24 @@ def _size_policy(queue: dict) -> dict | None:
     return None
 
 
-def _paths(root: Path, queue: dict, identity: object) -> tuple[Path, Path, Path]:
+def _has_source_hash(queue: dict) -> bool:
+    return _SOURCE_HASH.fullmatch(str(queue["source"].get("sha256") or "")) is not None
+
+
+def _name_prefix(queue: dict) -> str:
+    """``<slug>-<source hash>``: how every export name of the queue's source begins."""
     source = Path(str(queue["source"]["path"]))
-    raw_hash = str(queue["source"].get("sha256") or "")
     # Only hex reaches the name: a crafted hash cannot move the paths out of output/ or work/.
-    source_hash = raw_hash[:8] if _SOURCE_HASH.fullmatch(raw_hash) else "nohash"
+    source_hash = str(queue["source"]["sha256"])[:8] if _has_source_hash(queue) else "nohash"
+    slug = re.sub(r"[^\w.-]+", "-", source.stem, flags=re.UNICODE).strip("-._")
+    return f"{(slug or 'video')[:80]}-{source_hash}"
+
+
+def _paths(root: Path, queue: dict, identity: object) -> tuple[Path, Path, Path]:
     digest = hashlib.sha256(
         json.dumps(identity, ensure_ascii=False, sort_keys=True).encode("utf-8")
     ).hexdigest()[:8]
-    slug = re.sub(r"[^\w.-]+", "-", source.stem, flags=re.UNICODE).strip("-._")
-    slug = (slug or "video")[:80]
-    key = f"{slug}-{source_hash}-{digest}"
+    key = f"{_name_prefix(queue)}-{digest}"
     return (
         root / "work" / f"{key}-edit-plan.json",
         root / "output" / f"{key}-reviewed.mp4",
@@ -153,6 +190,26 @@ def output_candidates(root: Path, queue: dict, render: list | None) -> list[Path
     return [current] if legacy == current else [current, legacy]
 
 
+def other_exports(root: Path, queue: dict, render: list | None) -> list[Path]:
+    """The other files in output/ named as an export of the queue's source, by name.
+
+    An earlier revision named its export by its own operation ids. Only a
+    source with a hash is looked at, and only names: other_export_problem
+    tells what each file is. Never the queue's own names (output_candidates).
+    """
+    if not _has_source_hash(queue):
+        return []
+    pattern = re.compile(re.escape(_name_prefix(queue)) + r"-[0-9a-f]{8}-reviewed\.mp4")
+    own = {os.path.normcase(str(path)) for path in output_candidates(root, queue, render)}
+    folder = root / "output"
+    try:
+        with os.scandir(folder) as entries:
+            names = sorted(entry.name for entry in entries if pattern.fullmatch(entry.name) and entry.is_file())
+    except OSError:
+        return []
+    return [folder / name for name in names if os.path.normcase(str(folder / name)) not in own]
+
+
 def export_manifest_path(output: Path) -> Path:
     return output.with_suffix(output.suffix + ".manifest.json")
 
@@ -179,7 +236,8 @@ def manifest_problem(
     ``source_sha256``, record a full decode validation and the file's size;
     ``output`` must be a plain file, never a link nor the source file
     ``source_path`` itself; with ``compare_render`` its operations must also
-    render ``render``. Raises OSError when ``output`` cannot be read.
+    render ``render`` (same_render: their ids may differ). Raises OSError when
+    ``output`` cannot be read.
     """
     sha = str(source_sha256 or "").casefold()
     if not isinstance(manifest, dict):
@@ -230,7 +288,28 @@ def manifest_problem(
     rendered = render_identity(manifest["operations"])
     if rendered is None:
         return PROBLEM_MANIFEST
-    return None if rendered == render else PROBLEM_OLDER
+    return None if same_render(rendered, render) else PROBLEM_OLDER
+
+
+def other_export_problem(
+    root: Path, output: Path, manifest: Any, queue: dict, *, source_sha256: Any, render: list | None,
+    source_path: Any = None,
+) -> str | None:
+    """manifest_problem for a file other_exports found, which must also bear its own name.
+
+    That name is the one the manifest's operations give under the queue's
+    source and size policy: the manifest records no size policy, so only the
+    name proves the file was rendered under the current one. A legacy name (a
+    hash of decisions no manifest records) never passes.
+    """
+    problem = manifest_problem(root, output, manifest, source_sha256=source_sha256, render=render,
+                               source_path=source_path)
+    if problem is not None:
+        return problem
+    named = export_paths(root, queue, render_identity(manifest["operations"]))[1]
+    if os.path.normcase(os.path.abspath(named)) != os.path.normcase(os.path.abspath(output)):
+        return PROBLEM_NAME
+    return None
 
 
 def read_manifest(output: Path) -> Any:
@@ -242,15 +321,32 @@ def read_manifest(output: Path) -> Any:
 
 
 def verified_export(root: Path, queue: dict, render: list | None) -> tuple[Path, dict] | None:
-    """(output, manifest) of the first candidate its manifest proves; None when none does."""
+    """(output, manifest) of the first file its manifest proves; None when none does.
+
+    The queue's own name and its legacy name first (output_candidates), then an
+    export of the same render an earlier revision named (other_exports).
+    """
     source = queue.get("source") or {}
-    for output in output_candidates(root, queue, render):
+    facts = {"source_sha256": source.get("sha256"), "render": render, "source_path": source.get("path")}
+    found = _first_proven(
+        output_candidates(root, queue, render),
+        lambda output, manifest: manifest_problem(root, output, manifest, **facts),
+    )
+    if found is not None:
+        return found
+    return _first_proven(
+        other_exports(root, queue, render),
+        lambda output, manifest: other_export_problem(root, output, manifest, queue, **facts),
+    )
+
+
+def _first_proven(outputs: list[Path], problem_of: Callable[[Path, Any], str | None]) -> tuple[Path, dict] | None:
+    for output in outputs:
         try:
             if not output.is_file():
                 continue
             manifest = read_manifest(output)
-            problem = manifest_problem(root, output, manifest, source_sha256=source.get("sha256"),
-                                       render=render, source_path=source.get("path"))
+            problem = problem_of(output, manifest)
         except (OSError, ValueError, RuntimeError):
             # RuntimeError: a link loop on the way.
             continue

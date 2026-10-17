@@ -7,6 +7,7 @@ from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
 from biliflow.export_identity import legacy_export_paths
+from biliflow.final_renderer import normalize_output_size_policy
 from biliflow.job_import import import_existing_project
 from biliflow.job_pipeline import PipelineStage
 from biliflow.job_store import JobStore
@@ -359,6 +360,53 @@ class RestartImportTests(unittest.TestCase):
         output.with_suffix(".mp4.manifest.json").unlink()
         output.write_bytes(b"not a video")
         self.assertEqual(self.restart()["state"], "READY_TO_EXPORT")
+
+    def rebuilt_queue(self, **changes):
+        """A newer revision of the review as "Dựng lại danh sách duyệt" leaves it: the card under a new id."""
+        rebuilt = json.loads(json.dumps(self.queue))
+        rebuilt["items"][0].update(id="a-r4", **changes)
+        rebuilt["updated_at"] = "2026-10-02T00:00:00+00:00"
+        folder = self.root / "reports/jobs/movie-run-r4"
+        folder.mkdir(parents=True)
+        (folder / "review-queue.json").write_text(json.dumps(rebuilt), encoding="utf-8")
+        return rebuilt
+
+    def test_a_rebuilt_review_of_the_same_render_completes_the_job(self):
+        # Job 143: the export of the previous revision renders what the rebuilt review renders.
+        output = review_export_paths(self.root, self.queue)[1]
+        self.write_manifest(output)
+        rebuilt = self.rebuilt_queue()
+        self.assertNotEqual(review_export_paths(self.root, rebuilt)[1], output)
+        after = self.restart()
+        self.assertEqual(after["active_queue_path"], "reports/jobs/movie-run-r4/review-queue.json")
+        self.assertEqual((after["state"], after["progress"]), ("COMPLETED", 1.0))
+        outputs = [item["path"] for item in self.store.artifacts(self.job_id) if item["kind"] == "final_output"]
+        self.assertEqual(outputs, [output.relative_to(self.root).as_posix()])
+
+    def test_a_rebuilt_review_of_another_render_still_waits_for_its_export(self):
+        self.write_manifest(review_export_paths(self.root, self.queue)[1])
+        self.rebuilt_queue(decision_blur_edge_mode="vertical_only")
+        after = self.restart()
+        self.assertEqual(after["active_queue_path"], "reports/jobs/movie-run-r4/review-queue.json")
+        self.assertEqual(after["state"], "READY_TO_EXPORT")
+        self.assertFalse([item for item in self.store.artifacts(self.job_id) if item["kind"] == "final_output"])
+
+    def test_an_earlier_export_its_name_does_not_prove_never_completes_the_rebuilt_review(self):
+        # Its name is the only record of the size policy: another policy, or a file renamed by hand.
+        unlimited = dict(self.queue, export_size_policy=normalize_output_size_policy("unlimited", None))
+        under_another_policy = review_export_paths(self.root, unlimited)[1]
+        renamed = under_another_policy.with_name(
+            under_another_policy.name.replace(under_another_policy.name.split("-")[-2], "0123abcd"))
+        self.rebuilt_queue()
+        for name, output in (("another policy", under_another_policy), ("renamed", renamed)):
+            with self.subTest(case=name):
+                self.write_manifest(output)
+                after = self.restart()
+                self.assertEqual(after["state"], "READY_TO_EXPORT")
+                self.assertFalse([item for item in self.store.artifacts(self.job_id)
+                                  if item["kind"] == "final_output"])
+                for path in (output, output.with_suffix(".mp4.manifest.json")):
+                    path.unlink()
 
     def test_an_export_named_before_the_operations_hash_completes_the_job(self):
         legacy = legacy_export_paths(self.root, self.queue)[1]

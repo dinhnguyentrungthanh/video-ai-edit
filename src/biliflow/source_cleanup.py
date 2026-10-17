@@ -56,6 +56,8 @@ from biliflow.export_identity import (
     aware_datetime as _aware_datetime,
     export_manifest_path,
     manifest_problem,
+    other_export_problem,
+    other_exports,
     output_candidates,
 )
 from biliflow.job_store import IN_PROCESS_STATES, SOURCE_ARCHIVED_STATES, now_iso, sha256_file
@@ -259,6 +261,10 @@ def _parse_queue_facts(root: Path, data: bytes) -> dict[str, Any]:
         "max_decided_at": latest,
         "decided_at_valid": decided_at_valid,
         "render_identity": render,
+        # What names an export of another revision (other_exports): the source and the size policy.
+        "export_queue": {
+            "source": dict(queue["source"]), "export_size_policy": queue.get("export_size_policy"),
+        },
         "summary": review_summary(queue),
     }
 
@@ -365,28 +371,61 @@ def _exported_facts(root: Path, store: Any, job: dict[str, Any], facts: dict[str
 
     The export is the first candidate on disk (the review's own name, then
     the legacy name of an export made before the operations hash) that its
-    manifest proves; when none does, the refusal of the first one on disk.
+    manifest proves, else an export of the same render an earlier revision
+    named (export_identity.other_exports); when none does, the refusal of the
+    first candidate on disk, or why there is none.
     """
     job_id = int(job["id"])
     candidates: list[Path] = facts["output_candidates"]
     present = [output for output in candidates if output.is_file()]
-    if not present:
-        expected = {_folded(_relative(root, output)) for output in candidates}
-        exports = [
-            _folded(artifact.get("path")) for artifact in store.artifacts(job_id)
-            if artifact.get("kind") == "final_output"
-        ]
-        if expected.intersection(exports):
-            # This review was exported; the file just left output/.
-            raise _Refused(REASON_OUTPUT_MOVED)
-        raise _Refused(REASON_OUTPUT_STALE if exports else REASON_NO_OUTPUT)
     refusals: list[_Refused] = []
     for output in present:
         try:
             return _proven_output_facts(root, job, facts, output, fresh=fresh)
         except _Refused as refusal:
             refusals.append(refusal)
-    raise refusals[0]
+    other = _other_export_facts(root, job, facts, fresh=fresh)
+    if other is not None:
+        return other
+    if refusals:
+        raise refusals[0]
+    expected = {_folded(_relative(root, output)) for output in candidates}
+    exports = [
+        _folded(artifact.get("path")) for artifact in store.artifacts(job_id)
+        if artifact.get("kind") == "final_output"
+    ]
+    if expected.intersection(exports):
+        # This review was exported; the file just left output/.
+        raise _Refused(REASON_OUTPUT_MOVED)
+    raise _Refused(REASON_OUTPUT_STALE if exports else REASON_NO_OUTPUT)
+
+
+def _other_export_facts(root: Path, job: dict[str, Any], facts: dict[str, Any],
+                        *, fresh: bool) -> dict[str, Any] | None:
+    """The facts of an export of the same render an earlier revision named; None when none is proven.
+
+    A new revision ("Chạy lại", "Dựng lại danh sách duyệt") names its cards, and
+    so its export, anew. Only a manifest listing its operations and a file named
+    by them under this source and size policy count (other_export_problem).
+    """
+    queue, render = facts["export_queue"], facts["render_identity"]
+    # The queue's own names were tried first; export_queue has no items, so other_exports
+    # cannot tell the legacy one itself.
+    named = {os.path.normcase(str(output)) for output in facts["output_candidates"]}
+    for output in other_exports(root, queue, render):
+        if os.path.normcase(str(output)) in named:
+            continue
+        try:
+            manifest = _json_document("manifest", export_manifest_path(output), fresh=fresh)
+            problem = other_export_problem(
+                root, output, manifest, queue, source_sha256=job.get("source_sha256"), render=render,
+                source_path=job.get("source_path"),
+            )
+        except (OSError, ValueError, RecursionError, RuntimeError):
+            continue
+        if problem is None:
+            return _output_facts(root, output, manifest)
+    return None
 
 
 def _proven_output_facts(root: Path, job: dict[str, Any], facts: dict[str, Any], output: Path,
@@ -416,6 +455,11 @@ def _proven_output_facts(root: Path, job: dict[str, Any], facts: dict[str, Any],
         _check_plan_names_active_queue(root, job, manifest.get("edit_plan"), fresh=fresh)
     elif problem is not None:
         raise _Refused(_REASON_BY_PROBLEM[problem])
+    return _output_facts(root, output, manifest)
+
+
+def _output_facts(root: Path, output: Path, manifest: dict[str, Any]) -> dict[str, Any]:
+    """What the cleanup and the archive record of a proven export."""
     described = manifest["output"]
     return {
         "output_path": _relative(root, output),

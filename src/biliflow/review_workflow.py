@@ -3378,7 +3378,9 @@ def existing_review_export(root: Path, queue: dict) -> tuple[Path, dict] | None:
 
     Only a file its manifest proves (export_identity.manifest_problem), under
     its own name or the legacy name of an export made before the operations
-    hash; None otherwise.
+    hash, or under the name an earlier revision gave the same operations
+    (export_identity.other_exports: a rebuild names its cards anew); None
+    otherwise.
     """
     return verified_export(root, queue, queue_render_identity(queue))
 

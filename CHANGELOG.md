@@ -1,3 +1,18 @@
+# An export whose operations render the same is reused after a rebuild — session D (2026-10-17, branch `fix/export-reuse-same-ops` from `main` `376e352`; not merged)
+
+- Job 143: after "Dựng lại danh sách duyệt (giữ quyết định)" kept every decision, "Xuất video" rendered again (5–8 min) because the new revision names its cards, and so the operations and the export, anew; "Lưu trữ" and "Xóa video gốc" refused meanwhile (`docs/handoff/D-export-reuse.md`).
+- `export_identity`:
+  - an export's manifest operations are compared with the review's without their ids, still in order (`same_render`); every other manifest check is kept;
+  - names do not change (the hash still holds the ids);
+  - `other_exports` lists the other files in `output\` named as exports of the same source; one is the export when its manifest proves it and its name is the one its own operations give under the current source and size policy (`other_export_problem`; the manifest records no policy).
+- The same rule in "Xuất video" (`existing_review_export`), "Xóa video gốc" and "Lưu trữ" (`source_cleanup`) and the startup import (`job_import`). Refusal reasons are unchanged when no earlier export is proven. Nothing in `output\` is written.
+- Limits: a legacy-named export of another revision is not found; a rebuilt list does not carry a non-default size policy, so cleanup and archive refuse such an export until it is exported under that policy again.
+- Unchanged: scan cache keys equal `376e352` (10 stages); no detector, threshold, encoder, export byte or export name change.
+- Gates:
+  - Python: 18 new tests; 651 related tests; full suite 3,569 tests on `ef837e9`: OK but for 28 tests that need a video in the worktree's `input` (35/35 with a synthetic clip) and one export-lane timing test (the lane timing tests fail about one run in six on `main` `376e352` too);
+  - a code review found no CRITICAL, HIGH or MEDIUM issue; its three LOW findings are fixed or documented (`f8ddc38`);
+  - a copy of job 143 on a test Control Center (port 8798): the rebuild kept 22/22 decisions, and "Xuất video" completed in 0.03 s with the earlier export, without a render; both previews then took the video; the startup import completed the job from READY_TO_EXPORT (`docs/evidence/export-reuse/`).
+
 # G16 merge: "Dựng lại danh sách duyệt (giữ quyết định)" (2026-10-17, branch `merge/g16` from `main` `2c57172`; not yet in the main folder)
 
 - Merged `feat/rebuild-keep-decisions` (session D, task c; entry below) with `--no-ff`; the docs conflicts kept both entries.
