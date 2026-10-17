@@ -91,8 +91,10 @@
 .rv-ocr-more { margin-left: 0; }
 /* Session R "Ẩn khung": the image as it is (the scanner's own marks are part of a text preview). */
 .rv-card.bare .rv-region, .rv-card.bare .rv-boxes, .rv-card.bare.d-cut .rv-cut-label { display: none; }
-/* "Ẩn khung" only where the page draws something over the image (a red box, AI boxes, the cut or blur illustration). */
-.rv-card:not(.d-cut):not(.d-blur-full):not(:has(.rv-region, .rv-aibox)) .rv-frames-btn { display: none; }
+.rv-card.bare .rv-covers, .rv-card.bare .rv-cover-note { display: none; }
+/* "Ẩn khung" only where the page draws something over the image (a red box, AI boxes, other cards' blurs, the cut or
+ * blur illustration). */
+.rv-card:not(.d-cut):not(.d-blur-full):not(:has(.rv-region, .rv-aibox, .rv-cover)) .rv-frames-btn { display: none; }
 .rv-card.bare.d-blur-full .rv-art img, .rv-card.bare.d-cut .rv-art img { filter: none; }
 .rv-card .rv-frames-btn[aria-pressed="true"] { background: #e9f1ff; color: #194faf; border-color: #8eafe5; }
 .rv-card.zoom { grid-column: 1 / -1; }
@@ -156,6 +158,24 @@
 .rv-region-block.borrowed { grid-template-columns: minmax(0, 1fr) auto; align-items: center; }
 .rv-card.d-blur-full .rv-art img { filter: blur(14px); }
 .rv-card.d-cut .rv-art img { filter: brightness(.3) grayscale(.4); }
+/* Session D (S12): regions other cards blur at the time of the image (review-cards.js coversHtml). Decided: the image
+ * blurred in its box (a canvas painted from the loaded image, review-media.js drawCover; grey until then), a dashed
+ * sky-blue line 2 px outside it; only suggested: a dotted violet line, nothing blurred. Under the red box; hidden by
+ * "Ẩn khung", on a cut or whole-frame card and while the video shows (the drawing is of the still image). */
+.rv-covers { position: absolute; inset: 0; pointer-events: none; }
+.rv-cover { position: absolute; box-sizing: border-box; outline: 2px dashed #38bdf8; outline-offset: 2px; filter: drop-shadow(0 0 1px #000c); pointer-events: none; }
+.rv-cover.applied { background: #9aa7b866; }
+.rv-cover.pending { outline: 2px dotted #c084fc; }
+.rv-cover-blur { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
+.rv-cover em { position: absolute; left: 0; top: calc(100% + 5px); box-sizing: border-box; width: max-content; max-width: calc(var(--room, 1) * 100% - 2px); overflow-wrap: anywhere; padding: 1px 5px; border-radius: 4px; font: 600 11px system-ui, sans-serif; font-style: normal; color: #fff; background: #0369a1; }
+.rv-cover.pending em { background: #7e22ce; }
+.rv-cover.lr em { left: auto; right: 0; }
+.rv-cover.up em { top: auto; bottom: calc(100% + 5px); }
+.rv-cover.lin em { top: 2px; bottom: auto; }
+.rv-cover.lup em { top: auto; bottom: 2px; }
+.rv-art.revealed .rv-covers { display: none; }
+.rv-card.d-cut .rv-covers, .rv-card.d-cut .rv-cover-note, .rv-card.d-blur-full .rv-covers, .rv-card.d-blur-full .rv-cover-note { display: none; }
+.rv-cover-note { margin: 6px 12px 0; font-size: 12px; line-height: 1.45; color: var(--muted); overflow-wrap: anywhere; }
 .rv-cut-label { position: absolute; left: 10px; bottom: 10px; display: none; padding: 3px 8px; border-radius: 6px; font: 600 12px system-ui, sans-serif; color: #fff; background: #aa263e; }
 .rv-card.d-cut .rv-cut-label { display: block; }
 .rv-art.revealed .rv-cut-label { display: none; }

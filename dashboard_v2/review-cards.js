@@ -1,7 +1,7 @@
 /* Review dialog markup: header, filter chips, scene cards with their media (▶, timeline, strip of ≤8 frames,
  * moment chips, AI boxes, zoom, "Chi tiết kỹ thuật"), R2 decision buttons (Giữ / Làm mờ / Cắt / Cần xem thêm /
- * Xóa quyết định, region buttons, studio / platform memory, the blur or cut illustration on the image) and the
- * in-place patch used after a decision and by polling. Every queue string goes through esc(); ids only reach
+ * Xóa quyết định, region buttons, studio / platform memory, the blur or cut illustration on the image, the regions
+ * other cards blur over it, session D) and the in-place patch used after a decision and by polling. Every queue string goes through esc(); ids only reach
  * data-* attributes escaped. Card design follows the prototype dialog (article.scene, .scene-content, .selected).
  */
 (function (root) {
@@ -51,6 +51,8 @@
   }
   /* The report preview shown as the main image ('' for an evidence frame or no image). */
   const mainPreview = (m, x) => remoteMain(m, x) ? '' : String((x.preview_images || [])[0] || '');
+  /* The time of the main image: the evidence frame's, a report preview's from its name, null for a text preview. */
+  const mainTime = (m, x) => remoteMain(m, x) ? Number(m.ev.strongest.t) : R.thumbTime((x.preview_images || [])[0]);
   /* Session R: under the image, the magnifier (review.js draws it once the image loaded) and the note on the
    * scanner's "REVIEW n | zone" label of a text preview. */
   function zoneNoteHtml(x, path) { const text = D.zoneNote(x, path); return '<p class="rv-zone-note"' + (text ? '' : ' hidden') + '>' + esc(text) + '</p>'; }
@@ -134,6 +136,89 @@
     return '<span class="rv-region' + (regionBlurred(ctx, x) ? ' blurred' : '') + (borrowed ? ' borrowed' + place.cls : '') + '" style="left:' + pct(box.left) + ';top:' + pct(box.top) + ';width:' + pct(box.width) + ';height:' + pct(box.height) + place.room + '">' +
       (borrowed ? '<em>' + esc('áp dụng ' + borrowed.applies) + '</em>' : '') + '</span>';
   }
+  /* Session D (S12): what other cards blur at the time of the image (D.blurCovers, D.coversAt), drawn like the export:
+   * the image blurred in a dashed sky-blue box (review-media.js drawCover paints the canvas from the loaded image), a
+   * dotted violet box with nothing blurred for a card that only suggests BLUR. Labels are placed for a phone card
+   * (LABEL.ref px wide, the narrowest): each takes the first free place (a blurred box: inside it first, its picture is
+   * gone; a suggestion: beside it first) with its full, shorter or shortest words (D.coverWords), never over another
+   * label or the card's red box; no free place, no label (the note under the image says it). Lines are estimated. */
+  const LABEL = {ref: 360, char: 6.5, pad: 12, line: 17, gap: 5, inset: 2, outline: 4};
+  const meets = (a, b) => a.left < b.right && b.left < a.right && a.top < b.bottom && b.top < a.bottom;
+  function labelRect(b, lr, place, text, frameH) {
+    const textW = (text.length * LABEL.char + LABEL.pad) / LABEL.ref, maxW = lr ? b.left + b.width : 1 - b.left, w = Math.min(textW, maxW);
+    const h = Math.ceil(textW / maxW - 1e-9) * LABEL.line / frameH, gap = LABEL.gap / frameH, inset = LABEL.inset / frameH, left = lr ? b.left + b.width - w : b.left;
+    const top = place === ' lin' ? b.top + inset : place === ' lup' ? b.top + b.height - inset - h : place === ' up' ? b.top - gap - h : b.top + b.height + gap;
+    return {left, top, right: left + w, bottom: top + h};
+  }
+  function placeLabels(ctx, x, covers) {
+    const size = x.source_frame_size, ratio = Array.isArray(size) && Number(size[0]) > 0 && Number(size[1]) > 0 ? Number(size[1]) / Number(size[0]) : 9 / 16, frameH = LABEL.ref * ratio;
+    const taken = [], red = R.regionBox(ctx.queue, x);
+    if (red) {
+      const ox = LABEL.outline / LABEL.ref, oy = LABEL.outline / frameH, borrowed = borrowedOf(ctx, x, red);
+      taken.push({left: red.left - ox, top: red.top - oy, right: red.left + red.width + ox, bottom: red.top + red.height + oy});
+      if (borrowed) { const p = labelPlace(red.left, red.top, red.width, red.height); taken.push(labelRect(red, p.cls.includes(' lr'), p.cls.replace(' lr', ''), 'áp dụng ' + borrowed.applies, frameH)); }
+    }
+    return covers.slice().sort((a, b) => a.box.top - b.box.top || a.box.left - b.box.left).map(c => {
+      const b = c.box, p = labelPlace(b.left, b.top, b.width, b.height), lr = p.cls.includes(' lr'), base = p.cls.replace(' lr', '');
+      const beside = [base, '', ' up'].filter((v, i, all) => v !== ' lin' && all.indexOf(v) === i), words = D.coverWords(c);
+      // A blurred box's label starts inside it (its picture is gone), in shorter words if need be, before one starts
+      // beside it; it may run past a box narrower than the words. A suggestion's label goes beside its box first (what
+      // is in the box is still to be reviewed).
+      const inside = [' lin', ' lup'].flatMap(place => words.map(text => [place, text])), besides = words.flatMap(text => beside.map(place => [place, text]));
+      for (const [place, text] of c.state === 'applied' ? [...inside, ...besides] : [...besides, ...inside]) {
+        const rect = labelRect(b, lr, place, text, frameH);
+        if (rect.top >= 0 && rect.bottom <= 1 && !taken.some(o => meets(o, rect))) { taken.push(rect); return {id: c.id, cls: (lr ? ' lr' : '') + place, room: p.room, text, rect, free: true}; }
+      }
+      return {id: c.id, cls: lr ? ' lr' : '', room: p.room, text: '', rect: null, free: false};
+    });
+  }
+  const coverLabels = (ctx, x, t) => placeLabels(ctx, x, D.coversAt(D.blurCovers(ctx.queue, x), x, t));
+  const layerTime = t => t == null || t === '' || !Number.isFinite(Number(t)) ? '' : String(Number(t));
+  function coversHtml(ctx, x, t) {
+    const covers = D.coversAt(D.blurCovers(ctx.queue, x), x, t), labels = new Map(placeLabels(ctx, x, covers).map(l => [l.id, l]));
+    return '<span class="rv-covers" data-t="' + layerTime(t) + '">' + covers.map(c => {
+      const b = c.box, l = labels.get(c.id), r = c.region;
+      return '<span class="rv-cover ' + c.state + l.cls + '" data-owner="' + esc(c.id) + '" data-region="' + [r.x, r.y, r.width, r.height, c.size[0], c.size[1]].join(',') + '" style="left:' + pct(b.left) + ';top:' + pct(b.top) + ';width:' + pct(b.width) + ';height:' + pct(b.height) + l.room + '">' +
+        (c.state === 'applied' ? '<canvas class="rv-cover-blur" aria-hidden="true"></canvas>' : '') + (l.text ? '<em>' + esc(l.text) + '</em>' : '') + '</span>';
+    }).join('') + '</span>';
+  }
+  function coverNoteHtml(ctx, x, t) { const text = D.coverLegend(ctx.queue, x, t); return '<p class="rv-cover-note"' + (text ? '' : ' hidden') + '>' + esc(text) + '</p>'; }
+  /* The layer and its note for the image time t, in place; true when the layer changed (its canvases are then blank). */
+  function setCovers(el, ctx, x, t) {
+    const layer = el.querySelector('.rv-covers'), note = el.querySelector('.rv-cover-note');
+    if (!layer) return false;
+    const html = coversHtml(ctx, x, t), text = coverNoteHtml(ctx, x, t), changed = layer.__html !== html;
+    if (changed) { layer.outerHTML = html; el.querySelector('.rv-covers').__html = html; }
+    if (note && note.__html !== text) { note.outerHTML = text; el.querySelector('.rv-cover-note').__html = text; }
+    return changed;
+  }
+  const coverCropOf = (node, img) => { const v = String(node.dataset.region || '').split(',').map(Number); return D.coverCrop({x: v[0], y: v[1], width: v[2], height: v[3]}, [v[4], v[5]], img.naturalWidth, img.naturalHeight); };
+  /* Paints every blurred copy from the image the card shows, once it has loaded. */
+  function paintCovers(el) {
+    const Media = root.BFReviewMedia, img = el.querySelector('.rv-art img'), canvases = el.querySelectorAll('.rv-cover-blur');
+    if (!Media || !img || !img.complete || !img.naturalWidth || !canvases.length) return;
+    for (const canvas of canvases) { const crop = coverCropOf(canvas.parentNode, img); if (crop) Media.drawCover(canvas, img, crop); }
+  }
+  /* review.js: the covers of the image the card shows, for its magnifier ([{state, crop}] in image pixels); none while
+   * the card is cut or blurred whole (its layer is hidden then too). */
+  function magCovers(el, img) {
+    if (!img || !img.naturalWidth || el.matches('.d-cut, .d-blur-full')) return [];
+    return [...el.querySelectorAll('.rv-covers .rv-cover')].map(c => ({state: c.classList.contains('applied') ? 'applied' : 'pending', crop: coverCropOf(c, img)})).filter(c => c.crop);
+  }
+  /* review.js: an image loaded in the card. Its time is the main image's, the time of the strip frame whose image it
+   * is (a frame shown from the strip), else unknown; the layer follows it and is painted from it. */
+  function syncCovers(el, ctx, x, img) {
+    if (!x || !img || !el.querySelector('.rv-covers')) return;
+    const src = img.getAttribute('src') || '', m = ctx.media(x);
+    let t = null;
+    if (src === mainImage(m, x)) t = mainTime(m, x);
+    else {
+      const thumb = [...el.querySelectorAll('.rv-thumb')].find(b => { const i = b.querySelector('img'); return !!i && i.getAttribute('src') === src; });
+      if (thumb && thumb.dataset.t !== '') t = Number(thumb.dataset.t);
+    }
+    setCovers(el, ctx, x, t);
+    paintCovers(el);
+  }
   function regionBlock(ctx, x) {
     const owner = R.regionOwner(ctx.queue, x), r = owner && (owner.suggested_region_source_pixels || owner.decision_region_source_pixels), c = D.regionControls(x, owner, r);
     if (!c) return '';
@@ -169,15 +254,15 @@
   function techHtml(ctx, x, ev) { return D.techBody(ctx.queue, x, ev || null, R.isSafety(x) ? regionBlock(ctx, x) : ''); }
 
   function card(ctx, x) {
-    const m = ctx.media(x), src = mainImage(m, x), tip = suggestion(x), zoomed = ctx.zoomId === x.id, bare = !!(ctx.bare && ctx.bare.has(x.id));
+    const m = ctx.media(x), src = mainImage(m, x), tip = suggestion(x), zoomed = ctx.zoomId === x.id, bare = !!(ctx.bare && ctx.bare.has(x.id)), at = src ? mainTime(m, x) : null;
     return '<article class="scene rv-card' + (x.id === ctx.focusId ? ' on' : '') + (x.decision ? ' decided' : '') + (zoomed ? ' zoom' : '') + (x.decision === 'CUT' ? ' d-cut' : '') + (fullBlur(x) ? ' d-blur-full' : '') + (bare ? ' bare' : '') + '" data-item="' + esc(x.id) + '">' +
       '<div class="rv-art" data-review="select" style="aspect-ratio:' + esc(R.frameAspect(x)) + '">' +
-        (src ? '<img alt="" decoding="async" data-src="' + esc(src) + '">' : '') +
+        (src ? '<img alt="" decoding="async" data-src="' + esc(src) + '">' + coversHtml(ctx, x, at) : '') +
         regionHtml(ctx, x) +
         aiBoxes(ctx, x) + '<span class="rv-cut-label">Đã chọn cắt</span>' +
         '<span class="rv-art-note">' + (src ? 'Không tải được ảnh' : 'Không có ảnh xem trước cho mục này.') + '</span>' +
       '</div>' +
-      (src ? magHtml() + zoneNoteHtml(x, mainPreview(m, x)) : '') +
+      (src ? magHtml() + zoneNoteHtml(x, mainPreview(m, x)) + coverNoteHtml(ctx, x, at) : '') +
       '<div class="rv-bar">' + bar(ctx, m, x) + '</div>' +
       '<div class="rv-timeline" data-review="seek" title="Bấm để tua">' + R.timelineHtml(x, m.ev || null) + '<div class="head" hidden></div></div>' +
       '<div class="rv-strip">' + strip(m, x) + '</div>' + moments(x) +
@@ -265,11 +350,17 @@
     if (status && status.outerHTML !== html) { status.outerHTML = html; patched++; }
     el.classList.toggle('decided', !!x.decision);
     el.classList.toggle('on', x.id === ctx.focusId);
+    const whole = el.matches('.d-cut, .d-blur-full');
     el.classList.toggle('d-cut', x.decision === 'CUT');
     el.classList.toggle('d-blur-full', fullBlur(x));
     // The region can appear, move to another owner card or go (only the box is replaced, never the image box).
     const region = el.querySelector('.rv-region'), box = regionHtml(ctx, x);
     if ((region ? region.outerHTML : '') !== box) { if (region) region.remove(); if (box) el.querySelector('.rv-art').insertAdjacentHTML('beforeend', box); }
+    // Session D: other cards' blurs over the image shown now (its time is kept on the layer); a drawn magnifier that
+    // shows them is drawn again by review.js patch (its __magKey no longer matches).
+    const layer = el.querySelector('.rv-covers'), covers = !!layer && setCovers(el, ctx, x, layer.dataset.t);
+    if (covers) paintCovers(el);
+    if ((covers || whole !== el.matches('.d-cut, .d-blur-full')) && el.__magKey !== undefined) el.__magKey = null;
     if (setHtml(el.querySelector('.rv-actions'), actions(ctx, x))) patched++;
     setHtml(el.querySelector('.tech-body'), techHtml(ctx, x, ctx.media(x).ev));
     return patched;
@@ -283,5 +374,5 @@
     return patched;
   }
 
-  root.BFReviewCards = {BATCH, esc, card, refreshMedia, zoomExtra, mainImage, zoneNoteHtml, framesButton, header, progressHtml, chips, empty, patchCard, patchCards, actions};
+  root.BFReviewCards = {BATCH, esc, card, refreshMedia, zoomExtra, mainImage, zoneNoteHtml, framesButton, coversHtml, coverLabels, setCovers, syncCovers, magCovers, header, progressHtml, chips, empty, patchCard, patchCards, actions};
 })(window);

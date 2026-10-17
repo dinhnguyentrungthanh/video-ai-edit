@@ -265,9 +265,11 @@
 
   /* Session R: the magnifier under a card's image. view: BFReviewDetail.magnifier(); the crop of the loaded <img>
    * (same origin, no blob:) at its CSS size in device pixels (≤ 4096 a side), and unless the card is shown bare a red
-   * line 2 px outside the region, so it never covers what is inside. */
+   * line 2 px outside the region, so it never covers what is inside. Session D: unless bare, also the regions other
+   * cards blur (covers: review-cards.js magCovers, [{state, crop}] in image pixels), drawn as on the image (blurred,
+   * dashed sky-blue; a suggestion only dotted violet), under the red line. */
   const MAG_CANVAS_MAX = 4096, MAG_LINE = 2, MAG_GAP = 2;
-  function drawMagnifier(canvas, img, view, bare, dpr) {
+  function drawMagnifier(canvas, img, view, bare, dpr, covers) {
     const ratio = Math.max(1, Number(dpr) || 1), fit = Math.min(1, MAG_CANVAS_MAX / Math.max(view.cssW * ratio, view.cssH * ratio));
     canvas.width = Math.max(1, Math.round(view.cssW * ratio * fit)); canvas.height = Math.max(1, Math.round(view.cssH * ratio * fit));
     canvas.style.width = view.cssW.toFixed(1) + 'px'; canvas.style.height = view.cssH.toFixed(1) + 'px';
@@ -276,10 +278,59 @@
     g.drawImage(img, view.sx, view.sy, view.sw, view.sh, 0, 0, canvas.width, canvas.height);
     if (!bare) {
       const out = (MAG_GAP + MAG_LINE / 2) * k, r = view.red;
+      for (const cover of covers || []) magnifiedCover(g, canvas, img, view, k, cover);
       g.strokeStyle = '#ff304f'; g.lineWidth = MAG_LINE * k;
       g.strokeRect(r.x * k - out, r.y * k - out, r.w * k + 2 * out, r.h * k + 2 * out);
     }
   }
+  const COVER_LINES = {applied: ['#38bdf8', [6, 4]], pending: ['#c084fc', [2, 3]]};
+  /* One cover in the magnifier (k canvas pixels per CSS pixel); a part outside the view is clipped by the canvas. */
+  function magnifiedCover(g, canvas, img, view, k, cover) {
+    const c = cover.crop, ik = canvas.width / view.sw, x = (c.sx - view.sx) * ik, y = (c.sy - view.sy) * ik, w = c.sw * ik, h = c.sh * ik;
+    if (x >= canvas.width || y >= canvas.height || x + w <= 0 || y + h <= 0) return;
+    if (cover.state === 'applied') g.drawImage(blurCells(canvas.ownerDocument, img, c), 0, 0, c.gw, c.gh, x, y, w, h);
+    const out = (MAG_GAP + MAG_LINE / 2) * k, [color, dash] = COVER_LINES[cover.state] || COVER_LINES.applied;
+    g.save(); g.strokeStyle = color; g.lineWidth = MAG_LINE * k; g.setLineDash(dash.map(v => v * k));
+    g.strokeRect(x - out, y - out, w + 2 * out, h + 2 * out); g.restore();
+  }
 
-  root.BFReviewMedia = {createImageLoader, createPlayer, drawMagnifier};
+  /* Session D: a region another card blurs, painted from the card's own loaded <img> (media are no-store: a second
+   * <img> would ask again): its crop (BFReviewDetail.coverCrop) shrunk to gw × gh cells, then stretched back with
+   * smoothing, once (no CSS or backdrop filter, R4-B3). */
+  const COVER_CANVAS_MAX = 1280, COVER_SOURCE_MAX = 1920;
+  /* The image as a canvas at its natural size (≤ COVER_SOURCE_MAX a side), only when a part cut from the image itself
+   * painted nothing: Chromium does that for an SVG without a size of its own (the demo posters). */
+  function imageCanvas(doc, img) {
+    const fit = Math.min(1, COVER_SOURCE_MAX / Math.max(img.naturalWidth, img.naturalHeight)), canvas = doc.createElement('canvas');
+    canvas.width = Math.max(1, Math.round(img.naturalWidth * fit)); canvas.height = Math.max(1, Math.round(img.naturalHeight * fit));
+    const g = canvas.getContext('2d');
+    g.imageSmoothingEnabled = true; g.imageSmoothingQuality = 'high';
+    g.drawImage(img, 0, 0, canvas.width, canvas.height);
+    return canvas;
+  }
+  /* The crop shrunk to its gw × gh cells. */
+  function blurCells(doc, img, crop) {
+    const small = doc.createElement('canvas');
+    small.width = crop.gw; small.height = crop.gh;
+    const s = small.getContext('2d', {willReadFrequently: true});
+    s.imageSmoothingEnabled = true; s.imageSmoothingQuality = 'high';
+    s.drawImage(img, crop.sx, crop.sy, crop.sw, crop.sh, 0, 0, crop.gw, crop.gh);
+    let blank = false;
+    try { blank = s.getImageData(crop.gw >> 1, crop.gh >> 1, 1, 1).data[3] === 0; } catch (_) { /* unreadable: keep the cut as painted */ }
+    if (blank) {
+      const whole = imageCanvas(doc, img), f = whole.width / img.naturalWidth;
+      s.drawImage(whole, crop.sx * f, crop.sy * f, crop.sw * f, crop.sh * f, 0, 0, crop.gw, crop.gh);
+    }
+    return small;
+  }
+  function drawCover(canvas, img, crop) {
+    const fit = Math.min(1, COVER_CANVAS_MAX / Math.max(crop.sw, crop.sh)), small = blurCells(canvas.ownerDocument, img, crop);
+    canvas.width = Math.max(1, Math.round(crop.sw * fit)); canvas.height = Math.max(1, Math.round(crop.sh * fit));
+    const g = canvas.getContext('2d');
+    g.imageSmoothingEnabled = true; g.imageSmoothingQuality = 'high';
+    g.drawImage(small, 0, 0, crop.gw, crop.gh, 0, 0, canvas.width, canvas.height);
+    canvas.dataset.drawn = '1';
+  }
+
+  root.BFReviewMedia = {createImageLoader, createPlayer, drawMagnifier, drawCover};
 })(window);

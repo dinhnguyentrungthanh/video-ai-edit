@@ -1,3 +1,23 @@
+# A review card's image shows the regions other cards blur — session D (2026-10-17, branch `fix/review-preview-blurs` from `main` `41169fc`; not merged)
+
+- Cause (job 134 on the phone): a card's preview showed the watermark or fixed text that another card already blurs as sharp as the rest, so the export's blur was invisible and the red box read as the blurred region.
+- Dashboard V2 only (S12 of `docs/DASHBOARD_V2_REVIEW_PLAN.md`, `docs/handoff/D-preview-blurs.md`):
+  - On the main image and in the magnifier, the region of every other card decided BLUR is blurred at the image's time, in a dashed sky-blue box with a short label ("đã làm mờ ở thẻ watermark (toàn phim)"). A discrete card counts moment by moment; an image without a time only shows regions that hold the whole card.
+  - A card that only suggests BLUR is a dotted violet box with nothing blurred ("đề xuất…, chưa duyệt").
+  - Not drawn: KEEP and CUT cards, whole-frame BLUR, candidates, the card itself and the logo card whose red box it borrows.
+  - The blur is a canvas cut from the loaded image (no CSS or backdrop filter, no second request). Labels never cover each other or the red box.
+  - A line under the image sums it up; "Chi tiết kỹ thuật" of every card lists which region which card blurs, and when.
+  - "Ẩn khung" hides it all; it is also hidden while the video plays and on cut or wholly blurred cards.
+- No change to `review_workflow.py`, the scans, decisions or exports; scan cache keys equal to 41169fc (10 stages); the classic page is unchanged.
+- Gates:
+  - `verify-review.cjs` 45/45 and the new `browser-check-review-covers.cjs` 9/9 (Edge, 390 px light and dark, 1440 px);
+  - the other `browser-check-review*` and `verify*` scripts pass;
+  - 130 Python tests of Dashboard V2 and the review pass.
+  - `browser-check.cjs` stops at R4.3 as on 41169fc.
+- Visual check on a test Control Center (temporary root, port 8799) with the review queues of jobs 145 and 134 (`docs/evidence/preview-blurs/`):
+  - 16 screenshots; 0 POST; queues unchanged;
+  - every blurred region painted; labels inside the image and apart.
+
 # G14 merge: the subtitle-band watermark card reaches the film's edges (2026-10-16, branch `merge/g14` from `main` `41d219d`; not yet in the main folder)
 
 - Merged `fix/watermark-edges` (session D: `cb0122e`, entry below) with `--no-ff`.

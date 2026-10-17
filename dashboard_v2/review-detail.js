@@ -1,7 +1,8 @@
 /* Review dialog (R1): texts of a card's evidence and "Chi tiết kỹ thuật", ported from the classic review
  * page (viText, labelsReasonsHtml, visualAiHtml, evidenceHtml, regionDetailHtml, decisionScope, scopeBlock,
- * overlapCoverage, aiModelLine, techDetails, evidenceMediaHtml). Pure: no DOM, no fetch. Every queue string
- * goes through esc(). verify-review.cjs compares the output with the classic functions.
+ * aiModelLine, techDetails, evidenceMediaHtml) and, since session D (S12), what other cards blur over a card's image
+ * (blurCovers, coversAt, coverageNote instead of the classic overlapCoverage). Pure: no DOM, no fetch. Every queue
+ * string goes through esc(). verify-review.cjs compares the output with the classic functions.
  */
 (function (root, factory) {
   const core = typeof module === 'object' && module.exports ? require('./review-core.js') : root.BFReviewCore;
@@ -51,24 +52,96 @@
     return {kind:'single',title:'CHỈ ĐOẠN HIỆN TẠI',detail:`Quyết định chỉ áp dụng ${from}–${to}. Đây không phải lựa chọn đại diện cho mọi quảng cáo hoặc logo cùng loại trong toàn phim.`};
   }
   function scopeBlock(queue, x) { const scope = decisionScope(queue, x); return `<div class="scope-detail ${scope.kind}"><strong>Phạm vi áp dụng: ${esc(scope.title)}</strong>${esc(scope.detail)}</div>`; }
-  function overlapCoverage(queue, x) {
-    const covered = (queue?.items || []).filter(o => o.id !== x.id && o.decision === 'BLUR' && o.start_seconds < x.end_seconds && o.end_seconds > x.start_seconds);
-    if (!covered.length) return '';
-    const persistent = covered.filter(o => o.candidate_type === 'persistent_overlay' && o.decision_region_source_pixels && o.decision_region_source_pixels !== 'FULL_FRAME');
-    const full = covered.filter(o => o.decision_region_source_pixels === 'FULL_FRAME'), parts = [];
-    if (persistent.length) {
-      const owner = persistent[0], r = owner.decision_region_source_pixels, current = x.suggested_region_source_pixels || x.decision_region_source_pixels;
-      const label = esc(readingLabel(owner, viText((owner.labels || [])[0] || '') || 'logo/watermark')), scope = trackCoversFullVideo(queue, owner) ? 'toàn video' : `${clock(owner.start_seconds)}–${clock(owner.end_seconds)}`;
-      if (!current) {
-        const drawn = !R.isSafety(x) && R.regionOwner(queue, x)?.id === owner.id;
-        parts.push(`Track <strong>${label}</strong> đã được duyệt làm mờ ${scope} ở thẻ riêng${drawn ? ' (khung đỏ trong ảnh)' : ''}. Thẻ này không có vùng riêng — quyết định bên dưới áp dụng cho cả đoạn ${R.span(x)}.`);
-      } else {
-        const same = regionOverlap(r, current) >= .6;
-        parts.push(same ? `Track <strong>${label}</strong> cùng vùng này đã được duyệt làm mờ ${scope}; thẻ hiện tại chỉ là bằng chứng hỗ trợ.` : `Track <strong>${label}</strong> ở vùng khác đã được duyệt làm mờ ${scope} (x=${Number(r.x)}, y=${Number(r.y)}, rộng=${Number(r.width)}, cao=${Number(r.height)}). Vùng đỏ hiện tại vẫn là ứng viên riêng.`);
-      }
+  /* Session D (S12, docs/handoff/D-preview-blurs.md): the regions OTHER cards blur over this card's picture, as the
+   * export does (review_workflow.approved_operations): a decided BLUR card's region from its start to its end, a
+   * discrete card's in each of its moments. A main card that only suggests BLUR (no decision yet) is 'pending'. Not
+   * covers: KEEP and CUT cards, a whole-frame BLUR (coverageNote counts it), candidates (outside the plan until
+   * decided), the card itself and the logo card whose red box it borrows (regionHtml draws that one). The box is in
+   * fractions of the source frame; scope and short say when, for the note and for the label on the image. */
+  const COVER = {eps: .05, list: 6, cells: 3, cellMin: 1 / 160};
+  const COVER_KINDS = {repeated_watermark:'watermark',scrolling_text:'dòng chữ chạy'};
+  const clamp01 = v => Math.min(1, Math.max(0, v));
+  const momentsOrSpan = x => { const ms = R.momentsOf(x); return ms.length ? ms : [{start: Number(x.start_seconds), end: Number(x.end_seconds)}]; };
+  const imageTime = t => t == null || t === '' ? NaN : Number(t);
+  function coverKind(o) {
+    if (COVER_KINDS[o.candidate_type]) return COVER_KINDS[o.candidate_type];
+    if (o.candidate_type === 'persistent_overlay') return o.category === 'visual_logo' ? 'logo cố định' : 'chữ cố định';
+    return R.isLogoItem(o) ? 'logo' : o.category === 'text' ? 'chữ' : 'vùng';
+  }
+  function blurCovers(queue, x) {
+    const box = R.regionBox(queue, x), borrowed = box && box.owner !== x.id ? box.owner : null, own = momentsOrSpan(x), covers = [];
+    for (const o of queue?.items || []) {
+      if (!o || o.id === x.id || o.id === borrowed || o.advisory) continue;
+      const pending = !o.decision && o.suggested_decision === 'BLUR', r = pending ? o.suggested_region_source_pixels : o.decision === 'BLUR' ? o.decision_region_source_pixels : null;
+      if (!r || typeof r !== 'object') continue;
+      const ms = momentsOrSpan(o);
+      if (!ms.some(m => own.some(n => m.start < Math.max(n.end, n.start + COVER.eps) && m.end > n.start))) continue;
+      const sw = Number(o.source_frame_size?.[0]), sh = Number(o.source_frame_size?.[1]);
+      if (!(sw > 0 && sh > 0)) continue;
+      const region = {x: Number(r.x), y: Number(r.y), width: Number(r.width), height: Number(r.height)};
+      // A region that starts left of or above the frame keeps only its part inside it.
+      const left = clamp01(region.x / sw), top = clamp01(region.y / sh), width = Math.min(1 - left, (Math.min(region.x, 0) + region.width) / sw), height = Math.min(1 - top, (Math.min(region.y, 0) + region.height) / sh);
+      if (!Object.values(region).every(Number.isFinite) || !(width > 0 && height > 0)) continue;
+      const full = ms.length === 1 && trackCoversFullVideo(queue, o), last = ms[ms.length - 1];
+      covers.push({id: String(o.id), state: pending ? 'pending' : 'applied', region, size: [sw, sh], box: {left, top, width, height}, kind: coverKind(o), reading: readingLabel(o, ''), moments: ms,
+        scope: full ? 'toàn phim' : ms.length > 1 ? `${ms.length} khoảnh khắc ${clock(ms[0].start)}–${clock(last.end)}` : `${clock(ms[0].start)}–${clock(ms[0].end)}`,
+        short: full ? 'toàn phim' : ms.length > 1 ? `${ms.length} khoảnh khắc` : `${R.mmss(ms[0].start)}–${R.mmss(ms[0].end)}`});
     }
-    if (full.length) parts.push(`${full.length} đoạn trùng thời gian đã được duyệt làm mờ toàn cảnh.`);
-    return parts.length ? `<div class="coverage">${parts.join(' ')}</div>` : '';
+    return covers;
+  }
+  /* The covers over the image at time t (±COVER.eps): one of the cover's moments holds t. An image without a time (a
+   * text preview) gets the covers one of whose moments holds the whole card (each moment of a discrete card). */
+  function coversAt(covers, x, t) {
+    const at = imageTime(t), spans = Number.isFinite(at) ? [{start: at, end: at}] : momentsOrSpan(x);
+    return covers.filter(c => spans.every(s => c.moments.some(m => m.start <= s.start + COVER.eps && m.end >= s.end - COVER.eps)));
+  }
+  /* The label of a cover on the image: full, shorter, shortest (review-cards.js takes the first that has room). */
+  function coverWords(c) {
+    return c.state === 'applied' ? [`đã làm mờ ở thẻ ${c.kind} (${c.short})`, `đã làm mờ · ${c.kind}`, 'đã làm mờ']
+      : [`đề xuất làm mờ ở thẻ ${c.kind}, chưa duyệt`, `đề xuất · ${c.kind}, chưa duyệt`, 'đề xuất, chưa duyệt'];
+  }
+  /* The line under the image (plain text): what the drawing at time t shows and what it leaves out. */
+  function coverLegend(queue, x, t) {
+    const covers = blurCovers(queue, x), shown = coversAt(covers, x, t), at = imageTime(t), known = Number.isFinite(at);
+    const applied = shown.filter(c => c.state === 'applied').length, pending = shown.length - applied, rest = covers.length - shown.length, parts = [];
+    if (applied) parts.push(`Vùng mờ viền xanh: ${applied} vùng thẻ khác đã làm mờ ${known ? `lúc ${mmssTenth(at)}` : 'suốt đoạn này'} — bản xuất cũng làm mờ.`);
+    if (pending) parts.push(`Viền tím chấm: ${pending} vùng thẻ khác đề xuất làm mờ, chưa duyệt.`);
+    if (rest) parts.push(`Còn ${rest} vùng của thẻ khác ${known ? 'làm mờ lúc khác trong đoạn này' : 'chỉ trùng một phần đoạn này'}, không vẽ trên ảnh này (xem Chi tiết kỹ thuật).`);
+    return parts.join(' ');
+  }
+  /* "Chi tiết kỹ thuật", every card: which region other cards blur (or only suggest), where, for how long and when it
+   * meets this card; whole-frame BLURs over the same time are counted (the classic sentence). */
+  function coverageNote(queue, x) {
+    const covers = blurCovers(queue, x), own = momentsOrSpan(x), from = Number(x.start_seconds), to = Number(x.end_seconds);
+    const whole = (queue?.items || []).filter(o => o.id !== x.id && o.decision === 'BLUR' && o.decision_region_source_pixels === 'FULL_FRAME' && Number(o.start_seconds) < to && Number(o.end_seconds) > from);
+    if (!covers.length && !whole.length) return '';
+    const mine = R.regionOwner(queue, x), red = mine && mine.id === x.id ? x.suggested_region_source_pixels || x.decision_region_source_pixels : null;
+    const during = c => {
+      if (coversAt([c], x, null).length) return 'suốt đoạn của thẻ này';
+      const meet = c.moments.flatMap(m => own.map(n => [Math.max(m.start, n.start), Math.min(m.end, n.end)])).filter(([a, b]) => b > a).map(([a, b]) => `${clock(a)}–${clock(b)}`);
+      return `trùng thẻ này ${meet.slice(0, 3).join('; ')}${meet.length > 3 ? '; …' : ''}`;
+    };
+    const line = c => `${c.kind}${c.reading ? ` “${esc(c.reading)}”` : ''} (x=${c.region.x}, y=${c.region.y}, rộng=${c.region.width}, cao=${c.region.height})${red && regionOverlap(c.region, red) >= .6 ? ', cùng vùng khung đỏ của thẻ này' : ''} — ${c.state === 'applied' ? 'đã làm mờ' : 'đề xuất làm mờ'} ở thẻ riêng, ${c.scope}, ${during(c)}`;
+    const list = cs => cs.slice(0, COVER.list).map(line).join('; ') + (cs.length > COVER.list ? ` và ${cs.length - COVER.list} vùng khác` : '');
+    const applied = covers.filter(c => c.state === 'applied'), pending = covers.filter(c => c.state === 'pending'), parts = [];
+    if (applied.length) parts.push(`Vùng thẻ khác đã làm mờ (bản xuất làm mờ đúng vùng và lúc này; trên ảnh: viền xanh nét đứt): ${list(applied)}.`);
+    if (pending.length) parts.push(`Vùng thẻ khác chỉ đề xuất làm mờ, chưa duyệt (trên ảnh: viền tím chấm): ${list(pending)}.`);
+    if (covers.length && !red) parts.push(`Thẻ này không có vùng riêng — quyết định bên dưới áp dụng cho cả đoạn ${R.span(x)}.`);
+    if (whole.length) parts.push(`${whole.length} đoạn trùng thời gian đã được duyệt làm mờ toàn cảnh.`);
+    return `<div class="coverage">${parts.join(' ')}</div>`;
+  }
+  /* The cover's region in the loaded image's pixels (the source frame may be letterboxed in it, as for the magnifier),
+   * cut at the image edges, and the gw × gh cells it is shrunk to (a third of its smaller side, at least 1/160 of the
+   * image width) before review-media.js stretches it back: the blur. null when nothing of it is in the image. */
+  function coverCrop(region, sourceSize, imageW, imageH) {
+    const sw = Number(sourceSize && sourceSize[0]), sh = Number(sourceSize && sourceSize[1]);
+    if (!(sw > 0 && sh > 0 && imageW > 0 && imageH > 0)) return null;
+    const scale = Math.min(imageW / sw, imageH / sh), ox = (imageW - sw * scale) / 2, oy = (imageH - sh * scale) / 2;
+    const x = Math.max(0, Number(region.x) * scale + ox), y = Math.max(0, Number(region.y) * scale + oy);
+    const right = Math.min(imageW, (Number(region.x) + Number(region.width)) * scale + ox), bottom = Math.min(imageH, (Number(region.y) + Number(region.height)) * scale + oy);
+    if (!(right > x && bottom > y)) return null;
+    const w = right - x, h = bottom - y, cell = Math.max(Math.min(w, h) / COVER.cells, imageW * COVER.cellMin);
+    return {sx: x, sy: y, sw: w, sh: h, gw: Math.max(1, Math.round(w / cell)), gh: Math.max(1, Math.round(h / cell))};
   }
   function regionDetailHtml(x, owner, r) {
     const borrowed = owner && owner.id !== x.id, status = regionName(owner);
@@ -102,7 +175,7 @@
     const owner = R.regionOwner(queue, x), r = owner && (owner.suggested_region_source_pixels || owner.decision_region_source_pixels);
     const score = x.max_score == null ? '—' : Number(x.max_score).toFixed(3);
     const parts = [`<div class="meta">${esc(x.review_kind || x.category)} · ưu tiên ${esc(x.priority || '—')} · điểm ${score} · ${clock(x.start_seconds)}–${clock(x.end_seconds)} · ${esc(x.id)}</div>`, scopeBlock(queue, x)];
-    if (R.isSafety(x)) parts.push(overlapCoverage(queue, x));
+    parts.push(coverageNote(queue, x));
     if (!R.isSafety(x) || (owner && r && r !== 'FULL_FRAME')) parts.push(regionDetailHtml(x, owner, r));
     if (controls) parts.push(controls);
     parts.push(labelsReasonsHtml(x), visualAiHtml(x), evidenceHtml(ev));
@@ -295,6 +368,6 @@
   }
 
   return {esc, clock, viText, readingLabel, memoryMatch, memoryBrandName, boxesFromMemory, trackCoversFullVideo, regionOverlap, regionName, decisionScope, scopeBlock,
-    overlapCoverage, regionDetailHtml, labelsReasonsHtml, visualAiHtml, evidenceHtml, aiModelLine, techBody, evidenceView, magnifier, readings, zoneNote, ZONE_NAMES,
+    blurCovers, coversAt, coverWords, coverLegend, coverageNote, coverCrop, regionDetailHtml, labelsReasonsHtml, visualAiHtml, evidenceHtml, aiModelLine, techBody, evidenceView, magnifier, readings, zoneNote, ZONE_NAMES,
     regionControls, borrowedRegion, studioCompareLine, studioTextsNote, studioFramesNote, studioMaskNote, studioNote, platformNote};
 });

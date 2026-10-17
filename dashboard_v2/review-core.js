@@ -19,6 +19,9 @@
  *      shows the image without it, a magnifier under every card image replaces the zoomed card's 360 px crop, the
  *      card shows "Máy đọc: …" and a note on the text scanner's "REVIEW n | zone" label; the classic page is
  *      unchanged (D2). Decisions and POST bodies are unchanged.
+ *   S12 (session D, docs/handoff/D-preview-blurs.md) a card's image shows the regions other cards blur at its time
+ *      (blurred in a dashed sky-blue box; a suggestion: a dotted violet box), and "Chi tiết kỹ thuật" names them on
+ *      every card, every kind (the classic overlapCoverage: safety cards, fixed overlays); the classic page is unchanged.
  * R3 bulk and export follow the classic bulkKeep(), bulkAccept(), runBlocking() and finalizeExport(): same filter map,
  * same confirm words (count as the server selects, S1), the export gate and the export_dialog.py sentence.
  * R2 decisions follow the classic decide(), undo() and writeFailureMessage(): same confirms (S5 shows them in

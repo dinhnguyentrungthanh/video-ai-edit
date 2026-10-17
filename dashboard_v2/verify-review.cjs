@@ -305,13 +305,15 @@ check('R1 video reasons and probe statuses are the classic ones', () => {
   }
   same([404, 409, 410, 415, 206, 206, 403, 0].map((s, i) => R.probeReason(s, i === 5 ? 3 : 0)), ['source_missing', 'source_changed', 'source_cleaned', 'unsupported_container', null, 'decode_error', null, null]);
 });
-check('R1 "Chi tiết kỹ thuật" and evidence texts equal the classic markup', () => {
+check('R1 "Chi tiết kỹ thuật" and evidence texts equal the classic markup (but the note on the blurs of other cards, S12)', () => {
   for (const q of [QUEUES.mixed30, QUEUES.edge, QUEUES.demo101]) {
     old.load(q);
     q.items.concat(q.advisory_items).forEach((x, i) => {
       const ev = evidenceCases(x, i)[i % 5];
-      assert.equal('<details class="tech"><summary>Chi tiết kỹ thuật</summary><div class="tech-body">' + D.techBody(q, x, ev) + '</div></details>', old.fn.techDetails(x, ev, false), x.id);
-      same(D.decisionScope(q, x), old.fn.decisionScope(x)); assert.equal(D.overlapCoverage(q, x), old.fn.overlapCoverage(x));
+      // S12 (session D): the note on other cards' blurs is V2's own (every card, every kind; checked below).
+      const noCoverage = h => h.replace(/<div class="coverage">[\s\S]*?<\/div>/, '');
+      assert.equal(noCoverage('<details class="tech"><summary>Chi tiết kỹ thuật</summary><div class="tech-body">' + D.techBody(q, x, ev) + '</div></details>'), noCoverage(old.fn.techDetails(x, ev, false)), x.id);
+      same(D.decisionScope(q, x), old.fn.decisionScope(x));
       assert.equal(D.labelsReasonsHtml(x), old.fn.labelsReasonsHtml(x)); assert.equal(D.visualAiHtml(x), old.fn.visualAiHtml(x));
       assert.equal(D.evidenceHtml(ev), old.fn.evidenceHtml(ev)); assert.equal(D.aiModelLine(x), old.fn.aiModelLine(x));
     });
@@ -718,7 +720,7 @@ check('Session R (1): "Ẩn khung / Hiện khung" shows a card\'s image without 
   const hidden = cssRules().find(r => r.selector === '.rv-card.bare .rv-region, .rv-card.bare .rv-boxes, .rv-card.bare.d-cut .rv-cut-label');
   assert.ok(hidden && /^\s*display: none;\s*$/.test(hidden.body), 'bare hides the boxes, their labels and "Đã chọn cắt"');
   assert.ok(cssRules().some(r => r.selector === '.rv-card.d-cut .rv-cut-label'), 'the rule it must beat');
-  const only = cssRules().find(r => r.selector === '.rv-card:not(.d-cut):not(.d-blur-full):not(:has(.rv-region, .rv-aibox)) .rv-frames-btn');
+  const only = cssRules().find(r => r.selector === '.rv-card:not(.d-cut):not(.d-blur-full):not(:has(.rv-region, .rv-aibox, .rv-cover)) .rv-frames-btn');
   assert.ok(only && /^\s*display: none;\s*$/.test(only.body), 'no "Ẩn khung" where nothing is drawn over the image');
   const plain = cssRules().find(r => r.selector === '.rv-card.bare.d-blur-full .rv-art img, .rv-card.bare.d-cut .rv-art img');
   assert.ok(plain && /^\s*filter: none;\s*$/.test(plain.body), 'bare shows the image without the blur or cut illustration');
@@ -806,6 +808,236 @@ check('Session R (3): the note under a text preview says "subtitle" / "top-right
   assert.match(Cards.card(cardCtx(q), other), /<p class="rv-zone-note" hidden><\/p>/);
   assert.ok(fs.readFileSync(path.join(__dirname, 'review-core.js'), 'utf8').slice(0, 3600).includes('S11'), 'review-core.js lists S11');
   assert.ok(!/rv-zone-note|rv-ocr|rv-mag|text_preview_zones/.test(script), 'D2: the classic page is unchanged');
+});
+/* Session D (docs/handoff/D-preview-blurs.md): a card's image showed only its own red box while other cards blurred the
+ * watermark under the subtitles and the text at the top for the whole film (the export was clean), and the note on
+ * other cards' blurs was on safety cards only and counted fixed overlays only. Now the card draws the regions other
+ * cards blur at the time of its image, and "Chi tiết kỹ thuật" names them on every card. V2 only (S12): the classic
+ * page is unchanged (D2); decisions and POST bodies are unchanged. */
+const COVER_FRAME = [1280, 720];
+function coverQueue(frame) {
+  const size = frame || COVER_FRAME, box = (x, y, width, height) => ({x, y, width, height});
+  const card = (id, extra) => ({id, category: 'text', review_kind: 'text', priority: 'medium', start_seconds: 0, end_seconds: 600, source_frame_size: size,
+    labels: [], reasons: [], preview_images: [], decision: null, suggested_decision: null, ...extra});
+  const blur = (r, extra) => ({suggested_region_source_pixels: r, decision: 'BLUR', decision_region_source_pixels: r, ...extra});
+  const items = [
+    card('dlg', {start_seconds: 100, end_seconds: 110, suggested_region_source_pixels: box(300, 560, 680, 60), decision: 'KEEP', decision_region_source_pixels: box(300, 560, 680, 60),
+      preview_images: ['reports/jobs/demo/text/text-previews/track-00012.jpg'], labels: ['Ngày mai chúng ta đi sớm']}),
+    card('wm', blur(box(552, 643, 176, 31), {candidate_type: 'repeated_watermark', temporal_policy: 'discrete_detected_intervals', detected_intervals: [{start_seconds: 0, end_seconds: 600}], labels: ['WWW.EXAMPLE.COM <b>']})),
+    card('top', blur(box(837, 44, 319, 47), {review_kind: 'logo_overlay', candidate_type: 'persistent_overlay', labels: ['EXAMPLE.COM']})),
+    card('band', blur(box(0, 21, 1280, 32), {review_kind: 'logo_overlay', candidate_type: 'persistent_overlay'})),
+    card('scroll', {candidate_type: 'scrolling_text', start_seconds: 105, end_seconds: 200, suggested_decision: 'BLUR', suggested_region_source_pixels: box(0, 680, 1280, 40)}),
+    card('moments', blur(box(500, 300, 100, 50), {category: 'visual_logo', review_kind: 'logo_overlay', temporal_policy: 'discrete_detected_intervals', start_seconds: 95, end_seconds: 115,
+      detected_intervals: [{start_seconds: 95, end_seconds: 102}, {start_seconds: 108, end_seconds: 115}]})),
+    card('later', blur(box(20, 20, 100, 100), {category: 'visual_logo', review_kind: 'logo_overlay', start_seconds: 300, end_seconds: 400})),
+    card('kept', {candidate_type: 'repeated_watermark', suggested_region_source_pixels: box(556, 609, 201, 58), suggested_decision: 'BLUR', decision: 'KEEP', decision_region_source_pixels: box(556, 609, 201, 58)}),
+    card('whole', {category: 'gore', review_kind: 'gore', start_seconds: 104, end_seconds: 106, decision: 'BLUR', decision_region_source_pixels: 'FULL_FRAME'}),
+    card('fight', {category: 'violence', review_kind: 'violence', start_seconds: 100, end_seconds: 110, preview_images: ['reports/jobs/demo/violence/frame-104.000s.jpg']}),
+    card('scene', {category: 'gore', review_kind: 'gore', temporal_policy: 'discrete_detected_intervals', start_seconds: 96, end_seconds: 112,
+      detected_intervals: [{start_seconds: 96, end_seconds: 101}, {start_seconds: 109, end_seconds: 112}]}),
+  ];
+  const advisory = [card('maybe', {advisory: true, start_seconds: 100, end_seconds: 110, suggested_decision: 'BLUR', suggested_region_source_pixels: box(10, 10, 50, 50)})];
+  return {status: 'WAITING_REVIEW', source: {duration_seconds: 600}, items, advisory_items: advisory};
+}
+const coverItem = (q, id) => q.items.find(x => x.id === id);
+/* review-media.js on fake canvases: every 2D call is logged as [canvas, call, ...arguments] (canvases and images by
+ * name); alpha is what a cut from the image paints in its middle (0: nothing, as Chromium for a part of a sizeless SVG). */
+function fakeCanvases(alpha) {
+  const ctx = {window: {BFReviewCore: R}}, calls = [];
+  vm.runInNewContext(fs.readFileSync(path.join(__dirname, 'review-media.js'), 'utf8'), ctx);
+  const pen = name => ({drawImage: (...a) => calls.push([name, ...a.map(v => typeof v === 'object' ? v.name : v)]), getImageData: () => ({data: [0, 0, 0, alpha]}),
+    save: () => calls.push([name, 'save']), restore: () => calls.push([name, 'restore']), setLineDash: d => calls.push([name, 'dash', ...d]), strokeRect: (...a) => calls.push([name, 'stroke', ...a]),
+    set strokeStyle(v) { calls.push([name, 'color', v]); }, set lineWidth(v) { calls.push([name, 'width', v]); }, set imageSmoothingEnabled(v) { /* not logged */ }, set imageSmoothingQuality(v) { /* not logged */ }});
+  let made = 0;
+  const doc = {createElement: tag => { const c = {name: tag + ++made}; c.getContext = () => pen(c.name); calls.push(['create', c.name]); return c; }};
+  const canvas = name => ({name, dataset: {}, style: {}, ownerDocument: doc, getContext: () => pen(name)});
+  return {Media: ctx.window.BFReviewMedia, calls, canvas};
+}
+check('Session D (1): the regions other cards blur, as the export: a decided BLUR region over start–end, or over each moment of a discrete card; a suggested BLUR as pending; never KEEP, whole-frame BLUR, candidates, the card itself or the red box it borrows', () => {
+  const q = coverQueue(), covers = D.blurCovers(q, coverItem(q, 'dlg'));
+  same(covers.map(c => [c.id, c.state]), [['wm', 'applied'], ['top', 'applied'], ['band', 'applied'], ['scroll', 'pending'], ['moments', 'applied']]);
+  const [wm] = covers, by = id => covers.find(c => c.id === id);
+  same(wm.box, {left: 552 / 1280, top: 643 / 720, width: 176 / 1280, height: 31 / 720});
+  same(wm.region, {x: 552, y: 643, width: 176, height: 31}); same(wm.size, [1280, 720]); same(wm.moments, [{start: 0, end: 600}]);
+  same(covers.map(c => [c.kind, c.scope, c.short]), [['watermark', 'toàn phim', 'toàn phim'], ['chữ cố định', 'toàn phim', 'toàn phim'], ['chữ cố định', 'toàn phim', 'toàn phim'],
+    ['dòng chữ chạy', '01:45.0–03:20.0', '1:45–3:20'], ['logo', '2 khoảnh khắc 01:35.0–01:55.0', '2 khoảnh khắc']]);
+  same(by('moments').moments, [{start: 95, end: 102}, {start: 108, end: 115}]);
+  assert.equal(wm.reading, 'WWW.EXAMPLE.COM <b>', 'plain text (escaped where it is shown)');
+  // A violence card without a region borrows the red box of the fixed logo card: that one is its red box, not a cover.
+  const fight = coverItem(q, 'fight');
+  assert.equal(R.regionBox(q, fight).owner, 'top');
+  same(D.blurCovers(q, fight).map(c => c.id), ['wm', 'band', 'scroll', 'moments']);
+  // A logo card visual_logo blurs as 'logo'; a fixed region read by the logo scanner is a fixed logo.
+  same(D.blurCovers(q, coverItem(q, 'later')).map(c => [c.id, c.kind]), [['wm', 'watermark'], ['top', 'chữ cố định'], ['band', 'chữ cố định']]);
+  const logoQ = coverQueue(); coverItem(logoQ, 'top').category = 'visual_logo';
+  assert.equal(D.blurCovers(logoQ, coverItem(logoQ, 'dlg'))[1].kind, 'logo cố định');
+  // No frame size, no region or a broken one, a cleared decision: nothing to draw.
+  const broken = coverQueue();
+  coverItem(broken, 'wm').source_frame_size = null; coverItem(broken, 'top').decision_region_source_pixels = null; coverItem(broken, 'band').decision_region_source_pixels = {x: 0, y: 0, width: 0, height: 9};
+  Object.assign(coverItem(broken, 'moments'), {decision: null, suggested_decision: 'KEEP'});
+  same(D.blurCovers(broken, coverItem(broken, 'dlg')).map(c => c.id), ['scroll']);
+  same(D.blurCovers({items: []}, coverItem(q, 'dlg')), []);
+  // A region that starts left of or above the frame keeps only its part inside it; one wholly outside is not drawn.
+  const edge = coverQueue();
+  coverItem(edge, 'top').decision_region_source_pixels = {x: -40, y: -10, width: 100, height: 30};
+  coverItem(edge, 'band').decision_region_source_pixels = {x: -200, y: 5, width: 100, height: 30};
+  same(D.blurCovers(edge, coverItem(edge, 'dlg')).filter(c => c.id === 'top' || c.id === 'band').map(c => [c.id, c.box]), [['top', {left: 0, top: 0, width: 60 / 1280, height: 20 / 720}]]);
+});
+check('Session D (2): what is drawn follows the time of the image: a moment holds it (±0.05 s), a discrete card counts in its moments only; an image without a time (a text preview) needs one moment over the whole card, over each moment of a discrete card', () => {
+  const q = coverQueue(), dlg = coverItem(q, 'dlg'), covers = D.blurCovers(q, dlg), at = t => D.coversAt(covers, dlg, t).map(c => c.id);
+  same(at(105), ['wm', 'top', 'band', 'scroll'], 'in the gap between the two moments');
+  same(at(100.5), ['wm', 'top', 'band', 'moments'], 'before the scrolling line');
+  same(at(104.96), ['wm', 'top', 'band', 'scroll'], '0.05 s early still counts');
+  same(at(104.9), ['wm', 'top', 'band']);
+  same(at(102.04), ['wm', 'top', 'band', 'moments']); same(at(102.1), ['wm', 'top', 'band']);
+  for (const t of [null, undefined, '', 'x']) same(at(t), ['wm', 'top', 'band'], 'no time: ' + t);
+  const scene = coverItem(q, 'scene');
+  same(D.coversAt(D.blurCovers(q, scene), scene, null).map(c => c.id), ['wm', 'band', 'moments'], 'each moment of the scene lies in a moment of the other card');
+  same(D.coversAt(D.blurCovers(q, scene), scene, 105).map(c => c.id), ['wm', 'band', 'scroll']);
+});
+check('Session D (3): a card that nothing else blurs draws nothing (an empty layer, no note, no "Ẩn khung" for it alone)', () => {
+  const Cards = cardsModule(), q = coverQueue();
+  q.items = q.items.filter(x => ['dlg', 'later', 'kept', 'fight'].includes(x.id));
+  const fight = coverItem(q, 'fight');
+  same(D.blurCovers(q, fight), []); assert.equal(D.coverageNote(q, fight), ''); assert.equal(D.coverLegend(q, fight, 104), '');
+  const html = Cards.card(cardCtx(q), fight);
+  assert.ok(html.includes('<span class="rv-covers" data-t="104"></span>'), 'an empty layer that remembers the image time');
+  assert.ok(!/class="rv-cover (applied|pending)/.test(html) && html.includes('<p class="rv-cover-note" hidden></p>'));
+  assert.ok(!D.techBody(q, fight, null).includes('class="coverage"'));
+  assert.ok(!Cards.card(cardCtx(q), coverItem(q, 'dlg')).includes('class="rv-cover applied'), 'KEEP and a later logo are not drawn');
+  const noImage = coverQueue(), bare = coverItem(noImage, 'scene');
+  assert.ok(!Cards.card(cardCtx(noImage), bare).includes('rv-covers'), 'no image, no layer');
+  const only = cssRules().find(r => r.selector === '.rv-card:not(.d-cut):not(.d-blur-full):not(:has(.rv-region, .rv-aibox, .rv-cover)) .rv-frames-btn');
+  assert.ok(only && /^\s*display: none;\s*$/.test(only.body), '"Ẩn khung" also where only other cards\' regions are drawn');
+});
+check('Session D (4): drawn like the export: the blurred image in a dashed sky-blue box, "đã làm mờ ở thẻ watermark (toàn phim)"; a suggestion: a dotted violet box, nothing blurred, "…, chưa duyệt"; "Ẩn khung", a cut or whole-frame card and the playing video hide them', () => {
+  const Cards = cardsModule(), q = coverQueue(), dlg = coverItem(q, 'dlg'), owners = html => [...html.matchAll(/<span class="rv-cover (applied|pending)[^"]*" data-owner="([^"]+)"/g)].map(m => [m[2], m[1]]);
+  const html = Cards.card(cardCtx(q), dlg);
+  same(owners(html), [['wm', 'applied'], ['top', 'applied'], ['band', 'applied']], 'a text preview has no time: the film-long regions');
+  assert.match(html, /<span class="rv-covers" data-t=""><span class="rv-cover applied[^"]*" data-owner="wm" data-region="552,643,176,31,1280,720" style="left:43\.13%;top:89\.31%;width:13\.75%;height:4\.31%;--room:[\d.]+"><canvas class="rv-cover-blur" aria-hidden="true"><\/canvas><em>đã làm mờ · watermark<\/em><\/span>/);
+  // The full words where they fit on a phone card; the watermark at the bottom gets the shorter ones (D (4b)).
+  assert.ok(html.includes('<canvas class="rv-cover-blur" aria-hidden="true"></canvas><em>đã làm mờ ở thẻ chữ cố định (toàn phim)</em>'), 'the band along the top');
+  assert.ok(html.indexOf('rv-covers') > html.indexOf('<img') && html.indexOf('rv-covers') < html.indexOf('rv-region'), 'over the image, under the red box');
+  assert.ok(html.includes('<p class="rv-cover-note">Vùng mờ viền xanh: 3 vùng thẻ khác đã làm mờ suốt đoạn này — bản xuất cũng làm mờ. Còn 2 vùng của thẻ khác chỉ trùng một phần đoạn này, không vẽ trên ảnh này (xem Chi tiết kỹ thuật).</p>'));
+  const later = Cards.coversHtml(cardCtx(q), dlg, 105);
+  same(owners(later), [['wm', 'applied'], ['top', 'applied'], ['band', 'applied'], ['scroll', 'pending']]);
+  assert.match(later, /<span class="rv-cover pending[^"]*" data-owner="scroll" data-region="0,680,1280,40,1280,720" style="[^"]+"><em>đề xuất[^<]*, chưa duyệt<\/em><\/span>/, 'no blurred copy on a suggestion');
+  assert.equal(D.coverLegend(q, dlg, 105), 'Vùng mờ viền xanh: 3 vùng thẻ khác đã làm mờ lúc 1:45.0 — bản xuất cũng làm mờ. Viền tím chấm: 1 vùng thẻ khác đề xuất làm mờ, chưa duyệt. Còn 1 vùng của thẻ khác làm mờ lúc khác trong đoạn này, không vẽ trên ảnh này (xem Chi tiết kỹ thuật).');
+  // Ids and readings reach the markup escaped.
+  const odd = coverQueue(); coverItem(odd, 'wm').id = 'wm"><b>';
+  assert.ok(Cards.card(cardCtx(odd), coverItem(odd, 'dlg')).includes('data-owner="wm&quot;&gt;&lt;b&gt;"'));
+  // "Ẩn khung" hides them with the red box; so do a cut or whole-frame card and the video while it shows.
+  assert.match(Cards.card(cardCtx(q, {bare: new Set(['dlg'])}), dlg), /^<article class="scene rv-card decided bare" /);
+  const rules = cssRules(), rule = sel => rules.find(r => r.selector === sel);
+  for (const sel of ['.rv-card.bare .rv-covers, .rv-card.bare .rv-cover-note', '.rv-art.revealed .rv-covers',
+    '.rv-card.d-cut .rv-covers, .rv-card.d-cut .rv-cover-note, .rv-card.d-blur-full .rv-covers, .rv-card.d-blur-full .rv-cover-note']) {
+    assert.ok(rule(sel) && /^\s*display: none;\s*$/.test(rule(sel).body), sel);
+  }
+  assert.match(rule('.rv-cover').body, /outline: 2px dashed #38bdf8;.*outline-offset: 2px;.*pointer-events: none;/);
+  assert.match(rule('.rv-cover.pending').body, /^\s*outline: 2px dotted #c084fc;\s*$/);
+  assert.match(rule('.rv-cover-blur').body, /position: absolute; inset: 0; width: 100%; height: 100%;/);
+  assert.ok(!/filter/.test(rule('.rv-cover-blur').body), 'the blur is painted into the canvas, no CSS filter (R4-B3)');
+});
+check('Session D (4b): on a 390 px phone (job 134: a band along the top, a fixed text under its right end, the watermark under the subtitles) no label covers another; a blurred region carries its label inside', () => {
+  const Cards = cardsModule(), q = coverQueue([1280, 536]), dlg = coverItem(q, 'dlg');
+  Object.assign(coverItem(q, 'wm'), {decision_region_source_pixels: {x: 552, y: 443, width: 176, height: 31}});
+  Object.assign(dlg, {suggested_region_source_pixels: {x: 300, y: 380, width: 680, height: 50}});
+  const labels = Cards.coverLabels(cardCtx(q), dlg, null), meets = (a, b) => a.left < b.right && b.left < a.right && a.top < b.bottom && b.top < a.bottom;
+  same(labels.map(l => l.id), ['band', 'top', 'wm']);
+  for (let i = 0; i < labels.length; i++) for (let k = i + 1; k < labels.length; k++) assert.ok(!meets(labels[i].rect, labels[k].rect), labels[i].id + ' / ' + labels[k].id);
+  assert.match(labels[0].cls, / lin/); assert.equal(labels[0].text, 'đã làm mờ ở thẻ chữ cố định (toàn phim)');
+  assert.equal(labels[1].text, 'đã làm mờ ở thẻ chữ cố định (toàn phim)', 'under its box: the band label is inside the band');
+  assert.equal(labels[2].text, 'đã làm mờ · watermark', 'the full words would wrap below the image or cover the red box');
+  assert.match(labels[2].cls, / lin/);
+  assert.ok(labels.every(l => l.rect.top >= 0 && l.rect.bottom <= 1), 'inside the image height');
+  // On the card of the text at the top, the labels keep off its red box and stay in their blurred boxes, in shorter
+  // words, rather than over the picture (the watermark's full words took two lines over the subtitles above it).
+  const onTop = Cards.coverLabels(cardCtx(q), coverItem(q, 'top'), null);
+  same(onTop.map(l => [l.id, l.cls, l.text]), [['band', ' lin', 'đã làm mờ · chữ cố định'], ['wm', ' lin', 'đã làm mờ · watermark']]);
+  // Too crowded for the full words: the short label, never two over each other.
+  const crowd = coverQueue([1280, 536]);
+  crowd.items.push(...[0, 1, 2].map(i => ({...coverItem(crowd, 'top'), id: 'top' + i, decision_region_source_pixels: {x: 700 + i * 20, y: 30 + i * 6, width: 300, height: 40}})));
+  const many = Cards.coverLabels(cardCtx(crowd), coverItem(crowd, 'dlg'), null);
+  const placed = many.filter(l => l.free);
+  assert.ok(placed.length < many.length && many.filter(l => !l.free).every(l => l.text === '' && l.rect === null), 'no room: no label');
+  for (let i = 0; i < placed.length; i++) for (let k = i + 1; k < placed.length; k++) assert.ok(!meets(placed[i].rect, placed[k].rect));
+});
+check('Session D (5): "Chi tiết kỹ thuật" on every card names each region other cards blur (watermark, scrolling text, fixed text or logo, logo, moments): which card, where and when; suggestions apart; whole-frame BLUR counted; escaped', () => {
+  const q = coverQueue(), note = D.coverageNote(q, coverItem(q, 'dlg'));
+  assert.ok(note.startsWith('<div class="coverage">') && note.endsWith('</div>'), note);
+  for (const part of [
+    'Vùng thẻ khác đã làm mờ (bản xuất làm mờ đúng vùng và lúc này; trên ảnh: viền xanh nét đứt): ',
+    'watermark “WWW.EXAMPLE.COM &lt;b&gt;” (x=552, y=643, rộng=176, cao=31) — đã làm mờ ở thẻ riêng, toàn phim, suốt đoạn của thẻ này',
+    'chữ cố định “EXAMPLE.COM” (x=837, y=44, rộng=319, cao=47) — đã làm mờ ở thẻ riêng, toàn phim, suốt đoạn của thẻ này',
+    'chữ cố định (x=0, y=21, rộng=1280, cao=32) — đã làm mờ ở thẻ riêng, toàn phim',
+    'logo (x=500, y=300, rộng=100, cao=50) — đã làm mờ ở thẻ riêng, 2 khoảnh khắc 01:35.0–01:55.0, trùng thẻ này 01:40.0–01:42.0; 01:48.0–01:50.0',
+    'Vùng thẻ khác chỉ đề xuất làm mờ, chưa duyệt (trên ảnh: viền tím chấm): dòng chữ chạy (x=0, y=680, rộng=1280, cao=40) — đề xuất làm mờ ở thẻ riêng, 01:45.0–03:20.0, trùng thẻ này 01:45.0–01:50.0',
+    '1 đoạn trùng thời gian đã được duyệt làm mờ toàn cảnh.']) assert.ok(note.includes(part), part + '\n' + note);
+  assert.ok(!note.includes('không có vùng riêng'), 'the dialogue card has its own red box');
+  // The same region as the card's own red box (the KEEP card of a second watermark reading).
+  assert.ok(D.coverageNote(q, coverItem(q, 'kept')).includes('watermark “WWW.EXAMPLE.COM &lt;b&gt;” (x=552, y=643, rộng=176, cao=31), cùng vùng khung đỏ của thẻ này — đã làm mờ ở thẻ riêng'));
+  // A safety card (no region of its own) gets the note too, as every card does.
+  const fight = D.coverageNote(q, coverItem(q, 'fight'));
+  assert.ok(fight.includes('Thẻ này không có vùng riêng — quyết định bên dưới áp dụng cho cả đoạn 1:40–1:50.') && fight.includes('watermark'), fight);
+  for (const id of ['dlg', 'fight', 'later', 'scroll']) assert.ok(D.techBody(q, coverItem(q, id), null).includes('<div class="coverage">'), id);
+  // More than six regions: the first six and how many more.
+  const lots = coverQueue();
+  lots.items.push(...[0, 1, 2, 3].map(i => ({...coverItem(lots, 'top'), id: 'extra' + i, labels: [], decision_region_source_pixels: {x: 10 * i, y: 200, width: 40, height: 20}})));
+  assert.match(D.coverageNote(lots, coverItem(lots, 'dlg')), / và 2 vùng khác\./);
+  assert.ok(fs.readFileSync(path.join(__dirname, 'review-core.js'), 'utf8').slice(0, 4400).includes('S12'), 'review-core.js lists S12');
+  assert.ok(!/rv-cover|blurCovers|coverageNote/.test(script), 'D2: the classic page is unchanged');
+});
+check('Session D (6): the blurred copy is cut from the loaded image (a letterboxed frame too), shrunk to a few cells and stretched back into the canvas once; review.js draws it when an image loads', () => {
+  same(D.coverCrop({x: 552, y: 443, width: 176, height: 31}, [1280, 536], 960, 402), {sx: 414, sy: 332.25, sw: 132, sh: 23.25, gw: 17, gh: 3});
+  same(D.coverCrop({x: 0, y: 0, width: 1280, height: 72}, [1280, 720], 1280, 800), {sx: 0, sy: 40, sw: 1280, sh: 72, gw: 53, gh: 3}, 'source letterboxed in the image');
+  same(D.coverCrop({x: 1200, y: 700, width: 200, height: 100}, [1280, 720], 1280, 720), {sx: 1200, sy: 700, sw: 80, sh: 20, gw: 10, gh: 3}, 'cut at the image edge');
+  for (const args of [[[0, 0], 960, 540], [[1280, 720], 0, 540], [null, 960, 540]]) assert.equal(D.coverCrop({x: 1, y: 1, width: 5, height: 5}, ...args), null);
+  assert.equal(D.coverCrop({x: 2000, y: 10, width: 5, height: 5}, [1280, 720], 1280, 720), null, 'outside the image');
+  const {Media, calls, canvas} = fakeCanvases(255), img = {name: 'img', naturalWidth: 960, naturalHeight: 402}, cover = canvas('cover');
+  Media.drawCover(cover, img, {sx: 414, sy: 332.25, sw: 132, sh: 23.25, gw: 17, gh: 3});
+  same([cover.width, cover.height], [132, 23]);
+  same(calls, [['create', 'canvas1'], ['canvas1', 'img', 414, 332.25, 132, 23.25, 0, 0, 17, 3], ['cover', 'canvas1', 0, 0, 17, 3, 0, 0, 132, 23]], 'cut from the image itself, no copy of the whole image');
+  assert.equal(cover.dataset.drawn, '1');
+  // A part of an SVG without a size of its own paints nothing in Chromium: the cells are cut again from a canvas copy
+  // of the whole image (at most 1920 px a side).
+  const svg = fakeCanvases(0), poster = svg.canvas('cover');
+  svg.Media.drawCover(poster, {name: 'svg', naturalWidth: 3840, naturalHeight: 1608}, {sx: 1656, sy: 1329, sw: 528, sh: 93, gw: 17, gh: 3});
+  same(svg.calls, [['create', 'canvas1'], ['canvas1', 'svg', 1656, 1329, 528, 93, 0, 0, 17, 3], ['create', 'canvas2'], ['canvas2', 'svg', 0, 0, 1920, 804],
+    ['canvas1', 'canvas2', 828, 664.5, 264, 46.5, 0, 0, 17, 3], ['cover', 'canvas1', 0, 0, 17, 3, 0, 0, 528, 93]]);
+  const review = fs.readFileSync(path.join(__dirname, 'review.js'), 'utf8');
+  assert.match(review, /img\.addEventListener\('load', \(\) => \{ if \(s\) Cards\.syncCovers\(el, ctx\(\), s\.map\.get\(el\.dataset\.item\), img\); drawMag\(el\); \}\)/, 'every image a card shows repaints its covers');
+  assert.ok(review.split('\n').length <= 800, 'review.js stays under the 800-line ceiling');
+});
+check('Session D (7): the magnifier shows the same covers (blurred with a dashed sky-blue line, a suggestion dotted violet) under the red line; none when bare, none on a cut or wholly blurred card', () => {
+  const Cards = cardsModule(), view = {sx: 400, sy: 300, sw: 200, sh: 66.5, cssW: 300, cssH: 99.75, zoom: 3, scroll: false, red: {x: 30, y: 20, w: 150, h: 30}}, img = {name: 'img', naturalWidth: 960, naturalHeight: 402};
+  const covers = [{state: 'applied', crop: {sx: 414, sy: 332.25, sw: 132, sh: 23.25, gw: 17, gh: 3}}, {state: 'pending', crop: {sx: 380, sy: 290, sw: 40, sh: 20, gw: 6, gh: 3}},
+    {state: 'applied', crop: {sx: 700, sy: 300, sw: 50, sh: 20, gw: 7, gh: 3}}];
+  const one = fakeCanvases(255), mag = one.canvas('mag');
+  one.Media.drawMagnifier(mag, img, view, false, 1, covers);
+  same([mag.width, mag.height, mag.style.width, mag.style.height], [300, 100, '300.0px', '99.8px']);
+  same(one.calls, [['mag', 'img', 400, 300, 200, 66.5, 0, 0, 300, 100],
+    ['create', 'canvas1'], ['canvas1', 'img', 414, 332.25, 132, 23.25, 0, 0, 17, 3], ['mag', 'canvas1', 0, 0, 17, 3, 21, 48.375, 198, 34.875],
+    ['mag', 'save'], ['mag', 'color', '#38bdf8'], ['mag', 'width', 2], ['mag', 'dash', 6, 4], ['mag', 'stroke', 18, 45.375, 204, 40.875], ['mag', 'restore'],
+    ['mag', 'save'], ['mag', 'color', '#c084fc'], ['mag', 'width', 2], ['mag', 'dash', 2, 3], ['mag', 'stroke', -33, -18, 66, 36], ['mag', 'restore'],
+    ['mag', 'color', '#ff304f'], ['mag', 'width', 2], ['mag', 'stroke', 27, 17, 156, 36]], 'the third cover is outside the view');
+  const sharp = fakeCanvases(255);
+  sharp.Media.drawMagnifier(sharp.canvas('mag'), img, view, false, 2, covers.slice(0, 1));
+  same(sharp.calls.filter(c => c[1] === 'dash' || c[1] === 'width'), [['mag', 'width', 4], ['mag', 'dash', 12, 8], ['mag', 'width', 4]], 'lines and dashes in CSS pixels');
+  for (const [bare, list] of [[true, covers], [false, undefined]]) {
+    const other = fakeCanvases(255);
+    other.Media.drawMagnifier(other.canvas('mag'), img, view, bare, 1, list);
+    same(other.calls, [['mag', 'img', 400, 300, 200, 66.5, 0, 0, 300, 100], ...(bare ? [] : [['mag', 'color', '#ff304f'], ['mag', 'width', 2], ['mag', 'stroke', 27, 17, 156, 36]])]);
+  }
+  // review-cards.js magCovers: the covers of the layer shown, cut in the loaded image's pixels.
+  const node = (state, region) => ({classList: {contains: c => c === state}, dataset: {region}});
+  const card = (cls, nodes) => ({matches: sel => sel.split(',').some(s => cls.split(' ').includes(s.trim().slice(1))), querySelectorAll: () => nodes});
+  const nodes = [node('applied', '552,443,176,31,1280,536'), node('pending', '2000,10,5,5,1280,720')];
+  same(Cards.magCovers(card('', nodes), img), [{state: 'applied', crop: {sx: 414, sy: 332.25, sw: 132, sh: 23.25, gw: 17, gh: 3}}], 'a cover outside the image is left out');
+  for (const cls of ['d-cut', 'd-blur-full']) same(Cards.magCovers(card(cls, nodes), img), [], cls);
+  same(Cards.magCovers(card('', nodes), {naturalWidth: 0}), [], 'image not loaded');
+  const review = fs.readFileSync(path.join(__dirname, 'review.js'), 'utf8'), cards = fs.readFileSync(path.join(__dirname, 'review-cards.js'), 'utf8');
+  assert.match(review, /Media\.drawMagnifier\(canvas, img, view, el\.classList\.contains\('bare'\), window\.devicePixelRatio, Cards\.magCovers\(el, img\)\);/);
+  assert.match(cards, /if \(\(covers \|\| whole !== el\.matches\('\.d-cut, \.d-blur-full'\)\) && el\.__magKey !== undefined\) el\.__magKey = null;/, 'patch draws a magnifier again when its covers change');
 });
 check('R4-B3: no backdrop-filter in V2 (dialog backdrops, the top bar and the "Làm mờ" region made Chrome blink on the user\'s PC); no size container on card images', () => {
   const files = fs.readdirSync(__dirname).filter(f => /\.(css|js|html)$/.test(f));
