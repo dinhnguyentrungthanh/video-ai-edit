@@ -91,7 +91,7 @@
       const x = s.map.get(el.dataset.item);
       if (!x) return;
       const art = el.querySelector('.rv-art'), img = art.querySelector('img'), m = media(x), remote = m.ev && m.hasKey && m.ev.strongest && img && img.dataset.src.includes('/frame?');
-      if (img && !img.__mag) { img.__mag = true; img.addEventListener('load', () => drawMag(el)); } // every image it shows: the magnifier follows
+      if (img && !img.__mag) { img.__mag = true; img.addEventListener('load', () => { if (s) Cards.syncCovers(el, ctx(), s.map.get(el.dataset.item), img); drawMag(el); }); } // every image it shows: other cards' blurs and the magnifier follow
       loader.watch(art, img ? img.dataset.src : '', priority, remote ? frameRefresher(x, m.ev.strongest.t) : null);
       for (const thumb of el.querySelectorAll('.rv-thumb:not(.ghost)')) {
         loader.watch(thumb, thumb.querySelector('img').dataset.src, priority ? 5 : 0, thumb.dataset.remote ? frameRefresher(x, Number(thumb.dataset.t)) : null);

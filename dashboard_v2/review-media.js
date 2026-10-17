@@ -281,5 +281,32 @@
     }
   }
 
-  root.BFReviewMedia = {createImageLoader, createPlayer, drawMagnifier};
+  /* Session D: a region another card blurs, painted from the card's own loaded <img> (media are no-store: a second
+   * <img> would ask again): its crop (BFReviewDetail.coverCrop) shrunk to gw × gh cells, then stretched back over the
+   * canvas with smoothing, once (no CSS or backdrop filter, R4-B3). */
+  const COVER_CANVAS_MAX = 1280, COVER_SOURCE_MAX = 1920;
+  /* The image once as a canvas at its natural size (≤ COVER_SOURCE_MAX a side), the source the covers are cut from:
+   * Chromium paints nothing for a part of an SVG without a size of its own (the demo posters), a canvas always works. */
+  function imageCanvas(img) {
+    const fit = Math.min(1, COVER_SOURCE_MAX / Math.max(img.naturalWidth, img.naturalHeight)), canvas = img.ownerDocument.createElement('canvas');
+    canvas.width = Math.max(1, Math.round(img.naturalWidth * fit)); canvas.height = Math.max(1, Math.round(img.naturalHeight * fit));
+    const g = canvas.getContext('2d');
+    g.imageSmoothingEnabled = true; g.imageSmoothingQuality = 'high';
+    g.drawImage(img, 0, 0, canvas.width, canvas.height);
+    return canvas;
+  }
+  function drawCover(canvas, img, crop) {
+    const fit = Math.min(1, COVER_CANVAS_MAX / Math.max(crop.sw, crop.sh));
+    canvas.width = Math.max(1, Math.round(crop.sw * fit)); canvas.height = Math.max(1, Math.round(crop.sh * fit));
+    const small = canvas.ownerDocument.createElement('canvas');
+    small.width = crop.gw; small.height = crop.gh;
+    const s = small.getContext('2d'), g = canvas.getContext('2d');
+    s.imageSmoothingEnabled = true; s.imageSmoothingQuality = 'high';
+    s.drawImage(img, crop.sx, crop.sy, crop.sw, crop.sh, 0, 0, crop.gw, crop.gh);
+    g.imageSmoothingEnabled = true; g.imageSmoothingQuality = 'high';
+    g.drawImage(small, 0, 0, crop.gw, crop.gh, 0, 0, canvas.width, canvas.height);
+    canvas.dataset.drawn = '1';
+  }
+
+  root.BFReviewMedia = {createImageLoader, createPlayer, drawMagnifier, imageCanvas, drawCover};
 })(window);
