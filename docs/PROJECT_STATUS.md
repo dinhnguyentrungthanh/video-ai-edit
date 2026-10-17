@@ -1,3 +1,7 @@
+## G15 merge, review previews show other cards' blurs and the export lane budgeted by stage (2026-10-17) — branch `merge/g15`, not yet in the main folder
+
+- Session D task a (entries below): card images and the magnifier draw the regions other cards blur. A1d (entry below): the export lane uses the measured peak of the running scan stage instead of the Qwen2-VL peak for every stage, and heavier stages wait for a lane export. Scan cache keys unchanged; full suite 3,537 (1 unrelated cleanup error, OK on rerun). Details in `CHANGELOG.md`.
+
 ## G14 merge, the subtitle-band watermark card reaches the film's edges (2026-10-16) — branch `merge/g14`, not yet in the main folder
 
 - Session D (entry below): a site watermark read in 10 runs or more reaches the scan's start and end when they are 150 s or closer, and carried decisions stay with their own card. Review build only: scan cache keys unchanged, "Chạy lại" rebuilds the list without a rescan. Full suite 3,513 (1 unrelated download e2e failure, OK on rerun). Details in `CHANGELOG.md`.

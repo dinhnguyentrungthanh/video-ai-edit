@@ -1,3 +1,8 @@
+# G15 merge: review previews show other cards' blurs; export lane budgeted by the running stage (2026-10-17, branch `merge/g15` from `main` `41169fc`; not yet in the main folder)
+
+- Merged `fix/review-preview-blurs` (session D, task a) and `perf/export-lane-a1d` (A1d) with `--no-ff`; entries below.
+- Scan cache keys unchanged (10 stages). Full suite 3,537 tests, 39 skipped, 1 error in `test_adult_verification` (its temporary folder's cleanup hit a file held by another process), which passed 17/17 when rerun alone.
+
 # A review card's image shows the regions other cards blur — session D (2026-10-17, branch `fix/review-preview-blurs` from `main` `41169fc`; not merged)
 
 - Cause (job 134 on the phone): a card's preview showed the watermark or fixed text that another card already blurs as sharp as the rest, so the export's blur was invisible and the red box read as the blurred region.

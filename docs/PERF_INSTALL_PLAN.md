@@ -1047,6 +1047,17 @@ Session cloud lập kế hoạch dừng vì hết credit. Một session **điề
   - ảnh xem trước của thẻ hiện cả vùng các thẻ khác đã làm mờ (để thẻ phụ đề không trông như bỏ sót quảng cáo);
   - A1d (mục 14.17), nút dựng lại giữ quyết định, nhớ đoạn giới thiệu của nền tảng (job 129, job 145 0:00–0:05), lỗi nguồn xoay 90°/270°.
 
+### 14.20 G15: D (a) ảnh thẻ hiện vùng thẻ khác đã làm mờ, và A1d (ngân sách VRAM theo bước) (2026-10-17)
+
+- Hai session chạy song song cho nhanh (người dùng đồng ý), gộp chung một lần:
+  - `fix/review-preview-blurs`: ảnh và ô phóng to của thẻ vẽ vùng các thẻ khác đã quyết BLUR (làm mờ, viền nét đứt xanh) và vùng chỉ đề xuất BLUR (viền chấm tím, không làm mờ); "Ẩn khung" ẩn hết;
+  - `perf/export-lane-a1d`: làn xuất tính theo đỉnh đã đo của bước đang chạy (text 833, localize_logo 1.309, visual_logo 4.691, confirm_violence 4.943 MiB…), bước nặng chờ bản xuất ở làn phụ; kiểm GPU thật trên Control Center thử đạt (đỉnh 5.134 MiB, không tràn).
+- Khóa cache quét không đổi. Full suite 3.537 (1 lỗi dọn thư mục tạm không liên quan, chạy lại đạt).
+- Còn lại:
+  - (c) nút "Dựng lại danh sách duyệt (giữ quyết định)": session D đang làm trên `feat/rebuild-keep-decisions` (từ `b9b7e23`);
+  - nhớ đoạn giới thiệu của nền tảng (job 129, job 145 0:00–0:05), lỗi nguồn xoay 90°/270°;
+  - tài liệu của D-text-consensus và D-top-logo còn trỏ tới `temp\text-consensus\`, `temp\top-logo\`: kết quả đã chuyển sang `reports\evidence\`.
+
 ### 14.6 Cách session điều phối làm việc
 
 - Làm trong worktree `temp\wt-coord`, nhánh `coord/plan` (từ `origin/main`). **Không sửa thư mục chính** đang chạy Control Center.
