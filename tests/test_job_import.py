@@ -360,6 +360,36 @@ class RestartImportTests(unittest.TestCase):
         output.write_bytes(b"not a video")
         self.assertEqual(self.restart()["state"], "READY_TO_EXPORT")
 
+    def rebuilt_queue(self, **changes):
+        """A newer revision of the review as "Dựng lại danh sách duyệt" leaves it: the card under a new id."""
+        rebuilt = json.loads(json.dumps(self.queue))
+        rebuilt["items"][0].update(id="a-r4", **changes)
+        rebuilt["updated_at"] = "2026-10-02T00:00:00+00:00"
+        folder = self.root / "reports/jobs/movie-run-r4"
+        folder.mkdir(parents=True)
+        (folder / "review-queue.json").write_text(json.dumps(rebuilt), encoding="utf-8")
+        return rebuilt
+
+    def test_a_rebuilt_review_of_the_same_render_completes_the_job(self):
+        # Job 143: the export of the previous revision renders what the rebuilt review renders.
+        output = review_export_paths(self.root, self.queue)[1]
+        self.write_manifest(output)
+        rebuilt = self.rebuilt_queue()
+        self.assertNotEqual(review_export_paths(self.root, rebuilt)[1], output)
+        after = self.restart()
+        self.assertEqual(after["active_queue_path"], "reports/jobs/movie-run-r4/review-queue.json")
+        self.assertEqual((after["state"], after["progress"]), ("COMPLETED", 1.0))
+        outputs = [item["path"] for item in self.store.artifacts(self.job_id) if item["kind"] == "final_output"]
+        self.assertEqual(outputs, [output.relative_to(self.root).as_posix()])
+
+    def test_a_rebuilt_review_of_another_render_still_waits_for_its_export(self):
+        self.write_manifest(review_export_paths(self.root, self.queue)[1])
+        self.rebuilt_queue(decision_blur_edge_mode="vertical_only")
+        after = self.restart()
+        self.assertEqual(after["active_queue_path"], "reports/jobs/movie-run-r4/review-queue.json")
+        self.assertEqual(after["state"], "READY_TO_EXPORT")
+        self.assertFalse([item for item in self.store.artifacts(self.job_id) if item["kind"] == "final_output"])
+
     def test_an_export_named_before_the_operations_hash_completes_the_job(self):
         legacy = legacy_export_paths(self.root, self.queue)[1]
         self.assertNotEqual(legacy, review_export_paths(self.root, self.queue)[1])

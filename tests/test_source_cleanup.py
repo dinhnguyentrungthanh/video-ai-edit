@@ -298,6 +298,21 @@ class CleanupFixture(unittest.TestCase):
     def manifest_of(self, job_id):
         return self.output_of(job_id).with_suffix(".mp4.manifest.json")
 
+    def rebuild_same_render(self, job_id, *, change=None):
+        """The job's review as "Dựng lại danh sách duyệt" leaves it (job 143): a new revision with the same
+        cards and decisions under new ids; ``change`` edits that queue first."""
+        job = self.store.get_job(job_id)
+        queue = self.queue(job_id)
+        for value in queue["items"]:
+            value["id"] = f'{value["id"]}-r4'
+        if change is not None:
+            change(queue)
+        relative = f'reports/jobs/{job["job_key"]}-run-r4/review-queue.json'
+        (self.root / relative).parent.mkdir(parents=True)
+        (self.root / relative).write_text(json.dumps(queue), encoding="utf-8")
+        self.store.update_job(job_id, active_queue_path=relative, active_revision=2)
+        return queue
+
     def skip_record(self, job_id, **overrides):
         """The skip:{id} record exactly as ControlCenter.skip_export writes it."""
         job = self.store.get_job(job_id)
@@ -812,6 +827,49 @@ class IneligibleTests(CleanupFixture):
             "legacy", plan_queue="reports/jobs/legacy/review-queue-r1.json",
         )
         self.assertEqual(self.reason(legacy), self.STALE)
+
+    def test_a_rebuilt_review_of_the_same_render_keeps_the_export_deletable(self):
+        # Job 143: "Dựng lại danh sách duyệt" named every card anew, so the export of the previous
+        # revision has another name; it renders the same operations and is still the review's export.
+        decided = iso(NOW - timedelta(hours=1))
+        job_id = self.make_exported_job(
+            "rebuilt", items=[item("a", decided_at=decided), blur_item("b", decided_at=decided)], operations=True,
+        )
+        output, manifest = self.output_of(job_id), self.manifest_of(job_id)
+        source = self.source_of(job_id)
+        self.rebuild_same_render(job_id)
+        self.assertNotEqual(self.output_of(job_id), output)
+        preview = self.preview([job_id])
+        self.assertEqual([entry["output_path"] for entry in preview["eligible"]],
+                         [output.relative_to(self.root).as_posix()])
+        result = self.execute([job_id], preview["preview_id"])
+        self.assertEqual((result["deleted_count"], result["failed_count"]), (1, 0))
+        self.assertEqual(self.hashed, [source.resolve(), output])
+        self.assertFalse(os.path.lexists(source) or os.path.lexists(manifest))
+        self.assertTrue(output.is_file())  # the exported video stays
+
+    def test_a_rebuilt_review_of_another_render_is_refused_as_before(self):
+        decided = iso(NOW - timedelta(hours=1))
+        for name, change in (
+            ("edge", lambda queue: queue["items"][1].update(decision_blur_edge_mode="vertical_only")),
+            ("start", lambda queue: queue["items"][1].update(start_seconds=3.5)),
+            ("policy", lambda queue: queue.update(export_size_policy={"mode": "unlimited"})),
+        ):
+            with self.subTest(change=name):
+                job_id = self.make_exported_job(
+                    name, items=[item("a", decided_at=decided), blur_item("b", decided_at=decided)],
+                    operations=True,
+                )
+                self.rebuild_same_render(job_id, change=change)
+                self.assertEqual(self.reason(job_id), self.STALE)
+        # The earlier export moved out of output/ by hand: refused with the reason main gave.
+        moved = self.make_exported_job(
+            "moved", items=[item("a", decided_at=decided), blur_item("b", decided_at=decided)], operations=True,
+        )
+        output = self.output_of(moved)
+        self.rebuild_same_render(moved)
+        os.replace(output, self.root / "work" / output.name)
+        self.assertEqual(self.reason(moved), self.STALE)
 
     def test_an_export_rendered_from_other_decisions(self):
         decided = iso(NOW - timedelta(hours=1))

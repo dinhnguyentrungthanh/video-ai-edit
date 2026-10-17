@@ -416,6 +416,33 @@ class ArchiveTests(ArchiveFixture):
         self.assertFalse(output.exists() or manifest.exists())
         self.assertTrue(self.target_of(job_id).is_file())
 
+    def test_a_rebuilt_review_of_the_same_render_archives_the_earlier_export(self):
+        # Job 143: "Dựng lại danh sách duyệt" named every card anew; the export of the previous
+        # revision renders the same operations, so that file is the one recycled.
+        decided = iso(NOW - timedelta(hours=1))
+        blurred = {
+            "id": "b", "category": "advertising", "start_seconds": 3.0, "end_seconds": 4.5, "decision": "BLUR",
+            "decided_at": decided, "reasons": ["logo"], "evidence": [],
+            "decision_region_source_pixels": {"x": 10, "y": 20, "width": 200, "height": 96},
+        }
+        job_id = self.make_exported_job("tap15", items=[item("a", decided_at=decided), blurred], operations=True)
+        output = self.output_of(job_id)
+        manifest = output.with_name(output.name + ".manifest.json")
+        queue = self.queue(job_id)
+        for value in queue["items"]:
+            value["id"] += "-r4"
+        relative = "reports/jobs/tap15-run-r4/review-queue.json"
+        (self.root / relative).parent.mkdir(parents=True)
+        (self.root / relative).write_text(json.dumps(queue), encoding="utf-8")
+        self.store.update_job(job_id, active_queue_path=relative, active_revision=2)
+        self.assertNotEqual(self.output_of(job_id), output)
+        preview = self.preview([job_id])
+        self.assertEqual(preview["eligible"][0]["output_name"], output.name)
+        result = self.archive([job_id], preview["preview_id"])
+        self.assertEqual((result["archived_count"], result["failed_count"]), (1, 0))
+        self.assertEqual([call["path"] for call in self.recycler.calls], [output, manifest])
+        self.assertTrue(self.target_of(job_id).is_file())
+
     def test_skipped_job_moves_only_the_source(self):
         job_id = self.make_skipped_job("tap30")
         record = self.store.setting(f"skip:{job_id}")

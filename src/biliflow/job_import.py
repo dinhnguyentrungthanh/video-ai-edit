@@ -3,9 +3,15 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
-from typing import Any
+from typing import Any, Sequence
 
-from biliflow.export_identity import export_manifest_path, manifest_problem, output_candidates
+from biliflow.export_identity import (
+    export_manifest_path,
+    manifest_problem,
+    other_export_problem,
+    other_exports,
+    output_candidates,
+)
 from biliflow.job_pipeline import safe_job_key
 from biliflow.job_store import SOURCE_ARCHIVED_STATES, SOURCE_CLEANED_STATES, JobStore, sha256_file
 from biliflow.probe import duration_seconds, probe_video
@@ -40,31 +46,41 @@ def _read_json(path: Path) -> dict[str, Any] | None:
 
 
 def _proven_export(root: Path, manifest_path: Path, output: Path, manifest: dict[str, Any],
-                   source: Path, source_hash: str, render: list | None, *, compare_render: bool) -> bool:
+                   source: Path, source_hash: str, render: list | None, *, compare_render: bool,
+                   named_by: dict[str, Any] | None = None) -> bool:
     """The manifest sits beside ``output`` and proves it is a complete render of ``source``.
 
     With ``compare_render`` (a reviewed job) its operations must also be the
-    ones the active review renders.
+    ones the active review renders. ``named_by`` is that review's queue when
+    ``output`` is an export an earlier revision named (other_exports): it must
+    also bear the name its operations give under that queue.
     """
     if not _same_path(manifest_path, export_manifest_path(output)) or not output.is_file():
         return False
     try:
-        problem = manifest_problem(root, output, manifest, source_sha256=source_hash, render=render,
-                                   compare_render=compare_render, source_path=source)
+        if named_by is not None:
+            problem = other_export_problem(root, output, manifest, named_by, source_sha256=source_hash,
+                                           render=render, source_path=source)
+        else:
+            problem = manifest_problem(root, output, manifest, source_sha256=source_hash, render=render,
+                                       compare_render=compare_render, source_path=source)
     except OSError:
         return False
     return problem is None
 
 
 def _completed_export(root: Path, manifest_path: Path, source: Path, source_hash: str,
-                      render: list | None, expected_outputs: list[Path] | None,
+                      render: list | None, expected_outputs: list[Path] | None, *,
+                      active_queue: dict[str, Any] | None = None, other_outputs: Sequence[Path] = (),
                       ) -> tuple[Path, dict[str, Any]] | None:
     """(output, manifest) when ``manifest_path`` proves an export of ``source``, else None.
 
     ``expected_outputs`` (a reviewed job) are the paths an export of its active
-    review may have. The output is named beside its manifest in output/ (never
-    resolved: output/ may be a junction). A malformed manifest is skipped, never
-    raised: one file in output/ must not stop the Control Center from starting.
+    review may have; ``other_outputs`` are exports of the same source earlier
+    revisions named (other_exports of ``active_queue``). The output is named
+    beside its manifest in output/ (never resolved: output/ may be a junction).
+    A malformed manifest is skipped, never raised: one file in output/ must not
+    stop the Control Center from starting.
     """
     manifest = _read_json(manifest_path)
     if not manifest or manifest.get("status") != "COMPLETED":
@@ -75,12 +91,15 @@ def _completed_export(root: Path, manifest_path: Path, source: Path, source_hash
     output_value = described.get("path") if isinstance(described, dict) else None
     output_path = root / str(output_value) if output_value else manifest_path.with_suffix("")
     try:
+        named_by = None
         if expected_outputs is not None and not any(
             _same_path(output_path, expected) for expected in expected_outputs
         ):
-            return None
+            if not any(_same_path(output_path, other) for other in other_outputs):
+                return None
+            named_by = active_queue
         if not _proven_export(root, manifest_path, output_path, manifest, source, source_hash, render,
-                              compare_render=expected_outputs is not None):
+                              compare_render=expected_outputs is not None, named_by=named_by):
             return None
     except (OSError, ValueError, RuntimeError):
         return None
@@ -244,9 +263,11 @@ def import_existing_project(root: Path, store: JobStore) -> dict[str, int]:
 
         # A verified final manifest wins over queue state. A reviewed job is
         # complete only when the manifest is the export of its active review
-        # (its own name or the legacy one, with the same operations): an older
-        # export of the same source must not undo a rerun.
+        # (its own name or the legacy one, or the name an earlier revision gave
+        # the same operations): an older export of the same source must not
+        # undo a rerun.
         expected_outputs = None
+        other_outputs: list[Path] = []
         render = None
         if previous_state is not None and previous_state not in UNREVIEWED_STATES:
             if active_queue is None:
@@ -254,10 +275,12 @@ def import_existing_project(root: Path, store: JobStore) -> dict[str, int]:
             try:
                 render = queue_render_identity(active_queue)
                 expected_outputs = output_candidates(root, active_queue, render)
+                other_outputs = other_exports(root, active_queue, render)
             except (KeyError, TypeError, ValueError):
                 continue
         for manifest_path in (root / "output").glob("*.manifest.json"):
-            found = _completed_export(root, manifest_path, source, source_hash, render, expected_outputs)
+            found = _completed_export(root, manifest_path, source, source_hash, render, expected_outputs,
+                                      active_queue=active_queue, other_outputs=other_outputs)
             if found is None:
                 continue
             output_path, manifest = found

@@ -23,6 +23,7 @@ from biliflow.export_identity import (
     export_manifest_path,
     legacy_export_paths,
     manifest_problem,
+    other_exports,
     output_candidates,
 )
 from biliflow.final_renderer import normalize_output_size_policy
@@ -123,6 +124,24 @@ def write_export(root, output, queue, *, sha=SHA, change=None, content=b"rendere
         change(manifest)
     output.with_suffix(output.suffix + ".manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
     return manifest
+
+
+def renamed(queue, mark="-r4"):
+    """``queue`` as a new revision builds it: the same cards and decisions under other ids."""
+    value = json.loads(json.dumps(queue))
+    for item in value["items"]:
+        item["id"] = f'{item["id"]}{mark}'
+    return value
+
+
+def others(root, queue):
+    """other_exports of ``queue`` with its own render identity, as verified_export asks."""
+    return other_exports(root, queue, queue_render_identity(queue))
+
+
+def folder_state(folder):
+    """Every file under ``folder`` with its bytes: what a lookup must leave as it is."""
+    return {path.relative_to(folder).as_posix(): path.read_bytes() for path in folder.rglob("*") if path.is_file()}
 
 
 class TempRoot(unittest.TestCase):
@@ -414,6 +433,160 @@ class ExistingExportTests(TempRoot):
         self.assertIsNone(existing_review_export(self.root, queue))
 
 
+class OtherRevisionExportTests(TempRoot):
+    """A new revision names its cards, and so its operations, anew ("Chạy lại", "Dựng lại danh sách duyệt"):
+    an export of the same render made from an earlier revision keeps its own name and is still the export."""
+
+    def setUp(self):
+        super().setUp()
+        # Two blurs that start together: the render applies them in this order.
+        self.exported = make_queue(
+            blur(), blur("review-b", decision_region_source_pixels=dict(REGION, x=400)), keep(),
+        )
+        self.output = review_export_paths(self.root, self.exported)[1]
+        self.manifest = write_export(self.root, self.output, self.exported)
+
+    def test_the_same_render_under_other_ids_is_reused(self):
+        rebuilt = renamed(self.exported)
+        self.assertNotEqual(review_export_paths(self.root, rebuilt)[1], self.output)
+        self.assertEqual(others(self.root, rebuilt), [self.output])
+        before = folder_state(self.root / "output")
+        found, manifest = existing_review_export(self.root, rebuilt)
+        self.assertEqual((found, manifest), (self.output, self.manifest))
+        # The size policy finalize records (the default) names it the same.
+        planned = {**rebuilt, "export_size_policy": normalize_output_size_policy("default", None)}
+        self.assertEqual(existing_review_export(self.root, planned)[0], self.output)
+        self.assertEqual(folder_state(self.root / "output"), before)  # nothing written or renamed
+
+    def test_another_render_under_other_ids_is_not_reused(self):
+        def swap(queue):
+            queue["items"][0], queue["items"][1] = queue["items"][1], queue["items"][0]
+
+        cases = {
+            "region": lambda q: q["items"][0]["decision_region_source_pixels"].update(width=180),
+            "start": lambda q: q["items"][0].update(start_seconds=3.5),
+            "end": lambda q: q["items"][0].update(end_seconds=8.5),
+            "edge mode": lambda q: q["items"][0].update(decision_blur_edge_mode="vertical_only"),
+            "cut instead": lambda q: q["items"][0].update(decision="CUT"),
+            "detected intervals": lambda q: q["items"][0].update(**DISCRETE),
+            "one more blur": lambda q: q["items"][2].update(
+                decision="BLUR", decision_region_source_pixels=dict(REGION)),
+            "order": swap,
+            "size policy": lambda q: q.update(export_size_policy=normalize_output_size_policy("unlimited", None)),
+        }
+        for name, change in cases.items():
+            with self.subTest(change=name):
+                rebuilt = renamed(self.exported)
+                change(rebuilt)
+                self.assertIsNone(existing_review_export(self.root, rebuilt))
+
+    def test_an_export_under_a_non_default_policy_is_reused_under_that_policy_only(self):
+        unlimited = make_queue(blur(), keep(), policy=normalize_output_size_policy("unlimited", None))
+        output = review_export_paths(self.root, unlimited)[1]
+        write_export(self.root, output, unlimited)
+        rebuilt = renamed(unlimited)
+        self.assertEqual(existing_review_export(self.root, rebuilt)[0], output)
+        for policy in (None, normalize_output_size_policy("default", None),
+                       normalize_output_size_policy("custom", 2)):
+            with self.subTest(policy=policy):
+                other = {key: value for key, value in rebuilt.items() if key != "export_size_policy"}
+                if policy is not None:
+                    other["export_size_policy"] = policy
+                self.assertIsNone(existing_review_export(self.root, other))
+
+    def test_a_file_its_manifest_does_not_prove_is_never_reused(self):
+        rebuilt = renamed(self.exported)
+        broken = {
+            "no manifest": lambda: export_manifest_path(self.output).unlink(),
+            "unreadable manifest": lambda: export_manifest_path(self.output).write_text("{", encoding="utf-8"),
+            "decode not passed": lambda: self.rewrite(lambda m: m["encoding"].update(
+                full_decode_validation_passed=False)),
+            "not completed": lambda: self.rewrite(lambda m: m.update(status="FAILED")),
+            "other source": lambda: self.rewrite(lambda m: m["source"].update(sha256="cd" * 32)),
+            "source modified": lambda: self.rewrite(lambda m: m["source"].update(modified=True)),
+            "about another file": lambda: self.rewrite(lambda m: m["output"].update(
+                path="output/other-reviewed.mp4")),
+            "file changed": lambda: self.output.write_bytes(self.output.read_bytes() + b"x"),
+            "no operations": lambda: self.rewrite(lambda m: m.pop("operations")),
+            "other operations": lambda: self.rewrite(lambda m: m.update(operations=m["operations"][:1])),
+        }
+        for name, damage in broken.items():
+            with self.subTest(case=name):
+                self.manifest = write_export(self.root, self.output, self.exported)
+                self.assertEqual(existing_review_export(self.root, rebuilt)[0], self.output)
+                damage()
+                self.assertIsNone(existing_review_export(self.root, rebuilt))
+
+    def rewrite(self, change):
+        self.manifest = write_export(self.root, self.output, self.exported, change=change)
+
+    def test_a_proven_file_under_a_name_its_manifest_does_not_give_is_never_reused(self):
+        # The name is all that records the size policy: a file renamed by hand proves nothing.
+        digest = self.output.name.split("-")[-2]
+        moved = self.output.with_name(self.output.name.replace(f"-{digest}-", "-0123abcd-"))
+        for path in (self.output, export_manifest_path(self.output)):
+            path.unlink()
+        write_export(self.root, moved, self.exported)
+        rebuilt = renamed(self.exported)
+        self.assertEqual(others(self.root, rebuilt), [moved])
+        self.assertIsNone(existing_review_export(self.root, rebuilt))
+
+    def test_only_files_named_as_exports_of_this_source_are_looked_at(self):
+        rebuilt = renamed(self.exported)
+        prefix = self.output.name[: -len("-00000000-reviewed.mp4")]
+        for name in (f"{prefix}-0123abcd-reviewed.mp4.part", f"{prefix}-0123abcg-reviewed.mp4",
+                     f"{prefix}-0123abcd-preview.mp4", f"x{prefix}-0123abcd-reviewed.mp4"):
+            (self.root / "output" / name).write_bytes(b"other")
+        (self.root / "output" / f"{prefix}-89abcdef-reviewed.mp4").mkdir()
+        self.assertEqual(others(self.root, rebuilt), [self.output])
+        for name, queue in (
+            ("other film", renamed(make_queue(*self.exported["items"], source="E:/input/Tập 10.mp4"))),
+            ("other source hash", renamed(make_queue(*self.exported["items"], sha="cd" * 32))),
+        ):
+            with self.subTest(case=name):
+                self.assertEqual(others(self.root, queue), [])
+                self.assertIsNone(existing_review_export(self.root, queue))
+        for sha in (None, "abc", "../../x"):
+            with self.subTest(sha=sha):
+                self.assertEqual(others(self.root, renamed(make_queue(*self.exported["items"], sha=sha))), [])
+        # The queue's own names are not "other" exports.
+        own = make_queue(*self.exported["items"])
+        self.assertEqual(others(self.root, own), [])
+
+    def test_its_own_name_and_its_legacy_name_still_come_first(self):
+        rebuilt = renamed(self.exported)
+        own = review_export_paths(self.root, rebuilt)[1]
+        legacy = legacy_export_paths(self.root, rebuilt)[1]
+        write_export(self.root, legacy, rebuilt, content=b"legacy " * 64)
+        self.assertEqual(existing_review_export(self.root, rebuilt)[0], legacy)
+        write_export(self.root, own, rebuilt, content=b"own " * 64)
+        self.assertEqual(existing_review_export(self.root, rebuilt)[0], own)
+        self.assertEqual(output_candidates(self.root, rebuilt, queue_render_identity(rebuilt)), [own, legacy])
+        self.assertEqual(others(self.root, rebuilt), [self.output])
+
+    def test_an_export_of_another_revision_named_by_its_decisions_is_not_found(self):
+        # The limit (docs/handoff/D-export-reuse.md): a legacy name hashes the cards' decisions,
+        # which no manifest records, so it cannot prove the size policy.
+        exported = make_queue(blur("review-z"), keep("review-y"))
+        legacy = legacy_export_paths(self.root, exported)[1]
+        write_export(self.root, legacy, exported)
+        self.assertEqual(existing_review_export(self.root, exported)[0], legacy)
+        rebuilt = renamed(exported)
+        self.assertIn(legacy, others(self.root, rebuilt))
+        self.assertIsNone(existing_review_export(self.root, rebuilt))
+
+    def test_the_manifest_operations_are_compared_without_their_ids(self):
+        rebuilt = renamed(self.exported)
+        render = queue_render_identity(rebuilt)
+        self.assertNotEqual([op["id"] for op in render], [op["id"] for op in self.manifest["operations"]])
+        self.assertIsNone(manifest_problem(self.root, self.output, self.manifest, source_sha256=SHA, render=render))
+        reordered = list(reversed(render[:2])) + render[2:]
+        self.assertEqual(
+            manifest_problem(self.root, self.output, self.manifest, source_sha256=SHA, render=reordered),
+            PROBLEM_OLDER,
+        )
+
+
 class FinalizeReuseTests(TempRoot):
     """ControlCenter.finalize on a temp root with a real JobStore and JobScheduler."""
 
@@ -541,6 +714,32 @@ class FinalizeReuseTests(TempRoot):
                 self.assertEqual(self.store.setting(f"render:{self.job_id}")["output"], self.relative(expected))
                 self.assertEqual((legacy.read_bytes(), manifest.read_bytes()), before)
                 self.center.scheduler.cancel(self.job_id)
+
+    def test_a_rebuilt_review_of_the_same_render_completes_without_a_render(self):
+        # Job 143: "Dựng lại danh sách duyệt" kept every decision under new card ids.
+        output = review_export_paths(self.root, self.queue())[1]
+        write_export(self.root, output, self.queue(), sha=self.sha)
+        before = folder_state(self.root / "output")
+        self.set_items(blur("review-a-r4"), keep("review-k-r4"))
+        own = review_export_paths(self.root, self.queue())[1]
+        self.assertNotEqual(own, output)
+        result = self.finalize()
+        self.assertEqual((result["status"], result["output"]), ("COMPLETED", self.relative(output)))
+        self.assertEqual(self.store.get_job(self.job_id)["state"], "COMPLETED")
+        self.assertIsNone(self.store.render_request(self.job_id))
+        self.assertEqual(folder_state(self.root / "output"), before)
+        self.assertFalse(os.path.lexists(own))
+
+    def test_a_rebuilt_review_of_another_render_still_renders(self):
+        output = review_export_paths(self.root, self.queue())[1]
+        write_export(self.root, output, self.queue(), sha=self.sha)
+        before = folder_state(self.root / "output")
+        self.set_items(blur("review-a-r4", decision_blur_edge_mode="vertical_only"), keep("review-k-r4"))
+        result = self.finalize()
+        expected = review_export_paths(self.root, self.queue())[1]
+        self.assertEqual((result["status"], result["output"]), ("QUEUED", self.relative(expected)))
+        self.assertEqual(folder_state(self.root / "output"), before)
+        self.center.scheduler.cancel(self.job_id)
 
 
 if __name__ == "__main__":
