@@ -1,0 +1,113 @@
+{
+  "job": 143,
+  "code": "ef837e9",
+  "started_at": "2026-10-17T08:49:01+00:00",
+  "taken_from_install_for_line_ends": [
+    "config/license_policy.json",
+    "scripts/env.ps1"
+  ],
+  "test_job": 1,
+  "copied_revision": 3,
+  "cache_entries_left_out": [
+    "localize_logo",
+    "visual_logo"
+  ],
+  "before": {
+    "state": "COMPLETED",
+    "revision": 3,
+    "previews": {
+      "cleanup": {
+        "http": 200,
+        "eligible": true,
+        "reason": null
+      },
+      "archive": {
+        "http": 200,
+        "eligible": true,
+        "reason": null
+      }
+    }
+  },
+  "press": {
+    "http": 200,
+    "state": "QUEUED",
+    "error": null,
+    "decisions": 22
+  },
+  "rebuild_seconds": 344.0,
+  "after_rebuild": {
+    "state": "READY_TO_EXPORT",
+    "revision": 4,
+    "pending": 0,
+    "decisions": {
+      "BLUR": 2,
+      "CUT": 1,
+      "KEEP": 19
+    },
+    "decision_carry": {
+      "from_revision": 3,
+      "previous_decisions": 22,
+      "carried": 22,
+      "restored_unchanged": 0,
+      "conflicts": 0,
+      "restored_reasons": {
+        "conflict": 0,
+        "not_wider": 0,
+        "moments_outside": 0,
+        "no_match": 0
+      }
+    },
+    "operations": 3,
+    "same_render_as_the_export": true,
+    "operation_ids_differ": true,
+    "own_name_differs_from_the_export": true,
+    "own_name_exists": false,
+    "previews": {
+      "cleanup": {
+        "http": 200,
+        "eligible": false,
+        "reason": "Chỉ dọn được video đã xuất hoặc đã bỏ qua (mục “Hoàn tất”)"
+      },
+      "archive": {
+        "http": 200,
+        "eligible": false,
+        "reason": "Chỉ lưu trữ được video đã xuất hoặc đã bỏ qua (mục “Hoàn tất”)"
+      }
+    }
+  },
+  "export": {
+    "http": 200,
+    "status": "COMPLETED",
+    "error": null,
+    "seconds": 0.03,
+    "output_is_the_export": true,
+    "state": "COMPLETED",
+    "render_request": false,
+    "output_unchanged_since_the_copy": true,
+    "work_unchanged_by_the_export": true,
+    "previews": {
+      "cleanup": {
+        "http": 200,
+        "eligible": true,
+        "reason": null
+      },
+      "archive": {
+        "http": 200,
+        "eligible": true,
+        "reason": null
+      }
+    }
+  },
+  "events_after_the_press": [
+    "PREFLIGHT_OK",
+    "STAGE_CACHE_SKIPPED",
+    "STAGE_CACHE_STORED",
+    "STAGE_COMPLETED",
+    "STAGE_STARTED",
+    "STRUCTURE_AUDIT_COMPLETED"
+  ],
+  "render_stage_started": false,
+  "real_queue_idle_throughout": true,
+  "finished_at": "2026-10-17T08:55:24+00:00",
+  "root": "er-check-20261017-154901"
+}

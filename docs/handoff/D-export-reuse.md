@@ -164,3 +164,50 @@ Commit `e70af07` (kế hoạch), `ef837e9` (mã và test).
       khi dò.
     - L2: danh sách dựng lại hay chạy lại không mang `export_size_policy`. Ghi ở mục 6.
     - L3: thiếu test cho phép kiểm tên khi import, cho manifest hỏng lúc dò, và cho tên riêng có file hỏng. Đã thêm.
+
+## 5. Kiểm thật trên Control Center thử
+
+Script `docs/evidence/export-reuse/reuse_check.py`, bằng chứng `docs/evidence/export-reuse/check-2026-10-17/`
+(`result.json`, `result-previews.json`, `result-import.json`, README). Không có ảnh chụp.
+
+- Gốc tạm `temp\er-check-<giờ>`, Control Center thử cổng 8798.
+  - Chép job 143 như trước khi người dùng bấm: revision 3, thư mục báo cáo của nó, bản xuất `…-aa426512-24b2b5b2-…`
+    cùng manifest, bản sao (không link) video gốc, các mục cache quét.
+  - Thư mục cài chỉ được đọc (database ở chế độ chỉ đọc). Không route nào của Control Center thật được gọi, `output\`
+    thật không bị động tới. Hàng đợi thật trống suốt lượt.
+- Trước khi bấm: COMPLETED, revision 3; "Xóa video gốc" và "Lưu trữ" đều nhận video.
+- Bấm "Dựng lại danh sách duyệt" (mã `ef837e9`). Sau 344 s:
+  - revision 4, READY_TO_EXPORT; 22/22 quyết định mang sang, 0 thẻ chờ, 0 xung đột;
+  - đúng như máy thật: `text` quét lại trên GPU, vì root thử không dùng được cache của thư mục cài;
+  - 3 operation render y hệt manifest của bản xuất, id khác. Tên riêng của danh sách mới khác tên bản xuất, và không có
+    file nào ở tên đó.
+- Bấm "Xuất video":
+  - HTTP 200, `COMPLETED` sau 0,03 s; bản xuất là bản cũ;
+  - không có yêu cầu render, không có stage render;
+  - `output\` không đổi so với lúc chép, `work\` không đổi vì lần xuất;
+  - "Xóa video gốc" và "Lưu trữ" nhận video.
+- Mã `f8ddc38` (sau phần sửa theo review), trên cùng gốc:
+  - `previews`: COMPLETED, cả hai thao tác nhận video;
+  - `import`: đưa job về READY_TO_EXPORT (như job 143 thật bây giờ) rồi chạy bước import lúc khởi động. Job về
+    COMPLETED, bản cũ được ghi làm bản xuất.
+- Gốc thử đã xóa bằng `remove`.
+
+## 6. Giới hạn
+
+- Bản xuất đặt tên legacy (hash của quyết định) của một revision khác không được dò: tên đó không tính lại được từ
+  manifest. Bản legacy của chính danh sách hiện tại vẫn tìm theo tên như trước.
+- Danh sách mới của "Chạy lại" và "Dựng lại danh sách duyệt" không mang `export_size_policy`. Với một bản xuất dưới
+  policy khác mặc định (không giới hạn, hay tùy chỉnh GB):
+  - "Xóa video gốc", "Lưu trữ" và bước import tính tên dưới policy mặc định, nên từ chối (đóng an toàn);
+  - "Xuất video" vẫn dùng lại bản đó nếu người dùng chọn lại đúng policy cũ trong hộp xuất.
+- So theo thứ tự: nếu một lần dựng đổi thứ tự hai thẻ cùng ưu tiên, cùng giờ bắt đầu, cùng nhóm, thì phải xuất lại.
+- Một bản xuất được dùng lại không đổi tên. Tên của nó vẫn mang id của revision cũ, còn artifact `final_output` cũ vẫn
+  trỏ đúng file.
+
+## 7. Bước tiếp theo
+
+1. Điều phối gộp nhánh. Thử `merge-tree` sau cùng ở mục báo cáo.
+2. Sau khi gộp và khởi động lại Control Center thật:
+   - job 143 (đang READY_TO_EXPORT) sẽ về COMPLETED ngay lúc khởi động, nhờ bước import;
+   - nếu chưa về, bấm "Xuất video": phải xong ngay, không render;
+   - rồi "Lưu trữ" hay "Xóa video gốc" nhận bản `…-24b2b5b2-…`.

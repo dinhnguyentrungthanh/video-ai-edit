@@ -1,0 +1,19 @@
+{
+  "pass": "previews",
+  "code": "f8ddc38",
+  "test_job": 1,
+  "root": "er-check-20261017-154901",
+  "state": "COMPLETED",
+  "previews": {
+    "cleanup": {
+      "http": 200,
+      "eligible": true,
+      "reason": null
+    },
+    "archive": {
+      "http": 200,
+      "eligible": true,
+      "reason": null
+    }
+  }
+}
