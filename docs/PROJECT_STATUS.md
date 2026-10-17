@@ -1,3 +1,7 @@
+## G17 merge, reuse of an export whose operations render the same (2026-10-17) — branch `merge/g17`, not yet in the main folder
+
+- Session D (entry below): after "Dựng lại danh sách duyệt (giữ quyết định)", an export whose operations render the same (ids aside, same order) is the export of the new list: "Xuất video" finishes at once and clean-up and archive accept it; nothing is written to `output\`. Scan cache keys unchanged; 582 focused tests OK on the merge, D's full suite OK. Details in `CHANGELOG.md`.
+
 ## An export whose operations render the same is reused after a rebuild, session D (2026-10-17) — branch `fix/export-reuse-same-ops`, not merged
 
 - After "Dựng lại danh sách duyệt" or "Chạy lại", an export of an earlier revision that renders the same operations (ids aside, same order, same size policy) is the review's export: "Xuất video" completes at once, and "Lưu trữ" and "Xóa video gốc" take it. Export names, scan cache keys and exports are unchanged.

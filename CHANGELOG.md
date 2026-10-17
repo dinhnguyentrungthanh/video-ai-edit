@@ -1,3 +1,8 @@
+# G17 merge: reuse of an export whose operations render the same (2026-10-17, branch `merge/g17` from `main` `376e352`; not yet in the main folder)
+
+- Merged `fix/export-reuse-same-ops` (session D; entry below) with `--no-ff`; the merged tree equals the branch tip.
+- Scan cache keys unchanged (10 stages). 582 tests of the touched and clip-dependent modules OK on the merge; session D's full suite on the code commit OK (the clip-dependent tests passed with a synthetic clip). `ExportLaneTests` and `StageBudgetLaneTests` remain flaky on timing (about one run in six, also on `376e352`).
+
 # An export whose operations render the same is reused after a rebuild — session D (2026-10-17, branch `fix/export-reuse-same-ops` from `main` `376e352`; not merged)
 
 - Job 143: after "Dựng lại danh sách duyệt (giữ quyết định)" kept every decision, "Xuất video" rendered again (5–8 min) because the new revision names its cards, and so the operations and the export, anew; "Lưu trữ" and "Xóa video gốc" refused meanwhile (`docs/handoff/D-export-reuse.md`).

@@ -1065,6 +1065,12 @@ Session cloud lập kế hoạch dừng vì hết credit. Một session **điề
 - Lưu ý: `state\brand-memory.json` đổi mỗi khi duyệt thẻ địa chỉ web (bộ nhớ quảng cáo), nên lần dựng lại kế tiếp quét lại `visual_logo` và `localize_logo` (2–3 phút mỗi tập).
 - Còn lại: nhớ đoạn giới thiệu của nền tảng (job 129, job 145 0:00–0:05), lỗi nguồn xoay 90°/270°, có nên tách bộ nhớ quảng cáo khỏi khóa cache của hai bước logo; tài liệu của D-text-consensus và D-top-logo còn trỏ tới `temp\` (kết quả đã ở `reports\evidence\`).
 
+### 14.22 G17: D, dùng lại bản xuất có cùng operation sau khi dựng lại (2026-10-17)
+
+- Gộp `fix/export-reuse-same-ops`: so operation của manifest với danh sách hiện tại không tính `id`, vẫn theo thứ tự; dò các bản xuất khác của cùng video chỉ khi tên tính lại từ chính manifest khớp; không ghi gì vào `output\`. Kiểm trên bản sao job 143: "Xuất video" xong trong 0,03 s bằng bản cũ, không render.
+- Khóa cache quét không đổi. 582 test liên quan OK trên bản gộp; full suite của D OK.
+- Còn lại: hai lớp test thời gian của làn xuất (`ExportLaneTests`, `StageBudgetLaneTests`) chập chờn khoảng 1/6 lượt, có từ A1d; tách bộ nhớ quảng cáo khỏi khóa cache của hai bước logo (sau session P); lỗi nguồn xoay 90°/270°.
+
 ### 14.6 Cách session điều phối làm việc
 
 - Làm trong worktree `temp\wt-coord`, nhánh `coord/plan` (từ `origin/main`). **Không sửa thư mục chính** đang chạy Control Center.
