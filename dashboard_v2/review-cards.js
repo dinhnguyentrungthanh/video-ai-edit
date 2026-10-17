@@ -161,8 +161,9 @@
     return covers.slice().sort((a, b) => a.box.top - b.box.top || a.box.left - b.box.left).map(c => {
       const b = c.box, p = labelPlace(b.left, b.top, b.width, b.height), lr = p.cls.includes(' lr'), base = p.cls.replace(' lr', '');
       const beside = [base, '', ' up'].filter((v, i, all) => v !== ' lin' && all.indexOf(v) === i), words = D.coverWords(c);
-      // A blurred box holds its own label, in shorter words if need be, before a label covers the picture beside it; a
-      // suggestion's label goes beside its box first (what is in the box is still to be reviewed).
+      // A blurred box's label starts inside it (its picture is gone), in shorter words if need be, before one starts
+      // beside it; it may run past a box narrower than the words. A suggestion's label goes beside its box first (what
+      // is in the box is still to be reviewed).
       const inside = [' lin', ' lup'].flatMap(place => words.map(text => [place, text])), besides = words.flatMap(text => beside.map(place => [place, text]));
       for (const [place, text] of c.state === 'applied' ? [...inside, ...besides] : [...besides, ...inside]) {
         const rect = labelRect(b, lr, place, text, frameH);

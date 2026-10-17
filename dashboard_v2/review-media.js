@@ -315,7 +315,9 @@
     const s = small.getContext('2d', {willReadFrequently: true});
     s.imageSmoothingEnabled = true; s.imageSmoothingQuality = 'high';
     s.drawImage(img, crop.sx, crop.sy, crop.sw, crop.sh, 0, 0, crop.gw, crop.gh);
-    if (s.getImageData(crop.gw >> 1, crop.gh >> 1, 1, 1).data[3] === 0) {
+    let blank = false;
+    try { blank = s.getImageData(crop.gw >> 1, crop.gh >> 1, 1, 1).data[3] === 0; } catch (_) { /* unreadable: keep the cut as painted */ }
+    if (blank) {
       const whole = imageCanvas(doc, img), f = whole.width / img.naturalWidth;
       s.drawImage(whole, crop.sx * f, crop.sy * f, crop.sw * f, crop.sh * f, 0, 0, crop.gw, crop.gh);
     }
