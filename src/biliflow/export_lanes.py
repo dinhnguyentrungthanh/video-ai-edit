@@ -1,4 +1,4 @@
-"""When an export may run beside a scan (perf plan A1b, docs/PERF_INSTALL_PLAN.md section 5).
+"""When an export may run beside a scan (perf plans A1b and A1d, docs/PERF_INSTALL_PLAN.md).
 
 "Xuất song song" in Cài đặt is ``auto`` (the default) or ``off``. ``off`` is the
 single worker of before: scans and exports one at a time, exports first, each
@@ -9,13 +9,18 @@ of these hold when it would start:
 - the export asks for ``auto`` (never a plan forced to x264) and the root's
   hardware profile confirms NVENC for this very FFmpeg (no trial encode);
 - the source's frame size is one whose NVENC memory was measured;
-- NVML shows room for the NVENC session next to the largest scan stage (measured)
-  plus a safety margin (``vram_decision``).
+- NVML shows room for the NVENC session next to that scan stage's measured peak
+  plus a safety margin (``vram_decision``, ``scan_budget``).
 
 Anything else and the export waits for the main lane as before. x264 never runs
 beside a scan: an NVENC export of the second lane that fails on its own or comes
 out over the size limit stops (the renderer writes ``export_deferral_path``) and
 is encoded with x264 by the main lane once the scan job running beside it is done.
+
+A1d: each stage is budgeted at its own measured peak where the measurement holds,
+at the largest one otherwise. So while the export runs, the main lane starts a GPU
+stage only when NVML shows room for that stage's peak beside the export
+(``stage_beside_export``); otherwise the stage waits for the export to end.
 
 The control plane only (scheduler, Control Center): nothing here is part of a
 scan stage's cache key, and nothing loads torch or a hardware_* module on import.
@@ -49,12 +54,33 @@ MIB = 1024 * 1024
 #     in pixels) it was measured for, smallest first: 169-170 MiB at 1280x640 and
 #     244 MiB at 1920x1080, alone and while Qwen2-VL ran (both runs).
 #   SCAN_PEAK_MIB: the most VRAM a scan stage added above what was in use just
-#     before it started: confirm_violence (Qwen2-VL), 4851-4943 MiB; every scan stage
-#     is budgeted at it (visual_logo 4688-4690, localize_logo 1309, text 833 and less).
+#     before it started: confirm_violence (Qwen2-VL), 4851-4943 MiB. A stage the
+#     measurement below does not cover is budgeted at it.
+#   STAGE_PEAK_MIB (A1d): each GPU stage's own peak, measured the same way: the
+#     largest of its processes that ran with no export beside them, in both runs and
+#     on both clips (1920x1080 live action, 1280x640 mixed), with the largest clip
+#     frame it ran on. Those scans used profile "careful" with "Quét nhanh" on (OCR
+#     batch 8, fp16 text detection, logo routing warmed with NVDEC), so a stage's peak
+#     holds only for such a job whose source frame fits inside that clip frame. gore
+#     and violence alone (one of the two detectors chosen) were not measured. Measure
+#     again when a stage's model, batch or precision changes.
 #   SAFETY_MARGIN_MIB: VRAM left free after both. Other programs' VRAM moved by 106
 #     MiB during the measurement; the user chose twice that, 256 MiB, on 2026-10-14.
 NVENC_NEED_MIB: tuple[tuple[int, int], ...] | None = ((1280 * 640, 170), (1920 * 1080, 244))
 SCAN_PEAK_MIB: int | None = 4943
+STAGE_PEAK_MIB: dict[str, tuple[int, tuple[int, int]]] | None = {
+    # stage: (MiB above the baseline, the largest clip frame (width, height) it ran on)
+    "adult": (258, (1920, 1080)),
+    "verify_adult": (479, (1920, 1080)),
+    "live_safety": (717, (1920, 1080)),
+    "animation_safety": (754, (1280, 640)),
+    "text": (833, (1920, 1080)),
+    "localize_logo": (1309, (1920, 1080)),
+    "visual_logo": (4690, (1920, 1080)),
+    "confirm_violence": (4943, (1920, 1080)),
+}
+STAGE_PEAK_PROFILE = "careful"
+STAGE_PEAK_FAST_SCAN = True
 SAFETY_MARGIN_MIB: int | None = 256
 # The long side of a frame NVENC memory was measured for (1080p landscape or portrait).
 MAX_MEASURED_LONG_SIDE = 1920
@@ -71,6 +97,18 @@ SIZE_UNKNOWN = "size_unknown"
 SIZE_NOT_MEASURED = "size_not_measured"
 VRAM_UNREADABLE = "vram_unreadable"
 VRAM_SHORT = "vram_short"
+# Whether the main lane may start a GPU stage while an export runs beside it (A1d).
+STAGE_FITS = "stage_fits"
+STAGE_WAITS = "stage_waits"
+STAGE_VRAM_UNREADABLE = "stage_vram_unreadable"
+STAGE_NOT_MEASURED = "stage_not_measured"
+# What a scan stage's VRAM budget rests on (A1d): its own measured peak, or
+# SCAN_PEAK_MIB because the measurement does not cover it.
+BASIS_STAGE = "stage"
+BASIS_STAGE_NOT_MEASURED = "stage_not_measured"
+BASIS_SCAN_SETTINGS = "scan_settings"
+BASIS_FRAME_UNKNOWN = "frame_unknown"
+BASIS_FRAME_NOT_MEASURED = "frame_not_measured"
 
 # What the dashboard says for each (shown on the job's events).
 REASON_TEXT = {
@@ -85,6 +123,10 @@ REASON_TEXT = {
     SIZE_NOT_MEASURED: "Kích thước khung lớn hơn mức đã đo VRAM của NVENC; xuất tuần tự.",
     VRAM_UNREADABLE: "Không đọc được VRAM của GPU; xuất tuần tự.",
     VRAM_SHORT: "VRAM còn trống không đủ cho NVENC cạnh bước quét; xuất tuần tự.",
+    STAGE_FITS: "Bước quét chạy cạnh bản xuất song song (đủ VRAM).",
+    STAGE_WAITS: "Bước quét này chờ bản xuất song song xong: VRAM không đủ cho cả hai.",
+    STAGE_VRAM_UNREADABLE: "Bước quét này chờ bản xuất song song xong: không đọc được VRAM của GPU.",
+    STAGE_NOT_MEASURED: "Bước quét này chờ bản xuất song song xong: chưa có số đo VRAM.",
 }
 
 
@@ -151,6 +193,51 @@ def nvenc_need_mib(width: int, height: int) -> int | None:
     return None
 
 
+def largest_nvenc_need_mib() -> int | None:
+    """The most VRAM an NVENC export was measured to need (any measured frame), or None."""
+    if NVENC_NEED_MIB is None:
+        return None
+    return max(need for _ceiling, need in NVENC_NEED_MIB)
+
+
+@dataclass(frozen=True)
+class ScanBudget:
+    """The VRAM a scan stage is budgeted at, and what that rests on (a ``BASIS_*``)."""
+    stage: str
+    peak_mib: int
+    basis: str
+
+
+def _fits_inside(frame: tuple[int, int], measured: tuple[int, int]) -> bool:
+    """The frame fits inside the measured one, landscape or portrait."""
+    return max(frame) <= max(measured) and min(frame) <= min(measured)
+
+
+def scan_budget(
+    stage: str, *, profile: str, fast_scan: bool, frame: tuple[int, int] | None,
+) -> ScanBudget | None:
+    """The VRAM a scan stage may add above what was in use before it (A1d), or None unmeasured.
+
+    Its own measured peak (STAGE_PEAK_MIB) when the job scans as measured (profile and
+    "Quét nhanh") and its source frame fits inside the clip frame the stage was
+    measured on; SCAN_PEAK_MIB, the largest peak of any stage, for anything else.
+    """
+    if SCAN_PEAK_MIB is None:
+        return None
+    measured = (STAGE_PEAK_MIB or {}).get(stage)
+    if measured is None:
+        basis = BASIS_STAGE_NOT_MEASURED
+    elif profile != STAGE_PEAK_PROFILE or bool(fast_scan) != STAGE_PEAK_FAST_SCAN:
+        basis = BASIS_SCAN_SETTINGS
+    elif frame is None:
+        basis = BASIS_FRAME_UNKNOWN
+    elif not _fits_inside(frame, measured[1]):
+        basis = BASIS_FRAME_NOT_MEASURED
+    else:
+        return ScanBudget(stage, measured[0], BASIS_STAGE)
+    return ScanBudget(stage, SCAN_PEAK_MIB, basis)
+
+
 @dataclass(frozen=True)
 class LaneDecision:
     parallel: bool
@@ -162,31 +249,66 @@ class LaneDecision:
         return REASON_TEXT[self.reason]
 
 
-def vram_decision(read: VramRead | None, *, baseline_mib: int | None, need_mib: int) -> LaneDecision:
+def vram_decision(
+    read: VramRead | None, *, baseline_mib: int | None, need_mib: int, scan_peak_mib: int | None = None,
+) -> LaneDecision:
     """Room for NVENC beside the scan: measured numbers only, no guess.
 
-    The scan may still grow (a model loads later in its stage, or its next stage is
-    the Qwen2-VL one), so it is budgeted at SCAN_PEAK_MIB above ``baseline_mib``, the
-    VRAM in use just before its stage started (other programs, an export already
-    running). What NVML shows now counts when it is more. The lane opens only when
-    NVENC still leaves SAFETY_MARGIN_MIB free:
+    The scan may still grow (a model loads later in its stage), so it is budgeted at
+    its stage's peak (``scan_peak_mib``, from ``scan_budget``; SCAN_PEAK_MIB when not
+    given) above ``baseline_mib``, the VRAM in use just before its stage started
+    (other programs, an export already running). What NVML shows now counts when it
+    is more. The lane opens only when NVENC still leaves SAFETY_MARGIN_MIB free:
 
-        total - max(used now, baseline + SCAN_PEAK_MIB) - need >= SAFETY_MARGIN_MIB
+        total - max(used now, baseline + stage peak) - need >= SAFETY_MARGIN_MIB
+
+    The stages after it are the main lane's to check before they start while the
+    export runs (``stage_beside_export``).
     """
     if SCAN_PEAK_MIB is None or SAFETY_MARGIN_MIB is None:
         return LaneDecision(False, NOT_MEASURED)
     if read is None or baseline_mib is None:
         return LaneDecision(False, VRAM_UNREADABLE)
-    projected = max(read.used_mib, baseline_mib + SCAN_PEAK_MIB)
+    peak = SCAN_PEAK_MIB if scan_peak_mib is None else scan_peak_mib
+    projected = max(read.used_mib, baseline_mib + peak)
     left = read.total_mib - projected - need_mib
     detail = {
         "total_mib": read.total_mib, "used_mib": read.used_mib, "free_mib": read.free_mib,
-        "baseline_mib": baseline_mib, "scan_peak_mib": SCAN_PEAK_MIB, "need_mib": need_mib,
+        "baseline_mib": baseline_mib, "scan_peak_mib": peak, "need_mib": need_mib,
         "margin_mib": SAFETY_MARGIN_MIB, "left_mib": left,
     }
     if left < SAFETY_MARGIN_MIB:
         return LaneDecision(False, VRAM_SHORT, detail)
     return LaneDecision(True, OPENED, detail)
+
+
+def stage_beside_export(
+    read: VramRead | None, *, scan_peak_mib: int | None, export_need_mib: int | None,
+) -> LaneDecision:
+    """Whether the main lane may start a GPU scan stage while an export runs in the export lane (A1d).
+
+    "Used now" holds the other programs and the export as far as it has started; the
+    export's measured need is counted again in full, since its NVENC session may not
+    have reached it yet. The stage starts only when its peak still leaves the margin:
+
+        total - (used now + export need + stage peak) >= SAFETY_MARGIN_MIB
+
+    Otherwise, or without a reading or a measured number, the stage waits for the
+    export to end.
+    """
+    if SAFETY_MARGIN_MIB is None or scan_peak_mib is None or export_need_mib is None:
+        return LaneDecision(False, STAGE_NOT_MEASURED)
+    if read is None:
+        return LaneDecision(False, STAGE_VRAM_UNREADABLE)
+    left = read.total_mib - (read.used_mib + export_need_mib + scan_peak_mib)
+    detail = {
+        "total_mib": read.total_mib, "used_mib": read.used_mib, "free_mib": read.free_mib,
+        "scan_peak_mib": scan_peak_mib, "need_mib": export_need_mib,
+        "margin_mib": SAFETY_MARGIN_MIB, "left_mib": left,
+    }
+    if left < SAFETY_MARGIN_MIB:
+        return LaneDecision(False, STAGE_WAITS, detail)
+    return LaneDecision(True, STAGE_FITS, detail)
 
 
 @dataclass(frozen=True)
