@@ -14,12 +14,16 @@ This process runs at below-normal priority, so the test Control Center, its stag
 them do too; the run records the priority of each FFmpeg it sees.
 
   setup    --source <video>: the root; clips E1 (the export) and S1 (the film), stream-copied from the
-           source at --export-at and --scan-at
+           source at --export-at and --scan-at; with --film, F1: the whole source remuxed with another
+           metadata tag (the same frames, another SHA-256)
   profile  "Đo lại" of the test Control Center (the export lane needs a profile that confirms NVENC)
   ready    scan E1 and decide its review (the detectors' suggestions accepted, everything else KEEP)
   run      with the test queue paused, export E1 (auto) and start S1's scan, then resume: the first waiting
            stage is the export and the film waits at preflight. Both lanes every 0.5 s, nvidia-smi every
            0.2 s, NVML every 0.1 s, the stage rows, the lane events and the export's manifest
+  measure  scan F1 alone (the grounding cache moved aside first): each stage process's VRAM peak above
+           the VRAM in use in the second before it started, as A1b measured it on 10-minute clips, now
+           on a whole film, with the stages' own peak CUDA memory from their reports
   report   --evidence <dir>: the checks; check.json and vram-1s.csv, without names, paths or detector text
   remove   take the root down
 Scans use the detector groups of scripts/a1c_check.py (advertising: preflight, text, visual_logo,
@@ -49,8 +53,8 @@ HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 sys.path.insert(0, str(HERE.parent / "src"))
 from a1b_gates import (  # noqa: E402
-    Center, LaneWatch, _Idle, decide, describe_clip, export_facts, ffmpeg_tools, job_record, overlap_seconds,
-    stage_overlaps, wait_settled,
+    Center, LaneWatch, _Idle, decide, describe_clip, export_facts, ffmpeg_tools, job_record, move_grounding_cache,
+    overlap_seconds, remux, stage_overlaps, wait_settled,
 )
 from a1b_vram_measure import Sampler, check_place, cut_clip, job_for, job_state, log, make_root, remove_root, wait_for  # noqa: E402
 from a1c_check import (  # noqa: E402
@@ -149,6 +153,84 @@ class SmiSampler(threading.Thread):
             return self.samples[-1][2] if self.samples else None
 
 
+class ProcessWatch(threading.Thread):
+    """Every 0.25 s the test Control Center's main-lane stage process. For each process: its VRAM peak
+    above the least VRAM in use in the second before it was first seen (as the scheduler reads its
+    baseline: the process imports Python and torch first, its models load later), from NVML and nvidia-smi."""
+
+    def __init__(self, test: Any, start: float, nvml: Sampler, smi: SmiSampler) -> None:
+        super().__init__(daemon=True)
+        self.test, self.start_at, self.nvml, self.smi = test, start, nvml, smi
+        self.stop, self.current, self.processes = threading.Event(), None, []
+
+    def run(self) -> None:
+        while not self.stop.is_set():
+            try:
+                lanes = self.test.call("GET", "/api/status").get("active_lanes") or []
+            except (OSError, ValueError):
+                lanes = None
+            if lanes is not None:
+                main = next((item for item in lanes if item.get("lane") == "main" and item.get("pid")), None)
+                self._observe(main, time.monotonic())
+            self.stop.wait(0.25)
+        self._observe(None, time.monotonic())
+
+    def _observe(self, active: dict | None, now: float) -> None:
+        key = (active["job_id"], active["stage"], active["pid"]) if active else None
+        current = self.current
+        if current and key != current["key"]:
+            nvml, smi = self.nvml.window(current["start"], now), self.smi.window(current["start"], now)
+            self.processes.append({
+                "job_id": current["key"][0], "stage": current["key"][1],
+                "start_s": round(current["start"] - self.start_at, 1), "end_s": round(now - self.start_at, 1),
+                "baseline_mib": current["baseline"],
+                "peak_mib": {"nvml": max(nvml) if nvml else None, "nvidia_smi": max(smi) if smi else None},
+                "peak_above_baseline_mib": {
+                    name: (max(values) - current["baseline"][name]
+                           if values and current["baseline"][name] is not None else None)
+                    for name, values in (("nvml", nvml), ("nvidia_smi", smi))},
+            })
+            self.current = current = None
+        if key and current is None:
+            nvml, smi = self.nvml.window(now - 1.0, now), self.smi.window(now - 1.0, now)
+            self.current = {"key": key, "start": now,
+                            "baseline": {"nvml": min(nvml) if nvml else None, "nvidia_smi": min(smi) if smi else None}}
+
+    def finish(self) -> list[dict]:
+        self.stop.set()
+        self.join(10)
+        return self.processes
+
+
+def stage_peaks(processes: list[dict]) -> dict[str, int]:
+    """Each stage's largest process peak above its baseline (NVML, as A1b recorded it)."""
+    peaks: dict[str, int] = {}
+    for item in processes:
+        value = item["peak_above_baseline_mib"]["nvml"]
+        if value is not None:
+            peaks[item["stage"]] = max(peaks.get(item["stage"], 0), value)
+    return peaks
+
+
+def report_cuda_peaks(root: Path, store: Any, job_id: int) -> dict[str, int | None]:
+    """The peak CUDA memory (MiB, PyTorch) the film's logo stages wrote into their reports."""
+    job = store.get_job(job_id)
+    base = root / "reports" / "jobs" / str(store.setting(f"pipeline_key:{job_id}") or job["job_key"]) / "visual-logo"
+    found: dict[str, int | None] = {"visual_logo": None, "grounding": None}
+    try:
+        scan = json.loads((base / "scan.json").read_text(encoding="utf-8"))
+        found["visual_logo"] = int((scan.get("metrics") or {})["peak_cuda_memory_bytes"]) // (1024 * 1024)
+    except (OSError, ValueError, KeyError, TypeError):
+        pass
+    try:
+        localized = json.loads((base / "scan-localized.json").read_text(encoding="utf-8"))
+        inference = (localized.get("grounding_region_summary") or {}).get("inference") or {}
+        found["grounding"] = int(inference["peak_cuda_bytes"]) // (1024 * 1024)
+    except (OSError, ValueError, KeyError, TypeError):
+        pass
+    return found
+
+
 def per_second(start: float, end: float, smi: SmiSampler, nvml: Sampler) -> list[dict]:
     """The largest reading of each second, from both samplers."""
     rows = []
@@ -174,6 +256,10 @@ def setup(args: argparse.Namespace) -> int:
             clip = root / "input" / f"a1d-{tag}.mp4"
             cut_clip(tools / "ffmpeg.exe", source, clip, start, args.minutes * 60)
             clips[tag] = describe_clip(tools, root, clip, None)
+        if args.film:
+            clip = root / "input" / "a1d-F1.mp4"
+            remux(tools / "ffmpeg.exe", source, clip, "a1d-check-F1")
+            clips["F1"] = describe_clip(tools, root, clip, None)
         head = subprocess.run(["git", "-C", str(code), "rev-parse", "HEAD"], capture_output=True, text=True, check=True)
         save(root, {"created_at": datetime.now().astimezone().isoformat(timespec="seconds"),
                     "code_commit": head.stdout.strip(), "port": args.port, "clips": clips, "jobs": {}, "runs": {},
@@ -320,6 +406,59 @@ def run_check(args: argparse.Namespace) -> int:
     return 0
 
 
+def measure(args: argparse.Namespace) -> int:
+    install, root = paths(args)
+    state = load(root)
+    if "F1" not in state["clips"]:
+        raise SystemExit("no whole film in this root: run setup with --film")
+    if "measure" in state:
+        raise SystemExit("the measurement is recorded already")
+    require_real_idle(install)
+    result: dict[str, Any] = {"film": "F1", "detectors": DETECTORS, "style": STYLE,
+                              "grounding_cache_moved": move_grounding_cache(root, "measure")}
+    nvml, smi = Sampler(), SmiSampler()
+    nvml.start()
+    smi.start()
+    nvml.ready.wait(10)
+    smi.ready.wait(10)
+    if smi.error:
+        raise SystemExit(f"nvidia-smi did not start ({smi.error}): nothing was run")
+    real = RealQueueWatch(install)
+    real.start()
+    center = Center(root, state["port"])
+    try:
+        with center as test:
+            assert center.process is not None
+            priority = PriorityWatch(center.process.pid)
+            priority.start()
+            register(test, root, state)
+            film_job = result["film_job"] = state["jobs"]["F1"]
+            time.sleep(3)
+            start = time.monotonic()
+            watch = ProcessWatch(test, start, nvml, smi)
+            watch.start()
+            try:
+                start_scan(test, film_job)
+                result["states"] = {str(key): value for key, value in
+                                    wait_settled(test, [film_job], "the scan of the whole film").items()}
+                result["total_seconds"] = round(time.monotonic() - start, 1)
+            finally:
+                result["processes"] = watch.finish()
+                result["process_priority"] = priority.finish()
+            result["film_record"] = job_record(test, film_job)
+    finally:
+        result["real_queue_changes"] = real.finish()
+        smi.finish()
+        nvml.stop.set()
+        nvml.join(10)
+    result["stage_peak_above_baseline_mib"] = stage_peaks(result["processes"])
+    state["measure"] = result
+    save(root, state)
+    log(f"measure: {result.get('total_seconds')} s, states {result.get('states')}, "
+        f"peaks {result['stage_peak_above_baseline_mib']}")
+    return 0
+
+
 # --- report ------------------------------------------------------------------------------------------
 
 def out_of_memory_logs(root: Path, job_ids: list[int]) -> list[str]:
@@ -394,8 +533,34 @@ def checks(root: Path, store: Any, state: dict) -> dict:
         "every_ffmpeg_below_normal": bool(ffmpeg_seen) and set(ffmpeg_seen) == {BELOW_NORMAL},
         "real_queue_stayed_empty_and_paused": not any(real_changes.values()),
     }
+    film = state.get("measure")
+    film_details = None
+    if film is not None:
+        measured = film["stage_peak_above_baseline_mib"]
+        recorded = {stage: export_lanes.STAGE_PEAK_MIB[stage][0] for stage in measured
+                    if stage in (export_lanes.STAGE_PEAK_MIB or {})}
+        film_job = film["film_job"]
+        film_failed = [event["event_type"] for event in store.events(film_job, limit=2000)
+                       if event["event_type"] == "STAGE_FAILED"]
+        # The per-stage numbers hold on a whole film too: no stage went above its recorded peak.
+        result["whole_film_within_the_recorded_peaks"] = (
+            film["states"].get(str(film_job)) == "WAITING_REVIEW" and not film_failed
+            and not out_of_memory_logs(root, [film_job]) and bool(recorded)
+            and all(measured[stage] <= peak for stage, peak in recorded.items()))
+        result["real_queue_stayed_empty_and_paused"] = (
+            result["real_queue_stayed_empty_and_paused"] and not film.get("real_queue_changes"))
+        film_details = {
+            "stage_peak_above_baseline_mib": measured, "recorded_stage_peak_mib": recorded,
+            "over_the_recorded_peak": {stage: measured[stage] - peak for stage, peak in recorded.items()
+                                       if measured[stage] > peak},
+            "report_peak_cuda_mib": report_cuda_peaks(root, store, film_job), "processes": film["processes"],
+            "seconds": film.get("total_seconds"), "stage_failed_events": film_failed,
+            "process_priority": film.get("process_priority"), "real_queue_changes": film.get("real_queue_changes"),
+            "grounding_cache_moved": film.get("grounding_cache_moved"),
+        }
     result["passed"] = all(result.values())
     details = {
+        "whole_film": film_details,
         "timeline": order, "lane_events": events, "scan_wait_events": run["scan_wait_events"],
         "lane_segments": run["lane_segments"], "overlap_seconds": run.get("overlap_seconds"),
         "stage_overlap_seconds": run["stage_overlap_seconds"], "export_outlasted_the_light_stage": export_outlasted_light,
@@ -458,8 +623,10 @@ def main() -> int:
     first.add_argument("--export-at", type=float, default=600.0, help="where E1 starts in the video (seconds)")
     first.add_argument("--scan-at", type=float, default=1800.0, help="where S1 starts in the video (seconds)")
     first.add_argument("--port", type=int, default=DEFAULT_PORT)
+    first.add_argument("--film", action="store_true", help="also remux the whole source as F1 for measure")
     steps: dict[str, Callable[[argparse.Namespace], int]] = {
-        "profile": profile, "ready": ready, "run": run_check, "report": report, "remove": remove,
+        "profile": profile, "ready": ready, "run": run_check, "measure": measure, "report": report,
+        "remove": remove,
     }
     for name in steps:
         step = commands.add_parser(name)

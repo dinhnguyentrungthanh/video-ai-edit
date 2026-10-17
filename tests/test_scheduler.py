@@ -2779,6 +2779,79 @@ class StageBudgetLaneTests(LaneFixture):
         self.assertIsNone(self.take(EXPORT_LANE))
         self.assertEqual(self.scheduler.read_vram.call_count, reads + 1)
 
+    def test_a_first_shortfall_says_why_when_no_gpu_stage_comes_to_judge_the_export_again(self):
+        self.gpu_stages = (("visual_logo", "SCANNING_LOGO"),)
+        self.review = True  # build_review (CPU) after visual_logo
+        a = self.job("a")
+        self.start(a)
+        self.scheduler.start()
+        heavy = self.wait_for("a:visual_logo")
+        self.use_vram(self.OTHERS + 4690)
+        b = self.job("b")
+        self.export_auto(b)
+        self.wait_until(lambda: b in self.scheduler._short_beside, "the export lane never looked")
+        self.use_vram(self.OTHERS)
+        heavy.finish(0)
+        render = self.wait_for(f"render:{b}")  # in the main lane: no GPU stage left to go beside
+        self.assertNotIn("env", render.kwargs)
+        (event,) = self.events_of(b, "EXPORT_LANE_SEQUENTIAL")
+        self.assertEqual(self.payload(event, "reason", "scan_peak_stage", "scan_peak_mib", "left_mib"),
+                         {"reason": "vram_short", "scan_peak_stage": "visual_logo", "scan_peak_mib": 4690,
+                          "left_mib": 6144 - (1200 + 4690) - 244})
+        render.finish(0)
+        self.wait_for("a:build_review").finish(0)
+        self.wait_until(lambda: not self.scheduler.is_busy(a) and self.store.get_job(b)["state"] == "COMPLETED",
+                        "the scan or the export never finished")
+        self.assertEqual(len(self.events_of(b, "EXPORT_LANE_SEQUENTIAL")), 1)
+        self.assertEqual(self.scheduler._short_beside, {})
+
+    def heavy_stage_waiting(self):
+        """Export b runs beside a's text; text ended and visual_logo waits for b (a, b, render)."""
+        a, b = self.job("a"), self.job("b")
+        self.start(a)
+        self.export_auto(b)
+        self.scheduler.start()
+        text = self.wait_for("a:text")
+        render = self.wait_for(f"render:{b}")
+        self.use_vram(self.OTHERS + self.NVENC)
+        text.finish(0)
+        self.wait_until(lambda: self.events_of(a, "STAGE_WAITS_FOR_EXPORT"), "the heavy stage never waited")
+        return a, b, render
+
+    def test_a_cancelled_export_lets_the_waiting_stage_start(self):
+        a, b, render = self.heavy_stage_waiting()
+        self.use_vram(self.OTHERS)
+        self.scheduler.cancel(b)
+        self.assertEqual(self.terminated, [render.kind])
+        self.wait_for("a:visual_logo").finish(0)
+        self.wait_for("a:localize_logo").finish(0)
+        self.wait_until(lambda: not self.scheduler.is_busy(a), "the scan job never finished")
+        self.assertEqual(self.store.get_job(b)["state"], "CANCELLED")
+        self.assertIsNone(self.scheduler._lane_export)
+
+    def test_a_handed_back_export_lets_the_waiting_stage_start_and_follows_the_scan(self):
+        a, b, render = self.heavy_stage_waiting()
+        self.use_vram(self.OTHERS)
+        self.write_deferral(b, "encoder_error")
+        render.finish(2)
+        self.wait_until(lambda: self.events_of(b, "EXPORT_DEFERRED"), "the export was never handed back")
+        self.wait_for("a:visual_logo").finish(0)
+        self.wait_for("a:localize_logo").finish(0)
+        again = self.wait_for(f"render:{b}", count=2)  # x264 in the main lane once the scan job is done
+        self.assertNotIn("env", again.kwargs)
+        again.finish(0)
+        self.wait_until(lambda: self.store.get_job(b)["state"] == "COMPLETED", "the export never completed")
+        self.assertEqual(self.kinds(), ["a:text", f"render:{b}", "a:visual_logo", "a:localize_logo", f"render:{b}"])
+
+    def test_a_failed_ffprobe_is_kept_and_not_run_every_look(self):
+        source = self.root / "input" / "broken.mp4"
+        source.write_bytes(b"not a video")
+        failure = subprocess.CalledProcessError(1, "ffprobe")
+        with patch("biliflow.scheduler.probe_video", side_effect=failure) as probe:
+            for _look in range(3):
+                self.assertEqual(JobScheduler._probe_frame(self.scheduler, source), {})
+        probe.assert_called_once()
+
     def test_a_scan_the_measurement_does_not_cover_keeps_the_largest_peak(self):
         cases = (
             ("scan_settings", lambda a: self.store.set_setting(f"fast_scan:{a}", False)),
