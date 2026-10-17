@@ -146,6 +146,14 @@ class _GpuStage:
     baseline_mib: int | None
 
 
+@dataclass(frozen=True)
+class _LaneExport:
+    """The export the export lane took (A1d), from its choice until that lane's turn ends."""
+    job_id: int
+    # NVENC's measured VRAM for the export's frame (export_lanes.nvenc_need_mib).
+    need_mib: int
+
+
 class _ExportHandedBack(RuntimeError):
     """A render of the second lane stopped and left its deferral record."""
 
@@ -236,6 +244,15 @@ class JobScheduler:
         self._parallel_decisions: dict[int, export_lanes.LaneDecision] = {}
         self._last_scan_job_id: int | None = None
         self._frame_probes: dict[tuple[str, int, int], dict] = {}
+        # Perf plan A1d, under _lock: the export the export lane took, recorded with its
+        # choice so the main lane counts it before its process starts; the scan stage
+        # (job, stage) beside which an export first found too little VRAM (it gets one
+        # more look, for the GPU stage after the main lane's next boundary); and the
+        # (scan job, stage, export job) the events last said waits for the export lane's
+        # current turn.
+        self._lane_export: _LaneExport | None = None
+        self._short_beside: dict[int, tuple[int, str, export_lanes.LaneDecision]] = {}
+        self._stage_wait_noted: tuple[int, str, int | None] | None = None
         # NVML read of GPU 0 (export_lanes.read_vram); tests give their own.
         self.read_vram = export_lanes.read_vram
 
@@ -271,7 +288,10 @@ class JobScheduler:
 
     def _lane_busy(self, lane: str) -> bool:
         with self._lock:
-            return lane in self._active or lane in self._executing
+            return (
+                lane in self._active or lane in self._executing
+                or (lane == EXPORT_LANE and self._lane_export is not None)
+            )
 
     def parallel_export_mode(self) -> str:
         """``auto`` or ``off`` ("Xuất song song" in Cài đặt); ``auto`` when never set."""
@@ -712,6 +732,7 @@ class JobScheduler:
             with self._lock:
                 self._sequential_exports.discard(job_id)
                 self._parallel_decisions.pop(job_id, None)
+                self._short_beside.pop(job_id, None)
             self.store.ensure_stage(job_id, "render")
             self.store.update_stage(job_id, "render", state="PENDING", error=None, pid=None)
             self.store.set_setting(f"render:{job_id}", {
@@ -912,6 +933,10 @@ class JobScheduler:
         preflight), and while it was handed back from the export lane and the scan
         job that ran beside it still has stages to run (perf plan A1b: x264 after
         the scan, never cutting in).
+
+        While the export lane runs an export, a GPU stage starts only when the VRAM
+        left holds its measured peak beside that export; otherwise the main lane
+        waits for the export to end (A1d, _beside_lane_export).
         """
         parallel = self._parallel_allowed()
         export_lane_busy = self._lane_busy(EXPORT_LANE)
@@ -921,15 +946,62 @@ class JobScheduler:
         waiting = self._iter_waiting()
         first = next(waiting, None)
         if first is None or first[2].name != "render":
-            return first
+            return self._beside_lane_export(first) if export_lane_busy else first
         next_scan = next((item for item in waiting if item[2].name != "render"), None)
         if next_scan is not None and self._export_waits(
             first, next_scan, parallel=parallel, export_lane_busy=export_lane_busy,
         ):
-            return next_scan
+            return self._beside_lane_export(next_scan) if export_lane_busy else next_scan
         if export_lane_busy:
             return None
         return first
+
+    def _beside_lane_export(
+        self, selection: tuple[dict[str, Any], dict[str, Any], PipelineStage] | None,
+    ) -> tuple[dict[str, Any], dict[str, Any], PipelineStage] | None:
+        """``selection`` while the export lane runs an export, or None: the main lane waits (A1d).
+
+        A CPU stage always starts. A GPU stage starts only when NVML, read now, shows
+        room for its measured peak next to the export's NVENC need plus the margin
+        (export_lanes.stage_beside_export); a heavier stage waits for the export to
+        end, so the two never ask for more VRAM than the card has. The scan job's
+        events say so once per wait.
+        """
+        if selection is None or not runs_on_gpu(selection[2]):
+            return selection
+        job, _stage, definition = selection
+        with self._lock:
+            running = self._lane_export
+        # The export lane always records its export with its choice; the largest
+        # measured need stands in should a turn ever lack that record.
+        need = running.need_mib if running is not None else export_lanes.largest_nvenc_need_mib()
+        budget = self._scan_budget(job, definition.name)
+        decision = export_lanes.stage_beside_export(
+            self.read_vram(), scan_peak_mib=budget.peak_mib if budget else None, export_need_mib=need,
+        )
+        if decision.parallel:
+            return selection
+        self._note_stage_wait(int(job["id"]), definition.name, running, budget, decision)
+        return None
+
+    def _note_stage_wait(
+        self, job_id: int, stage: str, running: _LaneExport | None,
+        budget: export_lanes.ScanBudget | None, decision: export_lanes.LaneDecision,
+    ) -> None:
+        """STAGE_WAITS_FOR_EXPORT on the scan job, once per (stage, export) it waits for."""
+        export_job_id = running.job_id if running is not None else None
+        key = (job_id, stage, export_job_id)
+        with self._lock:
+            if self._stage_wait_noted == key:
+                return
+            self._stage_wait_noted = key
+        self.store.add_event(
+            job_id, "STAGE_WAITS_FOR_EXPORT", decision.text,
+            payload={
+                "reason": decision.reason, "stage": stage, "export_job_id": export_job_id,
+                **({"scan_peak_basis": budget.basis} if budget else {}), **decision.detail,
+            },
+        )
 
     def _export_waits(
         self, export: tuple[dict[str, Any], dict[str, Any], PipelineStage],
@@ -954,10 +1026,15 @@ class JobScheduler:
         with self._lock:
             if job_id in self._sequential_exports:
                 return False
-        if self._first_gpu_stage(next_scan) is None:
+        gpu_stage = self._first_gpu_stage(next_scan)
+        if gpu_stage is None:
             return False
-        # Nothing runs on the GPU now: what is in use is the baseline of the stage to come.
-        decision = self._lane_decision(export, baseline_mib=None)
+        # Nothing runs on the GPU now: what is in use is the baseline of the stage to
+        # come, budgeted at that stage's own peak (A1d). Too little VRAM here is final,
+        # even for an export that already got its one more look (_select_parallel_export).
+        decision = self._lane_decision(
+            export, baseline_mib=None, budget=self._scan_budget(next_scan[0], gpu_stage.name),
+        )
         if not decision.parallel:
             self._turn_down(job_id, decision)
         return decision.parallel
@@ -1012,23 +1089,42 @@ class JobScheduler:
         return read_render_stall(self.root, self.root / str(render["output"]))
 
     def _probe_frame(self, source: Path) -> dict:
-        """ffprobe's answer for a source, kept per (path, size, mtime) between checks."""
+        """ffprobe's answer for a source, kept per (path, size, mtime) between checks.
+
+        An ffprobe that fails is kept too, as an empty answer (no frame size: the
+        export stays sequential, a scan stage is budgeted at the largest peak), so a
+        main lane waiting beside an export does not start ffprobe every second.
+        """
         stat = source.stat()
         key = (str(source), stat.st_size, stat.st_mtime_ns)
         with self._lock:
             known = self._frame_probes.get(key)
         if known is None:
-            known = probe_video(self.root / "tools" / "ffmpeg" / "bin" / "ffprobe.exe", source)
+            try:
+                known = probe_video(self.root / "tools" / "ffmpeg" / "bin" / "ffprobe.exe", source)
+            except (OSError, subprocess.SubprocessError, ValueError):
+                known = {}
             with self._lock:
                 if len(self._frame_probes) >= 64:
                     self._frame_probes.clear()
                 self._frame_probes[key] = known
         return known
 
+    def _scan_budget(self, job: dict[str, Any], stage: str) -> export_lanes.ScanBudget | None:
+        """The VRAM this scan job's stage is budgeted at (export_lanes.scan_budget, A1d)."""
+        try:
+            frame = export_lanes.frame_size(self._probe_frame(Path(job["source_path"])))
+        except Exception:  # noqa: BLE001 - an unreadable source is budgeted at the largest peak
+            frame = None
+        return export_lanes.scan_budget(
+            stage, profile=str(job.get("profile")), fast_scan=self.fast_scan(int(job["id"])), frame=frame,
+        )
+
     def _lane_decision(
         self, export: tuple[dict[str, Any], dict[str, Any], PipelineStage], *, baseline_mib: int | None,
+        budget: export_lanes.ScanBudget | None,
     ) -> export_lanes.LaneDecision:
-        """Whether this export may run in the export lane beside a scan (export_lanes)."""
+        """Whether this export may run in the export lane beside a scan stage budgeted at ``budget``."""
         job_id = int(export[0]["id"])
         candidate = export_lanes.export_candidate(
             self.root, self.store.setting(f"render:{job_id}"), probe=self._probe_frame,
@@ -1041,22 +1137,35 @@ class JobScheduler:
         read = self.read_vram()
         if baseline_mib is None and read is not None:
             baseline_mib = read.used_mib
-        decision = export_lanes.vram_decision(read, baseline_mib=baseline_mib, need_mib=int(candidate.need_mib))
+        decision = export_lanes.vram_decision(
+            read, baseline_mib=baseline_mib, need_mib=int(candidate.need_mib),
+            scan_peak_mib=budget.peak_mib if budget else None,
+        )
         return export_lanes.LaneDecision(decision.parallel, decision.reason, {
-            **decision.detail, "width": candidate.width, "height": candidate.height,
+            **decision.detail,
+            **({"scan_peak_stage": budget.stage, "scan_peak_basis": budget.basis} if budget else {}),
+            "width": candidate.width, "height": candidate.height,
         })
 
     def _select_parallel_export(self) -> tuple[dict[str, Any], dict[str, Any], PipelineStage] | None:
         """The export lane: the first waiting export, beside the main lane's GPU stage, when allowed.
 
         Each export is judged once: turned down, it runs in the main lane at its
-        next stage boundary (exports first), as with "Tắt".
+        next stage boundary (exports first), as with "Tắt". One exception (A1d):
+        the first time an export finds too little VRAM beside a stage, that is
+        about this stage's peak only. It is not judged again beside the same stage;
+        the main lane judges it at its next boundary for the GPU stage to come, and
+        too little VRAM then, or beside any later stage, is final.
+
+        The export is recorded as the lane's (_lane_export) under the same lock
+        that checks the stage it was judged beside still runs, so the main lane,
+        at that stage's end, already counts it.
         """
         if not self._parallel_allowed():
             return None
         with self._lock:
             gpu = self._gpu_stage
-            if gpu is None or EXPORT_LANE in self._active or EXPORT_LANE in self._executing:
+            if gpu is None or self._lane_busy(EXPORT_LANE):
                 return None
         export = next((item for item in self._iter_waiting(exports_only=True) if item[2].name == "render"), None)
         if export is None:
@@ -1065,8 +1174,17 @@ class JobScheduler:
         with self._lock:
             if job_id in self._sequential_exports:
                 return None
-        decision = self._lane_decision(export, baseline_mib=gpu.baseline_mib)
+            short_beside = self._short_beside.get(job_id)
+        if short_beside is not None and short_beside[:2] == (gpu.job_id, gpu.stage):
+            return None
+        decision = self._lane_decision(
+            export, baseline_mib=gpu.baseline_mib, budget=self._scan_budget(self.store.get_job(gpu.job_id), gpu.stage),
+        )
         if not decision.parallel:
+            if decision.reason == export_lanes.VRAM_SHORT and short_beside is None:
+                with self._lock:
+                    self._short_beside[job_id] = (gpu.job_id, gpu.stage, decision)
+                return None
             self._turn_down(job_id, decision)
             return None
         with self._lock:
@@ -1076,6 +1194,7 @@ class JobScheduler:
             self._parallel_decisions[job_id] = export_lanes.LaneDecision(True, decision.reason, {
                 **decision.detail, "scan_job_id": gpu.job_id, "scan_stage": gpu.stage,
             })
+            self._lane_export = _LaneExport(job_id, int(decision.detail["need_mib"]))
         return export
 
     def _turn_down(self, job_id: int, decision: export_lanes.LaneDecision) -> None:
@@ -1102,6 +1221,11 @@ class JobScheduler:
             finally:
                 with self._lock:
                     self._executing.pop(lane, None)
+                    if lane == EXPORT_LANE:
+                        # The turn is over: a stage that waited for it may start, and a wait
+                        # for the lane's next export is a new one for the events.
+                        self._lane_export = None
+                        self._stage_wait_noted = None
                 # The other lane looks again at once (a stage boundary, a free export lane).
                 self._wake.set()
 
@@ -1225,6 +1349,15 @@ class JobScheduler:
             decision = self._parallel_decisions.pop(job_id, None)
             if lane == MAIN_LANE and name != "render":
                 self._last_scan_job_id = job_id
+            short = self._short_beside.pop(job_id, None) if name == "render" else None
+            turned_down = job_id in self._sequential_exports
+        if lane == MAIN_LANE and short is not None and not turned_down:
+            # A1d: too little VRAM beside a stage once, and no GPU stage came to judge
+            # it again: that is why it runs in the main lane.
+            self.store.add_event(
+                job_id, "EXPORT_LANE_SEQUENTIAL", short[2].text,
+                payload={"reason": short[2].reason, **short[2].detail},
+            )
         if lane == EXPORT_LANE and decision is not None:
             self.store.add_event(
                 job_id, "EXPORT_LANE_PARALLEL", decision.text,

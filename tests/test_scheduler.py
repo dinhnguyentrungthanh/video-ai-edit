@@ -31,6 +31,7 @@ from biliflow.scheduler import (
     InputWatcher,
     JobScheduler,
     _GpuStage,
+    _LaneExport,
     _LaneWake,
 )
 from biliflow.final_renderer import (
@@ -1525,8 +1526,8 @@ class FakeStageProcess:
         return self.returncode
 
 
-class ExportLaneTests(SchedulerFixture):
-    """Perf plan A1b: one NVENC export beside a GPU scan stage, only when the machine allows it.
+class LaneFixture(SchedulerFixture):
+    """Both lanes of the scheduler with fake stage processes (perf plans A1b, A1c, A1d).
 
     Measured VRAM numbers are given here (the real ones come from the A1b
     measurement); stage processes are fakes the test ends, so both lanes really
@@ -1555,7 +1556,9 @@ class ExportLaneTests(SchedulerFixture):
         self.vram = VramRead(total_mib=12288, used_mib=1000, free_mib=11288)
         self.scheduler.read_vram = Mock(side_effect=lambda: self.vram)
         self.probe = self.FULL_HD
-        probe = patch.object(self.scheduler, "_probe_frame", side_effect=lambda source: self.probe)
+        self.probes = {}  # by the source's file stem (the job's name); self.probe otherwise
+        probe = patch.object(self.scheduler, "_probe_frame",
+                             side_effect=lambda source: self.probes.get(Path(source).stem, self.probe))
         probe.start()
         self.addCleanup(probe.stop)
         self.scheduler.poll_seconds = 0.05
@@ -1576,6 +1579,7 @@ class ExportLaneTests(SchedulerFixture):
     preflight = False
     cpu_before: tuple[str, ...] = ()
     review = False
+    gpu_stages: tuple[tuple[str, str], ...] = (("scan_one", "SCANNING_TEXT"), ("scan_two", "SCANNING_LOGO"))
 
     def scan_stages(self, job_key):
         def cpu(name, state):
@@ -1586,7 +1590,7 @@ class ExportLaneTests(SchedulerFixture):
             *(cpu(name, "SCANNING_SAFETY") for name in self.cpu_before),
             *(PipelineStage(name, state, (StageCommand(("python", f"{job_key}:{name}", "--device", self.device), ()),),
                             uses_gpu=True)
-              for name, state in (("scan_one", "SCANNING_TEXT"), ("scan_two", "SCANNING_LOGO"))),
+              for name, state in self.gpu_stages),
             *([cpu("build_review", "BUILDING_REVIEW")] if self.review else []),
         ]
 
@@ -1676,6 +1680,10 @@ class ExportLaneTests(SchedulerFixture):
         render = self.wait_for(f"render:{b}")
         self.wait_until(lambda: len(self.scheduler.active_lanes) == 2, "both lanes never ran")
         return a, b, scan, render
+
+
+class ExportLaneTests(LaneFixture):
+    """Perf plan A1b: one NVENC export beside a GPU scan stage, only when the machine allows it."""
 
     def test_auto_runs_one_nvenc_export_beside_a_gpu_scan_stage(self):
         a, b, scan, render = self.both_running()
@@ -2467,6 +2475,402 @@ class ExportLaneTests(SchedulerFixture):
         self.wait_for("a:scan_two").finish(0)
         self.wait_until(lambda: not self.scheduler.is_busy(a), "the scan job never finished")
         self.assertEqual(self.kinds(), ["a:scan_one", f"render:{b}", "a:scan_two"])
+
+
+class StageBudgetLaneTests(LaneFixture):
+    """Perf plan A1d: each scan stage is budgeted at its own measured peak, and the main lane
+    waits for the export lane's export before a GPU stage the VRAM left cannot hold.
+
+    Numbers like the RTX 2060's on 2026-10-15: 6144 MiB, other programs 1200 MiB, NVENC
+    244 MiB at 1080p, margin 256. A1b's single peak (4943) leaves no room for NVENC beside
+    any stage; text (833) and localize_logo (1309) leave plenty, visual_logo (4690) does not.
+    """
+
+    gpu_stages = (("text", "SCANNING_TEXT"), ("visual_logo", "SCANNING_LOGO"), ("localize_logo", "LOCALIZING_REGIONS"))
+    OTHERS = 1200
+    NVENC = 244
+    UHD = {"streams": [{"codec_type": "video", "width": 3840, "height": 2160}]}
+
+    def setUp(self):
+        super().setUp()
+        numbers = patch.multiple(
+            "biliflow.export_lanes",
+            NVENC_NEED_MIB=((1280 * 640, 170), (1920 * 1080, self.NVENC)), SCAN_PEAK_MIB=4943, SAFETY_MARGIN_MIB=256,
+            STAGE_PEAK_MIB={"text": (833, (1920, 1080)), "visual_logo": (4690, (1920, 1080)),
+                            "localize_logo": (1309, (1920, 1080)), "confirm_violence": (4943, (1920, 1080))},
+        )
+        numbers.start()
+        self.addCleanup(numbers.stop)
+        self.addCleanup(self.stop_lanes)  # the lanes stop before the numbers go back
+        self.use_vram(self.OTHERS)
+
+    def use_vram(self, used):
+        self.vram = VramRead(total_mib=6144, used_mib=used, free_mib=6144 - used)
+
+    def complete(self, job_id, *names):
+        for name in names:
+            self.store.update_stage(job_id, name, state="COMPLETED", progress=1.0)
+
+    def take(self, lane=MAIN_LANE):
+        """(job id, stage) the lane would take now, or None."""
+        selection = self.scheduler._select(lane)
+        return None if selection is None else (int(selection[0]["id"]), selection[1]["name"])
+
+    @staticmethod
+    def payload(event, *keys):
+        return {key: event["payload"][key] for key in keys}
+
+    def lane_export_running(self, name="b"):
+        """The export lane has taken this job's export (the main lane sees only its record)."""
+        job_id = self.job(name)
+        self.export_auto(job_id)
+        self.assertTrue(self.store.claim_queued(job_id, "RENDERING", "render"))
+        self.scheduler._lane_export = _LaneExport(job_id, self.NVENC)
+        return job_id
+
+    def heavy_stage_running(self, *, then):
+        """Scan job a runs visual_logo in the main lane (baseline 1200, the GPU at its peak);
+        ``then`` is its GPU stage after it."""
+        self.gpu_stages = (("visual_logo", "SCANNING_LOGO"), (then, "SCANNING_SAFETY"))
+        a = self.job("a")
+        self.start(a)
+        self.assertTrue(self.store.claim_queued(a, "SCANNING_LOGO", "visual_logo"))
+        self.scheduler._gpu_stage = _GpuStage(1, a, "visual_logo", self.OTHERS)
+        self.use_vram(self.OTHERS + 4690)
+        return a
+
+    def end_stage(self, job_id, name):
+        """The main lane's stage process ended and the job waits for its next stage."""
+        self.scheduler._gpu_stage = None
+        self.complete(job_id, name)
+        self.store.update_job(job_id, state="QUEUED")
+        self.use_vram(self.OTHERS)
+
+    def test_an_export_runs_beside_a_light_stage_and_the_heavy_stage_after_it_waits(self):
+        # Job 139 on 2026-10-15: exports queued at a light stage ran one after another.
+        a, b = self.job("a"), self.job("b")
+        self.start(a)
+        self.export_auto(b)
+        self.scheduler.start()
+        text = self.wait_for("a:text")
+        render = self.wait_for(f"render:{b}")
+        (event,) = self.events_of(b, "EXPORT_LANE_PARALLEL")
+        self.assertEqual(
+            self.payload(event, "scan_stage", "scan_peak_stage", "scan_peak_mib", "scan_peak_basis", "baseline_mib",
+                         "need_mib", "left_mib"),
+            {"scan_stage": "text", "scan_peak_stage": "text", "scan_peak_mib": 833, "scan_peak_basis": "stage",
+             "baseline_mib": 1200, "need_mib": 244, "left_mib": 6144 - (1200 + 833) - 244},
+        )
+        # A1b's single peak refused it: 6144 - (1200 + 4943) - 244 = -243.
+        self.assertEqual(self.events_of(b, "EXPORT_LANE_SEQUENTIAL"), [])
+        self.use_vram(self.OTHERS + self.NVENC)  # NVENC holds its memory now
+        text.finish(0)
+        self.wait_until(lambda: self.events_of(a, "STAGE_WAITS_FOR_EXPORT"), "the heavy stage never waited")
+        time.sleep(0.5)  # ten looks of the main lane: visual_logo never starts beside the export, one event
+        self.assertEqual(self.kinds(), ["a:text", f"render:{b}"])
+        (wait,) = self.events_of(a, "STAGE_WAITS_FOR_EXPORT")
+        self.assertEqual((wait["level"], wait["message"]), ("INFO", REASON_TEXT["stage_waits"]))
+        self.assertEqual(
+            self.payload(wait, "reason", "stage", "export_job_id", "used_mib", "need_mib", "scan_peak_mib",
+                         "scan_peak_basis", "margin_mib", "left_mib"),
+            {"reason": "stage_waits", "stage": "visual_logo", "export_job_id": b, "used_mib": 1444, "need_mib": 244,
+             "scan_peak_mib": 4690, "scan_peak_basis": "stage", "margin_mib": 256,
+             "left_mib": 6144 - (1444 + 244 + 4690)},
+        )
+        self.assertEqual(self.store.get_job(a)["state"], "QUEUED")
+        self.use_vram(self.OTHERS)
+        render.finish(0)
+        self.wait_until(lambda: self.store.get_job(b)["state"] == "COMPLETED", "the export never completed")
+        self.wait_for("a:visual_logo").finish(0)
+        self.wait_for("a:localize_logo").finish(0)
+        self.wait_until(lambda: not self.scheduler.is_busy(a), "the scan job never finished")
+        self.assertEqual(self.kinds(), ["a:text", f"render:{b}", "a:visual_logo", "a:localize_logo"])
+        self.assertEqual(self.terminated, [])
+        self.assertIsNone(self.scheduler._lane_export)
+
+    def test_a_lighter_stage_starts_beside_the_running_export(self):
+        self.gpu_stages = (("text", "SCANNING_TEXT"), ("localize_logo", "LOCALIZING_REGIONS"))
+        a, b = self.job("a"), self.job("b")
+        self.start(a)
+        self.export_auto(b)
+        self.scheduler.start()
+        text = self.wait_for("a:text")
+        render = self.wait_for(f"render:{b}")
+        self.use_vram(self.OTHERS + self.NVENC)
+        text.finish(0)
+        # 1444 + 244 + 1309 leaves 3147 MiB: localize_logo starts beside the export.
+        light = self.wait_for("a:localize_logo")
+        self.assertIsNone(render.poll())
+        self.assertEqual([item["lane"] for item in self.scheduler.active_lanes], [MAIN_LANE, EXPORT_LANE])
+        self.assertEqual(self.events_of(a, "STAGE_WAITS_FOR_EXPORT"), [])
+        render.finish(0)
+        light.finish(0)
+        self.wait_until(lambda: not self.scheduler.is_busy(a) and self.store.get_job(b)["state"] == "COMPLETED",
+                        "the scan or the export never finished")
+        self.assertEqual(self.kinds(), ["a:text", f"render:{b}", "a:localize_logo"])
+
+    def test_an_export_queued_during_a_heavy_stage_goes_beside_the_light_stage_after_it(self):
+        # Job 139 again: export 147 was turned down beside visual_logo and ran alone.
+        self.gpu_stages = (("visual_logo", "SCANNING_LOGO"), ("localize_logo", "LOCALIZING_REGIONS"))
+        a = self.job("a")
+        self.start(a)
+        self.scheduler.start()
+        heavy = self.wait_for("a:visual_logo")
+        self.use_vram(self.OTHERS + 4690)
+        b = self.job("b")
+        self.export_auto(b)
+        # One read for visual_logo's baseline, one for the export beside it (10 < 256 MiB left).
+        self.wait_until(lambda: self.scheduler.read_vram.call_count >= 2, "the export lane never looked")
+        time.sleep(0.5)
+        self.assertEqual(self.scheduler.read_vram.call_count, 2)  # judged once beside visual_logo
+        self.assertEqual(self.kinds(), ["a:visual_logo"])
+        self.assertEqual(self.events_of(b, "EXPORT_LANE_SEQUENTIAL"), [])
+        self.use_vram(self.OTHERS)
+        heavy.finish(0)
+        light = self.wait_for("a:localize_logo")
+        render = self.wait_for(f"render:{b}")
+        (event,) = self.events_of(b, "EXPORT_LANE_PARALLEL")
+        self.assertEqual(self.payload(event, "scan_stage", "scan_peak_mib"),
+                         {"scan_stage": "localize_logo", "scan_peak_mib": 1309})
+        self.assertEqual(self.events_of(b, "EXPORT_LANE_SEQUENTIAL"), [])
+        render.finish(0)
+        light.finish(0)
+        self.wait_until(lambda: not self.scheduler.is_busy(a) and self.store.get_job(b)["state"] == "COMPLETED",
+                        "the scan or the export never finished")
+        self.assertEqual(self.kinds(), ["a:visual_logo", "a:localize_logo", f"render:{b}"])
+
+    def test_the_main_lane_judges_a_gpu_stage_with_what_the_gpu_holds_now(self):
+        a = self.job("a")
+        self.start(a)
+        self.complete(a, "text", "visual_logo")  # next: localize_logo
+        b = self.lane_export_running()
+        self.use_vram(1444)
+        self.assertEqual(self.take(), (a, "localize_logo"))  # 1444 + 244 + 1309 + 256 <= 6144
+        self.assertEqual(self.events_of(a, "STAGE_WAITS_FOR_EXPORT"), [])
+        self.use_vram(4400)  # other programs grew: 4400 + 244 + 1309 = 5953
+        self.assertIsNone(self.take())
+        self.assertIsNone(self.take())
+        (wait,) = self.events_of(a, "STAGE_WAITS_FOR_EXPORT")
+        self.assertEqual(self.payload(wait, "reason", "stage", "export_job_id", "used_mib", "scan_peak_mib", "left_mib"),
+                         {"reason": "stage_waits", "stage": "localize_logo", "export_job_id": b, "used_mib": 4400,
+                          "scan_peak_mib": 1309, "left_mib": 6144 - 5953})
+
+    def test_without_a_vram_reading_the_gpu_stage_waits_for_the_export(self):
+        a = self.job("a")
+        self.start(a)
+        self.complete(a, "text", "visual_logo")
+        b = self.lane_export_running()
+        self.vram = None
+        self.assertIsNone(self.take())
+        (wait,) = self.events_of(a, "STAGE_WAITS_FOR_EXPORT")
+        self.assertEqual((wait["message"], wait["payload"]["reason"], wait["payload"]["export_job_id"]),
+                         (REASON_TEXT["stage_vram_unreadable"], "stage_vram_unreadable", b))
+        # Once the export lane is done, the stage runs as before.
+        self.store.update_job(b, state="COMPLETED")
+        self.scheduler._lane_export = None
+        self.assertEqual(self.take(), (a, "localize_logo"))
+
+    def test_cpu_stages_never_wait_for_the_export(self):
+        self.preflight = True
+        self.review = True
+        a, c = self.job("a"), self.job("c")
+        self.start(c)
+        self.complete(c, "preflight", "text", "visual_logo", "localize_logo")  # next: build_review
+        self.start(a)  # next: preflight
+        self.lane_export_running()
+        self.vram = None
+        self.assertEqual(self.take(), (c, "build_review"))
+        self.scheduler.cancel(c)
+        self.assertEqual(self.take(), (a, "preflight"))
+        self.scheduler.read_vram.assert_not_called()
+        self.assertEqual(self.events_of(a, "STAGE_WAITS_FOR_EXPORT") + self.events_of(c, "STAGE_WAITS_FOR_EXPORT"), [])
+
+    def test_with_off_an_export_already_beside_still_holds_its_vram(self):
+        a = self.job("a")
+        self.start(a)
+        self.complete(a, "text")  # next: visual_logo
+        self.lane_export_running()
+        self.scheduler.set_parallel_export_mode("off")
+        self.use_vram(1444)
+        self.assertIsNone(self.take())
+        self.assertEqual(len(self.events_of(a, "STAGE_WAITS_FOR_EXPORT")), 1)
+
+    def test_the_export_lane_holds_its_place_until_its_export_starts(self):
+        a, b = self.job("a"), self.job("b")
+        self.start(a)
+        self.export_auto(b)
+        self.assertTrue(self.store.claim_queued(a, "SCANNING_TEXT", "text"))
+        self.scheduler._gpu_stage = _GpuStage(1, a, "text", self.OTHERS)
+        self.assertEqual(self.take(EXPORT_LANE), (b, "render"))
+        # text ends before the export lane's thread has claimed b: the main lane sees b as taken
+        # and keeps NVENC's need for it, though NVENC has not started yet.
+        self.end_stage(a, "text")
+        self.assertTrue(self.scheduler._lane_busy(EXPORT_LANE))
+        self.assertIsNone(self.take())  # 1200 + 244 + 4690 leaves 10 MiB: visual_logo waits
+        self.assertEqual(self.events_of(b, "EXPORT_LANE_SEQUENTIAL"), [])  # nor does the main lane take b
+        (wait,) = self.events_of(a, "STAGE_WAITS_FOR_EXPORT")
+        self.assertEqual(self.payload(wait, "stage", "export_job_id", "used_mib", "left_mib"),
+                         {"stage": "visual_logo", "export_job_id": b, "used_mib": 1200,
+                          "left_mib": 6144 - (1200 + 244 + 4690)})
+        # The export ran and the export lane's loop ended: the main lane goes on.
+        self.assertTrue(self.store.claim_queued(b, "RENDERING", "render"))
+        self.store.update_job(b, state="COMPLETED")
+        self.scheduler._lane_export = None
+        self.assertEqual(self.take(), (a, "visual_logo"))
+
+    def test_a_shortfall_beside_a_heavy_stage_is_looked_at_again_for_the_next_stage(self):
+        a = self.heavy_stage_running(then="localize_logo")
+        b = self.job("b")
+        self.export_auto(b)
+        self.assertIsNone(self.take(EXPORT_LANE))  # 6144 - 5890 - 244 = 10 < 256
+        reads = self.scheduler.read_vram.call_count
+        self.assertIsNone(self.take(EXPORT_LANE))  # judged once beside this stage
+        self.assertEqual(self.scheduler.read_vram.call_count, reads)
+        self.assertEqual(self.events_of(b, "EXPORT_LANE_SEQUENTIAL"), [])  # not final
+        self.assertNotIn(b, self.scheduler._sequential_exports)
+        self.end_stage(a, "visual_logo")
+        # At the boundary the export is judged for localize_logo: the main lane runs it and
+        # the export lane takes the export beside it.
+        self.assertEqual(self.take(), (a, "localize_logo"))
+        self.assertTrue(self.store.claim_queued(a, "SCANNING_SAFETY", "localize_logo"))
+        self.scheduler._gpu_stage = _GpuStage(2, a, "localize_logo", self.OTHERS)
+        self.assertEqual(self.take(EXPORT_LANE), (b, "render"))
+        detail = self.scheduler._parallel_decisions[b].detail
+        self.assertEqual((detail["scan_stage"], detail["scan_peak_mib"], detail["left_mib"]),
+                         ("localize_logo", 1309, 6144 - (1200 + 1309) - 244))
+        self.assertEqual(self.events_of(b, "EXPORT_LANE_SEQUENTIAL"), [])
+
+    def test_a_second_shortfall_at_the_boundary_is_final(self):
+        a = self.heavy_stage_running(then="confirm_violence")
+        b = self.job("b")
+        self.export_auto(b)
+        self.assertIsNone(self.take(EXPORT_LANE))
+        self.end_stage(a, "visual_logo")
+        self.assertEqual(self.take(), (b, "render"))  # 6144 - (1200 + 4943) - 244 < 256: the export goes first
+        self.take()  # judged once per export request
+        (event,) = self.events_of(b, "EXPORT_LANE_SEQUENTIAL")
+        self.assertEqual(self.payload(event, "reason", "scan_peak_stage", "scan_peak_mib", "scan_peak_basis", "left_mib"),
+                         {"reason": "vram_short", "scan_peak_stage": "confirm_violence", "scan_peak_mib": 4943,
+                          "scan_peak_basis": "stage", "left_mib": 6144 - (1200 + 4943) - 244})
+
+    def test_a_second_shortfall_beside_the_next_stage_is_final(self):
+        a = self.heavy_stage_running(then="localize_logo")
+        b = self.job("b")
+        self.export_auto(b)
+        self.assertIsNone(self.take(EXPORT_LANE))
+        self.end_stage(a, "visual_logo")
+        self.assertEqual(self.take(), (a, "localize_logo"))
+        self.assertTrue(self.store.claim_queued(a, "SCANNING_SAFETY", "localize_logo"))
+        self.scheduler._gpu_stage = _GpuStage(2, a, "localize_logo", self.OTHERS)
+        self.use_vram(5700)  # something took VRAM since the boundary: 6144 - 5700 - 244 = 200
+        self.assertIsNone(self.take(EXPORT_LANE))
+        (event,) = self.events_of(b, "EXPORT_LANE_SEQUENTIAL")
+        self.assertEqual(self.payload(event, "reason", "scan_peak_stage", "left_mib"),
+                         {"reason": "vram_short", "scan_peak_stage": "localize_logo", "left_mib": 200})
+        self.assertIn(b, self.scheduler._sequential_exports)
+
+    def test_a_new_export_request_is_judged_afresh_beside_the_running_stage(self):
+        self.heavy_stage_running(then="localize_logo")
+        b = self.job("b")
+        self.export_auto(b)
+        self.assertIsNone(self.take(EXPORT_LANE))
+        reads = self.scheduler.read_vram.call_count
+        self.export_auto(b)  # Xuất video again
+        self.assertIsNone(self.take(EXPORT_LANE))
+        self.assertEqual(self.scheduler.read_vram.call_count, reads + 1)
+
+    def test_a_first_shortfall_says_why_when_no_gpu_stage_comes_to_judge_the_export_again(self):
+        self.gpu_stages = (("visual_logo", "SCANNING_LOGO"),)
+        self.review = True  # build_review (CPU) after visual_logo
+        a = self.job("a")
+        self.start(a)
+        self.scheduler.start()
+        heavy = self.wait_for("a:visual_logo")
+        self.use_vram(self.OTHERS + 4690)
+        b = self.job("b")
+        self.export_auto(b)
+        self.wait_until(lambda: b in self.scheduler._short_beside, "the export lane never looked")
+        self.use_vram(self.OTHERS)
+        heavy.finish(0)
+        render = self.wait_for(f"render:{b}")  # in the main lane: no GPU stage left to go beside
+        self.assertNotIn("env", render.kwargs)
+        (event,) = self.events_of(b, "EXPORT_LANE_SEQUENTIAL")
+        self.assertEqual(self.payload(event, "reason", "scan_peak_stage", "scan_peak_mib", "left_mib"),
+                         {"reason": "vram_short", "scan_peak_stage": "visual_logo", "scan_peak_mib": 4690,
+                          "left_mib": 6144 - (1200 + 4690) - 244})
+        render.finish(0)
+        self.wait_for("a:build_review").finish(0)
+        self.wait_until(lambda: not self.scheduler.is_busy(a) and self.store.get_job(b)["state"] == "COMPLETED",
+                        "the scan or the export never finished")
+        self.assertEqual(len(self.events_of(b, "EXPORT_LANE_SEQUENTIAL")), 1)
+        self.assertEqual(self.scheduler._short_beside, {})
+
+    def heavy_stage_waiting(self):
+        """Export b runs beside a's text; text ended and visual_logo waits for b (a, b, render)."""
+        a, b = self.job("a"), self.job("b")
+        self.start(a)
+        self.export_auto(b)
+        self.scheduler.start()
+        text = self.wait_for("a:text")
+        render = self.wait_for(f"render:{b}")
+        self.use_vram(self.OTHERS + self.NVENC)
+        text.finish(0)
+        self.wait_until(lambda: self.events_of(a, "STAGE_WAITS_FOR_EXPORT"), "the heavy stage never waited")
+        return a, b, render
+
+    def test_a_cancelled_export_lets_the_waiting_stage_start(self):
+        a, b, render = self.heavy_stage_waiting()
+        self.use_vram(self.OTHERS)
+        self.scheduler.cancel(b)
+        self.assertEqual(self.terminated, [render.kind])
+        self.wait_for("a:visual_logo").finish(0)
+        self.wait_for("a:localize_logo").finish(0)
+        self.wait_until(lambda: not self.scheduler.is_busy(a), "the scan job never finished")
+        self.assertEqual(self.store.get_job(b)["state"], "CANCELLED")
+        self.assertIsNone(self.scheduler._lane_export)
+
+    def test_a_handed_back_export_lets_the_waiting_stage_start_and_follows_the_scan(self):
+        a, b, render = self.heavy_stage_waiting()
+        self.use_vram(self.OTHERS)
+        self.write_deferral(b, "encoder_error")
+        render.finish(2)
+        self.wait_until(lambda: self.events_of(b, "EXPORT_DEFERRED"), "the export was never handed back")
+        self.wait_for("a:visual_logo").finish(0)
+        self.wait_for("a:localize_logo").finish(0)
+        again = self.wait_for(f"render:{b}", count=2)  # x264 in the main lane once the scan job is done
+        self.assertNotIn("env", again.kwargs)
+        again.finish(0)
+        self.wait_until(lambda: self.store.get_job(b)["state"] == "COMPLETED", "the export never completed")
+        self.assertEqual(self.kinds(), ["a:text", f"render:{b}", "a:visual_logo", "a:localize_logo", f"render:{b}"])
+
+    def test_a_failed_ffprobe_is_kept_and_not_run_every_look(self):
+        source = self.root / "input" / "broken.mp4"
+        source.write_bytes(b"not a video")
+        failure = subprocess.CalledProcessError(1, "ffprobe")
+        with patch("biliflow.scheduler.probe_video", side_effect=failure) as probe:
+            for _look in range(3):
+                self.assertEqual(JobScheduler._probe_frame(self.scheduler, source), {})
+        probe.assert_called_once()
+
+    def test_a_scan_the_measurement_does_not_cover_keeps_the_largest_peak(self):
+        cases = (
+            ("scan_settings", lambda a: self.store.set_setting(f"fast_scan:{a}", False)),
+            ("frame_not_measured", lambda a: self.probes.__setitem__(self.store.get_job(a)["job_key"], self.UHD)),
+            ("frame_unknown", lambda a: self.probes.__setitem__(self.store.get_job(a)["job_key"], {"streams": []})),
+        )
+        for index, (basis, change) in enumerate(cases):
+            with self.subTest(basis=basis):
+                a, b = self.job(f"s{index}a"), self.job(f"s{index}b")
+                self.start(a)
+                change(a)
+                self.export_auto(b)
+                self.assertEqual(self.take(), (b, "render"))
+                (event,) = self.events_of(b, "EXPORT_LANE_SEQUENTIAL")
+                self.assertEqual(self.payload(event, "reason", "scan_peak_stage", "scan_peak_mib", "scan_peak_basis"),
+                                 {"reason": "vram_short", "scan_peak_stage": "text", "scan_peak_mib": 4943,
+                                  "scan_peak_basis": basis})
+                self.scheduler.cancel(a)
+                self.scheduler.cancel(b)
 
 
 class InputWatcherRestoreTests(unittest.TestCase):
