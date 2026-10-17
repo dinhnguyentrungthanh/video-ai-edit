@@ -1,0 +1,138 @@
+{
+  "job": 145,
+  "code": "3dbfeee",
+  "started_at": "2026-10-17T05:54:23+00:00",
+  "taken_from_install_for_line_ends": [
+    "config/license_policy.json",
+    "scripts/env.ps1"
+  ],
+  "test_job": 1,
+  "cache_entries_left_out": [
+    "localize_logo",
+    "visual_logo"
+  ],
+  "before": {
+    "state": "COMPLETED",
+    "revision": 3,
+    "decisions": {
+      "BLUR": 2,
+      "KEEP": 24,
+      "CUT": 1
+    },
+    "pending": 0,
+    "previews": {
+      "cleanup": {
+        "http": 200,
+        "eligible": true,
+        "reason": null
+      },
+      "archive": {
+        "http": 200,
+        "eligible": true,
+        "reason": null
+      }
+    }
+  },
+  "press": {
+    "http": 200,
+    "state": "QUEUED",
+    "error": null,
+    "decisions": 27,
+    "from_revision": 3
+  },
+  "while_queued": {
+    "request_written": true,
+    "second_press_http": 400,
+    "second_press_refusal": "Video #1 đang trong hàng đợi hoặc đang được xử lý; chờ xong rồi dựng lại danh sách duyệt.",
+    "previews": {
+      "cleanup": {
+        "http": 200,
+        "eligible": false,
+        "reason": "Chỉ dọn được video đã xuất hoặc đã bỏ qua (mục “Hoàn tất”)"
+      },
+      "archive": {
+        "http": 200,
+        "eligible": false,
+        "reason": "Chỉ lưu trữ được video đã xuất hoặc đã bỏ qua (mục “Hoàn tất”)"
+      }
+    },
+    "old_export_present": true
+  },
+  "rebuild_seconds": 295.0,
+  "after": {
+    "state": "WAITING_REVIEW",
+    "revision": 4,
+    "decisions": {
+      "BLUR": 2,
+      "CUT": 1,
+      "KEEP": 23
+    },
+    "pending": 1,
+    "decision_carry": {
+      "previous_decisions": 27,
+      "carried": 27,
+      "restored_unchanged": 0,
+      "conflicts": 0,
+      "restored_reasons": {
+        "conflict": 0,
+        "not_wider": 0,
+        "moments_outside": 0,
+        "no_match": 0
+      },
+      "from_revision": 3,
+      "from_sha256": "4e0299581d84a4e4343362796fb7ba7ccce414147a281dfc02c395baf978d631"
+    },
+    "audit_last": "REBUILD_KEEP_DECISIONS",
+    "sources": {
+      "marks": {
+        "carried_to_a_new_card": 26
+      },
+      "decisions_without_an_old_source": 0
+    },
+    "previews": {
+      "cleanup": {
+        "http": 200,
+        "eligible": false,
+        "reason": "Chỉ dọn được video đã xuất hoặc đã bỏ qua (mục “Hoàn tất”)"
+      },
+      "archive": {
+        "http": 200,
+        "eligible": false,
+        "reason": "Chỉ lưu trữ được video đã xuất hoặc đã bỏ qua (mục “Hoàn tất”)"
+      }
+    },
+    "old_list_unchanged": true,
+    "source_unchanged": true,
+    "old_export_unchanged": true
+  },
+  "stages": {
+    "cache_hit": [],
+    "events": [
+      "PREFLIGHT_OK",
+      "STAGE_CACHE_SKIPPED",
+      "STAGE_CACHE_STORED",
+      "STAGE_COMPLETED",
+      "STAGE_STARTED",
+      "STRUCTURE_AUDIT_COMPLETED"
+    ]
+  },
+  "browser": {
+    "posts": 0,
+    "carry_note": {
+      "1440": "Đã mang 27 / 27 quyết định của revision 3 sang thẻ mới. Còn 1 thẻ chờ duyệt (mới hoặc đổi). Không có quyết định nào được tự đặt.",
+      "390": "Đã mang 27 / 27 quyết định của revision 3 sang thẻ mới. Còn 1 thẻ chờ duyệt (mới hoặc đổi). Không có quyết định nào được tự đặt."
+    },
+    "confirm_points": [
+      "Quyết định cũ được giữ: bạn chỉ phải duyệt thẻ mới hoặc thẻ đã đổi.",
+      "Bản xuất cũ vẫn nằm trong output, không bị xóa.",
+      "Phải xuất lại sau khi duyệt. Tới lúc đó “Lưu trữ” và “Xóa video gốc” chưa dùng được.",
+      "Video vào hàng đợi như “Chạy lại kiểm tra”; bước quét dùng lại kết quả đã lưu khi mã quét không đổi."
+    ]
+  },
+  "reexport": {
+    "skipped": "cards left to review"
+  },
+  "real_queue_idle_throughout": true,
+  "finished_at": "2026-10-17T06:00:35+00:00",
+  "root": "rk-check-20261017-125423"
+}

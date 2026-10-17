@@ -1792,7 +1792,7 @@ class ControlCenterHttpTests(unittest.TestCase):
             "/api/scheduler", method="POST", headers={"X-BiliFlow-Token": "wrong"}, body=b"{}",
         )
         self.assertEqual(status, 403)
-        for action in ("skip", "unskip", "review/finalize"):
+        for action in ("skip", "unskip", "review/finalize", "rebuild-review"):
             route = f"/api/jobs/{self.job_id}/{action}"
             with self.subTest(route=route):
                 for host, token in (("evil.example", "test-token"), (None, "wrong"), (None, None)):
@@ -2215,6 +2215,27 @@ class ControlCenterHttpTests(unittest.TestCase):
             )
         self.assertEqual(status, 400)
         self.assertEqual(len(queued_events(job["id"])), 1)
+
+    def test_rebuild_review_route_queues_a_new_revision_that_names_the_queue_in_use(self):
+        from biliflow.scheduler import JobScheduler
+        self.center.scheduler = JobScheduler(self.root, self.store)
+        self.store.update_job(self.job_id, content_style="animation")
+        headers = {"X-BiliFlow-Token": "test-token", "Content-Type": "application/json"}
+        route = f"/api/jobs/{self.job_id}/rebuild-review"
+        with patch(
+            "biliflow.scheduler.pipeline_stages",
+            return_value=[PipelineStage("preflight", "PREFLIGHT", tuple())],
+        ):
+            status, _, raw = self.request(route, method="POST", headers=headers, body=b"{}")
+            self.assertEqual(status, 200, raw)
+            rebuild = json.loads(raw)["rebuild"]
+            self.assertEqual((rebuild["from_queue"], rebuild["from_revision"]), ("reports/jobs/troy/review-queue.json", 1))
+            request = self.root / "reports" / "jobs" / rebuild["pipeline_key"] / "decision-carry-request.json"
+            self.assertEqual(json.loads(request.read_text(encoding="utf-8"))["from_queue"], rebuild["from_queue"])
+            self.assertEqual(self.store.get_job(self.job_id)["state"], "QUEUED")
+            status, _, raw = self.request(route, method="POST", headers=headers, body=b"{}")
+        self.assertEqual(status, 400)
+        self.assertIn("trong hàng đợi", json.loads(raw)["error"])
 
     # ---------------- Request limits (review: negative Content-Length, no read timeout)
     def raw_exchange(self, head, body=b"", *, wait=5.0):

@@ -469,7 +469,7 @@ async function mutate(operation,j,body){
 function simpleConfirm(j,a){
   const text={cancel:'Hủy xử lý video này? Video gốc, report và quyết định duyệt vẫn được giữ. Dừng chỉ tạm dừng; Bỏ qua đánh dấu xong mà không xuất.',
     skip:'Đánh dấu video hoàn tất mà không xuất? Video gốc và report vẫn được giữ.',
-    unskip:'Mở lại video để xuất? Video sẽ quay về mục Chờ duyệt.',
+    unskip:'Mở lại video để xuất? Video sẽ quay về mục Chờ duyệt.',rebuild:C.REBUILD_CONFIRM,
     pause:'Dừng ngay bước hiện tại? Bạn có thể tiếp tục sau.',
     stopAfter:'Dừng sau khi bước hiện tại hoàn tất?',
     hide:'Ẩn video đã hủy khỏi danh sách chính? Có thể hiện lại trong nhóm Đã ẩn.',
@@ -477,9 +477,9 @@ function simpleConfirm(j,a){
     restore:'Trả video gốc từ archive về đúng đường dẫn input sau khi kiểm SHA-256? Với video đã xuất, bạn cần xuất lại; video đã bỏ qua vẫn giữ trạng thái bỏ qua.',
     retry:'Thử lại bước lỗi của video này?',resume:'Tiếp tục xử lý video, giữ vị trí hàng đợi đã có?',
     recheck:'Đọc lại Thùng rác và ghi kết quả kiểm tra? Các bản ghi dọn/lưu trữ cũ được giữ nguyên.'};
-  showModal(a.label,'<p>'+esc(text[a.id]||a.label+'?')+'</p><p><strong>#'+j.id+' · '+esc(j.name)+'</strong></p>',()=>{
+  showModal(a.label,(Array.isArray(text[a.id])?'<ul>'+text[a.id].map(x=>'<li>'+esc(x)+'</li>').join('')+'</ul>':'<p>'+esc(text[a.id]||a.label+'?')+'</p>')+'<p><strong>#'+j.id+' · '+esc(j.name)+'</strong></p>',()=>{
     let body={};if(a.id==='recheck')body=j.source_cleanup?.state==='RECYCLED'?{kind:'source_cleanup',id:j.source_cleanup.id}:{kind:'archive_export',id:j.source_archive.id};
-    return mutate(a.id,j,body).then(()=>{toast(sent(a.label+' · #'+j.id));return true;});
+    return mutate(a.id,j,body).then(r=>{toast(a.id==='rebuild'&&LIVE?C.rebuildSent(r&&r.body):sent(a.label+' · #'+j.id));return true;});
   },a.label);
 }
 function scanForm(j,rerun){

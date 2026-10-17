@@ -142,7 +142,8 @@
           if (operation === 'start') { j.content_style = body.content_style; j.profile = body.profile; }
           else { j.active_revision++; j.active_queue_path = null; j.review_summary = null; }
           j.hidden_at = null; queueJob(j, 'scan', false);
-        } else if (operation === 'resume' || operation === 'retry') queueJob(j, j.render_request ? 'export' : 'scan', true);
+        } else if (operation === 'rebuild') { j.active_revision++; j.active_queue_path = null; j.review_summary = null; j.cleanup = {eligible: false}; j.archive = {eligible: false}; queueJob(j, 'scan', false); }
+        else if (operation === 'resume' || operation === 'retry') queueJob(j, j.render_request ? 'export' : 'scan', true);
         else if (operation === 'pause') j.state = 'PAUSED';
         else if (operation === 'stopAfter') j.stop_after_stage = true;
         else if (operation === 'cancel') { j.state = 'CANCELLED'; j.render_request = false; j.queue_position = null; j.hidden_at = null; }

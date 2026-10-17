@@ -10,6 +10,7 @@ from biliflow.review_workflow import build_review_queue
 
 BAND = {"x": 0, "y": 35, "width": 1280, "height": 68}
 PIECE = {"x": 300, "y": 40, "width": 100, "height": 40}
+NO_REASONS = {"conflict": 0, "not_wider": 0, "moments_outside": 0, "no_match": 0}
 
 
 def _card(card_id, start, end, region, decision=None, **extra):
@@ -55,7 +56,7 @@ class CarryTests(unittest.TestCase):
         items, _, summary = carry_review_decisions([old], [_card("new", 10.5, 19.0, PIECE)], [])
         self.assertEqual(next(item for item in items if item["id"] == "new")["decision"], "CUT")
         self.assertEqual(summary, {"previous_decisions": 1, "carried": 1, "restored_unchanged": 0,
-                                   "conflicts": 0})
+                                   "conflicts": 0, "restored_reasons": NO_REASONS})
 
     def test_the_same_id_with_other_moments_is_not_the_same_card(self):
         old = _card("same", 100.0, 160.0, None, "CUT", category="violence", **_moments((100, 110), (150, 160)))
@@ -118,7 +119,7 @@ class CarryTests(unittest.TestCase):
                 self.assertEqual(by_id["line"]["decision"], "KEEP")
                 self.assertEqual(optional, [])
                 self.assertEqual(summary, {"previous_decisions": 2, "carried": 2, "restored_unchanged": 0,
-                                           "conflicts": 0})
+                                           "conflicts": 0, "restored_reasons": NO_REASONS})
 
     def test_a_blur_of_separate_moments_carries_to_the_same_moments_grown(self):
         # Two moments, the last grown to the film's end: each old moment lies inside a new one, so the
@@ -156,6 +157,29 @@ class CarryTests(unittest.TestCase):
         self.assertEqual(items[0]["decision"], "BLUR")
         self.assertNotIn("advisory", items[0])
         self.assertEqual(summary["carried"], 1)
+
+    def test_the_summary_says_why_each_decision_came_back_unchanged(self):
+        watermark = {"x": 552, "y": 443, "width": 176, "height": 31}
+        cases = [
+            # A KEEP of one piece meets only the card of the whole band.
+            ([_card("old", 10.0, 20.0, PIECE, "KEEP")], [_card("new", 10.0, 20.0, BAND)], "not_wider"),
+            # Two old cards disagree on the one new card.
+            ([_card("mark", 0.0, 2643.5, watermark, "BLUR", **_moments((0.0, 2643.5))),
+              _card("line", 2253.0, 2259.5, {"x": 333, "y": 408, "width": 618, "height": 65}, "KEEP")],
+             [_card("mark-longer", 0.0, 2657.2, watermark, **_moments((0.0, 2657.2)))], "conflict"),
+            # A blur with a moment outside the separate moments of the new card.
+            ([_card("mark", 0.0, 2559.5, watermark, "BLUR", **_moments((0.0, 1000.5), (1297.0, 2559.5)))],
+             [_card("mark-other", 0.0, 2700.0, watermark, **_moments((0.0, 900.0), (1297.0, 2700.0)))],
+             "moments_outside"),
+            # Nothing in the new queue shows it.
+            ([_card("old", 10.0, 20.0, PIECE, "CUT")], [], "no_match"),
+        ]
+        for previous, items, reason in cases:
+            with self.subTest(reason=reason):
+                _, _, summary = carry_review_decisions(previous, items, [])
+                self.assertEqual(summary["restored_reasons"],
+                                 {**NO_REASONS, reason: summary["restored_unchanged"]})
+                self.assertGreater(summary["restored_unchanged"], 0)
 
     def test_inputs_are_not_modified(self):
         previous = [_card("old", 10.0, 20.0, BAND, "BLUR")]

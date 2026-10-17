@@ -165,7 +165,7 @@ PC_ONLY_VISUAL_AUDIT = "Chỉ làm trên PC: Visual AI Audit gửi ảnh ra ngo�
 PHONE_ALLOWED_POSTS = tuple(re.compile(pattern) for pattern in (
     r"/api/scheduler",
     r"/api/ai/check",
-    r"/api/jobs/\d+/(?:start|resume|pause|stop-after-stage|cancel|retry|rerun|skip|unskip|hide|unhide)",
+    r"/api/jobs/\d+/(?:start|resume|pause|stop-after-stage|cancel|retry|rerun|rebuild-review|skip|unskip|hide|unhide)",
     r"/api/jobs/\d+/ai-audit",
     r"/api/jobs/\d+/review/(?:decision|clear|bulk-keep|bulk-accept|finalize)",
     # "Tải video": the phone pastes links and drives tasks; files land on the PC.

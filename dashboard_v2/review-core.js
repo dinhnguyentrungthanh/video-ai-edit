@@ -225,6 +225,19 @@
     const skipped = ((queue?.detection_scope || {}).skipped || []).map(x => SCOPE_NAMES[x] || x);
     return skipped.length ? `Không quét trong lượt này: ${skipped.join(', ')}. Ít mục hơn không có nghĩa các nhóm này đã an toàn.` : '';
   }
+  /* "Dựng lại danh sách duyệt (giữ quyết định)": what the build carried (queue.decision_carry, review_decision_carry).
+   * A decision not carried stays on its old card and still applies; its new card, if any, is left open. */
+  const CARRY_REASONS = {conflict: 'thẻ mới có các quyết định cũ trái nhau', not_wider: 'thẻ mới cho thấy nhiều hơn đoạn đã duyệt',
+    moments_outside: 'thẻ mới có khoảnh khắc ngoài đoạn đã làm mờ', no_match: 'không còn thẻ mới cùng nội dung'};
+  function carryNote(queue) {
+    const c = queue?.decision_carry;
+    if (!c || typeof c !== 'object') return '';
+    const reasons = Object.entries(c.restored_reasons || {}).filter(([, n]) => n > 0).map(([k, n]) => `${n} vì ${CARRY_REASONS[k] || k}`);
+    const from = c.from_revision != null ? ` của revision ${c.from_revision}` : '';
+    const kept = c.restored_unchanged ? ` ${c.restored_unchanged} quyết định không mang sang thẻ mới được, vẫn giữ và vẫn áp dụng trên thẻ cũ${reasons.length ? ' (' + reasons.join('; ') + ')' : ''}.` : '';
+    const open = c.conflicts ? `, trong đó ${c.conflicts} thẻ để trống vì quyết định cũ trái nhau` : '';
+    return `Đã mang ${c.carried} / ${c.previous_decisions} quyết định${from} sang thẻ mới.${kept} Còn ${progress(queue).pending} thẻ chờ duyệt (mới hoặc đổi${open}). Không có quyết định nào được tự đặt.`;
+  }
   function filterLabel(filter, queue) {
     if (filter === 'pending') return `Chưa duyệt (${countsFrom(queue?.items || []).pending})`;
     if (filter === 'candidates') return `Ứng viên phụ (${(queue?.advisory_items || []).length})`;
@@ -421,7 +434,7 @@
   return {SAFETY,KIND_NAMES,STATUS,FILTERS,MORE_FILTERS,FILTER_IDS,TEXT,isSafety,momentsOf,isScene,studioEligible,platformEligible,sceneLogo,hasPlayer,
     isLogoItem,isAdItem,needsFullFrame,catName,actionName,sceneName,statusOf,mmss,span,visible,byTime,listItems,itemMap,countsFrom,statusFrom,progress,progressText,
     nextNote,initialFilter,pickFocus,nextUndecided,step,queueIdentity,queueVersion,bulkFilters,bulkCount,lockState,canExport,regionOwner,regionBox,
-    frameAspect,scopeWarning,filterLabel,thumbTime,momentIndex,nextMomentAfter,pickStrip,pickSceneStrip,pickFor,stripFrames,peakFirst,tlPos,thin,timelineHtml,
+    frameAspect,scopeWarning,CARRY_REASONS,carryNote,filterLabel,thumbTime,momentIndex,nextMomentAfter,pickStrip,pickSceneStrip,pickFor,stripFrames,peakFirst,tlPos,thin,timelineHtml,
     seekTarget,VIDEO_REASONS,videoReason,probeReason,REGION_NOTES,WRITE_RETRY_MS,momentTotal,sceneBlurMessage,aiConfirm,decisionConfirms,decisionBody,regionNote,
     keyDecision,blurLabel,chosenButton,studioRemembered,platformRemembered,isAdvisoryItem,syncCounts,applyDecision,applyClear,undoEntry,undoPlan,undoTitle,decisionLabel,
     advisoryUndoMessage,writeFailureMessage,transientWrite,bulkPlan,exportLine,exportActive};

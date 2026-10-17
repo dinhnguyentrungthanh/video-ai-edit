@@ -101,6 +101,19 @@ check('Labels, statuses and rule texts are the classic ones', () => {
   assert.ok(script.includes('Ít mục hơn không có nghĩa các nhóm này đã an toàn.'));
   assert.equal(R.scopeWarning({detection_scope: {skipped: ['adult', 'advertising']}}), 'Không quét trong lượt này: 18+, Quảng cáo / logo. Ít mục hơn không có nghĩa các nhóm này đã an toàn.');
 });
+check('"Dựng lại danh sách duyệt (giữ quyết định)": the dialog says what was kept, what waits and why', () => {
+  assert.equal(R.carryNote({items: []}), '', 'a fresh scan says nothing');
+  const items = [{id: 'a', decision: 'KEEP'}, {id: 'b', decision: null}, {id: 'c', decision: null}, {id: 'd', decision: 'BLUR'}];
+  const carry = {previous_decisions: 5, carried: 3, restored_unchanged: 2, conflicts: 1, from_revision: 4,
+    restored_reasons: {conflict: 1, not_wider: 0, moments_outside: 0, no_match: 1}};
+  assert.equal(R.carryNote({items, decision_carry: carry}), 'Đã mang 3 / 5 quyết định của revision 4 sang thẻ mới. 2 quyết định không mang sang thẻ mới được, vẫn giữ và vẫn áp dụng trên thẻ cũ (1 vì thẻ mới có các quyết định cũ trái nhau; 1 vì không còn thẻ mới cùng nội dung). Còn 2 thẻ chờ duyệt (mới hoặc đổi, trong đó 1 thẻ để trống vì quyết định cũ trái nhau). Không có quyết định nào được tự đặt.');
+  const all = {previous_decisions: 2, carried: 2, restored_unchanged: 0, conflicts: 0, restored_reasons: {conflict: 0, not_wider: 0, moments_outside: 0, no_match: 0}};
+  assert.equal(R.carryNote({items: items.slice(0, 1), decision_carry: all}), 'Đã mang 2 / 2 quyết định sang thẻ mới. Còn 0 thẻ chờ duyệt (mới hoặc đổi). Không có quyết định nào được tự đặt.');
+  // Every reason of review_decision_carry.RESTORED_REASONS has its words.
+  const py = fs.readFileSync(path.join(ROOT, 'src', 'biliflow', 'review_decision_carry.py'), 'utf-8');
+  const names = /RESTORED_REASONS = \(([^)]*)\)/.exec(py)[1].match(/"([a-z_]+)"/g).map(x => x.slice(1, -1));
+  assert.deepEqual(Object.keys(R.CARRY_REASONS).sort(), names.sort());
+});
 check('Per-item rules match on every sample item (kind, name, action, status, player, logo eligibility)', () => {
   let n = 0;
   for (const [name, q] of Object.entries(QUEUES)) {

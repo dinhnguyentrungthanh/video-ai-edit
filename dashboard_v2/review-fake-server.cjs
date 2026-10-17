@@ -134,6 +134,17 @@ function create() {
       try { body = JSON.parse(raw); } catch (_) { /* recorded as null */ }
       const m = p.match(/^\/api\/jobs\/(\d+)\/review\/(decision|clear|bulk-keep|bulk-accept|finalize)$/);
       posts.push({path: p, body, token: req.headers['x-biliflow-token'] || null, type: req.headers['content-type'] || '', at: Date.now()});
+      // "Dựng lại danh sách duyệt (giữ quyết định)" (browser-check-rebuild.cjs): the job is queued as ControlCenter.rebuild_review does.
+      const rebuild = p.match(/^\/api\/jobs\/(\d+)\/rebuild-review$/);
+      if (rebuild) {
+        if (req.headers['x-biliflow-token'] !== server_state.token) return send(res, 403, {error: 'Phiên không hợp lệ'});
+        if (!/^application\/json/.test(req.headers['content-type'] || '')) return send(res, 415, {error: 'JSON'});
+        const j = jobs.find(x => x.id === Number(rebuild[1])), q = j && queueFor(j.id);
+        if (!q) return send(res, 400, {error: 'Video chưa có danh sách duyệt'});
+        const summary = {from_revision: j.active_revision, from_queue: j.active_queue_path, decisions: q.items.filter(x => x.decision).length, pipeline_key: 'demo-' + j.id + '-run-1'};
+        Object.assign(j, {state: 'QUEUED', queue_kind: 'scan', queue_position: 1, active_queue_path: null, review_summary: null});
+        return send(res, 200, {...j, rebuild: summary});
+      }
       if (!m) return send(res, 405, {error: 'Không hỗ trợ'});
       const fail = server_state.failNext.shift();
       setTimeout(() => {

@@ -59,7 +59,7 @@ CSP_LITERAL = ("default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-
 PHONE_POSTS_LITERAL = (
     r"/api/scheduler",
     r"/api/ai/check",
-    r"/api/jobs/\d+/(?:start|resume|pause|stop-after-stage|cancel|retry|rerun|skip|unskip|hide|unhide)",
+    r"/api/jobs/\d+/(?:start|resume|pause|stop-after-stage|cancel|retry|rerun|rebuild-review|skip|unskip|hide|unhide)",
     r"/api/jobs/\d+/ai-audit",
     r"/api/jobs/\d+/review/(?:decision|clear|bulk-keep|bulk-accept|finalize)",
     # "Tải video" (video download plan, D2).
@@ -89,7 +89,9 @@ PHONE_POSTS_LITERAL = (
 # 4.15), also on the phone like the per-task Thử lại.
 # Session A1b added parallelExport, "Xuất song song: Tự động / Tắt" (93, from 939e32ba…; docs/PERF_INSTALL_PLAN.md
 # section 5), PC only (PHONE_POSTS_LITERAL unchanged).
-ENDPOINTS_SHA256 = "49478cf4821a38e0ac71972bf8b0018d4bb2a9990b0b3376b5d9ee61e1179098"
+# Session D added rebuild, "Dựng lại danh sách duyệt (giữ quyết định)" (94, from 49478cf4…; docs/handoff/D-rebuild-keep.md),
+# also on the phone like "Chạy lại" (rebuild-review in PHONE_POSTS_LITERAL).
+ENDPOINTS_SHA256 = "25669acb4f27a0159a1bb00249087d021a31049c5ac4d5ac2db98f982f89e559"
 
 
 def node(script: str) -> str:

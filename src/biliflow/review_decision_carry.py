@@ -43,6 +43,10 @@ PRESERVED_DECIDED_REASON = (
     "Quyết định cũ của bạn được giữ nguyên khi dựng lại danh sách duyệt "
     "(không có thẻ mới nào trùng đúng thẻ này)"
 )
+# Why a decided card came back unchanged (summary only, "Dựng lại danh sách duyệt (giữ quyết định)"):
+# old cards disagreeing on one new card; a KEEP/CUT/NEEDS_MORE_CONTEXT meeting only a card that shows more;
+# a BLUR whose moments or box lie outside the separate moments of the new card; no new card showing it.
+RESTORED_REASONS = ("conflict", "not_wider", "moments_outside", "no_match")
 
 
 def _box(value: object) -> dict | None:
@@ -266,10 +270,13 @@ def carry_review_decisions(
         carried.add(str(exact["id"]))
         output.append(moved)
     present = {str(item.get("id")) for item in output}
+    conflicted = {str(old_id) for item in output for old_id in item.get("decision_conflict") or []}
+    reasons = dict.fromkeys(RESTORED_REASONS, 0)
     restored = 0
     for old in decided:
         if str(old["id"]) in carried:
             continue
+        reasons[_restored_reason(old, items, conflicted)] += 1
         kept = dict(old)
         if str(old["id"]) in present:
             # A new card took this id (other moments): the old decision stays under its own name.
@@ -288,4 +295,17 @@ def carry_review_decisions(
         "carried": len(carried),
         "restored_unchanged": restored,
         "conflicts": conflicts,
+        "restored_reasons": reasons,
     }
+
+
+def _restored_reason(old: dict, items: list[dict], conflicted: set[str]) -> str:
+    """Which RESTORED_REASONS sent ``old`` back unchanged (``items``: the new main cards)."""
+    if str(old["id"]) in conflicted:
+        return "conflict"
+    matches = [new for new in items if _same_thing(old, new)]
+    if old["decision"] == "BLUR" and any(_discrete(new) for new in matches):
+        return "moments_outside"
+    if old["decision"] != "BLUR" and matches:
+        return "not_wider"
+    return "no_match"

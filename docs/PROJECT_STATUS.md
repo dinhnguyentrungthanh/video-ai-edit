@@ -6,6 +6,12 @@
 
 - Session D (entry below): a site watermark read in 10 runs or more reaches the scan's start and end when they are 150 s or closer, and carried decisions stay with their own card. Review build only: scan cache keys unchanged, "Chạy lại" rebuilds the list without a rescan. Full suite 3,513 (1 unrelated download e2e failure, OK on rerun). Details in `CHANGELOG.md`.
 
+## "Dựng lại danh sách duyệt (giữ quyết định)", session D (2026-10-17) — branch `feat/rebuild-keep-decisions`, not merged
+
+- A new Dashboard V2 button beside "Chạy lại kiểm tra", also on the phone. It queues a new revision as "Chạy lại" does (scan steps from the cache when unchanged); the new list keeps the decisions of the list in use by the carry rules, so only new or changed cards wait. An exported video returns to review, keeps its old export in `output`, and cannot be archived or have its source deleted until it is exported again. A skipped video is unskipped first.
+- Scan cache keys unchanged. Gates: full suite 3,528 tests: all pass except 28 that need a video in the worktree's input folder (test_job_pipeline, test_job_ocr_option; they pass with a synthetic clip there) and 1 timing test of test_hardware_manager that passes 3/3 alone; JS and browser checks pass; a copy of job 145 on a test Control Center kept 27/27 decisions with 1 changed card waiting.
+- Details in `docs/handoff/D-rebuild-keep.md`.
+
 ## A review card's image shows the regions other cards blur, session D (2026-10-17) — branch `fix/review-preview-blurs`, not merged
 
 - On a card's image and its magnifier, Dashboard V2 now draws the regions other cards blur at that time: blurred, as the export does, in a dashed sky-blue box. A card that only suggests BLUR gets a dotted violet box with nothing blurred. The technical details of every card list the overlapping regions, which card blurs each and when. "Ẩn khung" hides it all.
