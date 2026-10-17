@@ -76,3 +76,130 @@ Chỉ thêm tham số `pipeline_key` (mặc định None) vào `Scheduler.rerun`
 ### Không đổi
 Detector, ngưỡng, khóa cache quét (`cli.py`, `run.ps1`, `env.ps1` không đụng), cách mang quyết định, quyết định đã có,
 bản xuất.
+
+## 3. Đã làm
+
+Commit `0b983f4` (backend), `1f09e1d` (Dashboard V2), `3dbfeee` (sửa theo review mã, mục 4).
+
+### Backend
+- `src/biliflow/review_rebuild.py` (mới):
+  - `rebuild_refusal`: thứ tự kiểm là SKIPPED, có lệnh xuất chờ/đang xuất, Visual AI Audit đang chạy (nó ghi lại danh
+    sách đang dùng khi xong), đang chạy hoặc trong hàng đợi, trạng thái khác ba trạng thái được phép, không có danh sách
+    đang dùng, không còn video gốc. Khóa nguồn (đã dọn, lưu trữ) do
+    `ControlCenter._refuse_source_lock` kiểm trước, như các thao tác khác.
+  - `carry_request`: đọc danh sách đang dùng, kiểm cùng video nguồn (đường dẫn, và SHA-256 khi cả hai có), ghi lại
+    revision, đường dẫn tương đối và SHA-256 của danh sách cũ, số quyết định.
+  - `new_revision_key`: `<job_key>-run-<giờ>`, thêm `-2`, `-3`… nếu thư mục đã có.
+  - `write_carry_request`: tạo thư mục mới (không bao giờ dùng lại thư mục có sẵn), ghi qua file tạm rồi `os.replace`.
+    `discard_carry_request` xóa yêu cầu và thư mục khi rerun từ chối.
+  - `read_carry_request`: không có file thì None (dựng sạch như cũ). Từ chối (ValueError, trước khi ghi danh sách mới):
+    file là link hoặc không phải file, JSON hỏng, sai phiên bản, `from_queue` ra ngoài `reports`, trùng danh sách mới
+    hoặc không tên `review-queue.json`, danh sách cũ đọc không được, SHA-256 khác ("danh sách duyệt cũ đã đổi sau khi
+    bấm dựng lại"), danh sách cũ hỏng.
+- `review_workflow.build_review_queue`: đọc yêu cầu cạnh `queue_path`; danh sách cũ phải cùng video nguồn
+  (`QUEUE_MISMATCH`). Thẻ cũ chưa quyết định không quay lại (dựng sạch); quyết định cũ đi qua `carry_review_decisions`
+  như `keep_decisions`. `decision_carry` thêm `from_revision`, `from_queue`; `audit_log` của danh sách mới là
+  `audit_log` cũ cộng một dòng `REBUILD_KEEP_DECISIONS`. `decision_carry` ghi cả `from_sha256`: lần dựng sau trên chính
+  danh sách đã dựng từ yêu cầu này (`carry_applied`) lấy quyết định từ danh sách đó, nên quyết định người dùng đã đổi
+  sau đó không bao giờ bị quyết định của revision cũ đè lại.
+- `review_decision_carry`: phần tóm tắt thêm `restored_reasons` (`conflict`, `not_wider`, `moments_outside`,
+  `no_match`) cho mỗi quyết định trả về nguyên trên thẻ cũ. Cách mang không đổi.
+- `control_center.py`: route `POST /api/jobs/<id>/rebuild-review` (thân bị bỏ qua) đi qua cùng kiểm tra Host, token,
+  Origin và CSRF như các route job khác. `rebuild_review` chạy trong `_REVIEW_QUEUE_IO` và `job_action_lock`, ghi sự kiện
+  `REVIEW_REBUILD_QUEUED` và trả `rebuild: {from_revision, from_queue, decisions, pipeline_key}`. Rerun lỗi sau khi đã
+  xếp job vào hàng với revision mới thì yêu cầu được giữ lại cho bước dựng của revision đó.
+- `scheduler.py`: chỉ thêm `pipeline_key: str | None = None` vào `rerun` và dòng
+  `pipeline_key = pipeline_key or f"{job['job_key']}-run-{stamp}"`. Lúc gộp với A1d, xung đột nếu có chỉ ở đây.
+- `phone_access.py`: điện thoại được gửi `rebuild-review` như `rerun`.
+
+### Dashboard V2
+- `contracts.js`: thao tác `rebuild`, nhãn "Dựng lại danh sách duyệt (giữ quyết định)", ngay sau "Chạy lại kiểm tra"
+  cho video Chờ duyệt, Sẵn sàng xuất, Hoàn tất (có danh sách đang dùng). Tắt khi thiếu video gốc, đang lưu trữ/đã dọn hoặc
+  có lệnh xuất hoặc Visual AI Audit đang chạy; video Đã bỏ qua thấy nút tắt với lý do "bấm “Mở lại để xuất” trước".
+  Có trên điện thoại như "Chạy lại".
+- Hộp xác nhận (`REBUILD_CONFIRM`) liệt kê: quyết định cũ được giữ, chỉ phải duyệt thẻ mới hoặc thẻ đổi; bản xuất cũ vẫn
+  ở `output`, không bị xóa; phải xuất lại, tới lúc đó "Lưu trữ" và "Xóa video gốc" chưa dùng được; video vào hàng đợi
+  như "Chạy lại", bước quét dùng lại kết quả đã lưu khi mã quét không đổi.
+- Sau khi gửi, toast nói số quyết định giữ và revision cũ. Hộp duyệt cảnh của danh sách dựng lại có dòng `.rv-carry`
+  (`review-core.js` `carryNote`): số quyết định mang sang thẻ mới trên tổng, số giữ nguyên trên thẻ cũ kèm lý do, số
+  thẻ chờ duyệt (và số thẻ để trống vì quyết định cũ trái nhau), và câu "Không có quyết định nào được tự đặt".
+- `app.js` còn 796 dòng (trần 800): hộp xác nhận dùng lại `simpleConfirm`, chỉ thêm cách hiện danh sách.
+
+## 4. Kiểm
+
+- Python (gốc tạm trong `temp`):
+  - `tests/test_review_rebuild.py` (13): bảng trạng thái được/không được; yêu cầu ghi và đọc lại, tên trùng giây,
+    thư mục có sẵn, danh sách cũ đổi, ra ngoài `reports`, sai phiên bản; danh sách mới giữ mọi quyết định cũ và không tự
+    đặt quyết định nào; yêu cầu hỏng dừng bước trước khi ghi; không có yêu cầu thì dựng sạch; job đã xuất quay về duyệt,
+    "Xóa video gốc" và "Lưu trữ" từ chối lúc chờ và sau khi dựng, bản xuất cũ còn nguyên; mọi lần bị từ chối không ghi gì
+    (kể cả khi rerun từ chối thì yêu cầu bị thu lại); route điện thoại giống `rerun`; AI Audit đang chạy thì từ chối;
+    lần dựng sau trên danh sách đã dựng giữ quyết định đổi sau đó (test này hỏng khi bỏ phần sửa); rerun lỗi sau khi
+    đã xếp hàng thì yêu cầu còn.
+  - `tests/test_review_decision_carry.py` (15, thêm lý do), `tests/test_control_center.py` (route thật qua HTTP với token;
+    403 khi thiếu token hoặc Host lạ).
+  - Sau `3dbfeee`, chạy cùng nhau: `test_review_rebuild`, `test_review_decision_carry`, `test_control_center`,
+    `test_scheduler`, `test_source_cleanup`, `test_source_archive`, `test_review_workflow`, `test_dashboard_v2_review`,
+    `-frontend`, `-contract`, `-phone`: 432 test đạt. Các test Dashboard và điện thoại khác cũng đạt; chữ ký endpoint
+    trong `test_dashboard_v2_review` cập nhật cho một endpoint mới.
+- JS: `verify.cjs` 51, `verify-adapter.cjs` 42, `verify-review.cjs` 46 (thêm `carryNote` và đối chiếu tên lý do với
+  `RESTORED_REASONS` của Python), `browser-check-rebuild.cjs` 6 (mới: nút, hộp xác nhận, POST, toast, video bỏ qua, dòng
+  tóm tắt ở 1440 và 390 px), `browser-check-review` 27, `-layout` 13, `-covers` 9, `-write` 19, `-bulk` 13.
+  `browser-check.cjs` đạt 8 rồi hết giờ ở R4.3 (dòng 270), giống hệt trên `b9b7e23`: lỗi có sẵn, không do nhánh này.
+- Khóa cache quét: 10/10 stage giống `41169fc` (`build_code_manifest`, cây `git archive 41169fc` trong `temp`, đã xóa).
+- Review mã (agent, chỉ đọc, `b9b7e23..1f09e1d`): không có CRITICAL hay HIGH. Đã sửa trong `3dbfeee`:
+  - MEDIUM: AI Audit đang chạy ghi lại danh sách cũ, làm hỏng SHA-256 và bước dựng lỗi mãi;
+  - MEDIUM: yêu cầu nằm lại trong thư mục, một lần dựng tại chỗ sau đó sẽ đè quyết định mới bằng quyết định cũ;
+  - LOW: rerun lỗi sau khi đã xếp hàng thì yêu cầu bị xóa.
+  Agent cũng kiểm: không có đường vượt thư mục, không XSS, thứ tự khóa đúng, route đi qua cùng kiểm tra Host/token.
+
+## 5. Kiểm thật trên Control Center thử
+
+Script `docs/evidence/rebuild-keep/rebuild_check.py`, bằng chứng `docs/evidence/rebuild-keep/check-2026-10-17/`
+(`result.json`, `result-again.json`, README). Ảnh chụp có khung hình và tên phim thật nên ở
+`reports\evidence\rebuild-keep\check-2026-10-17\` (không vào Git).
+- Gốc tạm `temp\rk-check-<giờ>`, Control Center thử cổng 8797. Chép job 145 (đã xuất, 27 quyết định: KEEP 24, BLUR 2,
+  CẮT 1): video gốc, thư mục báo cáo, bản xuất cùng manifest, cache quét. Thư mục cài chỉ được đọc; không route nào của
+  Control Center thật được gọi. Hàng đợi thật trống suốt lượt (đọc database ở chế độ chỉ đọc).
+- Trước khi bấm: COMPLETED, revision 3, "Xóa video gốc" và "Lưu trữ" đều nhận video.
+- Bấm (mã `3dbfeee`): QUEUED, yêu cầu được ghi; bấm lần hai bị từ chối ("đang trong hàng đợi"); cả hai thao tác trên từ
+  chối ("Chỉ dọn/lưu trữ được video đã xuất hoặc đã bỏ qua").
+- Sau 295 s: revision 4, Chờ duyệt.
+  - 27/27 quyết định mang sang thẻ mới, 0 giữ nguyên trên thẻ cũ, 0 xung đột.
+  - 26 thẻ có quyết định (KEEP 23, BLUR 2, CẮT 1), mọi quyết định đều có nguồn cũ theo dấu của luật mang.
+  - 1 thẻ chờ duyệt: thẻ chữ cố định toàn phim mới, thay thẻ cũ cùng loại mà người dùng đã KEEP. Thẻ mới cho thấy nhiều
+    hơn nên luật không mang KEEP sang. KEEP cũ đó trùng với 20 thẻ hội thoại, và các thẻ này vẫn có KEEP của riêng chúng,
+    nên nó được đếm là "đã mang".
+  - Danh sách cũ, video gốc và bản xuất cũ không đổi. "Xóa video gốc" và "Lưu trữ" vẫn từ chối.
+  - Hộp duyệt hiện: "Đã mang 27 / 27 quyết định của revision 3 sang thẻ mới. Còn 1 thẻ chờ duyệt (mới hoặc đổi). Không có
+    quyết định nào được tự đặt." (1440 và 390 px). Ngăn chi tiết và hộp xác nhận chụp ở cả hai cỡ, bấm "Hủy", 0 POST.
+- Không xuất lại: còn 1 thẻ cần người duyệt, và tác tử không tự đặt quyết định. Nếu quyết định cho ra đúng các thao tác
+  cũ, "Xuất video" dùng lại bản xuất cũ (đã có từ trước, `existing_review_export`).
+- Cache:
+  - Khóa cache quét gồm đường dẫn tuyệt đối của `scripts\run.ps1` của root, nên root thử không bao giờ dùng được mục
+    cache của thư mục cài: lượt đầu quét lại `text` trên GPU (đúng thiết kế, không phải lỗi).
+  - Bấm lần hai trên cùng root (`again`, revision 4 → 5, 143 s): `text` lấy từ cache (`STAGE_CACHE_HIT`), 26/26 quyết
+    định mang sang, vẫn 1 thẻ chờ.
+  - `visual_logo` và `localize_logo` chạy GPU ở cả hai lượt: khóa của chúng gồm `state\brand-memory.json`, đã đổi lúc
+    22:58 ngày 16/10, sau lần quét cuối của mọi job. Trên root thử, đường dẫn mục cache của hai bước này dài 255–257 ký
+    tự, quá giới hạn 247, nên chúng không được lưu (`STAGE_CACHE_SKIPPED`). Trên thư mục cài, đường dẫn ngắn hơn 30 ký tự.
+  - Bản checkout của thư mục chính có `config\license_policy.json` xuống dòng CRLF và `scripts\env.ps1` LF, ngược với
+    `.gitattributes`. Worktree mới lấy theo `.gitattributes` nên hai file khác byte. Khóa cache hash từng byte, nên script
+    lấy hai file này từ thư mục cài khi chỉ khác xuống dòng; khác nội dung thì từ chối. Nếu một lần checkout nào ghi lại
+    hai file này trong thư mục chính, mọi khóa cache quét sẽ đổi.
+- Root thử đã xóa bằng `remove` (gỡ link trước, không đi vào bên trong).
+
+## 6. Giới hạn
+
+- Dựng lại trên thư mục cài chạy lại mọi bước có khóa đổi. Hiện bộ nhớ thương hiệu đã đổi sau lần quét cuối của mọi job,
+  nên `visual_logo` và `localize_logo` sẽ quét lại bằng GPU (khoảng 2–3 phút mỗi tập 40 phút); `text` lấy từ cache.
+- Thẻ cũ chưa quyết định không quay lại (dựng sạch như "Chạy lại").
+- Nếu danh sách cũ bị đổi sau khi bấm (không còn đường nào trong ứng dụng làm vậy sau khi chặn AI Audit), bước dựng dừng
+  lỗi, job ở Lỗi không có danh sách đang dùng; quyết định vẫn nằm trong file cũ nhưng "Thử lại" không cứu được. Chưa làm
+  đường nối lại revision cũ.
+- Job SKIPPED phải "Mở lại để xuất" trước.
+
+## 7. Bước tiếp theo
+
+1. Điều phối gộp vào G15 cùng A1d. Xung đột có thể có ở `scheduler.py` (chữ ký `rerun`).
+2. Sau khi gộp và khởi động lại Control Center thật: người dùng thử nút trên một tập đã xuất, nhìn dòng tóm tắt trong
+   hộp duyệt, duyệt thẻ chờ rồi xuất lại.
