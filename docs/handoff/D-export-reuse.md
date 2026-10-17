@@ -151,7 +151,16 @@ Commit `e70af07` (kế hoạch), `ef837e9` (mã và test).
 - Lúc RED (trước khi sửa mã): các test xóa gốc, lưu trữ, import và luồng dựng lại đều hỏng đúng chỗ.
 - Chạy cùng nhau, đạt 650 test (1 bỏ qua có sẵn): export_identity, final_renderer, export_encoder, source_cleanup (+http),
   source_archive (+http), job_import, job_delete, review_rebuild, review_decision_carry, control_center, scheduler,
-  review_workflow, export_guards, export_lanes.
+  review_workflow, export_guards, export_lanes. Trên `58c9edf` (sau phần sửa theo review), 651 test: đạt, trừ một test
+  thời gian của làn xuất (xem dưới).
+- Full suite (3.569 test, mã `ef837e9`): đạt, trừ:
+  - 28 test cần một video trong `input\` của worktree (`test_job_pipeline`, `test_job_ocr_option`). Đặt tạm một clip
+    tổng hợp 2 s thì 35/35 đạt; clip đã xóa.
+  - 1 test thời gian của làn xuất (`ExportLaneTests`), chạy riêng đạt 3/3.
+
+  Hai lớp test thời gian `ExportLaneTests` và `StageBudgetLaneTests` hỏng khoảng 1 lần trong 5–6 lượt, trên nhánh này
+  cũng như trên `main` `376e352` (6 lượt trong cây `git archive`: 1 lần hỏng). `scheduler.py` và `export_lanes.py`
+  không bị sửa.
 - Khóa cache quét: 10/10 stage giống `376e352` (`build_code_manifest`, so với cây `git archive 376e352` trong `temp`).
   Không file nào bị sửa nằm trong khóa của 10 stage.
 - Review mã (agent, chỉ đọc, `376e352..ef837e9`):

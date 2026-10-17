@@ -1,3 +1,9 @@
+## An export whose operations render the same is reused after a rebuild, session D (2026-10-17) — branch `fix/export-reuse-same-ops`, not merged
+
+- After "Dựng lại danh sách duyệt" or "Chạy lại", an export of an earlier revision that renders the same operations (ids aside, same order, same size policy) is the review's export: "Xuất video" completes at once, and "Lưu trữ" and "Xóa video gốc" take it. Export names, scan cache keys and exports are unchanged.
+- Gates: full suite 3,569 tests on `ef837e9`: OK but for 28 tests that need a video in the worktree's `input` (35/35 with a synthetic clip) and one export-lane timing test (the lane timing tests fail about one run in six on `main` `376e352` too); a copy of job 143 on a test Control Center completed "Xuất video" in 0.03 s without a render.
+- Details in `docs/handoff/D-export-reuse.md`.
+
 ## G16 merge, "Dựng lại danh sách duyệt (giữ quyết định)" (2026-10-17) — branch `merge/g16`, not yet in the main folder
 
 - Session D task c (entry below): a button beside "Chạy lại" rebuilds the review list in a new revision that keeps the decisions through `review_decision_carry`; an exported job returns to review and its old export stays in `output\`. Scan cache keys unchanged; full suite 3,552 OK. Details in `CHANGELOG.md`.

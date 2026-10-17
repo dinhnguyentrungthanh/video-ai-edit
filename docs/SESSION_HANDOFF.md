@@ -1,5 +1,13 @@
 # BiliFlow session handoff
 
+## Session D, an export whose operations render the same is reused after a rebuild — 2026-10-17, branch `fix/export-reuse-same-ops` from `main` `376e352` (worktree `temp\wt-export-reuse`), not merged
+
+- **Request (coordinator):** job 143's rebuild kept 22/22 decisions, but "Xuất video" would render again because the operation ids, which name the export and were compared, change with every revision. An export that renders the same must be the export: "Xuất video" completes at once, the job is COMPLETED, "Lưu trữ" and "Xóa video gốc" take it. Keep every manifest check; never reuse a file no manifest proves; never write in `output\`; old names still found; the same rule everywhere; cache keys equal `376e352`.
+- **Done:** `e70af07` plan, `ef837e9` code and tests, `f8ddc38` code review fixes, `58c9edf` evidence (`docs/evidence/export-reuse/`).
+- **Design:** compare without ids, in order; names unchanged; other exports of the source are found by name and accepted only when their name is the one their own manifest's operations give under the current source and size policy. Reasons in `docs/handoff/D-export-reuse.md` section 2.
+- **Gates:** full suite 3,569 tests on `ef837e9`: OK but for 28 tests that need a video in the worktree's `input` (35/35 with a synthetic clip) and one export-lane timing test (the lane timing tests fail about one run in six on `main` `376e352` too). Cache keys: 10/10 equal to `376e352`. The GPU was used only by the test Control Center, while the real queue was idle. The real Control Center was not called.
+- **For the user after the merge:** job 143 (READY_TO_EXPORT) becomes COMPLETED when the Control Center starts (startup import); otherwise "Xuất video" completes at once. Then "Lưu trữ" or "Xóa video gốc" take the export `…-aa426512-24b2b5b2-…`.
+
 ## G16 merge, "Dựng lại danh sách duyệt (giữ quyết định)" (session D, task c) — 2026-10-17, branch `merge/g16` (worktree `temp\wt-merge-g16`), not yet in the main folder
 
 - **Request:** the third of the user's three follow-ups: after a fix to the review build, "Chạy lại" gave a list without the old decisions and the user reviewed 25–30 cards per episode again.
