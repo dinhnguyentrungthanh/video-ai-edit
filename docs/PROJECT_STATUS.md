@@ -1,3 +1,7 @@
+## G16 merge, "Dựng lại danh sách duyệt (giữ quyết định)" (2026-10-17) — branch `merge/g16`, not yet in the main folder
+
+- Session D task c (entry below): a button beside "Chạy lại" rebuilds the review list in a new revision that keeps the decisions through `review_decision_carry`; an exported job returns to review and its old export stays in `output\`. Scan cache keys unchanged; full suite 3,552 OK. Details in `CHANGELOG.md`.
+
 ## G15 merge, review previews show other cards' blurs and the export lane budgeted by stage (2026-10-17) — branch `merge/g15`, not yet in the main folder
 
 - Session D task a (entries below): card images and the magnifier draw the regions other cards blur. A1d (entry below): the export lane uses the measured peak of the running scan stage instead of the Qwen2-VL peak for every stage, and heavier stages wait for a lane export. Scan cache keys unchanged; full suite 3,537 (1 unrelated cleanup error, OK on rerun). Details in `CHANGELOG.md`.

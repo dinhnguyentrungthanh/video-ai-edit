@@ -1058,6 +1058,13 @@ Session cloud lập kế hoạch dừng vì hết credit. Một session **điề
   - nhớ đoạn giới thiệu của nền tảng (job 129, job 145 0:00–0:05), lỗi nguồn xoay 90°/270°;
   - tài liệu của D-text-consensus và D-top-logo còn trỏ tới `temp\text-consensus\`, `temp\top-logo\`: kết quả đã chuyển sang `reports\evidence\`.
 
+### 14.21 G16: D (c) nút "Dựng lại danh sách duyệt (giữ quyết định)" (2026-10-17)
+
+- Gộp `feat/rebuild-keep-decisions`: nút cạnh "Chạy lại" tạo revision mới, bước dựng danh sách mang quyết định cũ chỉ qua `review_decision_carry` (không tự đặt quyết định nào); job đã xuất quay về duyệt, bản xuất cũ ở lại `output`, "Lưu trữ" và "Xóa video gốc" chờ tới khi xuất lại. Kiểm trên bản sao job 145: 27/27 quyết định giữ, 1 thẻ chờ.
+- Khóa cache quét không đổi. Full suite 3.552 OK.
+- Lưu ý: `state\brand-memory.json` đổi mỗi khi duyệt thẻ địa chỉ web (bộ nhớ quảng cáo), nên lần dựng lại kế tiếp quét lại `visual_logo` và `localize_logo` (2–3 phút mỗi tập).
+- Còn lại: nhớ đoạn giới thiệu của nền tảng (job 129, job 145 0:00–0:05), lỗi nguồn xoay 90°/270°, có nên tách bộ nhớ quảng cáo khỏi khóa cache của hai bước logo; tài liệu của D-text-consensus và D-top-logo còn trỏ tới `temp\` (kết quả đã ở `reports\evidence\`).
+
 ### 14.6 Cách session điều phối làm việc
 
 - Làm trong worktree `temp\wt-coord`, nhánh `coord/plan` (từ `origin/main`). **Không sửa thư mục chính** đang chạy Control Center.

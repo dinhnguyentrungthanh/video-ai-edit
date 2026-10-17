@@ -1,3 +1,8 @@
+# G16 merge: "Dựng lại danh sách duyệt (giữ quyết định)" (2026-10-17, branch `merge/g16` from `main` `2c57172`; not yet in the main folder)
+
+- Merged `feat/rebuild-keep-decisions` (session D, task c; entry below) with `--no-ff`; the docs conflicts kept both entries.
+- Scan cache keys unchanged (10 stages). Full suite 3,552 tests OK, 39 skipped.
+
 # "Dựng lại danh sách duyệt (giữ quyết định)" — session D (2026-10-17, branch `feat/rebuild-keep-decisions` from `fix/review-preview-blurs` `b9b7e23`; not merged)
 
 - A Dashboard V2 button beside "Chạy lại kiểm tra", also on the phone (`docs/handoff/D-rebuild-keep.md`):
