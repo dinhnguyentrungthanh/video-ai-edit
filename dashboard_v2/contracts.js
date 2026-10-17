@@ -183,8 +183,9 @@
     if (!['COMPLETED','SKIPPED','CANCELLED'].includes(j.state)) add('cancel','Hủy xử lý',true);
     if (j.state === 'CANCELLED') add(hidden(j)?'unhide':'hide',hidden(j)?'Hiện lại':'Ẩn khỏi danh sách',true);
     if (rerunnable.includes(j.state)) add('rerun','Chạy lại kiểm tra',sourceOK && !inFlight(j),sourceOK?'Lệnh xuất đang chờ/chạy.':sourceReason);
-    if (REBUILD_STATES.includes(j.state) && j.active_queue_path) add('rebuild','Dựng lại danh sách duyệt (giữ quyết định)',j.state!=='SKIPPED' && sourceOK && !inFlight(j),
-      j.state==='SKIPPED'?'Video đã bỏ qua: bấm “Mở lại để xuất” trước.':sourceOK?'Lệnh xuất đang chờ/chạy.':sourceReason);
+    const auditing = ['RUNNING','QUEUED'].includes(j.ai_audit?.state);
+    if (REBUILD_STATES.includes(j.state) && j.active_queue_path) add('rebuild','Dựng lại danh sách duyệt (giữ quyết định)',j.state!=='SKIPPED' && sourceOK && !inFlight(j) && !auditing,
+      j.state==='SKIPPED'?'Video đã bỏ qua: bấm “Mở lại để xuất” trước.':!sourceOK?sourceReason:auditing?'Visual AI Audit đang chạy; chờ xong rồi dựng lại.':'Lệnh xuất đang chờ/chạy.');
     /* A golden-set video (j.protected, from /api/status) keeps every delete action off, with that reason. */
     if (eligible(j,'cleanup')) add('cleanup','Xóa video gốc',!ctx.fileBusy && !j.protected,j.protected||'Một thao tác với video gốc đang chạy.');
     if (j.delete) add('delete','Xóa video',j.delete.eligible===true && !ctx.fileBusy && !j.protected,j.protected||(j.delete.eligible===true?'Một thao tác với video gốc đang chạy.':j.delete.reason||'Chưa xóa được video này.'));

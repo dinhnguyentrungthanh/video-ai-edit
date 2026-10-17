@@ -1696,6 +1696,7 @@ class ControlCenter:
                 job, in_flight=self._export_in_flight(job), busy=self.scheduler.is_busy(job_id),
                 in_process=job["state"] in IN_PROCESS_STATES,
                 source_present=Path(str(job["source_path"])).is_file(),
+                auditing=self.audit_running(job_id),  # start_ai_audit registers under job_action_lock too
             )
             if refusal:
                 raise ValueError(refusal)
@@ -1705,7 +1706,11 @@ class ControlCenter:
             try:
                 value = self.scheduler.rerun(job_id, pipeline_key=pipeline_key)
             except BaseException:
-                discard_carry_request(path)
+                # Taken back unless the job was queued with it before the error (rerun's event write, say):
+                # then its build_review still needs it.
+                if not (self.store.get_job(job_id)["state"] == "QUEUED"
+                        and self.store.setting(f"pipeline_key:{job_id}") == pipeline_key):
+                    discard_carry_request(path)
                 raise
             summary = {key: request[key] for key in ("from_revision", "from_queue", "decisions")}
             self.store.add_event(

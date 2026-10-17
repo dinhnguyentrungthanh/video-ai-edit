@@ -32,6 +32,8 @@ REBUILD_SKIPPED_REFUSAL = (
     "Video #{job_id} đang Bỏ qua (không xuất). Bấm “Mở lại để xuất” trước rồi dựng lại danh sách duyệt."
 )
 REBUILD_EXPORT_REFUSAL = "Video #{job_id} đang chờ xuất hoặc đang xuất; chờ xong rồi dựng lại danh sách duyệt."
+# An audit rewrites the list in use when it ends, which would change it after the request named its SHA-256.
+REBUILD_AUDIT_REFUSAL = "Video #{job_id} đang chạy Visual AI Audit; chờ xong rồi dựng lại danh sách duyệt."
 REBUILD_BUSY_REFUSAL = (
     "Video #{job_id} đang trong hàng đợi hoặc đang được xử lý; chờ xong rồi dựng lại danh sách duyệt."
 )
@@ -49,6 +51,7 @@ REQUEST_INVALID = "Yêu cầu giữ quyết định không dùng được ({reas
 
 def rebuild_refusal(
     job: dict[str, Any], *, in_flight: bool, busy: bool, in_process: bool, source_present: bool,
+    auditing: bool = False,
 ) -> str | None:
     """Why the job's review cannot be rebuilt now (a cleaned or archived source is refused before, as for
     "Chạy lại"); None when it can."""
@@ -57,6 +60,8 @@ def rebuild_refusal(
         return REBUILD_SKIPPED_REFUSAL.format(job_id=job_id)
     if in_flight:
         return REBUILD_EXPORT_REFUSAL.format(job_id=job_id)
+    if auditing:
+        return REBUILD_AUDIT_REFUSAL.format(job_id=job_id)
     if busy or in_process or state == "QUEUED":
         return REBUILD_BUSY_REFUSAL.format(job_id=job_id)
     if state not in REBUILD_STATES:
@@ -66,6 +71,14 @@ def rebuild_refusal(
     if not source_present:
         return REBUILD_SOURCE_MISSING.format(job_id=job_id)
     return None
+
+
+def carry_applied(queue: dict[str, Any] | None, request: dict[str, Any]) -> bool:
+    """``queue`` (the one already at the new revision's path) was built from ``request``: a later build there takes
+    its decisions from that queue, never the old revision's again over newer ones."""
+    applied = (queue or {}).get("decision_carry")
+    return (isinstance(applied, dict) and bool(request.get("from_sha256"))
+            and applied.get("from_sha256") == request.get("from_sha256"))
 
 
 def _same_path(first: object, second: object) -> bool:

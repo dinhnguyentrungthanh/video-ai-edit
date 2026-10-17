@@ -92,7 +92,8 @@ from biliflow.ad_text_patterns import AD_TEXT_PATTERNS as _AD_TEXT_PATTERNS
 from biliflow.ad_text_patterns import ad_text_tokens
 from biliflow.fixed_text_logo import join_fixed_text_logos
 from biliflow.review_decision_carry import carry_review_decisions
-from biliflow.review_rebuild import QUEUE_MISMATCH, read_carry_request, same_source as same_carry_source
+from biliflow.review_rebuild import QUEUE_MISMATCH, carry_applied, read_carry_request
+from biliflow.review_rebuild import same_source as same_carry_source
 from biliflow.scrolling_text import (
     SCROLLING_CANDIDATE_TYPE,
     promote_scrolling_text,
@@ -3753,6 +3754,9 @@ def build_review_queue(
         # A fresh build, as "Chạy lại": the old queue's open cards stay behind; its decisions are carried below.
         if not same_carry_source(carry[1], source_path, source_sha256):
             raise ValueError(QUEUE_MISMATCH)
+        if carry_applied(previous_queue, carry[0]) and same_carry_source(previous_queue, source_path, source_sha256):
+            # This request built the queue here already: its decisions, and any made since, are in that queue.
+            carry = (carry[0], previous_queue)
         decided_previous_items = list(carry[1].get("items") or [])
     # Opening studio idents: no pre-selected CUT without ad evidence (R3a), and a
     # card repeating a user-confirmed studio logo goes to the optional list (R3b).
@@ -3915,7 +3919,7 @@ def build_review_queue(
     if decision_carry is not None:
         if carry is not None:
             decision_carry = {**decision_carry, "from_revision": carry[0].get("from_revision"),
-                              "from_queue": carry[0].get("from_queue")}
+                              "from_queue": carry[0].get("from_queue"), "from_sha256": carry[0].get("from_sha256")}
         payload["decision_carry"] = decision_carry
         history = carry[1] if carry is not None else previous_queue
         payload["audit_log"] = list((history or {}).get("audit_log") or []) + [{

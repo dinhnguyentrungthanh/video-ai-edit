@@ -89,6 +89,7 @@ check('"Dựng lại danh sách duyệt (giữ quyết định)" sits beside "Ch
   }
   assert.deepEqual([has(job('SKIPPED',q),'rebuild').enabled,has(job('SKIPPED',q),'rebuild').reason],[false,'Video đã bỏ qua: bấm “Mở lại để xuất” trước.']);
   assert.equal(has(job('READY_TO_EXPORT',{...q,render_request:true}),'rebuild').enabled,false,'an export in flight');
+  assert.deepEqual([has(job('WAITING_REVIEW',{...q,ai_audit:{state:'RUNNING'}}),'rebuild').enabled,has(job('WAITING_REVIEW',{...q,ai_audit:{state:'RUNNING'}}),'rebuild').reason],[false,'Visual AI Audit đang chạy; chờ xong rồi dựng lại.']);
   assert.equal(has(job('COMPLETED',{...q,source_present:false}),'rebuild').enabled,false,'no source');
   assert.equal(has(job('COMPLETED',{...q,source_archived:true}),'rebuild').reason,'Video đang được lưu trữ. Khôi phục trước khi xử lý.');
   for(const state of ['QUEUED','SCANNING_TEXT','RENDERING','PAUSED','FAILED','CANCELLED'])assert.equal(has(job(state,q),'rebuild'),undefined,state);

@@ -2,6 +2,7 @@
 build carries the decisions of the queue in use; nothing else changes."""
 import hashlib
 import json
+import threading
 import unittest
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -75,9 +76,9 @@ class RefusalAndRequestTests(unittest.TestCase):
                     "source_sha256": "a" * 64, "active_queue_path": "reports/jobs/film/review-queue.json",
                     "active_revision": 3}
 
-    def refusal(self, *, in_flight=False, busy=False, in_process=False, source_present=True, **job):
+    def refusal(self, *, in_flight=False, busy=False, in_process=False, source_present=True, auditing=False, **job):
         return rebuild_refusal({**self.job, **job}, in_flight=in_flight, busy=busy, in_process=in_process,
-                               source_present=source_present)
+                               source_present=source_present, auditing=auditing)
 
     def test_only_a_reviewed_or_exported_job_with_its_queue_and_source_is_rebuilt(self):
         for state in ("WAITING_REVIEW", "READY_TO_EXPORT", "COMPLETED"):
@@ -85,6 +86,7 @@ class RefusalAndRequestTests(unittest.TestCase):
         cases = {
             "SKIPPED": ({"state": "SKIPPED"}, "Mở lại để xuất"),
             "export": ({"in_flight": True}, "chờ xuất hoặc đang xuất"),
+            "audit": ({"auditing": True}, "Visual AI Audit"),  # it rewrites the list in use when it ends
             "queued": ({"state": "QUEUED"}, "trong hàng đợi"),
             "scanning": ({"state": "SCANNING_TEXT", "in_process": True}, "đang được xử lý"),
             "busy": ({"busy": True}, "đang được xử lý"),
@@ -190,6 +192,17 @@ class BuildWithRequestTests(unittest.TestCase):
             self.build()
         self.assertFalse(self.new_queue.exists())
 
+    def test_a_later_build_of_the_rebuilt_list_keeps_the_decisions_made_since(self):
+        first = self.build()
+        self.assertEqual(first["decision_carry"]["from_sha256"], self.request["from_sha256"])
+        changed = {**first, "items": [{**x, "decision": "CUT"} if x["id"] == "keep" else x for x in first["items"]]}
+        self.new_queue.write_text(json.dumps(changed), encoding="utf-8")  # the user changed a decision since
+        again = build_review_queue(project_root=self.root, report_paths=[self.report], queue_path=self.new_queue,
+                                   keep_decisions=True)
+        self.assertEqual(_decided(again), {"keep": "CUT", "cut": "CUT"}, "never the old revision's KEEP again")
+        self.assertEqual(again["decision_carry"]["from_sha256"], self.request["from_sha256"])
+        self.assertEqual([e["action"] for e in again["audit_log"]], ["DECIDE", "REBUILD_KEEP_DECISIONS", "REBUILD_KEEP_DECISIONS"])
+
     def test_without_a_request_the_build_starts_fresh_as_before(self):
         (self.folder / CARRY_REQUEST_NAME).unlink()
         payload = self.build()
@@ -289,6 +302,25 @@ class ControlCenterRebuildTests(CleanupFixture):
         no_style = self.make_job("nostyle", state="WAITING_REVIEW", items=[KEEP])
         self.store.update_job(no_style, content_style="unknown")
         self.assert_refused(no_style, "loại nội dung")  # refused by rerun itself: the request is taken back
+
+    def test_a_running_audit_refuses_the_rebuild(self):
+        job_id = self.make_job("audited", state="WAITING_REVIEW", items=[KEEP])
+        self.center._audit_lock, self.center._audit_jobs = threading.Lock(), {job_id: object()}
+        self.assert_refused(job_id, "Visual AI Audit")
+
+    def test_the_request_stays_when_rerun_fails_after_the_job_was_queued(self):
+        job_id = self.make_job("late", state="WAITING_REVIEW", items=[KEEP])
+        rerun = self.scheduler.rerun
+
+        def queued_then_failed(*args, **kwargs):
+            rerun(*args, **kwargs)
+            raise RuntimeError("database is locked")
+        self.scheduler.rerun = queued_then_failed
+        with self.assertRaises(RuntimeError):
+            self.center.rebuild_review(job_id)
+        key = self.store.setting(f"pipeline_key:{job_id}")
+        self.assertEqual(self.store.get_job(job_id)["state"], "QUEUED")
+        self.assertTrue((self.root / "reports" / "jobs" / key / CARRY_REQUEST_NAME).is_file(), "its build still needs it")
 
     def assert_refused(self, job_id, words=None):
         before = (self.store.get_job(job_id), self.report_folders(), self.store.setting(f"pipeline_key:{job_id}"))
