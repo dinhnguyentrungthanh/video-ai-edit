@@ -7,6 +7,7 @@ from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
 from biliflow.export_identity import legacy_export_paths
+from biliflow.final_renderer import normalize_output_size_policy
 from biliflow.job_import import import_existing_project
 from biliflow.job_pipeline import PipelineStage
 from biliflow.job_store import JobStore
@@ -389,6 +390,23 @@ class RestartImportTests(unittest.TestCase):
         self.assertEqual(after["active_queue_path"], "reports/jobs/movie-run-r4/review-queue.json")
         self.assertEqual(after["state"], "READY_TO_EXPORT")
         self.assertFalse([item for item in self.store.artifacts(self.job_id) if item["kind"] == "final_output"])
+
+    def test_an_earlier_export_its_name_does_not_prove_never_completes_the_rebuilt_review(self):
+        # Its name is the only record of the size policy: another policy, or a file renamed by hand.
+        unlimited = dict(self.queue, export_size_policy=normalize_output_size_policy("unlimited", None))
+        under_another_policy = review_export_paths(self.root, unlimited)[1]
+        renamed = under_another_policy.with_name(
+            under_another_policy.name.replace(under_another_policy.name.split("-")[-2], "0123abcd"))
+        self.rebuilt_queue()
+        for name, output in (("another policy", under_another_policy), ("renamed", renamed)):
+            with self.subTest(case=name):
+                self.write_manifest(output)
+                after = self.restart()
+                self.assertEqual(after["state"], "READY_TO_EXPORT")
+                self.assertFalse([item for item in self.store.artifacts(self.job_id)
+                                  if item["kind"] == "final_output"])
+                for path in (output, output.with_suffix(".mp4.manifest.json")):
+                    path.unlink()
 
     def test_an_export_named_before_the_operations_hash_completes_the_job(self):
         legacy = legacy_export_paths(self.root, self.queue)[1]

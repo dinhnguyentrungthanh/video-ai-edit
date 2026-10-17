@@ -409,7 +409,12 @@ def _other_export_facts(root: Path, job: dict[str, Any], facts: dict[str, Any],
     by them under this source and size policy count (other_export_problem).
     """
     queue, render = facts["export_queue"], facts["render_identity"]
+    # The queue's own names were tried first; export_queue has no items, so other_exports
+    # cannot tell the legacy one itself.
+    named = {os.path.normcase(str(output)) for output in facts["output_candidates"]}
     for output in other_exports(root, queue, render):
+        if os.path.normcase(str(output)) in named:
+            continue
         try:
             manifest = _json_document("manifest", export_manifest_path(output), fresh=fresh)
             problem = other_export_problem(

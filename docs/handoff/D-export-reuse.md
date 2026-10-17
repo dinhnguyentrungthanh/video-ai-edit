@@ -46,7 +46,7 @@ Tên vẫn tính như cũ (IDENTITY_VERSION 2, có `id`). Không đổi tên c�
 Một file như vậy được nhận khi thỏa đủ ba điều:
 1. Manifest của nó qua `manifest_problem`, kể cả phép so nội dung.
 2. Tên file đúng bằng tên v2 tính lại từ operation trong chính manifest đó, với video nguồn và size policy của danh
-   sách hiện tại (`named_by_manifest`). Manifest không ghi size policy (chỉ ghi `maximum_bytes`), nên chỉ tên file
+   sách hiện tại (`other_export_problem`). Manifest không ghi size policy (chỉ ghi `maximum_bytes`), nên chỉ tên file
    chứng minh được bản đó xuất cùng policy.
 3. Video nguồn có SHA-256 hợp lệ. Tên `nohash` không bao giờ được dò.
 
@@ -86,3 +86,81 @@ lại được tên đó từ manifest. Bản xuất legacy của chính danh s�
   - bấm dựng lại, rồi "Xuất video";
   - phải xong ngay, không có tiến trình render, job COMPLETED, lưu trữ và xóa gốc nhận video;
   - không gọi Control Center thật.
+
+## 3. Đã làm
+
+Commit `e70af07` (kế hoạch), `ef837e9` (mã và test).
+
+- `export_identity.py`:
+  - `RENDER_FIELDS` bỏ `id`; `NAME_FIELDS` = `id` + `RENDER_FIELDS`. `render_identity` vẫn lấy `NAME_FIELDS`, nên tên
+    file của mọi bản xuất (cũ và mới) không đổi.
+  - `same_render(left, right)`: hai identity bằng nhau khi bỏ `id`, so theo thứ tự. `manifest_problem` dùng hàm này.
+  - `other_exports(root, queue, render)`: các file thường trong `output\` có tên
+    `<slug>-<sha8>-<8 hex thường>-reviewed.mp4` của chính video nguồn, xếp theo tên.
+    - Bỏ qua tên v2 và tên legacy của danh sách hiện tại.
+    - Nguồn không có SHA-256 hợp lệ thì trả rỗng.
+    - Chỉ đọc tên, không đọc file, không ghi gì.
+  - `other_export_problem(...)`: `manifest_problem` cộng điều kiện tên. Tên tính lại từ operation của manifest, với nguồn
+    và size policy của danh sách hiện tại, phải trùng tên file (so `normcase(abspath)`); sai thì trả mã mới
+    `PROBLEM_NAME`.
+  - `verified_export`: thử tên của mình, rồi tên legacy, rồi mới đến `other_exports`. Lỗi đọc của một file chỉ bỏ qua
+    file đó, như trước.
+- `source_cleanup._exported_facts`:
+  - thử các bản theo tên như cũ;
+  - không bản nào được chứng minh thì thử `_other_export_facts`;
+  - vẫn không có thì báo đúng lý do cũ (lý do của file đầu tiên, hoặc MOVED, STALE, NO_OUTPUT).
+
+  `_parse_queue_facts` ghi thêm `export_queue` (nguồn và size policy) để dò. "Lưu trữ" dùng `assess_job` nên cũng nhận
+  bản đó, và chuyển đúng file đó cùng manifest vào Thùng rác.
+- `job_import`:
+  - `other_exports` của danh sách đang dùng được thêm vào nơi tìm;
+  - một file chỉ có trong danh sách dò phải qua `other_export_problem`;
+  - một job READY_TO_EXPORT có bản xuất render y hệt về COMPLETED khi Control Center khởi động.
+- `review_workflow.existing_review_export`: chỉ sửa docstring. `control_center.finalize` không đổi.
+- Không sửa `scheduler.py`, `export_lanes.py`, renderer hay detector.
+
+## 4. Test và review mã
+
+- Test mới:
+  - `test_export_identity`:
+    - lớp `OtherRevisionExportTests`, 9 test:
+      - cùng render khác id: dùng lại, và `output\` không đổi;
+      - đổi vùng, start, end, edge mode, CUT, detected intervals, thêm một blur, thứ tự hay size policy: không dùng lại;
+      - policy khác mặc định: chỉ dùng lại dưới đúng policy đó;
+      - mười kiểu manifest không chứng minh;
+      - file bị đổi tên;
+      - chỉ tên của chính nguồn được dò;
+      - tên của mình và tên legacy vẫn được thử trước;
+      - tên legacy của revision khác không được dò;
+      - so manifest bỏ id nhưng giữ thứ tự;
+    - `FinalizeReuseTests`, thêm 2 test: dựng lại cùng render thì COMPLETED, không render, `output\` không đổi; khác
+      render thì vẫn xếp lượt render.
+  - `test_source_cleanup`, thêm 2 test:
+    - dựng lại cùng render: xóa gốc nhận bản cũ, kể cả khi ở tên riêng của danh sách mới có một file không manifest, và có
+      một file đặt tên như bản xuất nhưng manifest hỏng;
+    - "Xóa video gốc" xóa đúng manifest của bản cũ; file `.mp4` ở lại;
+    - khác edge mode, start hay policy, hoặc bản cũ bị dời đi: từ chối với lý do như main.
+  - `test_source_archive`, thêm 1 test: "Lưu trữ" nhận và chuyển đúng bản cũ cùng manifest vào Thùng rác (giả).
+  - `test_job_import`, thêm 3 test:
+    - cùng render: COMPLETED, artifact là bản cũ;
+    - khác render: vẫn READY_TO_EXPORT;
+    - bản xuất dưới policy khác hay bị đổi tên: không về COMPLETED. Thử đột biến bỏ phép kiểm tên thì test này hỏng.
+  - `test_review_rebuild`, thêm 1 test cả luồng: dựng lại, "Xuất video" về COMPLETED không render, xóa gốc và lưu trữ
+    nhận bản cũ. Bản quét giả của fixture không có track và `input_sha256`, nên test đổi id thẻ và đặt SHA-256 như một
+    bản dựng thật.
+- Lúc RED (trước khi sửa mã): các test xóa gốc, lưu trữ, import và luồng dựng lại đều hỏng đúng chỗ.
+- Chạy cùng nhau, đạt 650 test (1 bỏ qua có sẵn): export_identity, final_renderer, export_encoder, source_cleanup (+http),
+  source_archive (+http), job_import, job_delete, review_rebuild, review_decision_carry, control_center, scheduler,
+  review_workflow, export_guards, export_lanes.
+- Khóa cache quét: 10/10 stage giống `376e352` (`build_code_manifest`, so với cây `git archive 376e352` trong `temp`).
+  Không file nào bị sửa nằm trong khóa của 10 stage.
+- Review mã (agent, chỉ đọc, `376e352..ef837e9`):
+  - không có CRITICAL, HIGH hay MEDIUM;
+  - agent tự kiểm: tên mới không đổi, renderer không đọc `id`, mọi kiểm tra của manifest giữ nguyên, không vượt thư mục,
+    lý do từ chối giữ nguyên.
+  - Ba điểm LOW đã xử lý:
+    - L1: `source_cleanup` dò bằng một danh sách rút gọn (không có thẻ), nên có thể liệt kê tên legacy của chính danh sách
+      đó như một bản "khác" (vô hại: tên legacy không bao giờ qua điều kiện tên). Đã sửa: bỏ các tên của danh sách trước
+      khi dò.
+    - L2: danh sách dựng lại hay chạy lại không mang `export_size_policy`. Ghi ở mục 6.
+    - L3: thiếu test cho phép kiểm tên khi import, cho manifest hỏng lúc dò, và cho tên riêng có file hỏng. Đã thêm.

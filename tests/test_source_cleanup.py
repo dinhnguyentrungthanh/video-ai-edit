@@ -838,10 +838,19 @@ class IneligibleTests(CleanupFixture):
         output, manifest = self.output_of(job_id), self.manifest_of(job_id)
         source = self.source_of(job_id)
         self.rebuild_same_render(job_id)
-        self.assertNotEqual(self.output_of(job_id), output)
+        own = self.output_of(job_id)
+        self.assertNotEqual(own, output)
+        # Neither a file no manifest proves at the rebuilt review's own name nor a file named like an
+        # export whose manifest cannot be read stops the preview from finding the export.
+        own.write_bytes(b"not a video")
+        decoy = output.with_name(output.name.replace(output.name.split("-")[-2], "00000000"))
+        decoy.write_bytes(b"not a video either")
+        decoy.with_name(decoy.name + ".manifest.json").write_text("{", encoding="utf-8")
         preview = self.preview([job_id])
         self.assertEqual([entry["output_path"] for entry in preview["eligible"]],
                          [output.relative_to(self.root).as_posix()])
+        own.unlink()
+        preview = self.preview([job_id])
         result = self.execute([job_id], preview["preview_id"])
         self.assertEqual((result["deleted_count"], result["failed_count"]), (1, 0))
         self.assertEqual(self.hashed, [source.resolve(), output])
