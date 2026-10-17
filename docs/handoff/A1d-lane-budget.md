@@ -1,6 +1,6 @@
 # Bàn giao A1d – ngân sách VRAM của làn xuất theo bước đang chạy
 - Nhánh: perf/export-lane-a1d (từ main 41169fc) · Worktree: `temp\wt-a1d` · Cập nhật: 2026-10-17
-- Chạy ở: PC · Trạng thái: **code, test và khóa cache xong; kiểm thật trên Control Center thử chờ người dùng cho phép (hàng đợi thật phải trống và tạm dừng).** Chưa push, chưa merge.
+- Chạy ở: PC · Trạng thái: **xong: code, test, khóa cache (CLEAN 10/10) và kiểm thật GPU trên Control Center thử ngày 2026-10-17 (mọi kiểm tra đạt, `docs/evidence/a1d/2026-10-17/`).** Chưa push, chưa merge.
 
 ## Vấn đề
 - A1b tính mọi bước quét ở mức đỉnh của Qwen2-VL (`SCAN_PEAK_MIB` 4943 MiB): `6144 − max(đang dùng, nền + 4943) − NVENC 170 ≥ 256`.
@@ -9,7 +9,7 @@
 ## Đã xong
 
 ### Ngân sách theo bước (`src/biliflow/export_lanes.py`)
-- `STAGE_PEAK_MIB`: đỉnh VRAM thêm vào của từng bước GPU, lấy từ chính lần đo của A1b (`docs/evidence/a1b/vram-2026-10-14/run1`, `run2`, `summary.json`): lấy số lớn nhất của mọi tiến trình bước đó **không chạy chồng bản xuất**, ở cả hai lượt và cả hai clip.
+- `STAGE_PEAK_MIB`: đỉnh VRAM thêm vào của từng bước GPU, lấy từ chính lần đo của A1b (`docs/evidence/a1b/vram-2026-10-14/run1`, `run2`, `summary.json`) và lần quét cả phim của A1d (`docs/evidence/a1d/2026-10-17/check.json`): lấy số lớn nhất của mọi tiến trình bước đó **không chạy chồng bản xuất**, ở cả ba nguồn.
 
   | Bước | MiB | Khung clip lớn nhất đã đo |
   |---|---|---|
@@ -19,12 +19,13 @@
   | animation_safety | 754 | 1280x640 (chỉ clip mixed) |
   | text | 833 | 1920x1080 |
   | localize_logo | 1309 | 1920x1080 |
-  | visual_logo | 4690 | 1920x1080 (4690 ở clip 1280x640, 4688 ở 1080p) |
+  | visual_logo | 4691 | 1920x1080 (4690 ở clip 1280x640, 4688 ở 1080p, 4691 ở cả phim 1280x720) |
   | confirm_violence | 4943 | 1920x1080 (4851 lượt 1, 4943 lượt 2) |
 
   - Bốn số người dùng nêu (visual_logo 4688–4690, localize_logo 1309, text ≤ 833, confirm_violence 4851–4943) khớp với nguồn; lấy số lớn nhất của mỗi khoảng. Bốn bước còn lại có số đo trong cùng lần đo nên cũng được dùng.
+  - Lần quét cả phim ngày 2026-10-17 đo `visual_logo` 4691 (cao hơn 1 MiB), nên số này được nâng lên 4691; `text` 831 và `localize_logo` 1309 không vượt.
   - `gore` và `violence` riêng lẻ (chỉ chọn một trong hai detector) chưa có số đo: giữ 4943.
-  - Test `RecordedNumbersTests` đọc lại hai `summary.json` và kiểm bảng này đúng từng số, nên không có số nào đoán.
+  - Test `RecordedNumbersTests` đọc lại hai `summary.json` và `check.json` của A1d, rồi kiểm bảng này đúng từng số, nên không có số nào đoán.
 - `scan_budget(stage, profile, fast_scan, frame)`: dùng đỉnh của bước **chỉ khi** job quét giống lúc đo (profile `careful`, "Quét nhanh" bật: OCR batch 8, fp16, logo routing bằng NVDEC) **và** khung video gốc nằm gọn trong khung clip đã đo (ngang hoặc dọc). Mọi trường hợp khác giữ 4943, và ghi lý do (`scan_peak_basis`): `stage_not_measured`, `scan_settings`, `frame_unknown`, `frame_not_measured`.
   - Các job thật gần đây đều là `careful`, quét nhanh bật, khung 1280x534/536, nên đều dùng được đỉnh của bước.
 - `vram_decision(..., scan_peak_mib=…)`: công thức của A1b giữ nguyên, chỉ thay 4943 bằng đỉnh của bước làn xuất chạy cạnh:
@@ -62,8 +63,8 @@
   - phần dựng sẵn của `ExportLaneTests` tách thành `LaneFixture` (không đổi test cũ);
   - `StageBudgetLaneTests` (17 test, số như RTX 2060: 6144, nền 1200, NVENC 244, biên 256): bản xuất cạnh `text` (A1b từ chối); `visual_logo` chờ bản xuất rồi mới chạy, một sự kiện; `localize_logo` chạy ngay cạnh bản xuất; ca job 139 (bản xuất xếp lúc `visual_logo` chạy sang cạnh `localize_logo`); cổng đọc VRAM bây giờ; không đọc được VRAM; bước CPU không chờ; "Tắt" khi bản xuất đang chạy; giữ chỗ chống chạy đua giữa hai làn; xét lại một lần rồi chốt (ở ranh giới và cạnh bước sau); yêu cầu xuất mới xét lại từ đầu; job ngoài điều kiện đo giữ 4943; thiếu VRAM lần đầu rồi không còn bước GPU nào thì vẫn ghi lý do khi bản xuất chạy tuần tự; hủy hoặc trả về bản xuất thì bước đang chờ chạy tiếp; ffprobe lỗi được nhớ, không chạy lại mỗi giây.
 - Kết quả (src của worktree, `.venv` của thư mục chính):
-  - `tests.test_scheduler tests.test_export_lanes tests.test_export_lane_routes tests.test_job_import`: 163 test OK (sau các sửa của review).
-  - Bộ tập trung 28 module của A1b/A1c: 761 test OK, 5 bỏ qua, 332 giây (trên 13b59ee, trước các sửa nhỏ của review).
+  - `tests.test_scheduler tests.test_export_lanes tests.test_export_lane_routes tests.test_job_import`: 163 test OK (sau các sửa của review, và lại sau khi nâng `visual_logo` lên 4691).
+  - Bộ tập trung 28 module của A1b/A1c: 761 test OK, 5 bỏ qua, 332 giây (trên 13b59ee, trước các sửa nhỏ của review); chạy lại trên bản cuối (sau kiểm thật GPU và số 4691): **765 test OK, 5 bỏ qua, 344 giây**.
 
 ## Review độc lập
 - Một agent review chỉ đọc (13b59ee): **APPROVE, không có CRITICAL hay HIGH.** Nó kiểm lại: không đường nào để bước GPU vượt ngân sách bắt đầu khi làn xuất đang giữ bản xuất, kể cả chạy đua giữa hai luồng; thứ tự khóa không đổi; bản ghi `_lane_export` luôn được xóa (hủy, tạm dừng, trả về, lỗi, tắt máy); không chờ mãi; "Tắt" và lúc chưa đo như cũ; khóa cache không đổi; bảng `STAGE_PEAK_MIB` tính lại từ bằng chứng khớp từng số.
@@ -72,12 +73,12 @@
   - LOW: chỉ nhớ khóa cuối của sự kiện chờ; nay xóa khi lượt của làn xuất kết thúc, và sửa chú thích kiểu.
   - LOW: video không ffprobe được thì mỗi giây chạy ffprobe một lần trong lúc chờ; nay nhớ cả kết quả lỗi (theo đường dẫn, cỡ, mtime).
   - LOW: thêm test hủy và trả về bản xuất khi bước nặng đang chờ.
-- MEDIUM (chưa đóng, đang chờ đo GPU): số đo theo bước chỉ lấy từ hai clip 10 phút. Báo cáo quét thật (chỉ đọc, job 100–152) cho thấy:
+- MEDIUM (đã đóng ngày 2026-10-17 bằng bước `measure`, xem mục kiểm thật): số đo theo bước chỉ lấy từ hai clip 10 phút. Báo cáo quét thật (chỉ đọc, job 100–152) cho thấy:
   - `visual_logo`: đỉnh CUDA trong báo cáo 4262–4271 MiB với phim 36–74 phút, gần như không đổi;
   - grounding (lệnh thứ hai của `localize_logo`, bước có 1309 MiB): đỉnh CUDA 835–1042 MiB tùy phim, nên 1309 có thể thấp hơn phim nặng nhất;
   - `text` không ghi bộ nhớ trong báo cáo.
   
-  Vì vậy kiểm thật có thêm bước `measure`: quét cả phim của job 146 (phim có đỉnh grounding cao nhất, 1042 MiB) một mình và đo đỉnh từng tiến trình như A1b. Nếu bước nào vượt số đã ghi, số đó sẽ được nâng lên theo số đo mới (kèm bằng chứng và test).
+  Vì vậy kiểm thật có thêm bước `measure`: quét cả phim của job 146 (phim có đỉnh grounding cao nhất, 1042 MiB) một mình và đo đỉnh từng tiến trình như A1b. Kết quả: `text` 831, `visual_logo` 4691 (vượt 1 MiB, đã nâng số lên), `localize_logo` 1309 (grounding, đỉnh CUDA 1042 đúng như báo cáo thật).
 - Không sửa: `scheduler.py` dài 1593 dòng từ trước (nay khoảng 1720), vượt mức 800 dòng; tách phần làn xuất ra module riêng là một việc tái cấu trúc khác, không làm trong A1d.
 - Khóa cache quét: script so `cache_dependencies.stage_source_paths` và SHA-256 từng file của mọi bước trong `stage_cache.CACHEABLE_STAGES`, cộng 9 file cố định của `_tree_fingerprint`, giữa worktree và `git archive 41169fc`: **CLEAN**, 10 bước, 36 file, 7 file cố định có mặt; `scheduler.py` và `export_lanes.py` không thuộc khóa nào.
 
@@ -90,15 +91,18 @@
 - Lượt `run`: bản xuất E1 xếp trước phim S1 đang chờ `preflight`; lấy mẫu VRAM bằng nvidia-smi (0,2 s) và NVML (0,1 s).
 - Lượt `measure`: quét F1 một mình (cache grounding dời đi trước), đỉnh từng tiến trình so với VRAM trong giây trước khi nó bắt đầu, cộng đỉnh CUDA trong báo cáo của `visual_logo` và grounding; kiểm tra mới `whole_film_within_the_recorded_peaks`.
 - Kiểm tra: bản xuất cạnh `text` với đỉnh 833 của chính bước đó; chỉ ở làn xuất; hai làn cùng lúc; `visual_logo` chờ bản xuất (một sự kiện, bắt đầu sau khi bản xuất xong) hoặc vừa ngân sách và không có sự kiện; đỉnh VRAM dưới tổng; không có `STAGE_FAILED` hay log hết bộ nhớ; bản xuất `h264_nvenc`, `lane: parallel`, không fallback, qua kiểm tra "Xóa video gốc"; mọi FFmpeg dưới mức bình thường; hàng đợi thật trống và tạm dừng suốt lượt.
-- **Chưa chạy: chờ người dùng cho phép.**
+- **Đã chạy ngày 2026-10-17, 12:02–12:14, mọi kiểm tra đạt** (`docs/evidence/a1d/2026-10-17/README.md`, `check.json`, `vram-1s.csv`). Hàng đợi thật trống và tạm dừng suốt lượt; gốc thử đã gỡ.
+  - `run`: bản xuất E1 mở ở làn xuất cạnh `text` với đỉnh 833 của chính bước đó (còn 4541 MiB); hai làn chạy cùng lúc 59,3 s. Ở ranh giới, `visual_logo` vừa ngân sách (`6144 − (694 + 244 + 4691) = 515`) nên chạy cạnh bản xuất 29,6 s, không có sự kiện chờ. **Đỉnh VRAM 5134 MiB (nvidia-smi), 5322 MiB (NVML)** trên 6144. Không OOM, không `STAGE_FAILED`. Bản xuất `h264_nvenc`, `lane: parallel`, không fallback, qua kiểm tra "Xóa video gốc"; mọi FFmpeg dưới mức bình thường.
+  - Hôm nay nền VRAM chỉ 526 MiB (các ngày trước 950–1250), nên luật A1b cũng sẽ mở làn ở lượt này (còn 431). Ca chờ khi `visual_logo` không vừa được kiểm bằng test đơn vị và đối chiếu ở `replay-2026-10-15.md`.
+  - `measure`: cả phim (2807 s) quét trong 240,8 s, `WAITING_REVIEW`.
+- Sửa nhỏ trong script lúc chạy: `store.events(limit=…)` tối đa 1000 (trước ghi 2000, báo lỗi ở bước `report`); `check.json` ghi thêm `settings` của lượt quét để test đọc lại.
 
 ## Đang dở
-- Kiểm thật GPU (mục trên).
+- Không còn.
 
 ## Bước tiếp theo
-1. Người dùng bấm "Tạm dừng hàng đợi" trên Control Center thật (hàng đợi đang trống) và cho phép chạy; agent chạy `setup --film`, `profile`, `ready`, `run`, `measure`, `report`, `remove` (ước tính 15–20 phút dùng GPU).
-2. Điều phối: full suite trên nhánh, rồi gộp theo lời người dùng. Agent của A1d không push, không merge.
-3. Sau khi gộp và khởi động lại Control Center thật, A1d có hiệu lực ngay ("Tự động" và hồ sơ đã đo trên máy thật).
+1. Điều phối: full suite trên nhánh, rồi gộp theo lời người dùng. Agent của A1d không push, không merge.
+2. Sau khi gộp và khởi động lại Control Center thật, A1d có hiệu lực ngay ("Tự động" và hồ sơ đã đo trên máy thật).
 
 ## Cách kiểm
 - Lệnh test (trong worktree; các module liên quan):
@@ -120,7 +124,7 @@
   ```
 
 ## Chờ người dùng
-- Cho phép kiểm thật GPU và bấm "Tạm dừng hàng đợi" trên Control Center thật; mở lại sau khi xong.
+- Bấm "Tiếp tục hàng đợi" trên Control Center thật (đã tạm dừng cho lượt đo lúc 12:02).
 - Quyết định gộp nhánh vào main.
 
 ## Lưu ý cho người tiếp quản

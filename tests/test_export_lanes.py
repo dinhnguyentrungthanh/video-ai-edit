@@ -30,6 +30,7 @@ MEASURED = {"NVENC_NEED_MIB": ((1280 * 720, 300), (1920 * 1080, 500)), "SCAN_PEA
 UNMEASURED = {"NVENC_NEED_MIB": None, "SCAN_PEAK_MIB": None, "SAFETY_MARGIN_MIB": None}
 STAGES = {"light": (800, (1920, 1080)), "small_only": (700, (1280, 640)), "heavy": (5000, (1920, 1080))}
 A1B_EVIDENCE = Path(__file__).resolve().parents[1] / "docs" / "evidence" / "a1b" / "vram-2026-10-14"
+A1D_EVIDENCE = Path(__file__).resolve().parents[1] / "docs" / "evidence" / "a1d" / "2026-10-17" / "check.json"
 
 
 def video(width, height):
@@ -191,28 +192,38 @@ class StageBesideExportTests(unittest.TestCase):
 
 
 class RecordedNumbersTests(unittest.TestCase):
-    """The numbers shipped in export_lanes are the A1b measurement's, nothing guessed (A1d)."""
+    """The numbers shipped in export_lanes are measured ones, nothing guessed (A1d): the A1b
+    measurement's two runs on clips and A1d's whole-film scan."""
+
+    def measured_processes(self):
+        """(stage, MiB above the baseline, frame) of every scan process measured with no export beside it."""
+        settings = (export_lanes.STAGE_PEAK_PROFILE, export_lanes.STAGE_PEAK_FAST_SCAN)
+        for run in ("run1", "run2"):
+            summary = json.loads((A1B_EVIDENCE / run / "summary.json").read_text(encoding="utf-8"))
+            self.assertEqual((summary["settings"]["profile"], summary["settings"]["fast_scan"]), settings)
+            frames = {summary["jobs"][tag]: (clip["width"], clip["height"]) for tag, clip in summary["clips"].items()}
+            for item in summary["stage_processes"]:
+                if not item["overlaps_render"]:
+                    yield item["stage"], item["peak_above_baseline_mib"], frames[item["job_id"]]
+        check = json.loads(A1D_EVIDENCE.read_text(encoding="utf-8"))
+        self.assertEqual((check["settings"]["profile"], check["settings"]["fast_scan"]), settings)
+        frames = {check["jobs"][tag]: (clip["width"], clip["height"]) for tag, clip in check["clips"].items()}
+        for item in check["details"]["whole_film"]["processes"]:  # the film was scanned alone
+            yield item["stage"], max(item["peak_above_baseline_mib"].values()), frames[item["job_id"]]
 
     def test_the_stage_peaks_are_the_largest_measured_without_an_export_beside(self):
         expected: dict[str, tuple[int, tuple[int, int]]] = {}
-        for run in ("run1", "run2"):
-            summary = json.loads((A1B_EVIDENCE / run / "summary.json").read_text(encoding="utf-8"))
-            self.assertEqual((summary["settings"]["profile"], summary["settings"]["fast_scan"]),
-                             (export_lanes.STAGE_PEAK_PROFILE, export_lanes.STAGE_PEAK_FAST_SCAN))
-            frames = {summary["jobs"][tag]: (clip["width"], clip["height"]) for tag, clip in summary["clips"].items()}
-            for item in summary["stage_processes"]:
-                if item["overlaps_render"] or item["stage"] == "build_review":
-                    continue
-                peak, frame = expected.get(item["stage"], (0, (0, 0)))
-                job_frame = frames[item["job_id"]]
-                expected[item["stage"]] = (max(peak, item["peak_above_baseline_mib"]),
-                                           max(frame, job_frame, key=lambda size: size[0] * size[1]))
+        for stage, mib, job_frame in self.measured_processes():
+            if stage == "build_review":
+                continue
+            peak, frame = expected.get(stage, (0, (0, 0)))
+            expected[stage] = (max(peak, mib), max(frame, job_frame, key=lambda size: size[0] * size[1]))
         self.assertEqual(export_lanes.STAGE_PEAK_MIB, expected)
         self.assertEqual(export_lanes.SCAN_PEAK_MIB, max(peak for peak, _frame in expected.values()))
-        # The four named in the A1d request.
+        # The four named in the A1d request; visual_logo went 1 MiB above 4690 on the whole film.
         self.assertEqual({stage: expected[stage][0] for stage in ("visual_logo", "localize_logo", "text",
                                                                   "confirm_violence")},
-                         {"visual_logo": 4690, "localize_logo": 1309, "text": 833, "confirm_violence": 4943})
+                         {"visual_logo": 4691, "localize_logo": 1309, "text": 833, "confirm_violence": 4943})
 
 
 @patch.multiple(export_lanes, **MEASURED)

@@ -1,0 +1,357 @@
+{
+  "written_at": "2026-10-17T12:16:21+07:00",
+  "code_commit": "87def7f999ab61c195c2f7d58693806f6409ecaf",
+  "test_root": "a1d-check-20261017-110815",
+  "detectors": [
+    "advertising"
+  ],
+  "style": "live_action",
+  "settings": {
+    "profile": "careful",
+    "fast_scan": true,
+    "ocr_recognition_batch_size": 1
+  },
+  "clips": {
+    "E1": {
+      "width": 1280,
+      "height": 720,
+      "duration_seconds": 360.469766,
+      "sha256": "d8f0ba41b558c6857c821f22272f42e28e809bf600e234980ec6c534c9aaf830",
+      "bytes": 34115640
+    },
+    "S1": {
+      "width": 1280,
+      "height": 720,
+      "duration_seconds": 360.926875,
+      "sha256": "930e2a558b3326037abb87d6b62c21c86dc6d16306b38b9b60e5ec5c58cfff9a",
+      "bytes": 35710396
+    },
+    "F1": {
+      "width": 1280,
+      "height": 720,
+      "duration_seconds": 2807.106757,
+      "sha256": "979546a07117242555fb236fe063cc16d33cf20c4abf1833826d6a0c5994cc0f",
+      "bytes": 301959778
+    }
+  },
+  "jobs": {
+    "E1": 1,
+    "S1": 3,
+    "F1": 2
+  },
+  "profile": {
+    "exit": 0,
+    "outcome": "done",
+    "nvenc_trial": "ok"
+  },
+  "ready": {
+    "queue_status": "READY_FOR_EDIT_PLAN",
+    "decisions": {
+      "KEEP": 2
+    },
+    "state": "READY_TO_EXPORT"
+  },
+  "checks": {
+    "export_beside_the_light_stage_at_its_own_peak": true,
+    "export_only_in_the_export_lane": true,
+    "both_lanes_at_once": true,
+    "heavy_stage_waited_or_fit": true,
+    "vram_peak_below_the_card": true,
+    "no_out_of_memory": true,
+    "scan_and_export_finished": true,
+    "export_manifest_valid": true,
+    "every_ffmpeg_below_normal": true,
+    "real_queue_stayed_empty_and_paused": true,
+    "whole_film_within_the_recorded_peaks": true,
+    "passed": true
+  },
+  "details": {
+    "whole_film": {
+      "stage_peak_above_baseline_mib": {
+        "text": 831,
+        "visual_logo": 4691,
+        "localize_logo": 1309,
+        "build_review": 0
+      },
+      "recorded_stage_peak_mib": {
+        "text": 833,
+        "visual_logo": 4691,
+        "localize_logo": 1309
+      },
+      "over_the_recorded_peak": {},
+      "report_peak_cuda_mib": {
+        "visual_logo": 4269,
+        "grounding": 1042
+      },
+      "processes": [
+        {
+          "job_id": 2,
+          "stage": "text",
+          "start_s": 1.4,
+          "end_s": 110.0,
+          "baseline_mib": {
+            "nvml": 484,
+            "nvidia_smi": 296
+          },
+          "peak_mib": {
+            "nvml": 1315,
+            "nvidia_smi": 1127
+          },
+          "peak_above_baseline_mib": {
+            "nvml": 831,
+            "nvidia_smi": 831
+          }
+        },
+        {
+          "job_id": 2,
+          "stage": "visual_logo",
+          "start_s": 111.0,
+          "end_s": 181.8,
+          "baseline_mib": {
+            "nvml": 486,
+            "nvidia_smi": 298
+          },
+          "peak_mib": {
+            "nvml": 5177,
+            "nvidia_smi": 4989
+          },
+          "peak_above_baseline_mib": {
+            "nvml": 4691,
+            "nvidia_smi": 4691
+          }
+        },
+        {
+          "job_id": 2,
+          "stage": "localize_logo",
+          "start_s": 182.9,
+          "end_s": 200.1,
+          "baseline_mib": {
+            "nvml": 486,
+            "nvidia_smi": 298
+          },
+          "peak_mib": {
+            "nvml": 1253,
+            "nvidia_smi": 1065
+          },
+          "peak_above_baseline_mib": {
+            "nvml": 767,
+            "nvidia_smi": 767
+          }
+        },
+        {
+          "job_id": 2,
+          "stage": "localize_logo",
+          "start_s": 200.1,
+          "end_s": 213.2,
+          "baseline_mib": {
+            "nvml": 486,
+            "nvidia_smi": 298
+          },
+          "peak_mib": {
+            "nvml": 1795,
+            "nvidia_smi": 1607
+          },
+          "peak_above_baseline_mib": {
+            "nvml": 1309,
+            "nvidia_smi": 1309
+          }
+        },
+        {
+          "job_id": 2,
+          "stage": "build_review",
+          "start_s": 213.5,
+          "end_s": 240.8,
+          "baseline_mib": {
+            "nvml": 486,
+            "nvidia_smi": 298
+          },
+          "peak_mib": {
+            "nvml": 486,
+            "nvidia_smi": 298
+          },
+          "peak_above_baseline_mib": {
+            "nvml": 0,
+            "nvidia_smi": 0
+          }
+        }
+      ],
+      "seconds": 240.8,
+      "stage_failed_events": [],
+      "process_priority": {
+        "ffmpeg": {
+          "below_normal": 4
+        },
+        "other": {
+          "below_normal": 21
+        }
+      },
+      "real_queue_changes": [],
+      "grounding_cache_moved": true
+    },
+    "timeline": [
+      {
+        "job": "S1",
+        "stage": "preflight",
+        "start_s": 0.0,
+        "end_s": 0.2
+      },
+      {
+        "job": "S1",
+        "stage": "text",
+        "start_s": 0.2,
+        "end_s": 30.3
+      },
+      {
+        "job": "E1",
+        "stage": "render",
+        "start_s": 0.7,
+        "end_s": 60.4
+      },
+      {
+        "job": "S1",
+        "stage": "visual_logo",
+        "start_s": 30.3,
+        "end_s": 71.7
+      },
+      {
+        "job": "S1",
+        "stage": "localize_logo",
+        "start_s": 71.7,
+        "end_s": 95.1
+      },
+      {
+        "job": "S1",
+        "stage": "build_review",
+        "start_s": 95.1,
+        "end_s": 122.4
+      }
+    ],
+    "lane_events": [
+      {
+        "event": "EXPORT_LANE_PARALLEL",
+        "level": "INFO",
+        "payload": {
+          "reason": "opened",
+          "total_mib": 6144,
+          "used_mib": 526,
+          "free_mib": 5617,
+          "baseline_mib": 526,
+          "scan_peak_mib": 833,
+          "need_mib": 244,
+          "margin_mib": 256,
+          "left_mib": 4541,
+          "scan_peak_stage": "text",
+          "scan_peak_basis": "stage",
+          "width": 1280,
+          "height": 720,
+          "scan_job_id": 3,
+          "scan_stage": "text"
+        }
+      }
+    ],
+    "scan_wait_events": [],
+    "lane_segments": [
+      {
+        "lane": "export",
+        "job_id": 1,
+        "stage": "render",
+        "pid": 27960,
+        "start_s": 1.2,
+        "end_s": 61.1
+      },
+      {
+        "lane": "main",
+        "job_id": 3,
+        "stage": "text",
+        "pid": 4984,
+        "start_s": 1.2,
+        "end_s": 30.9
+      },
+      {
+        "lane": "main",
+        "job_id": 3,
+        "stage": "visual_logo",
+        "pid": 5180,
+        "start_s": 31.5,
+        "end_s": 72.2
+      },
+      {
+        "lane": "main",
+        "job_id": 3,
+        "stage": "localize_logo",
+        "pid": 24212,
+        "start_s": 72.8,
+        "end_s": 94.3
+      },
+      {
+        "lane": "main",
+        "job_id": 3,
+        "stage": "localize_logo",
+        "pid": 20180,
+        "start_s": 94.3,
+        "end_s": 95.4
+      },
+      {
+        "lane": "main",
+        "job_id": 3,
+        "stage": "build_review",
+        "pid": 10664,
+        "start_s": 95.4,
+        "end_s": 123.0
+      }
+    ],
+    "overlap_seconds": 59.3,
+    "stage_overlap_seconds": {
+      "text": 29.7,
+      "visual_logo": 29.6,
+      "localize_logo": 0.0,
+      "build_review": 0.0
+    },
+    "export_outlasted_the_light_stage": true,
+    "a1b_rule_left_mib_beside_the_light_stage": 431,
+    "margin_mib": 256,
+    "post_export_check": {
+      "eligible_for_delete_source": true,
+      "refusal": null,
+      "status": "COMPLETED",
+      "encoder": "h264_nvenc",
+      "lane": "parallel",
+      "validation_method": "cpu_full_decode",
+      "fallback": null
+    },
+    "stage_failed_events": [],
+    "out_of_memory_logs": [],
+    "process_priority": {
+      "ffmpeg": {
+        "below_normal": 7
+      },
+      "other": {
+        "below_normal": 21
+      }
+    },
+    "real_queue_changes": {
+      "profile": [],
+      "ready": [],
+      "run": []
+    },
+    "seconds": 123.0,
+    "gpu": {
+      "name": "NVIDIA GeForce RTX 2060",
+      "driver": "617.42"
+    },
+    "vram_mib": {
+      "before": {
+        "nvidia_smi": 337,
+        "nvml": 525
+      },
+      "peak": {
+        "nvidia_smi": 5134,
+        "nvml": 5322
+      },
+      "total": {
+        "nvidia_smi": 6144,
+        "nvml": 6144
+      }
+    }
+  }
+}

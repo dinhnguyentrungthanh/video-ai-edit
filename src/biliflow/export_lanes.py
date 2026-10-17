@@ -63,7 +63,9 @@ MIB = 1024 * 1024
 #     batch 8, fp16 text detection, logo routing warmed with NVDEC), so a stage's peak
 #     holds only for such a job whose source frame fits inside that clip frame. gore
 #     and violence alone (one of the two detectors chosen) were not measured. Measure
-#     again when a stage's model, batch or precision changes.
+#     again when a stage's model, batch or precision changes. A1d's whole-film scan
+#     (docs/evidence/a1d/2026-10-17/, 1280x720, the same settings) added a third source:
+#     visual_logo 4691 there; text and localize_logo stayed at or below their clip peaks.
 #   SAFETY_MARGIN_MIB: VRAM left free after both. Other programs' VRAM moved by 106
 #     MiB during the measurement; the user chose twice that, 256 MiB, on 2026-10-14.
 NVENC_NEED_MIB: tuple[tuple[int, int], ...] | None = ((1280 * 640, 170), (1920 * 1080, 244))
@@ -76,7 +78,7 @@ STAGE_PEAK_MIB: dict[str, tuple[int, tuple[int, int]]] | None = {
     "animation_safety": (754, (1280, 640)),
     "text": (833, (1920, 1080)),
     "localize_logo": (1309, (1920, 1080)),
-    "visual_logo": (4690, (1920, 1080)),
+    "visual_logo": (4691, (1920, 1080)),
     "confirm_violence": (4943, (1920, 1080)),
 }
 STAGE_PEAK_PROFILE = "careful"

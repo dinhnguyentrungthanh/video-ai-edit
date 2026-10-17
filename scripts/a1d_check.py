@@ -73,6 +73,8 @@ HEAVY_STAGE = "visual_logo"
 # Words a CUDA or PyTorch out-of-memory failure writes into a stage's log.
 OUT_OF_MEMORY_WORDS = ("out of memory", "outofmemoryerror", "cuda_error_out_of_memory", "cudaerrormemoryallocation")
 SMI_INTERVAL_MS = 200
+# What a1c_check.start_scan sends with every scan of this check (recorded in check.json).
+SCAN_SETTINGS = {"profile": "careful", "fast_scan": True, "ocr_recognition_batch_size": 1}
 
 
 # --- the root and its record -------------------------------------------------------------------------
@@ -502,7 +504,7 @@ def checks(root: Path, store: Any, state: dict) -> dict:
     ffmpeg_seen = Counter((run.get("process_priority") or {}).get("ffmpeg") or {})
     real_changes = {**state.get("real_queue_changes", {}), "run": run.get("real_queue_changes")}
     failed = [event["event_type"] for job_id in (scan_job, export_job)
-              for event in store.events(job_id, limit=2000) if event["event_type"] == "STAGE_FAILED"]
+              for event in store.events(job_id, limit=1000) if event["event_type"] == "STAGE_FAILED"]
     memory_logs = out_of_memory_logs(root, [scan_job, export_job])
     total = run["vram_total_mib"]["nvidia_smi"] or run["vram_total_mib"]["nvml"]
     peak = max(value for value in run["vram_peak_mib"].values() if value is not None)
@@ -540,7 +542,7 @@ def checks(root: Path, store: Any, state: dict) -> dict:
         recorded = {stage: export_lanes.STAGE_PEAK_MIB[stage][0] for stage in measured
                     if stage in (export_lanes.STAGE_PEAK_MIB or {})}
         film_job = film["film_job"]
-        film_failed = [event["event_type"] for event in store.events(film_job, limit=2000)
+        film_failed = [event["event_type"] for event in store.events(film_job, limit=1000)
                        if event["event_type"] == "STAGE_FAILED"]
         # The per-stage numbers hold on a whole film too: no stage went above its recorded peak.
         result["whole_film_within_the_recorded_peaks"] = (
@@ -592,7 +594,7 @@ def report(args: argparse.Namespace) -> int:
     evidence = {
         "written_at": datetime.now().astimezone().isoformat(timespec="seconds"),
         "code_commit": state["code_commit"], "test_root": root.name, "detectors": DETECTORS, "style": STYLE,
-        "clips": {tag: {key: value for key, value in clip.items() if key != "path"}
+        "settings": SCAN_SETTINGS, "clips": {tag: {key: value for key, value in clip.items() if key != "path"}
                   for tag, clip in state["clips"].items()},
         "jobs": state["jobs"], "profile": state.get("profile"), "ready": state.get("ready"), **found,
     }
