@@ -18,7 +18,7 @@
     scheduler:['POST','/api/scheduler'],shutdown:['POST','/api/shutdown'],
     /* "Xuất song song: Tự động / Tắt" (perf plan A1b): PC only, exactly {mode: 'auto'|'off'}. */
     parallelExport:['POST','/api/scheduler/parallel-export'],
-    start:['POST','/api/jobs/{id}/start'],resume:['POST','/api/jobs/{id}/resume'],pause:['POST','/api/jobs/{id}/pause'],stopAfter:['POST','/api/jobs/{id}/stop-after-stage'],cancel:['POST','/api/jobs/{id}/cancel'],retry:['POST','/api/jobs/{id}/retry'],rerun:['POST','/api/jobs/{id}/rerun'],skip:['POST','/api/jobs/{id}/skip'],unskip:['POST','/api/jobs/{id}/unskip'],hide:['POST','/api/jobs/{id}/hide'],unhide:['POST','/api/jobs/{id}/unhide'],audit:['POST','/api/jobs/{id}/ai-audit'],
+    start:['POST','/api/jobs/{id}/start'],resume:['POST','/api/jobs/{id}/resume'],pause:['POST','/api/jobs/{id}/pause'],stopAfter:['POST','/api/jobs/{id}/stop-after-stage'],cancel:['POST','/api/jobs/{id}/cancel'],retry:['POST','/api/jobs/{id}/retry'],rerun:['POST','/api/jobs/{id}/rerun'],rebuild:['POST','/api/jobs/{id}/rebuild-review'],skip:['POST','/api/jobs/{id}/skip'],unskip:['POST','/api/jobs/{id}/unskip'],hide:['POST','/api/jobs/{id}/hide'],unhide:['POST','/api/jobs/{id}/unhide'],audit:['POST','/api/jobs/{id}/ai-audit'],
     finalize:['POST','/api/jobs/{id}/review/finalize'],decision:['POST','/api/jobs/{id}/review/decision'],clear:['POST','/api/jobs/{id}/review/clear'],bulkKeep:['POST','/api/jobs/{id}/review/bulk-keep'],bulkAccept:['POST','/api/jobs/{id}/review/bulk-accept'],
     ai:['GET','/api/ai'],aiConfig:['POST','/api/ai/config'],aiCheck:['POST','/api/ai/check'],aiLogin:['POST','/api/ai/login'],
     cleanupPreview:['GET','/api/source-cleanup/preview'],cleanup:['POST','/api/source-cleanup'],deletePreview:['GET','/api/job-delete/preview'],delete:['POST','/api/job-delete'],archivePreview:['GET','/api/source-archive/preview'],archive:['POST','/api/source-archive'],restore:['POST','/api/source-archive/restore'],recheck:['POST','/api/source-recycle-check'],
@@ -78,6 +78,17 @@
   /* Phone mode (batch 2): these actions are refused by the phone listener (403 pc_only).
      "Xóa video gốc" and "Xóa video" work on the phone too (the user's choice, 2026-10-06). */
   const pcOnlyOps = ['archive','restore','recheck'];
+  /* "Dựng lại danh sách duyệt (giữ quyết định)" (docs/handoff/D-rebuild-keep.md): a new revision as "Chạy lại"
+     whose review carries the decisions of the list in use. The phone may send it, as it may send "Chạy lại". */
+  const REBUILD_STATES = ['WAITING_REVIEW','READY_TO_EXPORT','COMPLETED','SKIPPED'];
+  const REBUILD_CONFIRM = ['Quyết định cũ được giữ: bạn chỉ phải duyệt thẻ mới hoặc thẻ đã đổi.',
+    'Bản xuất cũ vẫn nằm trong output, không bị xóa.',
+    'Phải xuất lại sau khi duyệt. Tới lúc đó “Lưu trữ” và “Xóa video gốc” chưa dùng được.',
+    'Video vào hàng đợi như “Chạy lại kiểm tra”; bước quét dùng lại kết quả đã lưu khi mã quét không đổi.'];
+  function rebuildSent(body) {
+    const r = body && body.rebuild;
+    return r ? `Đã xếp dựng lại danh sách duyệt: giữ ${r.decisions} quyết định của revision ${r.from_revision}. Khi xong, mở Duyệt cảnh để xem thẻ mới hoặc thẻ đổi.` : 'Đã gửi lệnh dựng lại danh sách duyệt.';
+  }
   /* "Xóa video gốc" and "Xóa video" delete for good (2026-10-05): the POST must carry confirm_permanent:true. */
   const permanentOps = ['cleanup','delete'];
   /* A DELETED "Xóa video gốc" that left the export's manifest says so after this marker (source_cleanup.MANIFEST_WARNING). */
@@ -172,6 +183,8 @@
     if (!['COMPLETED','SKIPPED','CANCELLED'].includes(j.state)) add('cancel','Hủy xử lý',true);
     if (j.state === 'CANCELLED') add(hidden(j)?'unhide':'hide',hidden(j)?'Hiện lại':'Ẩn khỏi danh sách',true);
     if (rerunnable.includes(j.state)) add('rerun','Chạy lại kiểm tra',sourceOK && !inFlight(j),sourceOK?'Lệnh xuất đang chờ/chạy.':sourceReason);
+    if (REBUILD_STATES.includes(j.state) && j.active_queue_path) add('rebuild','Dựng lại danh sách duyệt (giữ quyết định)',j.state!=='SKIPPED' && sourceOK && !inFlight(j),
+      j.state==='SKIPPED'?'Video đã bỏ qua: bấm “Mở lại để xuất” trước.':sourceOK?'Lệnh xuất đang chờ/chạy.':sourceReason);
     /* A golden-set video (j.protected, from /api/status) keeps every delete action off, with that reason. */
     if (eligible(j,'cleanup')) add('cleanup','Xóa video gốc',!ctx.fileBusy && !j.protected,j.protected||'Một thao tác với video gốc đang chạy.');
     if (j.delete) add('delete','Xóa video',j.delete.eligible===true && !ctx.fileBusy && !j.protected,j.protected||(j.delete.eligible===true?'Một thao tác với video gốc đang chạy.':j.delete.reason||'Chưa xóa được video này.'));
@@ -250,5 +263,5 @@
     if (pairs.length) path += '?'+pairs.join('&');
     return {operation:id,method:ep[0],path,body:body||{}};
   }
-  return {accountOps,PC_ONLY_ACCOUNT_REASON,SOURCE_ID,pcOnlyOps,permanentOps,DELETE_NOTE,lostIds,PC_ONLY_REASON,phoneNotice,tailscaleOps,TAILSCALE_LABELS,tailscaleStep,tailscaleActions,tailscaleLoginUrl,SOURCE_MISSING_MESSAGE,sourceLine,formatStamp,formatBytes,detectors,tabs,labels,scanning,pausable,rerunnable,endpoints,cleaned,archived,hidden,locked,inFlight,eligible,reviewStats,tab,phase,overviewLabels,overviewMatch,operations,primary,validateScan,exportSelection,EXPORT_GATE_MESSAGE,EXPORT_SIZE_OPTIONS,EXPORT_CUSTOM_GB,exportDescription,exportConfirmText,exportPolicyChoice,OUTPUT_MOVED_REASON,reexportState,resourceItems,request};
+  return {REBUILD_STATES,REBUILD_CONFIRM,rebuildSent,accountOps,PC_ONLY_ACCOUNT_REASON,SOURCE_ID,pcOnlyOps,permanentOps,DELETE_NOTE,lostIds,PC_ONLY_REASON,phoneNotice,tailscaleOps,TAILSCALE_LABELS,tailscaleStep,tailscaleActions,tailscaleLoginUrl,SOURCE_MISSING_MESSAGE,sourceLine,formatStamp,formatBytes,detectors,tabs,labels,scanning,pausable,rerunnable,endpoints,cleaned,archived,hidden,locked,inFlight,eligible,reviewStats,tab,phase,overviewLabels,overviewMatch,operations,primary,validateScan,exportSelection,EXPORT_GATE_MESSAGE,EXPORT_SIZE_OPTIONS,EXPORT_CUSTOM_GB,exportDescription,exportConfirmText,exportPolicyChoice,OUTPUT_MOVED_REASON,reexportState,resourceItems,request};
 });

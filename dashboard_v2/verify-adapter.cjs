@@ -53,6 +53,7 @@ test('Every operation of guide section 4 uses its real path and body', async () 
     ['resume', j, {}, '/api/jobs/7/resume'], ['pause', j, {}, '/api/jobs/7/pause'],
     ['stopAfter', j, {}, '/api/jobs/7/stop-after-stage'], ['cancel', j, {}, '/api/jobs/7/cancel'],
     ['retry', j, {}, '/api/jobs/7/retry'], ['skip', j, {}, '/api/jobs/7/skip'], ['unskip', j, {}, '/api/jobs/7/unskip'],
+    ['rebuild', j, {}, '/api/jobs/7/rebuild-review'],
     ['hide', j, {}, '/api/jobs/7/hide'], ['unhide', j, {}, '/api/jobs/7/unhide'],
     ['audit', j, {visual: true}, '/api/jobs/7/ai-audit'],
     ['finalize', j, {size_mode: 'default'}, '/api/jobs/7/review/finalize'],

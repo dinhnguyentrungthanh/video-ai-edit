@@ -79,6 +79,25 @@ check('Missing source blocks export and rerun',()=>{
   const j=job('READY_TO_EXPORT',{source_present:false});
   assert.equal(has(j,'finalize').enabled,false);assert.equal(has(j,'rerun').enabled,false);
 });
+check('"Dựng lại danh sách duyệt (giữ quyết định)" sits beside "Chạy lại" for a reviewed or exported video, also on the phone',()=>{
+  const label='Dựng lại danh sách duyệt (giữ quyết định)',q={active_queue_path:'demo'};
+  for(const state of ['WAITING_REVIEW','READY_TO_EXPORT','COMPLETED']){
+    const j=job(state,q),ids=C.operations(j,{aiReady:true}).map(a=>a.id);
+    assert.equal(ids.indexOf('rebuild'),ids.indexOf('rerun')+1,state);
+    assert.deepEqual([has(j,'rebuild').label,has(j,'rebuild').enabled],[label,true],state);
+    assert.equal(has(j,'rebuild',{remote:true}).enabled,true,'the phone may send it, as "Chạy lại"');
+  }
+  assert.deepEqual([has(job('SKIPPED',q),'rebuild').enabled,has(job('SKIPPED',q),'rebuild').reason],[false,'Video đã bỏ qua: bấm “Mở lại để xuất” trước.']);
+  assert.equal(has(job('READY_TO_EXPORT',{...q,render_request:true}),'rebuild').enabled,false,'an export in flight');
+  assert.equal(has(job('COMPLETED',{...q,source_present:false}),'rebuild').enabled,false,'no source');
+  assert.equal(has(job('COMPLETED',{...q,source_archived:true}),'rebuild').reason,'Video đang được lưu trữ. Khôi phục trước khi xử lý.');
+  for(const state of ['QUEUED','SCANNING_TEXT','RENDERING','PAUSED','FAILED','CANCELLED'])assert.equal(has(job(state,q),'rebuild'),undefined,state);
+  assert.equal(has(job('WAITING_REVIEW',{active_queue_path:null}),'rebuild'),undefined,'no list to keep');
+  assert.deepEqual(C.request('rebuild',{id:42},{}),{operation:'rebuild',method:'POST',path:'/api/jobs/42/rebuild-review',body:{}});
+  assert.equal(C.REBUILD_CONFIRM.length,4);
+  assert.ok(C.REBUILD_CONFIRM[0].includes('chỉ phải duyệt thẻ mới hoặc thẻ đã đổi')&&C.REBUILD_CONFIRM[1].includes('output, không bị xóa')&&C.REBUILD_CONFIRM[2].startsWith('Phải xuất lại'));
+  assert.equal(C.rebuildSent({rebuild:{decisions:7,from_revision:3}}),'Đã xếp dựng lại danh sách duyệt: giữ 7 quyết định của revision 3. Khi xong, mở Duyệt cảnh để xem thẻ mới hoặc thẻ đổi.');
+});
 check('Unresolved NEEDS_MORE_CONTEXT blocks export even with stale ready status',()=>{
   const j=job('READY_TO_EXPORT',{review_summary:{status:'READY_FOR_EDIT_PLAN',main_items:2,pending:0,decisions:{KEEP:1,NEEDS_MORE_CONTEXT:1}}});
   assert.equal(C.reviewStats(j).remaining,1);assert.equal(has(j,'finalize').enabled,false);

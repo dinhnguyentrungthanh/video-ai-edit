@@ -313,13 +313,14 @@
   }
 
   function header(ctx) {
-    const scope = R.scopeWarning(ctx.queue);
+    const scope = R.scopeWarning(ctx.queue), carry = R.carryNote(ctx.queue);
     return '<div class="rv-title-row"><div class="rv-title"><h2 id="review-title">' + esc('Duyệt cảnh · #' + ctx.job.id + ' · ' + ctx.job.name) + '</h2>' +
         (ctx.oldUrl ? '<a class="rv-old" href="' + esc(ctx.oldUrl) + '">Mở trang duyệt cũ</a>' : '<span class="rv-old muted">Trang duyệt cũ chỉ có khi chạy cùng Control Center</span>') + '</div>' +
         '<button class="icon-button" type="button" data-review="close" aria-label="Đóng hộp duyệt">×</button></div>' +
       '<div class="rv-progress-box">' + progressHtml(ctx) + '</div>' +
       chips(ctx) +
       (scope ? '<div class="notice rv-scope" role="note">' + esc(scope) + '</div>' : '') +
+      (carry ? '<div class="notice rv-carry" role="note">' + esc(carry) + '</div>' : '') +
       '<div class="rv-tools"><button class="small secondary rv-bulk" type="button" data-review="bulk" data-kind="bulkKeep"' + (ctx.readonly ? ' disabled' : '') + ' title="Giữ nguyên các mục chưa duyệt của bộ lọc đang chọn">Giữ tất cả</button>' +
         '<button class="small secondary rv-bulk" type="button" data-review="bulk" data-kind="bulkAccept"' + (ctx.readonly ? ' disabled' : '') + ' title="Áp dụng đề xuất cho các mục chưa duyệt của bộ lọc đang chọn">Dùng đề xuất</button>' +
         '<button class="small secondary rv-undo" type="button" data-review="undo" disabled title="Chưa có lựa chọn nào trong phiên này để hoàn tác">↶ Hoàn tác</button><span class="rv-save" role="status" aria-live="polite"></span></div>' +
