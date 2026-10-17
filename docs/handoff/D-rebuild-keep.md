@@ -141,6 +141,9 @@ Commit `0b983f4` (backend), `1f09e1d` (Dashboard V2), `3dbfeee` (sửa theo revi
     `test_scheduler`, `test_source_cleanup`, `test_source_archive`, `test_review_workflow`, `test_dashboard_v2_review`,
     `-frontend`, `-contract`, `-phone`: 432 test đạt. Các test Dashboard và điện thoại khác cũng đạt; chữ ký endpoint
     trong `test_dashboard_v2_review` cập nhật cho một endpoint mới.
+  - Full suite (3.528 test, 42 phút): đạt, trừ 28 test cần video trong thư mục `input` của worktree
+    (`test_job_pipeline`, `test_job_ocr_option`; đạt 35/35 khi đặt một clip tổng hợp 2 s vào đó, clip đã xóa) và 1 test
+    đo thời gian của `test_hardware_manager` (`LimitTests`, chạy riêng đạt 3/3).
 - JS: `verify.cjs` 51, `verify-adapter.cjs` 42, `verify-review.cjs` 46 (thêm `carryNote` và đối chiếu tên lý do với
   `RESTORED_REASONS` của Python), `browser-check-rebuild.cjs` 6 (mới: nút, hộp xác nhận, POST, toast, video bỏ qua, dòng
   tóm tắt ở 1440 và 390 px), `browser-check-review` 27, `-layout` 13, `-covers` 9, `-write` 19, `-bulk` 13.

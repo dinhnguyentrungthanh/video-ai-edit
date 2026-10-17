@@ -1,5 +1,18 @@
 # BiliFlow session handoff
 
+## Session D, "Dựng lại danh sách duyệt (giữ quyết định)" — 2026-10-17, branch `feat/rebuild-keep-decisions` from `fix/review-preview-blurs` `b9b7e23` (worktree `temp\wt-rebuild-keep`), not merged
+
+- **Request (coordinator, task c, item 7 of `docs/handoff/D-ticker.md`):** a button beside "Chạy lại" that rebuilds the review list and keeps the decisions by the rules of `review_decision_carry`, never setting one; it says what was kept, what waits and why. An exported job returns to review, and archive and source delete refuse until it is exported again. Do not touch `scheduler.py` or `export_lanes.py` beyond a minimal, documented change (session A1d works there).
+- **Done:** `0b983f4` backend (`review_rebuild.py`, route and `ControlCenter.rebuild_review`, the carry request read by `build_review_queue`, `restored_reasons`), `1f09e1d` Dashboard V2 (button, confirmation, carry note, gates), `3dbfeee` code review fixes, and the evidence script `docs/evidence/rebuild-keep/rebuild_check.py`.
+- **`scheduler.py`:** only `rerun(..., pipeline_key=None)` and one line. A merge with A1d can conflict only there.
+- **Gates:** see `CHANGELOG.md` and `docs/handoff/D-rebuild-keep.md`. full suite 3,528 tests: all pass except 28 that need a video in the worktree's input folder (test_job_pipeline, test_job_ocr_option; they pass with a synthetic clip there) and 1 timing test of test_hardware_manager that passes 3/3 alone. Cache keys: 10/10 equal to 41169fc. The GPU was used only by the test Control Center, while the real queue was idle (the user allowed GPU use without asking on 2026-10-17). The real Control Center was not called.
+- **Found on the way:**
+  - The stage cache key holds the absolute `scripts\run.ps1` path, so a test root never uses the install's cache.
+  - The main folder's `config\license_policy.json` (CRLF) and `scripts\env.ps1` (LF) differ in line endings from what `.gitattributes` gives, so any checkout that rewrites them changes every scan cache key.
+  - The brand memory changed after every job's last scan, so a rebuild on the install rescans `visual_logo` and `localize_logo` on the GPU.
+- **Waiting for the coordinator:** the merge, planned as G15 with A1d.
+- **For the user after the merge:** open an exported episode, press "Dựng lại danh sách duyệt (giữ quyết định)", read the note in "Duyệt cảnh", review the waiting cards, export again.
+
 ## Session D, a review card's image shows the regions other cards blur — 2026-10-17, branch `fix/review-preview-blurs` from `main` `41169fc` (worktree `temp\wt-preview-blurs`), not merged
 
 - **Request (coordinator, task a):** on each card's preview, draw the regions of OTHER cards decided BLUR whose time holds the image's time, as the export does, with a short label. Discrete cards count moment by moment. A suggested-only BLUR may be drawn, clearly different. Extend the overlap note to watermark, scrolling-text and logo cards on every card. Keep "Ẩn khung", work on the phone, dashboard only.

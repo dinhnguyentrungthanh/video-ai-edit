@@ -1,3 +1,30 @@
+# "Dựng lại danh sách duyệt (giữ quyết định)" — session D (2026-10-17, branch `feat/rebuild-keep-decisions` from `fix/review-preview-blurs` `b9b7e23`; not merged)
+
+- A Dashboard V2 button beside "Chạy lại kiểm tra", also on the phone (`docs/handoff/D-rebuild-keep.md`):
+  - it queues a new revision as "Chạy lại" does; scan steps come from the cache when their key is unchanged;
+  - its review build carries the decisions of the list in use, by the rules of `review_decision_carry` only;
+  - conflicting or new cards stay open; the rebuild never sets a decision.
+- Backend:
+  - `POST /api/jobs/<id>/rebuild-review` uses the same Host, token, Origin and CSRF checks as the other job routes;
+  - it writes `decision-carry-request.json` into the new revision's report folder before the job is queued;
+  - `build_review_queue` reads that request and refuses an unusable one before writing;
+  - `scheduler.rerun` only gains an optional `pipeline_key`.
+- Refused when the job:
+  - is queued or running, is exporting, has an export waiting, or has an AI audit running;
+  - has no list or source, or its source is cleaned or archived;
+  - is skipped ("Mở lại để xuất" first).
+- An exported job returns to review. Its old export stays in `output`, and "Lưu trữ" and "Xóa video gốc" refuse until it is exported again.
+- The review dialog of a rebuilt list says how many decisions were carried, how many stayed on their old card and why (`decision_carry.restored_reasons`), and how many cards wait.
+- Unchanged: scan cache keys equal 41169fc (10 stages); no detector, threshold or export change.
+- Gates:
+  - Python: 13 rebuild tests, 432 focused tests, full suite 3,528 tests: all pass except 28 that need a video in the worktree's input folder (test_job_pipeline, test_job_ocr_option; they pass with a synthetic clip there) and 1 timing test of test_hardware_manager that passes 3/3 alone;
+  - JS: `verify.cjs` 51, `verify-adapter.cjs` 42, `verify-review.cjs` 46, the new `browser-check-rebuild.cjs` 6, and the other `browser-check-review*` scripts.
+  - A code review found no CRITICAL or HIGH issue; its two MEDIUM and one LOW findings are fixed in `3dbfeee`.
+- Test Control Center (temporary root, port 8797) on a copy of job 145 (`docs/evidence/rebuild-keep/`):
+  - 27/27 decisions carried; 1 changed card waits; no decision lacks an old source;
+  - "Lưu trữ" and "Xóa video gốc" refuse after the press;
+  - a second press restored `text` from the root's cache.
+
 # A review card's image shows the regions other cards blur — session D (2026-10-17, branch `fix/review-preview-blurs` from `main` `41169fc`; not merged)
 
 - Cause (job 134 on the phone): a card's preview showed the watermark or fixed text that another card already blurs as sharp as the rest, so the export's blur was invisible and the red box read as the blurred region.
