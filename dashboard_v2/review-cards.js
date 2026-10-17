@@ -160,8 +160,11 @@
     }
     return covers.slice().sort((a, b) => a.box.top - b.box.top || a.box.left - b.box.left).map(c => {
       const b = c.box, p = labelPlace(b.left, b.top, b.width, b.height), lr = p.cls.includes(' lr'), base = p.cls.replace(' lr', '');
-      const beside = [base, '', ' up'].filter((v, i, all) => v !== ' lin' && all.indexOf(v) === i), places = c.state === 'applied' ? [' lin', ' lup', ...beside] : [...beside, ' lin', ' lup'];
-      for (const text of D.coverWords(c)) for (const place of places) {
+      const beside = [base, '', ' up'].filter((v, i, all) => v !== ' lin' && all.indexOf(v) === i), words = D.coverWords(c);
+      // A blurred box holds its own label, in shorter words if need be, before a label covers the picture beside it; a
+      // suggestion's label goes beside its box first (what is in the box is still to be reviewed).
+      const inside = [' lin', ' lup'].flatMap(place => words.map(text => [place, text])), besides = words.flatMap(text => beside.map(place => [place, text]));
+      for (const [place, text] of c.state === 'applied' ? [...inside, ...besides] : [...besides, ...inside]) {
         const rect = labelRect(b, lr, place, text, frameH);
         if (rect.top >= 0 && rect.bottom <= 1 && !taken.some(o => meets(o, rect))) { taken.push(rect); return {id: c.id, cls: (lr ? ' lr' : '') + place, room: p.room, text, rect, free: true}; }
       }
@@ -188,16 +191,18 @@
     if (note && note.__html !== text) { note.outerHTML = text; el.querySelector('.rv-cover-note').__html = text; }
     return changed;
   }
+  const coverCropOf = (node, img) => { const v = String(node.dataset.region || '').split(',').map(Number); return D.coverCrop({x: v[0], y: v[1], width: v[2], height: v[3]}, [v[4], v[5]], img.naturalWidth, img.naturalHeight); };
   /* Paints every blurred copy from the image the card shows, once it has loaded. */
   function paintCovers(el) {
     const Media = root.BFReviewMedia, img = el.querySelector('.rv-art img'), canvases = el.querySelectorAll('.rv-cover-blur');
     if (!Media || !img || !img.complete || !img.naturalWidth || !canvases.length) return;
-    const source = Media.imageCanvas(img);
-    for (const canvas of canvases) {
-      const v = String(canvas.parentNode.dataset.region || '').split(',').map(Number);
-      const crop = D.coverCrop({x: v[0], y: v[1], width: v[2], height: v[3]}, [v[4], v[5]], source.width, source.height);
-      if (crop) Media.drawCover(canvas, source, crop);
-    }
+    for (const canvas of canvases) { const crop = coverCropOf(canvas.parentNode, img); if (crop) Media.drawCover(canvas, img, crop); }
+  }
+  /* review.js: the covers of the image the card shows, for its magnifier ([{state, crop}] in image pixels); none while
+   * the card is cut or blurred whole (its layer is hidden then too). */
+  function magCovers(el, img) {
+    if (!img || !img.naturalWidth || el.matches('.d-cut, .d-blur-full')) return [];
+    return [...el.querySelectorAll('.rv-covers .rv-cover')].map(c => ({state: c.classList.contains('applied') ? 'applied' : 'pending', crop: coverCropOf(c, img)})).filter(c => c.crop);
   }
   /* review.js: an image loaded in the card. Its time is the main image's, the time of the strip frame whose image it
    * is (a frame shown from the strip), else unknown; the layer follows it and is painted from it. */
@@ -344,14 +349,17 @@
     if (status && status.outerHTML !== html) { status.outerHTML = html; patched++; }
     el.classList.toggle('decided', !!x.decision);
     el.classList.toggle('on', x.id === ctx.focusId);
+    const whole = el.matches('.d-cut, .d-blur-full');
     el.classList.toggle('d-cut', x.decision === 'CUT');
     el.classList.toggle('d-blur-full', fullBlur(x));
     // The region can appear, move to another owner card or go (only the box is replaced, never the image box).
     const region = el.querySelector('.rv-region'), box = regionHtml(ctx, x);
     if ((region ? region.outerHTML : '') !== box) { if (region) region.remove(); if (box) el.querySelector('.rv-art').insertAdjacentHTML('beforeend', box); }
-    // Session D: other cards' blurs over the image shown now (its time is kept on the layer).
-    const layer = el.querySelector('.rv-covers');
-    if (layer && setCovers(el, ctx, x, layer.dataset.t)) paintCovers(el);
+    // Session D: other cards' blurs over the image shown now (its time is kept on the layer); a drawn magnifier that
+    // shows them is drawn again by review.js patch (its __magKey no longer matches).
+    const layer = el.querySelector('.rv-covers'), covers = !!layer && setCovers(el, ctx, x, layer.dataset.t);
+    if (covers) paintCovers(el);
+    if ((covers || whole !== el.matches('.d-cut, .d-blur-full')) && el.__magKey !== undefined) el.__magKey = null;
     if (setHtml(el.querySelector('.rv-actions'), actions(ctx, x))) patched++;
     setHtml(el.querySelector('.tech-body'), techHtml(ctx, x, ctx.media(x).ev));
     return patched;
@@ -365,5 +373,5 @@
     return patched;
   }
 
-  root.BFReviewCards = {BATCH, esc, card, refreshMedia, zoomExtra, mainImage, zoneNoteHtml, framesButton, coversHtml, coverLabels, setCovers, syncCovers, header, progressHtml, chips, empty, patchCard, patchCards, actions};
+  root.BFReviewCards = {BATCH, esc, card, refreshMedia, zoomExtra, mainImage, zoneNoteHtml, framesButton, coversHtml, coverLabels, setCovers, syncCovers, magCovers, header, progressHtml, chips, empty, patchCard, patchCards, actions};
 })(window);

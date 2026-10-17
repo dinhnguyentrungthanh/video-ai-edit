@@ -840,6 +840,19 @@ function coverQueue(frame) {
   return {status: 'WAITING_REVIEW', source: {duration_seconds: 600}, items, advisory_items: advisory};
 }
 const coverItem = (q, id) => q.items.find(x => x.id === id);
+/* review-media.js on fake canvases: every 2D call is logged as [canvas, call, ...arguments] (canvases and images by
+ * name); alpha is what a cut from the image paints in its middle (0: nothing, as Chromium for a part of a sizeless SVG). */
+function fakeCanvases(alpha) {
+  const ctx = {window: {BFReviewCore: R}}, calls = [];
+  vm.runInNewContext(fs.readFileSync(path.join(__dirname, 'review-media.js'), 'utf8'), ctx);
+  const pen = name => ({drawImage: (...a) => calls.push([name, ...a.map(v => typeof v === 'object' ? v.name : v)]), getImageData: () => ({data: [0, 0, 0, alpha]}),
+    save: () => calls.push([name, 'save']), restore: () => calls.push([name, 'restore']), setLineDash: d => calls.push([name, 'dash', ...d]), strokeRect: (...a) => calls.push([name, 'stroke', ...a]),
+    set strokeStyle(v) { calls.push([name, 'color', v]); }, set lineWidth(v) { calls.push([name, 'width', v]); }, set imageSmoothingEnabled(v) { /* not logged */ }, set imageSmoothingQuality(v) { /* not logged */ }});
+  let made = 0;
+  const doc = {createElement: tag => { const c = {name: tag + ++made}; c.getContext = () => pen(c.name); calls.push(['create', c.name]); return c; }};
+  const canvas = name => ({name, dataset: {}, style: {}, ownerDocument: doc, getContext: () => pen(name)});
+  return {Media: ctx.window.BFReviewMedia, calls, canvas};
+}
 check('Session D (1): the regions other cards blur, as the export: a decided BLUR region over start–end, or over each moment of a discrete card; a suggested BLUR as pending; never KEEP, whole-frame BLUR, candidates, the card itself or the red box it borrows', () => {
   const q = coverQueue(), covers = D.blurCovers(q, coverItem(q, 'dlg'));
   same(covers.map(c => [c.id, c.state]), [['wm', 'applied'], ['top', 'applied'], ['band', 'applied'], ['scroll', 'pending'], ['moments', 'applied']]);
@@ -864,6 +877,11 @@ check('Session D (1): the regions other cards blur, as the export: a decided BLU
   Object.assign(coverItem(broken, 'moments'), {decision: null, suggested_decision: 'KEEP'});
   same(D.blurCovers(broken, coverItem(broken, 'dlg')).map(c => c.id), ['scroll']);
   same(D.blurCovers({items: []}, coverItem(q, 'dlg')), []);
+  // A region that starts left of or above the frame keeps only its part inside it; one wholly outside is not drawn.
+  const edge = coverQueue();
+  coverItem(edge, 'top').decision_region_source_pixels = {x: -40, y: -10, width: 100, height: 30};
+  coverItem(edge, 'band').decision_region_source_pixels = {x: -200, y: 5, width: 100, height: 30};
+  same(D.blurCovers(edge, coverItem(edge, 'dlg')).filter(c => c.id === 'top' || c.id === 'band').map(c => [c.id, c.box]), [['top', {left: 0, top: 0, width: 60 / 1280, height: 20 / 720}]]);
 });
 check('Session D (2): what is drawn follows the time of the image: a moment holds it (±0.05 s), a discrete card counts in its moments only; an image without a time (a text preview) needs one moment over the whole card, over each moment of a discrete card', () => {
   const q = coverQueue(), dlg = coverItem(q, 'dlg'), covers = D.blurCovers(q, dlg), at = t => D.coversAt(covers, dlg, t).map(c => c.id);
@@ -932,6 +950,10 @@ check('Session D (4b): on a 390 px phone (job 134: a band along the top, a fixed
   assert.equal(labels[2].text, 'đã làm mờ · watermark', 'the full words would wrap below the image or cover the red box');
   assert.match(labels[2].cls, / lin/);
   assert.ok(labels.every(l => l.rect.top >= 0 && l.rect.bottom <= 1), 'inside the image height');
+  // On the card of the text at the top, the labels keep off its red box and stay in their blurred boxes, in shorter
+  // words, rather than over the picture (the watermark's full words took two lines over the subtitles above it).
+  const onTop = Cards.coverLabels(cardCtx(q), coverItem(q, 'top'), null);
+  same(onTop.map(l => [l.id, l.cls, l.text]), [['band', ' lin', 'đã làm mờ · chữ cố định'], ['wm', ' lin', 'đã làm mờ · watermark']]);
   // Too crowded for the full words: the short label, never two over each other.
   const crowd = coverQueue([1280, 536]);
   crowd.items.push(...[0, 1, 2].map(i => ({...coverItem(crowd, 'top'), id: 'top' + i, decision_region_source_pixels: {x: 700 + i * 20, y: 30 + i * 6, width: 300, height: 40}})));
@@ -971,17 +993,51 @@ check('Session D (6): the blurred copy is cut from the loaded image (a letterbox
   same(D.coverCrop({x: 1200, y: 700, width: 200, height: 100}, [1280, 720], 1280, 720), {sx: 1200, sy: 700, sw: 80, sh: 20, gw: 10, gh: 3}, 'cut at the image edge');
   for (const args of [[[0, 0], 960, 540], [[1280, 720], 0, 540], [null, 960, 540]]) assert.equal(D.coverCrop({x: 1, y: 1, width: 5, height: 5}, ...args), null);
   assert.equal(D.coverCrop({x: 2000, y: 10, width: 5, height: 5}, [1280, 720], 1280, 720), null, 'outside the image');
-  const ctx = {window: {BFReviewCore: R}}, calls = [];
-  vm.runInNewContext(fs.readFileSync(path.join(__dirname, 'review-media.js'), 'utf8'), ctx);
-  const pen = name => ({drawImage: (...a) => calls.push([name, ...a.map(v => typeof v === 'object' ? v.name : v)]), set imageSmoothingEnabled(v) { calls.push([name, 'smooth', v]); }, set imageSmoothingQuality(v) { calls.push([name, 'quality', v]); }});
-  const small = {name: 'small', getContext: () => pen('small')}, canvas = {name: 'canvas', dataset: {}, getContext: () => pen('canvas'), ownerDocument: {createElement: tag => (calls.push(['create', tag]), small)}};
-  ctx.window.BFReviewMedia.drawCover(canvas, {name: 'img'}, {sx: 414, sy: 332.25, sw: 132, sh: 23.25, gw: 17, gh: 3});
-  same([canvas.width, canvas.height, small.width, small.height], [132, 23, 17, 3]);
-  same(calls.filter(c => c[1] !== 'smooth' && c[1] !== 'quality'), [['create', 'canvas'], ['small', 'img', 414, 332.25, 132, 23.25, 0, 0, 17, 3], ['canvas', 'small', 0, 0, 17, 3, 0, 0, 132, 23]]);
-  assert.equal(canvas.dataset.drawn, '1');
+  const {Media, calls, canvas} = fakeCanvases(255), img = {name: 'img', naturalWidth: 960, naturalHeight: 402}, cover = canvas('cover');
+  Media.drawCover(cover, img, {sx: 414, sy: 332.25, sw: 132, sh: 23.25, gw: 17, gh: 3});
+  same([cover.width, cover.height], [132, 23]);
+  same(calls, [['create', 'canvas1'], ['canvas1', 'img', 414, 332.25, 132, 23.25, 0, 0, 17, 3], ['cover', 'canvas1', 0, 0, 17, 3, 0, 0, 132, 23]], 'cut from the image itself, no copy of the whole image');
+  assert.equal(cover.dataset.drawn, '1');
+  // A part of an SVG without a size of its own paints nothing in Chromium: the cells are cut again from a canvas copy
+  // of the whole image (at most 1920 px a side).
+  const svg = fakeCanvases(0), poster = svg.canvas('cover');
+  svg.Media.drawCover(poster, {name: 'svg', naturalWidth: 3840, naturalHeight: 1608}, {sx: 1656, sy: 1329, sw: 528, sh: 93, gw: 17, gh: 3});
+  same(svg.calls, [['create', 'canvas1'], ['canvas1', 'svg', 1656, 1329, 528, 93, 0, 0, 17, 3], ['create', 'canvas2'], ['canvas2', 'svg', 0, 0, 1920, 804],
+    ['canvas1', 'canvas2', 828, 664.5, 264, 46.5, 0, 0, 17, 3], ['cover', 'canvas1', 0, 0, 17, 3, 0, 0, 528, 93]]);
   const review = fs.readFileSync(path.join(__dirname, 'review.js'), 'utf8');
   assert.match(review, /img\.addEventListener\('load', \(\) => \{ if \(s\) Cards\.syncCovers\(el, ctx\(\), s\.map\.get\(el\.dataset\.item\), img\); drawMag\(el\); \}\)/, 'every image a card shows repaints its covers');
   assert.ok(review.split('\n').length <= 800, 'review.js stays under the 800-line ceiling');
+});
+check('Session D (7): the magnifier shows the same covers (blurred with a dashed sky-blue line, a suggestion dotted violet) under the red line; none when bare, none on a cut or wholly blurred card', () => {
+  const Cards = cardsModule(), view = {sx: 400, sy: 300, sw: 200, sh: 66.5, cssW: 300, cssH: 99.75, zoom: 3, scroll: false, red: {x: 30, y: 20, w: 150, h: 30}}, img = {name: 'img', naturalWidth: 960, naturalHeight: 402};
+  const covers = [{state: 'applied', crop: {sx: 414, sy: 332.25, sw: 132, sh: 23.25, gw: 17, gh: 3}}, {state: 'pending', crop: {sx: 380, sy: 290, sw: 40, sh: 20, gw: 6, gh: 3}},
+    {state: 'applied', crop: {sx: 700, sy: 300, sw: 50, sh: 20, gw: 7, gh: 3}}];
+  const one = fakeCanvases(255), mag = one.canvas('mag');
+  one.Media.drawMagnifier(mag, img, view, false, 1, covers);
+  same([mag.width, mag.height, mag.style.width, mag.style.height], [300, 100, '300.0px', '99.8px']);
+  same(one.calls, [['mag', 'img', 400, 300, 200, 66.5, 0, 0, 300, 100],
+    ['create', 'canvas1'], ['canvas1', 'img', 414, 332.25, 132, 23.25, 0, 0, 17, 3], ['mag', 'canvas1', 0, 0, 17, 3, 21, 48.375, 198, 34.875],
+    ['mag', 'save'], ['mag', 'color', '#38bdf8'], ['mag', 'width', 2], ['mag', 'dash', 6, 4], ['mag', 'stroke', 18, 45.375, 204, 40.875], ['mag', 'restore'],
+    ['mag', 'save'], ['mag', 'color', '#c084fc'], ['mag', 'width', 2], ['mag', 'dash', 2, 3], ['mag', 'stroke', -33, -18, 66, 36], ['mag', 'restore'],
+    ['mag', 'color', '#ff304f'], ['mag', 'width', 2], ['mag', 'stroke', 27, 17, 156, 36]], 'the third cover is outside the view');
+  const sharp = fakeCanvases(255);
+  sharp.Media.drawMagnifier(sharp.canvas('mag'), img, view, false, 2, covers.slice(0, 1));
+  same(sharp.calls.filter(c => c[1] === 'dash' || c[1] === 'width'), [['mag', 'width', 4], ['mag', 'dash', 12, 8], ['mag', 'width', 4]], 'lines and dashes in CSS pixels');
+  for (const [bare, list] of [[true, covers], [false, undefined]]) {
+    const other = fakeCanvases(255);
+    other.Media.drawMagnifier(other.canvas('mag'), img, view, bare, 1, list);
+    same(other.calls, [['mag', 'img', 400, 300, 200, 66.5, 0, 0, 300, 100], ...(bare ? [] : [['mag', 'color', '#ff304f'], ['mag', 'width', 2], ['mag', 'stroke', 27, 17, 156, 36]])]);
+  }
+  // review-cards.js magCovers: the covers of the layer shown, cut in the loaded image's pixels.
+  const node = (state, region) => ({classList: {contains: c => c === state}, dataset: {region}});
+  const card = (cls, nodes) => ({matches: sel => sel.split(',').some(s => cls.split(' ').includes(s.trim().slice(1))), querySelectorAll: () => nodes});
+  const nodes = [node('applied', '552,443,176,31,1280,536'), node('pending', '2000,10,5,5,1280,720')];
+  same(Cards.magCovers(card('', nodes), img), [{state: 'applied', crop: {sx: 414, sy: 332.25, sw: 132, sh: 23.25, gw: 17, gh: 3}}], 'a cover outside the image is left out');
+  for (const cls of ['d-cut', 'd-blur-full']) same(Cards.magCovers(card(cls, nodes), img), [], cls);
+  same(Cards.magCovers(card('', nodes), {naturalWidth: 0}), [], 'image not loaded');
+  const review = fs.readFileSync(path.join(__dirname, 'review.js'), 'utf8'), cards = fs.readFileSync(path.join(__dirname, 'review-cards.js'), 'utf8');
+  assert.match(review, /Media\.drawMagnifier\(canvas, img, view, el\.classList\.contains\('bare'\), window\.devicePixelRatio, Cards\.magCovers\(el, img\)\);/);
+  assert.match(cards, /if \(\(covers \|\| whole !== el\.matches\('\.d-cut, \.d-blur-full'\)\) && el\.__magKey !== undefined\) el\.__magKey = null;/, 'patch draws a magnifier again when its covers change');
 });
 check('R4-B3: no backdrop-filter in V2 (dialog backdrops, the top bar and the "Làm mờ" region made Chrome blink on the user\'s PC); no size container on card images', () => {
   const files = fs.readdirSync(__dirname).filter(f => /\.(css|js|html)$/.test(f));

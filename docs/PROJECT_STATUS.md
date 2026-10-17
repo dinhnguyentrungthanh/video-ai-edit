@@ -2,6 +2,13 @@
 
 - Session D (entry below): a site watermark read in 10 runs or more reaches the scan's start and end when they are 150 s or closer, and carried decisions stay with their own card. Review build only: scan cache keys unchanged, "Chạy lại" rebuilds the list without a rescan. Full suite 3,513 (1 unrelated download e2e failure, OK on rerun). Details in `CHANGELOG.md`.
 
+## A review card's image shows the regions other cards blur, session D (2026-10-17) — branch `fix/review-preview-blurs`, not merged
+
+- On a card's image and its magnifier, Dashboard V2 now draws the regions other cards blur at that time: blurred, as the export does, in a dashed sky-blue box. A card that only suggests BLUR gets a dotted violet box with nothing blurred. The technical details of every card list the overlapping regions, which card blurs each and when. "Ẩn khung" hides it all.
+- Dashboard only: decisions, exports and cache keys unchanged.
+- Gates: the review JS and browser checks and 130 Python tests pass; the real queues of jobs 145 and 134 were checked by eye on a test Control Center.
+- Details in `docs/handoff/D-preview-blurs.md`.
+
 ## A site watermark read in many runs reaches the film's edges, session D (2026-10-16) — branch `fix/watermark-edges`, not merged
 
 - Job 134 rev 2: the subtitle-band watermark card stopped 13.7 s before the end (the end credits covered the mark's last readings); 130 and 136 the same. A watermark group of 10 runs or more now reaches the scan's start and end when its first or last moment is 150 s or closer. The decision carry keeps the user's BLUR on the longer card.

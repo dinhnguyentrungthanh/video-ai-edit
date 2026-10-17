@@ -73,13 +73,15 @@
     for (const o of queue?.items || []) {
       if (!o || o.id === x.id || o.id === borrowed || o.advisory) continue;
       const pending = !o.decision && o.suggested_decision === 'BLUR', r = pending ? o.suggested_region_source_pixels : o.decision === 'BLUR' ? o.decision_region_source_pixels : null;
-      const sw = Number(o.source_frame_size?.[0]), sh = Number(o.source_frame_size?.[1]);
-      if (!r || typeof r !== 'object' || !(sw > 0 && sh > 0)) continue;
-      const region = {x: Number(r.x), y: Number(r.y), width: Number(r.width), height: Number(r.height)};
-      const left = clamp01(region.x / sw), top = clamp01(region.y / sh), width = Math.min(1 - left, region.width / sw), height = Math.min(1 - top, region.height / sh);
-      if (!Object.values(region).every(Number.isFinite) || !(width > 0 && height > 0)) continue;
+      if (!r || typeof r !== 'object') continue;
       const ms = momentsOrSpan(o);
       if (!ms.some(m => own.some(n => m.start < Math.max(n.end, n.start + COVER.eps) && m.end > n.start))) continue;
+      const sw = Number(o.source_frame_size?.[0]), sh = Number(o.source_frame_size?.[1]);
+      if (!(sw > 0 && sh > 0)) continue;
+      const region = {x: Number(r.x), y: Number(r.y), width: Number(r.width), height: Number(r.height)};
+      // A region that starts left of or above the frame keeps only its part inside it.
+      const left = clamp01(region.x / sw), top = clamp01(region.y / sh), width = Math.min(1 - left, (Math.min(region.x, 0) + region.width) / sw), height = Math.min(1 - top, (Math.min(region.y, 0) + region.height) / sh);
+      if (!Object.values(region).every(Number.isFinite) || !(width > 0 && height > 0)) continue;
       const full = ms.length === 1 && trackCoversFullVideo(queue, o), last = ms[ms.length - 1];
       covers.push({id: String(o.id), state: pending ? 'pending' : 'applied', region, size: [sw, sh], box: {left, top, width, height}, kind: coverKind(o), reading: readingLabel(o, ''), moments: ms,
         scope: full ? 'toàn phim' : ms.length > 1 ? `${ms.length} khoảnh khắc ${clock(ms[0].start)}–${clock(last.end)}` : `${clock(ms[0].start)}–${clock(ms[0].end)}`,

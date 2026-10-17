@@ -3,7 +3,8 @@
  * - the dialogue card's report preview (no time) shows the film-long fixed text blurred (a canvas painted from the
  *   loaded image) in a dashed sky-blue box, and the watermark card that only suggests BLUR in a dotted violet box;
  * - the labels stay inside the image and never cover each other, at 390 × 844 (phone) and 1440 × 900, light and dark;
- * - "Ẩn khung" hides the drawing and its note, "Hiện khung" brings them back;
+ * - the magnifier under the image shows the same covers below its red line;
+ * - "Ẩn khung" hides the drawing, its note and the covers in the magnifier, "Hiện khung" brings them back;
  * - on a safety card whose video cannot play, a report preview (time in its name) inside a moment of a discrete logo
  *   card shows that logo blurred, one outside does not (a card that can play seeks its video instead);
  * - BLUR on the watermark card draws it blurred on the dialogue card in place (the same card node);
@@ -89,6 +90,15 @@ async function check(name, fn) { await fn(); passed++; process.stdout.write('OK 
     for (let i = 0; i < ems.length; i++) for (let k = i + 1; k < ems.length; k++) assert.ok(!meets(ems[i], ems[k]), label + ': labels apart');
   };
   const SKY = 'dashed rgb(56, 189, 248)', VIOLET = 'dotted rgb(192, 132, 252)';
+  // The magnifier under a card's image: how many of its pixels have the sky-blue and the violet line colours.
+  const magInk = (page, id) => page.waitForFunction(id => {
+    const fig = document.querySelector(`#review-dialog article.rv-card[data-item="${id}"] .rv-mag`), c = fig && fig.querySelector('canvas');
+    if (!c || fig.hidden || c.dataset.drawn !== '1') return null;
+    const d = c.getContext('2d').getImageData(0, 0, c.width, c.height).data, near = (i, [r, g, b]) => d[i + 3] > 200 && Math.abs(d[i] - r) + Math.abs(d[i + 1] - g) + Math.abs(d[i + 2] - b) < 40;
+    let sky = 0, violet = 0;
+    for (let i = 0; i < d.length; i += 4) { if (near(i, [56, 189, 248])) sky++; else if (near(i, [192, 132, 252])) violet++; }
+    return {sky, violet};
+  }, id).then(h => h.jsonValue());
   // A source the evidence says is missing makes the job's one player unavailable for every card: the video check runs
   // on a page that never asked for that card.
   const videoCheck = page => check('1440 px: while the video of a violence card shows, its drawing is hidden', async () => {
@@ -120,14 +130,22 @@ async function check(name, fn) { await fn(); passed++; process.stdout.write('OK 
       });
       if (width === 1440) { if (VIDEO) await videoCheck(page); else process.stdout.write('SKIP video check: ffmpeg could not make the test clip\n'); }
       if (width !== 390 || theme !== 'light') { await page.close(); continue; }
-      await check('390 px: "Ẩn khung" hides the drawing and its note, "Hiện khung" brings them back', async () => {
+      await check('390 px: the magnifier of the dialogue card shows the suggested watermark below its red line (violet, dotted)', async () => {
+        const ink = await magInk(page, 'dlg');
+        assert.ok(ink.violet > 20 && ink.sky === 0, JSON.stringify(ink));
+      });
+      await check('390 px: "Ẩn khung" hides the drawing, its note and the covers in the magnifier; "Hiện khung" brings them back', async () => {
         const frames = page.locator('#review-dialog article.rv-card[data-item="dlg"] [data-review="frames"]');
         await frames.click();
         let d = await drawing(page, 'dlg');
         assert.equal(d.shown, false); assert.equal(d.note, '');
+        let ink = await magInk(page, 'dlg');
+        assert.ok(ink.violet === 0 && ink.sky === 0, JSON.stringify(ink));
         await frames.click();
         d = await drawing(page, 'dlg');
         assert.equal(d.shown, true); assert.ok(d.note);
+        ink = await magInk(page, 'dlg');
+        assert.ok(ink.violet > 20, JSON.stringify(ink));
       });
       await check('390 px: on a card whose video cannot play, a report preview inside a moment of the discrete logo card shows it blurred; one outside does not', async () => {
         const at = '#review-dialog article.rv-card[data-item="fight"]';
@@ -160,6 +178,9 @@ async function check(name, fn) { await fn(); passed++; process.stdout.write('OK 
         const d = await drawing(page, 'dlg'), wm = d.covers.find(c => c.owner === 'wm');
         assert.equal(wm.line, SKY); assert.ok(wm.painted);
         assert.equal(await page.evaluate(() => document.querySelector('#review-dialog article.rv-card[data-item="dlg"]').__marker), 1, 'patched, not rebuilt');
+        await page.waitForFunction(() => document.querySelector('#review-dialog article.rv-card[data-item="dlg"]').__magKey !== null);
+        const ink = await magInk(page, 'dlg');
+        assert.ok(ink.sky > 20 && ink.violet === 0, 'the magnifier is drawn again: ' + JSON.stringify(ink));
         assert.deepEqual(posts.slice(before).map(p => [p.path, p.body.id, p.body.decision]), [['/api/jobs/101/review/decision', 'wm', 'BLUR']]);
       });
       await page.close();

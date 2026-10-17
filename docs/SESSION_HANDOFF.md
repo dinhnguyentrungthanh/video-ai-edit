@@ -1,5 +1,18 @@
 # BiliFlow session handoff
 
+## Session D, a review card's image shows the regions other cards blur — 2026-10-17, branch `fix/review-preview-blurs` from `main` `41169fc` (worktree `temp\wt-preview-blurs`), not merged
+
+- **Request (coordinator, task a):** on each card's preview, draw the regions of OTHER cards decided BLUR whose time holds the image's time, as the export does, with a short label. Discrete cards count moment by moment. A suggested-only BLUR may be drawn, clearly different. Extend the overlap note to watermark, scrolling-text and logo cards on every card. Keep "Ẩn khung", work on the phone, dashboard only.
+- **Done:**
+  - `review-detail.js`: `blurCovers`, `coversAt`, `coverWords`, `coverLegend`, `coverageNote`, `coverCrop`.
+  - `review-cards.js`: the cover layer, labels, `setCovers`, `syncCovers`, `magCovers`.
+  - `review-media.js`: `drawCover` and covers in `drawMagnifier`.
+  - `review.js` (two calls) and `review.css`.
+  - Tests: verify-review "Session D" (1)–(7) and `browser-check-review-covers.cjs`. Evidence scripts are in `docs/evidence/preview-blurs/`.
+- **Gates:** see `CHANGELOG.md` and `docs/handoff/D-preview-blurs.md`. Cache keys: 10/10 equal to 41169fc. No GPU use. The real Control Center was not called.
+- **Waiting for the coordinator:** the merge. The next tasks, (b) A1d and (c) the rebuild button that keeps decisions, will be sent separately.
+- **For the user after the merge:** open a job with a subtitle-band watermark on the phone. The dialogue card shows the watermark blurred in a dashed sky-blue box, in the magnifier too.
+
 ## G14 merge, the subtitle-band watermark card reaches the film's edges (session D) — 2026-10-16, branch `merge/g14` (worktree `temp\wt-merge-g14`), not yet in the main folder
 
 - **Request:** after the user's real "Chạy lại" on G13, the subtitle-band watermark cards of jobs 130, 134 and 136 ended 9–14 s before the film's end (the end credits covered the mark's last readings), so those exports showed the mark at the end; the user asked for the fix before exporting them.

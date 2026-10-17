@@ -351,7 +351,7 @@
       fig.hidden = !view;
       if (!view) return;
       const canvas = fig.querySelector('canvas');
-      Media.drawMagnifier(canvas, img, view, el.classList.contains('bare'), window.devicePixelRatio);
+      Media.drawMagnifier(canvas, img, view, el.classList.contains('bare'), window.devicePixelRatio, Cards.magCovers(el, img));
       canvas.dataset.drawn = '1'; canvas.dataset.zoom = view.zoom.toFixed(2);
       fig.classList.toggle('scroll', view.scroll);
       fig.querySelector('.rv-mag-cap').textContent = 'Vùng phát hiện phóng to ×' + String(Math.round(view.zoom * 10) / 10).replace('.', ',') + (view.scroll ? ' · vuốt ngang để xem hết' : '');
